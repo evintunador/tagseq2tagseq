@@ -1,0 +1,3 @@
+[submodule "raw_data/DAGwikiextractor"]
+	path = raw_data/DAGwikiextractor
+	url = git@github.com:evintunador/DAGwikiextractor.git
