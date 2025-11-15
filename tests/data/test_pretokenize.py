@@ -6,7 +6,7 @@ from pathlib import Path
 import argparse
 import logging
 
-from experiments.dagseq2dagseq.pretokenize import run_preprocessing, load_custom_tokenizer
+from experiments.dagseq2dagseq.data.pretokenize import run_preprocessing, load_custom_tokenizer
 from gpt_lab.reproducibility import ReproducibilityManager
 from gpt_lab.data_sources.catalog_utils import BinaryShardIO
 

@@ -3,7 +3,7 @@ import logging
 import random
 from pathlib import Path
 
-from dataset import GraphIndex, PretokShardedBackend
+from data.dataset import GraphIndex, PretokShardedBackend
 
 
 logger = logging.getLogger(__name__)

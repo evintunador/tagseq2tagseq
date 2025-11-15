@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 from pathlib import Path
 
-from experiments.dagseq2dagseq.dataset import GraphIndex, PretokShardedBackend
+from experiments.dagseq2dagseq.data.dataset import GraphIndex, PretokShardedBackend
 
 
 @pytest.fixture(scope="module")
