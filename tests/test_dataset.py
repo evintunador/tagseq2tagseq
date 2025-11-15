@@ -4,7 +4,6 @@ import numpy as np
 from pathlib import Path
 
 from experiments.dagseq2dagseq.dataset import GraphIndex, PretokShardedBackend
-from gpt_lab.data_sources.catalog_utils import BinaryShardIO
 
 
 @pytest.fixture(scope="module")
@@ -100,6 +99,29 @@ def test_graph_index_loading(dummy_run_directory):
 
     assert index.get_all_titles() == ["Node A", "Node B", "Node C"]
 
+    # Basic id mapping sanity checks
+    node_a_id = index.get_id("Node A")
+    node_b_id = index.get_id("Node B")
+    node_c_id = index.get_id("Node C")
+
+    assert index.get_title(node_a_id) == "Node A"
+    assert index.get_title(node_b_id) == "Node B"
+    assert index.get_title(node_c_id) == "Node C"
+
+    # Neighbor helpers should reflect the simple chain A -> B -> C
+    assert index.neighbors_out(node_a_id) == [node_b_id]
+    assert index.neighbors_out(node_b_id) == [node_c_id]
+    assert index.neighbors_out(node_c_id) == []
+
+    assert index.neighbors_in(node_a_id) == []
+    assert index.neighbors_in(node_b_id) == [node_a_id]
+    assert index.neighbors_in(node_c_id) == [node_b_id]
+
+    # Token lengths
+    assert index.get_token_len(node_a_id) == 5
+    assert index.get_token_len(node_b_id) == 3
+    assert index.get_token_len(node_c_id) == 6
+
 
 def test_graph_index_file_not_found():
     """Tests that GraphIndex raises errors for missing files."""
@@ -109,12 +131,71 @@ def test_graph_index_file_not_found():
     with pytest.raises(FileNotFoundError, match="metadata.json not found"):
         GraphIndex(Path(".")) # Assuming metadata.json is not in root
 
+
+def test_graph_index_invalid_token_metadata_missing_field(tmp_path):
+    """GraphIndex should raise a clear error if required token metadata is missing."""
+    run_dir = tmp_path / "run_missing_field"
+    run_dir.mkdir()
+
+    metadata = {
+        "tokenizer": "dummy_tokenizer",
+        "dtype_str": "uint16",
+        "shard_filenames": ["shard_000000.bin"],
+    }
+    with open(run_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+
+    # tokenized_graph.jsonl with a node missing tok_offset_bytes
+    bad_node = {
+        "title": "Bad Node",
+        "outgoing": [],
+        "incoming": [],
+        "tok_shard_idx": 0,
+        # "tok_offset_bytes" missing on purpose
+        "tok_len": 5,
+    }
+    with open(run_dir / "tokenized_graph.jsonl", "w") as f:
+        f.write(json.dumps(bad_node) + "\n")
+
+    with pytest.raises(ValueError, match="Bad Node"):
+        GraphIndex(run_dir)
+
+
+def test_graph_index_invalid_token_metadata_types(tmp_path):
+    """GraphIndex should raise a clear error if token metadata has wrong types."""
+    run_dir = tmp_path / "run_bad_types"
+    run_dir.mkdir()
+
+    metadata = {
+        "tokenizer": "dummy_tokenizer",
+        "dtype_str": "uint16",
+        "shard_filenames": ["shard_000000.bin"],
+    }
+    with open(run_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+
+    # tokenized_graph.jsonl with wrong types for tok_len
+    bad_node = {
+        "title": "Bad Node",
+        "outgoing": [],
+        "incoming": [],
+        "tok_shard_idx": 0,
+        "tok_offset_bytes": 256 * 4,
+        "tok_len": "5",  # wrong type on purpose
+    }
+    with open(run_dir / "tokenized_graph.jsonl", "w") as f:
+        f.write(json.dumps(bad_node) + "\n")
+
+    with pytest.raises(ValueError, match="Bad Node"):
+        GraphIndex(run_dir)
+
 def test_pretok_sharded_backend_initialization(dummy_run_directory):
     """Tests that the backend initializes correctly."""
     index = GraphIndex(dummy_run_directory)
     backend = PretokShardedBackend(index)
     assert backend.index is index
     assert not backend._memmaps # Memmaps should be lazily loaded
+    assert backend.dtype == np.uint16
 
 
 def test_pretok_sharded_backend_get_tokens(dummy_run_directory):
@@ -147,3 +228,22 @@ def test_pretok_sharded_backend_get_tokens(dummy_run_directory):
 
     backend.close()
     assert len(backend._memmaps) == 0
+
+
+def test_pretok_sharded_backend_get_tokens_by_id(dummy_run_directory):
+    """Tests retrieving token data by integer document id."""
+    index = GraphIndex(dummy_run_directory)
+    backend = PretokShardedBackend(index)
+
+    node_a_id = index.get_id("Node A")
+    node_c_id = index.get_id("Node C")
+
+    tokens_a = backend.get_tokens_by_id(node_a_id)
+    assert tokens_a is not None
+    assert np.array_equal(tokens_a, np.array([0, 1, 2, 3, 4], dtype=np.uint16))
+
+    tokens_c = backend.get_tokens_by_id(node_c_id)
+    assert tokens_c is not None
+    assert np.array_equal(tokens_c, np.array([20, 21, 22, 23, 24, 25], dtype=np.uint16))
+
+    backend.close()
