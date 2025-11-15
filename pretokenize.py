@@ -8,6 +8,7 @@ import logging
 import multiprocessing as mp
 import os
 import re
+import sys
 from functools import partial
 from pathlib import Path
 from queue import Empty
@@ -20,8 +21,8 @@ import tiktoken
 from tqdm import tqdm
 
 from gpt_lab.data_sources.catalog_utils import BinaryShardIO
-from gpt_lab.reproducibility import ReproducibilityManager
-from gpt_lab.logger import setup_experiment_logging, get_system_info
+from gpt_lab.reproducibility import ReproducibilityManager, get_system_info
+from gpt_lab.logger import setup_experiment_logging
 
 logger = logging.getLogger(__name__)
 
