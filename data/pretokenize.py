@@ -21,7 +21,7 @@ import tiktoken
 from tqdm import tqdm
 
 from gpt_lab.data_sources.catalog_utils import BinaryShardIO
-from gpt_lab.reproducibility import ReproducibilityManager, get_system_info
+from gpt_lab.reproducibility import ReproducibilityManager
 from gpt_lab.logger import setup_experiment_logging
 
 logger = logging.getLogger(__name__)
@@ -205,8 +205,17 @@ def run_preprocessing(args, rep: ReproducibilityManager):
     # We set up our logging to go there.
     if rep.output_dir:
         setup_experiment_logging(rep.output_dir, rank=0, is_main_process=True)
-    
-    logger.info("System Information", extra=get_system_info(rep.get_git_info()))
+
+    # Log a structured snapshot of the reproducibility context
+    logger.info(
+        "System Information",
+        extra={
+            "git_info": rep.get_git_info(),
+            "software_environment": rep.software_environment,
+            "runtime_environment": rep.runtime_environment,
+            "run_invocation": rep.run_invocation,
+        },
+    )
 
     # --- Tokenizer Setup ---
     # As requested, the core logic uses a callable. 
