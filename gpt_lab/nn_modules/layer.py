@@ -17,7 +17,7 @@ ignore_if_no_cuda()
 
 
 class Layer(nn.Module):
-    def __init__(self, n_embd: int, n_head: int, dropout: float, bias: bool, max_seq_len: int, fp8: bool, drop_path_rate: float):
+    def __init__(self, n_embd: int, n_head: int, dropout: float, max_seq_len: int, fp8: bool, drop_path_rate: float):
         super().__init__()
         self.drop_path = DropPath(drop_path_rate)
         self.ln_1 = RMSNorm(n_embd)
