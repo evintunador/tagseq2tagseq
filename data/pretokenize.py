@@ -62,8 +62,18 @@ def tokenize_worker(
             if not title_line.startswith('# '):
                 logger.warning(f"Skipping {filepath}: does not have a title header.")
                 return
-            title = title_line[2:].strip()
+            title = os.path.splitext(os.path.basename(filepath))[0]
             content = f.read()
+            
+        # Clean hashes from links in the text to avoid polluting the model with implementation details.
+        # We want [Link](Title) instead of [Link](Title_123456).
+        # The hash is defined as exactly 6 hex characters at the end of the target.
+        # Match pattern: ](target_hash) -> ](target)
+        # Regex explanation:
+        #   (\]\(.*?)   -> Group 1: Capture "](" and the start of the target
+        #   _[0-9a-f]{6} -> Match underscore followed by 6 hex chars (the hash)
+        #   (\))        -> Group 2: Capture the closing parenthesis
+        content = re.sub(r'(\]\(.*?)_[0-9a-f]{6}(\))', r'\1\2', content)
 
         tokens = encode_fn(content)
         tokens_np = np.asarray(tokens, dtype=dtype)

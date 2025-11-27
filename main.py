@@ -9,13 +9,12 @@ import torch
 from torch.utils.data import DataLoader
 
 # GPT-Lab imports
-from gpt_lab.configuration import get_config
+from gpt_lab.configuration import compose_config
 from gpt_lab.distributed import DistributedManager
 from gpt_lab.reproducibility import ReproducibilityManager
 from gpt_lab.logger import setup_experiment_logging
-# from gpt_lab.train_loops.smart_api import smart_train
-# from gpt_lab.nn_modules.backbone import NanoGPTBackbone
-# from gpt_lab.nn_modules.training_model import NanoGPTTrainingModel
+from gpt_lab.train_loops.smart_api import smart_train
+from gpt_lab.nn_modules.training_module import DS2DSTrainingModule
 
 # Local imports (from demo_traversal.py)
 from data.dataset import GraphIndex, PretokShardedBackend, PackedSequenceDataset
@@ -138,8 +137,13 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # 3. Model & Optimizer Setup (TEMPLATE)
     # -------------------------------------------------------------------------
     # logger.info("Initializing Model...")
-    # backbone = NanoGPTBackbone(**cfg['model']).to(dist.device)
-    # model = NanoGPTTrainingModel(backbone).to(dist.device)
+    model = DS2DSTrainingModule(**cfg['model'].to(dist.device)
+    if cfg['model']['compile']:
+        model = torch.compile(
+            model,
+            dynamic=False,
+            mode=cfg['model']['compile_mode'],
+        )
     
     # optimizer = torch.optim.AdamW(
     #     model.parameters(), 
@@ -176,7 +180,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train a model on the DAGWiki dataset (Template).",
+        description="Train a DAGSeq2DAGSeq model on the TAGWiki dataset.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     
@@ -193,7 +197,7 @@ if __name__ == "__main__":
                         help="Random seed.")
 
     # Load configuration
-    config = get_config(parser)
+    config = compose_config(parser)
     
     # Setup run directory for logs and checkpoints
     run_dir = os.path.join(os.path.dirname(__file__), "runs", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))

@@ -24,7 +24,6 @@ class DS2DSBackbone(nn.Module):
     def __init__(
         self,
         num_layers: int, 
-        layer_repeat: int,
         model_dim: int, 
         num_heads: int,
         max_seq_len: int, 
@@ -47,9 +46,7 @@ class DS2DSBackbone(nn.Module):
             drop_path_rate=drop_path_rate,
             fp8=fp8,
         ) for _ in range(num_layers)])
-        
-        # Repeat the sequence of layers layer_repeat times (allowing for recurrence/weight sharing)
-        self.layers_repeated = [self.layers[i // layer_repeat] for i in range(num_layers * layer_repeat)]
+        self.skip_weights = nn.Parameter(torch.ones(num_layers//2))
 
     def forward(self, x: Tensor, block_mask: Any):
         """
@@ -57,11 +54,20 @@ class DS2DSBackbone(nn.Module):
             x: Input embeddings of shape (B, T, C) or (Total_Tokens, C)
             block_mask: The attention block mask (passed in, not created here)
         """
-        for layer in self.layers_repeated:
-            x = layer(
-                x=x, 
-                block_mask=block_mask
-            )
+        skip_connections = []
+        n_skip = len(self.skip_weights)
+        
+        for i, layer in enumerate(self.layers):
+            if i >= n_skip:
+                 # Pop skip connection
+                 if skip_connections:
+                    x = x + self.skip_weights[i - n_skip] * skip_connections.pop()
+            
+            x = layer(x, block_mask)
+            
+            if i < n_skip:
+                skip_connections.append(x)
+                
         return x
 
 
@@ -88,7 +94,6 @@ def output_validator(
     """
     input_tensor = inputs[0] 
     output_tensor = outputs
-    # Handle potential tuple return if harness wraps it differently, though usually direct
     if isinstance(output_tensor, tuple):
         output_tensor = output_tensor[0]
         
@@ -121,8 +126,7 @@ __test_config__ = ModuleTestConfig(
     test_cases=[
         {
             'init_args': {
-                'num_layers': 2,
-                'layer_repeat': 1,
+                'num_layers': 4,
                 'model_dim': dim,
                 'num_heads': num_heads,
                 'max_seq_len': max_seq_len,
@@ -173,7 +177,6 @@ __benchmark_config__ = BenchmarkConfig(
     },
     init_arg_builder=lambda params: {
         'num_layers': params['num_layers'],
-        'layer_repeat': 1,
         'model_dim': params['model_dim'],
         'num_heads': params['num_heads'],
         'max_seq_len': params['max_seq_len'],

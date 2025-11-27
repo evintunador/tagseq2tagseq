@@ -1,0 +1,20 @@
+data:
+  strategy: 
+
+model:
+  compile: True
+  compile_mode: 'default'
+  embed_dim: 
+
+optimizer:
+  type: 'adamw' # 'adamw' or 'muon'
+  wd: 0.1
+  init_lr: 0.000001
+  warmup_pct: 0.01
+  max_lr: 0.001
+  decay_type: 'cosine'
+  final_lr: 0.000001
+  plateau_pct: 0.3
+
+train_loop: 
+  epochs: 1

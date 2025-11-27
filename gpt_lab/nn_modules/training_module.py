@@ -28,10 +28,9 @@ def create_dag_block_mask(batch: Dict[str, Any], device: torch.device) -> Any:
 class DS2DSTrainingModule(nn.Module):
     def __init__(
         self,
-        block_mask_creator: Callable[Dict[str, Any], BlockMask],
+        block_mask_creator: Callable[[], BlockMask],
         vocab_size: int,
         num_layers: int, 
-        layer_repeat: int,
         model_dim: int, 
         num_heads: int,
         max_seq_len: int, 
@@ -51,7 +50,6 @@ class DS2DSTrainingModule(nn.Module):
         self.embedding = nn.Embedding(vocab_size, model_dim)
         self.backbone = DS2DSBackbone(
             num_layers=num_layers,
-            layer_repeat=layer_repeat,
             model_dim=model_dim,
             num_heads=num_heads,
             max_seq_len=max_seq_len,
@@ -145,7 +143,6 @@ __test_config__ = ModuleTestConfig(
                 'block_mask_creator': simple_block_mask_creator,
                 'vocab_size': 1024,
                 'num_layers': 2,
-                'layer_repeat': 1,
                 'model_dim': dim,
                 'num_heads': num_heads,
                 'max_seq_len': max_seq_len,
@@ -198,7 +195,6 @@ __benchmark_config__ = BenchmarkConfig(
         'block_mask_creator': simple_block_mask_creator,
         'vocab_size': 50257,
         'num_layers': params['num_layers'],
-        'layer_repeat': 1,
         'model_dim': params['model_dim'],
         'num_heads': params['num_heads'],
         'max_seq_len': params['max_seq_len'],
@@ -210,4 +206,3 @@ __benchmark_config__ = BenchmarkConfig(
     },
     input_provider=benchmark_input_provider,
 )
-
