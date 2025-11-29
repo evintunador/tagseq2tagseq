@@ -165,13 +165,13 @@ def build_packed_batch(
     else:
         tokens = np.empty(0, dtype=np.int64)
 
-    input_ids = torch.from_numpy(tokens)
+    tokens = torch.from_numpy(tokens)
     if as_2d:
         # Shape as [1, T] for convenience in typical LM workloads.
-        input_ids = input_ids.view(1, -1)
+        tokens = tokens.view(1, -1)
 
     return {
-        "input_ids": input_ids,
+        "tokens": tokens,
         "doc_spans": spans,
         "doc_ids": [span.doc_id for span in spans],
         "titles": [span.title for span in spans],

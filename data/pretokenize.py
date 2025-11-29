@@ -58,12 +58,9 @@ def tokenize_worker(
     """
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            title_line = f.readline()
-            if not title_line.startswith('# '):
-                logger.warning(f"Skipping {filepath}: does not have a title header.")
-                return
-            title = os.path.splitext(os.path.basename(filepath))[0]
             content = f.read()
+            
+        title = os.path.splitext(os.path.basename(filepath))[0]
             
         # Clean hashes from links in the text to avoid polluting the model with implementation details.
         # We want [Link](Title) instead of [Link](Title_123456).
