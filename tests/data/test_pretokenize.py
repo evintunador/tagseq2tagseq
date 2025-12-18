@@ -7,8 +7,8 @@ import argparse
 import logging
 
 from experiments.dagseq2dagseq.data.pretokenize import run_preprocessing, load_custom_tokenizer
-from gpt_lab.reproducibility import ReproducibilityManager
-from gpt_lab.data_sources.catalog_utils import BinaryShardIO
+from tunalab.reproducibility import ReproducibilityManager
+from tunalab.pretokenized_data.shard_io import BinaryShardIO
 
 # Disable excessive logging from the script during tests
 logging.disable(logging.INFO)

@@ -20,10 +20,10 @@ import numpy as np
 import tiktoken
 from tqdm import tqdm
 
-from gpt_lab.data_sources.catalog_utils import BinaryShardIO
-from gpt_lab.distributed import is_main
-from gpt_lab.reproducibility import ReproducibilityManager
-from gpt_lab.logger import setup_experiment_logging
+from tunalab.pretokenized_data.shard_io import BinaryShardIO
+from tunalab.distributed import is_main_process
+from tunalab.reproducibility import ReproducibilityManager
+from tunalab import tracking
 
 logger = logging.getLogger(__name__)
 

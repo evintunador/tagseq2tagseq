@@ -7,7 +7,7 @@ This experiment explores training language models on graph-structured data (spec
 - `data/`: Contains the custom dataset, sampler, and traversal logic.
 - `demo_traversal.py`: A script to demonstrate and inspect the graph traversal and packing logic without running a full training loop.
 - `main.py`: The primary training script (currently a template).
-- `gpt_lab.yaml`: Experiment configuration.
+- `tunalab.yaml`: Experiment configuration.
 
 ## Usage
 

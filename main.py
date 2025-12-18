@@ -8,13 +8,13 @@ from typing import Dict, Any
 import torch
 from torch.utils.data import DataLoader
 
-# GPT-Lab imports
-from gpt_lab.configuration import compose_config
-from gpt_lab.distributed import DistributedManager
-from gpt_lab.reproducibility import ReproducibilityManager
-from gpt_lab.logger import setup_experiment_logging
-from gpt_lab.train_loops.smart_api import smart_train
-from gpt_lab.nn_modules.training_module import DS2DSTrainingModule
+# Tunalab imports
+from tunalab.configuration import compose_config
+from tunalab.distributed import DistributedManager
+from tunalab.reproducibility import ReproducibilityManager
+from tunalab import tracking
+from tunalab.smart_train import smart_train
+from tunalab.nn_modules.training_module import DS2DSTrainingModule
 
 # Local imports (from demo_traversal.py)
 from data.dataset import GraphIndex, PretokShardedBackend, PackedSequenceDataset
@@ -42,7 +42,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # 1. Setup Logging & Reproducibility
     # -------------------------------------------------------------------------
     if rep.output_dir:
-        setup_experiment_logging(rep.output_dir, dist.rank, dist.is_main_process)
+        log_dir = os.path.join(rep.output_dir, "logs")
+        tracking.init(log_dir, dist.rank)
 
     dist.set_seed(cfg.get("seed", 42))
 

@@ -46,8 +46,8 @@ python main.py --dataset-dir <pretokenized_dataset_path> --strategy random_walk 
 
 ### Model Testing & Benchmarking
 ```bash
-# Run GPT-Lab's built-in module tests (from parent gpt_lab framework)
-# Tests are defined within the module files themselves (e.g., gpt_lab/nn_modules/training_module.py)
+# Run tunalab's built-in module tests (from parent tunalab framework)
+# Tests are defined within the module files themselves (e.g., tunalab/nn_modules/training_module.py)
 ```
 
 ## Architecture
@@ -90,7 +90,7 @@ python main.py --dataset-dir <pretokenized_dataset_path> --strategy random_walk 
 **Dataset** (`data/packed_dataset.py`):
 - `PackedSequenceDataset`: Yields packed batches by calling the sampler and collate function
 
-**Model** (`gpt_lab/nn_modules/`):
+**Model** (`tunalab/nn_modules/`):
 - `DS2DSTrainingModule`: Full training wrapper with embedding, backbone, norm, and fused linear+cross-entropy
 - `DS2DSBackbone`: Stack of transformer layers with FlexAttention support
 - `block_mask_creator.py`: Creates custom attention masks based on document boundaries and graph structure
@@ -109,18 +109,18 @@ python main.py --dataset-dir <pretokenized_dataset_path> --strategy random_walk 
 
 ## Configuration
 
-- `gpt_lab.yaml`: Minimal config referencing GPT-Lab packs (currently just `["nlp"]`)
+- `tunalab.yaml`: Minimal config referencing tunalab packs (currently just `["nlp"]`)
 - `main.py` CLI args override config values (e.g., `--dataset-dir`, `--strategy`, `--max-seq-len`)
-- Most hyperparameters live in GPT-Lab's configuration system (see `gpt_lab.configuration.compose_config`)
+- Most hyperparameters live in tunalab's configuration system (see `tunalab.configuration.compose_config`)
 
 ## Dependencies
 
-This experiment relies on the parent `gpt_lab` framework for:
-- Configuration management (`gpt_lab.configuration`)
-- Distributed training utilities (`gpt_lab.distributed`)
-- Logging and reproducibility (`gpt_lab.logger`, `gpt_lab.reproducibility`)
+This experiment relies on the parent `tunalab` framework for:
+- Configuration management (`tunalab.configuration`)
+- Distributed training utilities (`tunalab.distributed`)
+- Logging and reproducibility (`tunalab.tracking`, `tunalab.reproducibility`)
 - Neural network modules (transformer layers, norms, losses)
-- Training loops (`gpt_lab.train_loops.smart_api.smart_train`)
+- Training loops (`tunalab.smart_train`)
 
 External dependencies include PyTorch, NumPy, tiktoken (for tokenization), and tqdm (for progress bars).
 
@@ -139,7 +139,7 @@ External dependencies include PyTorch, NumPy, tiktoken (for tokenization), and t
 ├── main.py                          # Training entry point (template)
 ├── demo_traversal.py                # Inspection tool for packed batches
 ├── block_mask_creator.py            # Custom attention mask logic
-├── gpt_lab.yaml                     # Experiment config
+├── tunalab.yaml                     # Experiment config
 ├── data/
 │   ├── dataset.py                   # GraphIndex, PretokShardedBackend
 │   ├── traversal.py                 # Traversal strategy implementations
@@ -152,7 +152,7 @@ External dependencies include PyTorch, NumPy, tiktoken (for tokenization), and t
 │       ├── dump_extractor.py
 │       ├── build_graph.py
 │       └── extract.py               # Wikitext→Markdown cleaning logic
-├── gpt_lab/
+├── tunalab/
 │   └── nn_modules/
 │       ├── training_module.py       # DS2DSTrainingModule
 │       ├── backbone.py              # DS2DSBackbone

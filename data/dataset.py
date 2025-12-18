@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from gpt_lab.data_sources.catalog_utils import BinaryShardIO
+from tunalab.pretokenized_data.shard_io import BinaryShardIO
 
 logger = logging.getLogger(__name__)
 
