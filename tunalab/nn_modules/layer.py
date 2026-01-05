@@ -1,15 +1,11 @@
-from typing import Tuple, Any, Union
-
-import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.nn.attention.flex_attention import create_block_mask, BlockMask
+from torch.nn.attention.flex_attention import BlockMask
 
 from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
 from tunalab.modules.channel_mixing.glu import GLU
 from tunalab.modules.regularization.drop_path import DropPath
 from tunalab.modules.norms.rms_norm import RMSNorm
-from tunalab.modules.channel_mixing.fp8_linear import is_hopper_available
 
 
 class Layer(nn.Module):

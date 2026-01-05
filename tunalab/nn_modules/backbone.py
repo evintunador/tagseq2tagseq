@@ -1,12 +1,10 @@
-from typing import Any, Tuple
+from typing import Any
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
-from torch.nn.attention.flex_attention import create_block_mask
 
-from tunalab.modules.channel_mixing.fp8_linear import is_hopper_available
 from .layer import Layer
 
 

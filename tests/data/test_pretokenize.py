@@ -6,9 +6,11 @@ from pathlib import Path
 import argparse
 import logging
 
-from experiments.dagseq2dagseq.data.pretokenize import run_preprocessing, load_custom_tokenizer
 from tunalab.reproducibility import ReproducibilityManager
 from tunalab.pretokenized_data.shard_io import BinaryShardIO
+
+from data.pretokenize import run_preprocessing, load_custom_tokenizer
+
 
 # Disable excessive logging from the script during tests
 logging.disable(logging.INFO)

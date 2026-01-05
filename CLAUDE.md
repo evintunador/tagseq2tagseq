@@ -47,7 +47,7 @@ python main.py --dataset-dir <pretokenized_dataset_path> --strategy random_walk 
 ### Model Testing & Benchmarking
 ```bash
 # Run tunalab's built-in module tests (from parent tunalab framework)
-# Tests are defined within the module files themselves (e.g., tunalab/nn_modules/training_module.py)
+# Tests are defined within the module files themselves (e.g., tunalab/modules/training_module.py)
 ```
 
 ## Architecture
@@ -90,7 +90,7 @@ python main.py --dataset-dir <pretokenized_dataset_path> --strategy random_walk 
 **Dataset** (`data/packed_dataset.py`):
 - `PackedSequenceDataset`: Yields packed batches by calling the sampler and collate function
 
-**Model** (`tunalab/nn_modules/`):
+**Model** (`tunalab/modules/`):
 - `DS2DSTrainingModule`: Full training wrapper with embedding, backbone, norm, and fused linear+cross-entropy
 - `DS2DSBackbone`: Stack of transformer layers with FlexAttention support
 - `block_mask_creator.py`: Creates custom attention masks based on document boundaries and graph structure
@@ -153,7 +153,7 @@ External dependencies include PyTorch, NumPy, tiktoken (for tokenization), and t
 │       ├── build_graph.py
 │       └── extract.py               # Wikitext→Markdown cleaning logic
 ├── tunalab/
-│   └── nn_modules/
+│   └── modules/
 │       ├── training_module.py       # DS2DSTrainingModule
 │       ├── backbone.py              # DS2DSBackbone
 │       └── layer.py                 # Transformer layer

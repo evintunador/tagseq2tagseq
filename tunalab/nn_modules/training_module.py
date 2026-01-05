@@ -3,18 +3,11 @@ from typing import Dict, Any, Type, Callable, Tuple
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.nn.attention.flex_attention import BlockMask, create_block_mask
+from torch.nn.attention.flex_attention import BlockMask
 
 from tunalab.modules.norms.rms_norm import RMSNorm
 from tunalab.modules.losses.fused_cross_entropy import FusedLinearCELoss
-from tunalab.modules.channel_mixing.fp8_linear import is_hopper_available
 from .backbone import DS2DSBackbone
-
-
-# Placeholder for the standalone block mask creation function
-def create_dag_block_mask(batch: Dict[str, Any], device: torch.device) -> Any:
-    # Implement your complicated cool DAG block mask logic here
-    return None
 
 
 class DS2DSTrainingModule(nn.Module):

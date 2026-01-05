@@ -8,13 +8,12 @@ from typing import Dict, Any
 import torch
 from torch.utils.data import DataLoader
 
-# Tunalab imports
 from tunalab.configuration import compose_config
 from tunalab.distributed import DistributedManager
 from tunalab.reproducibility import ReproducibilityManager
 from tunalab import tracking
 from tunalab.smart_train import smart_train
-from tunalab.nn_modules.training_module import DS2DSTrainingModule
+from tunalab.modules.training_module import DS2DSTrainingModule
 
 # Local imports (from demo_traversal.py)
 from data.dataset import GraphIndex, PretokShardedBackend, PackedSequenceDataset

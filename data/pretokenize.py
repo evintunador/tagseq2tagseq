@@ -8,12 +8,11 @@ import logging
 import multiprocessing as mp
 import os
 import re
-import sys
 from functools import partial
 from pathlib import Path
 from queue import Empty
-from time import sleep, time
-from typing import Callable, List, Optional
+from time import sleep
+from typing import Callable, List
 import pickle
 
 import numpy as np
@@ -21,9 +20,9 @@ import tiktoken
 from tqdm import tqdm
 
 from tunalab.pretokenized_data.shard_io import BinaryShardIO
-from tunalab.distributed import is_main_process
 from tunalab.reproducibility import ReproducibilityManager
 from tunalab import tracking
+
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +211,8 @@ def run_preprocessing(args, rep: ReproducibilityManager):
     # The ReproducibilityManager gives us a unique output directory.
     # We set up our logging to go there.
     if rep.output_dir:
-        setup_experiment_logging(rep.output_dir, rank=0, is_main_process=True)
+        log_dir = os.path.join(rep.output_dir, "logs")
+        tracking.init(log_dir, rank=0)
 
     # Log a structured snapshot of the reproducibility context
     logger.info(
