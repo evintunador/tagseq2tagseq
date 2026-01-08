@@ -178,4 +178,3 @@ def build_packed_batch(
     }
 
 
-

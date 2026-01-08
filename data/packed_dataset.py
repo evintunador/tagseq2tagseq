@@ -14,7 +14,7 @@ class PackedSequenceDataset(IterableDataset):
 
     Each iteration yields a dictionary suitable as model input, containing:
 
-        - ``input_ids``: torch.LongTensor of shape [1, T] (or [T] if as_2d=False)
+        - ``tokens``: torch.LongTensor of shape [1, T] (or [T] if as_2d=False)
         - ``doc_spans``: List[DocSpan] describing per-doc spans in the sequence
         - ``doc_ids``: List[int] of document ids in order
         - ``titles``: List[str] of document titles in order

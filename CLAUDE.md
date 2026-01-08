@@ -85,7 +85,7 @@ python main.py --dataset-dir <pretokenized_dataset_path> --strategy random_walk 
 **Collation** (`data/collate.py`):
 - `build_packed_batch()`: Materializes a list of `DocPlacement` into actual token tensors
 - `DocSpan`: Metadata describing where each document appears in the final packed sequence
-- Returns `{"input_ids": Tensor, "doc_spans": List[DocSpan]}`
+- Returns `{"tokens": Tensor, "doc_spans": List[DocSpan]}`
 
 **Dataset** (`data/packed_dataset.py`):
 - `PackedSequenceDataset`: Yields packed batches by calling the sampler and collate function

@@ -114,7 +114,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     )
 
     # Create the Dataset
-    # This yields dictionaries containing 'input_ids', 'doc_spans', etc.
+    # This yields dictionaries containing 'tokens', 'doc_spans', etc.
     dataset = PackedSequenceDataset(
         graph=graph_index,
         backend=backend,

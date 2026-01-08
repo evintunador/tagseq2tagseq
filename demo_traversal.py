@@ -169,12 +169,12 @@ def main() -> None:
             logger.warning("Sampler produced no batches under the current settings.")
             return
 
-        input_ids: torch.Tensor = batch["input_ids"]
+        tokens: torch.Tensor = batch["tokens"]
         doc_spans = batch["doc_spans"]
 
         print("\n--- Packed Batch Summary ---")
-        print(f"input_ids shape: {tuple(input_ids.shape)}")
-        flat = input_ids.view(-1)
+        print(f"tokens shape: {tuple(tokens.shape)}")
+        flat = tokens.view(-1)
         print(f"Total tokens T: {flat.shape[0]}")
         print(f"Number of docs in batch: {len(doc_spans)}")
 
