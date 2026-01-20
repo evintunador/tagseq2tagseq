@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
-from tunalab.modules.layer import Layer
+from model.modules.layer import Layer
 
 
 def causal(b, h, q_idx, kv_idx):

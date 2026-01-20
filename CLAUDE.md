@@ -93,9 +93,34 @@ python main.py --dataset-dir <pretokenized_dataset_path> --strategy random_walk 
 **Dataset** (`data/packed_dataset.py`):
 - `PackedSequenceDataset`: Yields packed batches by calling the sampler and collate function
 
-**Model** (`tunalab/modules/`):
-- `DS2DSTrainingModule`: Full training wrapper with embedding, backbone, norm, and fused linear+cross-entropy
-- `DS2DSBackbone`: Stack of transformer layers with FlexAttention support
+**Model Architecture** (`tunalab/modules/`):
+
+The model follows a three-tier architecture pattern that separates concerns:
+
+1. **`DS2DSBackbone`** (nn.Module): The "spine" of the transformer
+   - Pure transformer layer stack with skip connections
+   - Intentionally excludes embeddings and output head
+   - Forward pass: pre-embedded inputs → hidden states
+   - Facilitates multimodal extensions and weight sharing
+
+2. **`DS2DSTrainingModule`** (nn.Module): Training wrapper implementing "batch in, loss out"
+   - Combines backbone with embeddings, normalization, and fused CE loss
+   - Two construction methods:
+     - `from_config(...)`: Recommended factory method for standard training
+     - `__init__(...)`: Direct construction with pre-built components
+   - `to_inference_model()`: Converts to DS2DSModel after training
+   - Forward pass: batch dict → loss dict
+
+3. **`DS2DSModel`** (NOT nn.Module): Inference and evaluation interface
+   - Holds references to trained components without nn.Module ceremony
+   - Provides stub methods for graph-aware generation and evaluation
+   - Methods to implement:
+     - `forward_inference()`: tokens → logits
+     - `generate()`: Graph-aware text generation
+     - `@register_handler` methods for benchmark evaluation
+   - Helper methods: `eval()`, `train()`, `to(device)`
+
+**Supporting Modules**:
 - `block_mask_creator.py`: Creates custom attention masks based on document boundaries and graph structure
 
 ### Key Design Patterns
@@ -109,6 +134,12 @@ python main.py --dataset-dir <pretokenized_dataset_path> --strategy random_walk 
 **Packed Sequences**: Multiple documents are concatenated into a single sequence to maximize GPU utilization. The `doc_spans` metadata tracks boundaries for custom attention patterns.
 
 **FlexAttention Integration**: The training module accepts a `block_mask_creator` callable that receives batch metadata (including `doc_spans`) and returns a `BlockMask` for PyTorch's FlexAttention API. This enables document-aware and graph-aware attention patterns.
+
+**Three-Tier Architecture**: The separation of Backbone (nn.Module) → TrainingModule (nn.Module) → Model (NOT nn.Module) follows the "backbone as spine" metaphor:
+- Backbone contains only the transformer layers (the "spine")
+- TrainingModule wraps backbone for training with "batch in, loss out" interface
+- Model provides inference/evaluation without nn.Module overhead
+- This enables clean weight sharing, multimodal extensions, and separate inference logic
 
 ## Configuration
 
@@ -155,13 +186,15 @@ External dependencies include PyTorch, NumPy, tiktoken (for tokenization), and t
 │       ├── dump_extractor.py
 │       ├── build_graph.py
 │       └── extract.py               # Wikitext→Markdown cleaning logic
-├── tunalab/
+├── model/
+│   ├── model.py                     # DS2DSModel (inference/eval)
 │   └── modules/
 │       ├── training_module.py       # DS2DSTrainingModule
 │       ├── backbone.py              # DS2DSBackbone
 │       └── layer.py                 # Transformer layer
 └── tests/
-    └── data/                        # Unit tests for data pipeline
+    ├── data/
+│   └── model/
 ```
 
 ## Common Workflows
@@ -177,6 +210,26 @@ External dependencies include PyTorch, NumPy, tiktoken (for tokenization), and t
 1. Edit `block_mask_creator.py` to change the mask creation logic
 2. The `create_doc_causal_block_mask` function receives `tokens` and `doc_spans`
 3. Use `doc_spans` to identify document boundaries and implement custom attention rules
+
+### Implementing Inference and Evaluation
+
+After training, convert the training module to an inference model:
+
+```python
+# After training
+trained_module = result['model']  # from smart_train
+inference_model = trained_module.to_inference_model()
+
+# Implement the stub methods in tunalab/modules/model.py:
+# 1. forward_inference(tokens, doc_spans) -> logits
+# 2. generate(...) -> str (graph-aware generation)
+# 3. @register_handler methods for evaluation
+```
+
+The DS2DSModel class provides skeleton implementations with detailed TODOs for:
+- Converting standard eval formats to packed sequences
+- Handling graph-aware generation logic
+- Computing perplexity and other benchmark metrics
 
 ### Debugging Packed Batches
 

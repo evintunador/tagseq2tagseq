@@ -4,6 +4,7 @@ import os
 import datetime
 from pathlib import Path
 from typing import Dict, Any
+import json
 
 import torch
 from torch.utils.data import DataLoader
@@ -15,8 +16,8 @@ from tunalab import tracking
 from tunalab.smart_train import smart_train
 
 # Local imports
-from tunalab.nn_modules.training_module import DS2DSTrainingModule
-from block_mask_creator import make_mask_creator_callable
+from model import DS2DSTrainingModule
+from model.graph_traversal.block_mask_creator import make_mask_creator_callable
 from data.dataset import GraphIndex, PretokShardedBackend, PackedSequenceDataset
 from data.layout import BOSEOSLayoutPolicy, NullLayoutPolicy
 from data.pack_sampler import PackBatchSampler
@@ -26,6 +27,7 @@ from data.traversal import (
     RandomSelectionStrategy,
     RandomWalkStrategy,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +49,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     dist.set_seed(cfg.get("seed", 42))
 
-    logger.info("System Information", extra={
-        "git_info": rep.get_git_info(),
-        "software_environment": rep.software_environment,
-        "runtime_environment": rep.runtime_environment,
-        "run_invocation": rep.run_invocation,
-    })
-    logger.info("Hyperparameters", extra=cfg)
+    if rep.output_dir:
+        json_path = os.path.join(rep.output_dir, "hyperparameters.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
 
     # -------------------------------------------------------------------------
     # 2. Data Loading Setup
@@ -62,7 +61,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # e.g. --data.dataset_dir /path/to/data
     dataset_dir_str = cfg.get('data', {}).get('dataset_dir')
     if not dataset_dir_str:
-        logger.warning("No dataset_dir specified in config. Skipping data loading.")
+        logger.error("No dataset_dir specified in config.")
         return
 
     dataset_dir = Path(dataset_dir_str)
@@ -152,9 +151,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     mask_type = cfg.get('model', {}).get('mask_type', 'doc_causal')
     block_mask_creator = make_mask_creator_callable(mask_type)
     
-    # Build model
-    model = DS2DSTrainingModule(
-        block_mask_creator=block_mask_creator,
+    # Build model using from_config factory
+    model = DS2DSTrainingModule.from_config(
         vocab_size=vocab_size,
         num_layers=cfg['model']['num_layers'],
         model_dim=cfg['model']['model_dim'],
@@ -162,6 +160,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         max_seq_len=cfg['model']['max_seq_len'],
         dropout=cfg['model'].get('dropout', 0.0),
         drop_path_rate=cfg['model'].get('drop_path_rate', 0.0),
+        block_mask_creator=block_mask_creator,
         fp8=cfg['model'].get('fp8', False),
         weight_tying=cfg['model'].get('weight_tying', True),
         ignore_index=cfg['model'].get('ignore_index', -100),

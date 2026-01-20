@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dagseq2dagseq"
+version = "0.1.0"
+dependencies = [
+    "torch",
+    "numpy",
+    "tunalab",
+    "tunalab-nlp",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["data", "data.*", "model", "model.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
