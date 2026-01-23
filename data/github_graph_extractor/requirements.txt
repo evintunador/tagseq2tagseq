@@ -4,3 +4,4 @@ networkx
 numpy
 datasets
 huggingface_hub
+orjson

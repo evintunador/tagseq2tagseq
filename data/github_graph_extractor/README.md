@@ -23,13 +23,21 @@ pip install -r requirements.txt
 
 ### 1. Download Sample Data
 
-First, download a sample of Python repositories from The Stack dataset (default: 100,000):
+Download a sample of Python repositories from The Stack dataset with production-ready streaming:
 
 ```bash
-python download_sample.py
+python download_sample.py --limit 100000
 ```
 
-You can specify different sample sizes:
+The script is optimized for very large datasets (10M+ records) with:
+- **Memory-efficient streaming**: No memory accumulation, processes items one-by-one
+- **Full content preservation**: No truncation of file contents
+- **Resume capability**: Automatically resumes from partially downloaded files
+- **Progress checkpoints**: Regular progress reporting and intermediate saves
+- **Error handling**: Robust handling of network failures and malformed data
+- **Disk space monitoring**: Checks available space before starting
+
+**Examples:**
 ```bash
 # Small sample for testing
 python download_sample.py --limit 10000
@@ -40,14 +48,23 @@ python download_sample.py --limit 100000
 # Large sample
 python download_sample.py --limit 1000000
 
-# Very large sample
+# Very large sample (production-ready)
 python download_sample.py --limit 10000000
-```
 
-This will create an appropriately named file (e.g., `sample_100k.jsonl`) containing the sampled repository data.
+# Resume interrupted download
+python download_sample.py --limit 10000000  # Will resume if sample_10M.jsonl exists
+
+# Custom output file
+python download_sample.py --limit 5000000 --output my_sample.jsonl
+```
 
 **Command-line options:**
 - `-o, --output`: Output file path (default: auto-generated based on limit)
+- `--limit`: Number of items to sample (default: 100,000)
+- `--no-resume`: Don't resume from existing file, start fresh
+- `--checkpoint-interval`: Progress report frequency (default: 100,000)
+- `--max-retries`: Network failure retries (default: 3)
+- `-v, --verbose`: Enable detailed logging
 - `--limit`: Number of repositories to sample (default: 100,000, max: 10,000,000)
 
 ### 2. Build the Dependency Graph
