@@ -1,0 +1,35 @@
+"""
+Graph extraction framework with pluggable components.
+
+This package provides shared abstractions for building document graphs
+from various sources (Wikipedia, GitHub, LaTeX, etc.).
+"""
+
+from .protocols import Document, LinkContext, LinkExtractor, LinkNormalizer, ContentSource
+from .normalization import HashingNormalizer, PassthroughNormalizer, WikiTitleNormalizer, PythonModuleNormalizer
+from .sources import MarkdownFileSource, JSONLSource
+from .link_extractors import MarkdownLinkExtractor, PythonImportExtractor
+from .graph_builder import GraphBuilder, GraphNode
+
+__all__ = [
+    # Protocols
+    "Document",
+    "LinkContext",
+    "LinkExtractor",
+    "LinkNormalizer",
+    "ContentSource",
+    # Normalizers
+    "HashingNormalizer",
+    "PassthroughNormalizer",
+    "WikiTitleNormalizer",
+    "PythonModuleNormalizer",
+    # Sources
+    "MarkdownFileSource",
+    "JSONLSource",
+    # Link Extractors
+    "MarkdownLinkExtractor",
+    "PythonImportExtractor",
+    # Core Builder
+    "GraphBuilder",
+    "GraphNode",
+]

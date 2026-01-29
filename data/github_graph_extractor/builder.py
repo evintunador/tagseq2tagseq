@@ -1,0 +1,263 @@
+"""
+GitHub intra-repository dependency graph builder using shared framework.
+
+This module extends the generic GraphBuilder with GitHub-specific logic:
+- Groups files by repository
+- Resolves imports to actual files within the same repository
+- Only creates links between files in the same repo (intra-repo dependencies)
+- Filters to keep only files with 2+ connections
+"""
+from pathlib import Path
+from typing import Dict, Set, Optional
+import logging
+import os
+
+from data.extractors.graph_builder import GraphBuilder, GraphNode
+from data.extractors.sources import JSONLSource
+from data.extractors.link_extractors import PythonImportExtractor
+from data.extractors.normalization import PythonModuleNormalizer
+from .extract import extract_file_imports, normalize_repository_name
+
+
+logger = logging.getLogger(__name__)
+
+
+def _path_to_module_name(file_path: str) -> str:
+    """Convert file path to Python module name."""
+    module_path = file_path[:-3] if file_path.endswith(".py") else file_path
+    return module_path.replace("/", ".").replace("\\", ".").strip(".")
+
+
+def _resolve_import_to_file(
+    imported_module: str, 
+    module_to_file: Dict[str, str], 
+    importing_file: str
+) -> Optional[str]:
+    """
+    Resolve an import statement to an actual file path within the repository.
+    
+    Handles:
+    - Relative imports (starting with .)
+    - Absolute imports matching module names
+    - Submodule imports
+    """
+    # Handle relative imports
+    if imported_module.startswith("."):
+        dot_count = len(imported_module) - len(imported_module.lstrip("."))
+        base_module = imported_module[dot_count:]
+
+        import_dir = os.path.dirname(importing_file)
+        for _ in range(dot_count - 1):
+            import_dir = os.path.dirname(import_dir)
+
+        if base_module:
+            full_module_path = os.path.join(import_dir, base_module.replace(".", "/"))
+        else:
+            full_module_path = import_dir
+
+        full_module_path = full_module_path.rstrip("/")
+
+        # Find matching file
+        for file_path in module_to_file.values():
+            if file_path == full_module_path + ".py" or file_path.startswith(full_module_path + "/"):
+                return file_path
+        return None
+
+    # Handle absolute imports - exact match
+    if imported_module in module_to_file:
+        return module_to_file[imported_module]
+
+    # Handle submodule imports (e.g., "foo" matches "foo.bar" or "foo.bar" matches "foo")
+    for module_name, file_path in module_to_file.items():
+        if module_name.startswith(imported_module + "."):
+            return file_path
+        if imported_module.startswith(module_name + "."):
+            return file_path
+
+    return None
+
+
+class GitHubGraphBuilder(GraphBuilder):
+    """
+    Extended graph builder for GitHub with intra-repository import resolution.
+    
+    GitHub has additional complexity:
+    - Needs to group files by repository
+    - Must resolve imports to actual files within repo
+    - Only creates links between files in the same repository
+    - Filters nodes with <2 links
+    """
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def build_graph(self, output_path: Path) -> Dict[str, GraphNode]:
+        """
+        Build intra-repository dependency graph.
+        
+        This overrides the base implementation to:
+        1. Group files by repository
+        2. Resolve imports to actual files within each repo
+        3. Only create edges between files in the same repo
+        4. Filter to keep only files with 2+ connections
+        
+        Args:
+            output_path: Where to write filtered graph
+        
+        Returns:
+            Filtered graph with only nodes having 2+ intra-repo links
+        """
+        logger.info("Building GitHub intra-repository dependency graph...")
+        
+        # Phase 1: Group files by repository and extract imports
+        repo_files = {}  # repo_name -> [(file_path, content, imports)]
+        
+        for doc in self.source.iter_documents():
+            repo_name = doc.metadata.get("max_stars_repo_name", "")
+            file_path = doc.identifier
+            content = doc.content
+            
+            if not repo_name or not file_path:
+                continue
+            
+            # Extract imports using extract.py logic
+            imported_modules = extract_file_imports(content, file_path, repo_name)
+            
+            repo_files.setdefault(repo_name, []).append((
+                file_path,
+                content,
+                imported_modules
+            ))
+        
+        logger.info(f"Grouped {sum(len(files) for files in repo_files.values())} files "
+                   f"into {len(repo_files)} repositories")
+        
+        # Phase 2: Build graph per repository with import resolution
+        final_graph = {}
+        repos_with_links = 0
+        
+        for repo_name, files in repo_files.items():
+            # Skip repos with only 1 file (can't have intra-repo links)
+            if len(files) < 2:
+                continue
+            
+            # Build module -> file mapping for this repo
+            module_to_file = {}
+            file_to_imports = {}
+            norm_repo = normalize_repository_name(repo_name)
+            
+            for file_path, content, imported_modules in files:
+                file_to_imports[file_path] = imported_modules
+                module_name = _path_to_module_name(file_path)
+                module_to_file[module_name] = file_path
+                
+                # Also map __init__.py to parent module
+                if file_path.endswith("/__init__.py"):
+                    parent_module = _path_to_module_name(file_path[:-12])
+                    if parent_module:
+                        module_to_file[parent_module] = file_path
+            
+            # Create nodes for this repo
+            repo_graph = {}
+            path_to_key = {}
+            
+            for file_path, content, _ in files:
+                # Use repo:path as the key format
+                k = f"{norm_repo}:{file_path}"
+                path_to_key[file_path] = k
+                repo_graph[k] = GraphNode(
+                    title=k,
+                    char_count=len(content)
+                )
+            
+            # Resolve imports to actual files and create outgoing edges
+            for file_path, imported_modules in file_to_imports.items():
+                outgoing_links = set()
+                for imported_module in imported_modules:
+                    target_file = _resolve_import_to_file(
+                        imported_module, 
+                        module_to_file, 
+                        file_path
+                    )
+                    # Only add link if target exists and is different from source
+                    if target_file and target_file != file_path:
+                        outgoing_links.add(target_file)
+                
+                if outgoing_links:
+                    repo_graph[path_to_key[file_path]].outgoing = outgoing_links
+            
+            # Compute incoming edges
+            for source_key, node in repo_graph.items():
+                source_path = source_key.split(":", 1)[1]
+                for target_file_path in node.outgoing:
+                    target_key = path_to_key.get(target_file_path)
+                    if target_key:
+                        repo_graph[target_key].incoming.add(source_path)
+            
+            # Check if this repo has any links
+            if any(node.outgoing or node.incoming for node in repo_graph.values()):
+                repos_with_links += 1
+                final_graph.update(repo_graph)
+        
+        logger.info(f"Graph complete: {len(final_graph)} nodes from {repos_with_links} repos "
+                   f"with intra-repository dependencies")
+        
+        # Phase 3: Filter to keep only nodes with 2+ total links
+        nodes_before = len(final_graph)
+        filtered = {
+            k: v for k, v in final_graph.items()
+            if (len(v.outgoing) + len(v.incoming)) >= 2
+        }
+        nodes_after = len(filtered)
+        
+        logger.info(
+            f"Filtered graph: {nodes_before} -> {nodes_after} nodes "
+            f"({nodes_after/nodes_before*100:.1f}% kept with 2+ links)"
+        )
+        
+        # Write filtered graph
+        self._write_graph(filtered, output_path)
+        
+        return filtered
+
+
+def build_github_graph(
+    input_file: Path,
+    output_path: Path,
+    show_progress: bool = True,
+) -> Dict[str, GraphNode]:
+    """
+    Build GitHub intra-repository dependency graph.
+    
+    This processes a JSONL file from download_sample.py and builds
+    a graph showing file-to-file dependencies within repositories.
+    
+    Args:
+        input_file: JSONL file from download_sample.py
+        output_path: Path for output graph.jsonl
+        show_progress: Show progress bars
+    
+    Returns:
+        Dictionary of graph nodes (filtered to 2+ links)
+    
+    Example:
+        >>> from pathlib import Path
+        >>> graph = build_github_graph(
+        ...     input_file=Path("sample_100k.jsonl"),
+        ...     output_path=Path("github_graph.jsonl")
+        ... )
+        >>> print(f"Built graph with {len(graph)} nodes")
+    """
+    builder = GitHubGraphBuilder(
+        source=JSONLSource(
+            input_file,
+            identifier_field="max_stars_repo_path",
+            additional_fields=["max_stars_repo_name"]
+        ),
+        link_extractor=PythonImportExtractor(),
+        normalizer=PythonModuleNormalizer(),
+        source_type="github",
+        show_progress=show_progress,
+    )
+    
+    return builder.build_graph(output_path)
