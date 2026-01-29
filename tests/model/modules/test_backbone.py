@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
-from tunalab.modules.backbone import DS2DSBackbone
+from model.modules.backbone import DS2DSBackbone
 
 
 def causal(b, h, q_idx, kv_idx):
