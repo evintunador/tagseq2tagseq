@@ -26,19 +26,19 @@ def dummy_pretokenize_input(tmpdir_factory):
     
     # Create dummy markdown files
     md_content = {
-        "Doc A": "This is the first document.",
-        "Doc B": "Here is the second one.",
-        "Doc C": "And a third, slightly longer document."
+        "Doc_A": "This is the first document.",
+        "Doc_B": "Here is the second one.",
+        "Doc_C": "And a third, slightly longer document."
     }
     for title, content in md_content.items():
-        with open(input_dir / f"{title.replace(' ', '_')}.md", "w") as f:
+        with open(input_dir / f"{title}.md", "w") as f:
             f.write(f"# {title}\n{content}")
 
-    # Create dummy graph.jsonl
+    # Create dummy graph.jsonl (titles must match filenames without .md extension)
     graph_data = [
-        {"title": "Doc A", "outgoing": ["Doc B"], "incoming": []},
-        {"title": "Doc B", "outgoing": [], "incoming": ["Doc A"]},
-        {"title": "Doc C", "outgoing": [], "incoming": []},
+        {"title": "Doc_A", "outgoing": ["Doc_B"], "incoming": []},
+        {"title": "Doc_B", "outgoing": [], "incoming": ["Doc_A"]},
+        {"title": "Doc_C", "outgoing": [], "incoming": []},
     ]
     graph_file_path = input_dir / "graph.jsonl"
     with open(graph_file_path, "w") as f:
@@ -95,9 +95,9 @@ def test_pretokenize_script_with_tiktoken(dummy_pretokenize_input, tmpdir_factor
         # Validate tokenized_graph.jsonl
         enc = tiktoken.get_encoding("gpt2")
         expected_tokens = {
-            "Doc A": enc.encode("This is the first document."),
-            "Doc B": enc.encode("Here is the second one."),
-            "Doc C": enc.encode("And a third, slightly longer document.")
+            "Doc_A": enc.encode("# Doc_A\nThis is the first document."),
+            "Doc_B": enc.encode("# Doc_B\nHere is the second one."),
+            "Doc_C": enc.encode("# Doc_C\nAnd a third, slightly longer document.")
         }
 
         with open(graph_path, "r") as f:
@@ -105,31 +105,31 @@ def test_pretokenize_script_with_tiktoken(dummy_pretokenize_input, tmpdir_factor
         assert len(lines) == 3
         
         graph_nodes = {json.loads(line)['title']: json.loads(line) for line in lines}
-        assert graph_nodes["Doc A"]["tok_len"] == len(expected_tokens["Doc A"])
-        assert graph_nodes["Doc B"]["tok_len"] == len(expected_tokens["Doc B"])
-        assert graph_nodes["Doc C"]["tok_len"] == len(expected_tokens["Doc C"])
-        assert graph_nodes["Doc A"]["tok_shard_idx"] == 0
+        assert graph_nodes["Doc_A"]["tok_len"] == len(expected_tokens["Doc_A"])
+        assert graph_nodes["Doc_B"]["tok_len"] == len(expected_tokens["Doc_B"])
+        assert graph_nodes["Doc_C"]["tok_len"] == len(expected_tokens["Doc_C"])
+        assert graph_nodes["Doc_A"]["tok_shard_idx"] == 0
 
         # Validate shard content
         all_read_tokens = BinaryShardIO.read_datafile_tokens_memmap(shard_path, dtype=np.uint16)
         
         expected_all_tokens = []
-        for title in ["Doc A", "Doc B", "Doc C"]: # Assumes this processing order
+        for title in ["Doc_A", "Doc_B", "Doc_C"]: # Assumes this processing order
             expected_all_tokens.extend(expected_tokens[title])
             
         # Note: The actual order of processing can vary with multiprocessing.
         # For a robust test with multiple workers, we'd need to read the offsets
         # from the graph.jsonl and check slices. For a single worker, this is fine.
         if args.processes == 1:
-            doc_a_info = graph_nodes["Doc A"]
+            doc_a_info = graph_nodes["Doc_A"]
             offset_a = (doc_a_info["tok_offset_bytes"] - 1024) // 2
             len_a = doc_a_info["tok_len"]
-            assert np.array_equal(all_read_tokens[offset_a:offset_a+len_a], expected_tokens["Doc A"])
+            assert np.array_equal(all_read_tokens[offset_a:offset_a+len_a], expected_tokens["Doc_A"])
             
-            doc_b_info = graph_nodes["Doc B"]
+            doc_b_info = graph_nodes["Doc_B"]
             offset_b = (doc_b_info["tok_offset_bytes"] - 1024) // 2
             len_b = doc_b_info["tok_len"]
-            assert np.array_equal(all_read_tokens[offset_b:offset_b+len_b], expected_tokens["Doc B"])
+            assert np.array_equal(all_read_tokens[offset_b:offset_b+len_b], expected_tokens["Doc_B"])
 
 # Re-enable logging
 logging.disable(logging.NOTSET)

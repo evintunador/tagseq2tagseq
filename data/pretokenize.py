@@ -12,7 +12,7 @@ from functools import partial
 from pathlib import Path
 from queue import Empty
 from time import sleep
-from typing import Callable, List
+from typing import Callable, List, Literal
 import pickle
 
 import numpy as np
@@ -23,8 +23,22 @@ from tunalab.pretokenized_data.shard_io import BinaryShardIO
 from tunalab.reproducibility import ReproducibilityManager
 from tunalab import tracking
 
+from .dataset_config import DatasetConfig, save_config_to_pretokenized_dir
+
 
 logger = logging.getLogger(__name__)
+
+
+# Title extraction strategies
+def extract_title_flat(filepath: str, input_dir: Path) -> str:
+    """Extract title as basename only (for flat datasets like Wikipedia)."""
+    return os.path.splitext(os.path.basename(filepath))[0]
+
+
+def extract_title_hierarchical(filepath: str, input_dir: Path) -> str:
+    """Extract title as relative path from input_dir (for nested datasets like GitHub)."""
+    relative_path = os.path.relpath(filepath, input_dir)
+    return os.path.splitext(relative_path)[0]
 
 
 def load_custom_tokenizer(tokenizer_path: Path):
@@ -50,6 +64,8 @@ def tokenize_worker(
     queue: mp.Queue,
     encode_fn: Callable[[str], List[int]],
     dtype: np.dtype,
+    input_dir: Path,
+    title_strategy: str,
 ):
     """
     Reads a single markdown file, extracts its title, tokenizes its content,
@@ -58,8 +74,12 @@ def tokenize_worker(
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-            
-        title = os.path.splitext(os.path.basename(filepath))[0]
+        
+        # Extract title based on strategy
+        if title_strategy == 'hierarchical':
+            title = extract_title_hierarchical(filepath, input_dir)
+        else:  # 'flat'
+            title = extract_title_flat(filepath, input_dir)
             
         # Clean hashes from links in the text to avoid polluting the model with implementation details.
         # We want [Link](Title) instead of [Link](Title_123456).
@@ -179,7 +199,9 @@ def writer_process(
     logger.info(f"Writing metadata to {output_metadata_file}...")
     with open(output_metadata_file, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=4)
-        
+    
+    # Write dataset_config.json for model to know how to handle titles
+    # This is returned from the writer_process indirectly via the parent function
     logger.info("Pre-tokenization complete.")
 
 
@@ -206,6 +228,21 @@ def finalize_shard(file_handle, total_bytes: int, dtype_str: str):
 
 def run_preprocessing(args, rep: ReproducibilityManager):
     """The main logic of the preprocessing script, wrapped to be called by the manager."""
+    
+    # Determine title extraction strategy
+    if args.title_strategy == 'auto':
+        # Auto-detect based on directory structure
+        # If we find nested directories with .md files, use hierarchical
+        has_nested = False
+        for md_file in args.input_dir.rglob("*.md"):
+            relative = md_file.relative_to(args.input_dir)
+            if len(relative.parts) > 1:  # File is in a subdirectory
+                has_nested = True
+                break
+        title_strategy = 'hierarchical' if has_nested else 'flat'
+        logger.info(f"Auto-detected title strategy: {title_strategy}")
+    else:
+        title_strategy = args.title_strategy
     
     # --- Setup Logging ---
     # The ReproducibilityManager gives us a unique output directory.
@@ -297,6 +334,8 @@ def run_preprocessing(args, rep: ReproducibilityManager):
             queue=queue,
             encode_fn=encode_fn,
             dtype=token_dtype,
+            input_dir=args.input_dir,
+            title_strategy=title_strategy,
         )
         # Using imap_unordered for potentially better performance as results are processed as they complete
         # A simple pool.map is also fine and was used before.
@@ -307,6 +346,23 @@ def run_preprocessing(args, rep: ReproducibilityManager):
     logger.info("All files sent to workers. Waiting for writer to finish...")
     writer.join()
     logger.info("All processes finished.")
+    
+    # --- Save dataset configuration ---
+    # Determine title format from strategy
+    if title_strategy == 'hierarchical':
+        title_format = 'hierarchical'
+    else:
+        title_format = 'flat'
+    
+    dataset_config = DatasetConfig(
+        name=args.dataset_name or f"Dataset from {args.input_dir.name}",
+        title_format=title_format,
+        title_strategy=title_strategy,
+        hash_length=6,
+        description=f"Pretokenized from {args.input_dir}"
+    )
+    save_config_to_pretokenized_dir(dataset_config, Path(rep.output_dir))
+    logger.info(f"Saved dataset configuration: {dataset_config.name}")
 
 
 def main():
@@ -354,6 +410,24 @@ def main():
         type=int,
         default=max(1, mp.cpu_count() - 1),
         help=f"Number of worker processes to use (default: {max(1, mp.cpu_count() - 1)})."
+    )
+    parser.add_argument(
+        "--title-strategy",
+        type=str,
+        choices=['flat', 'hierarchical', 'auto'],
+        default='auto',
+        help=(
+            "How to extract titles from filepaths:\n"
+            "  flat: Use basename only (e.g., 'file.md' -> 'file')\n"
+            "  hierarchical: Use relative path (e.g., 'dir/file.md' -> 'dir/file')\n"
+            "  auto: Detect based on directory structure (default)"
+        )
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default=None,
+        help="Optional name for the dataset (saved in config)"
     )
     parser.add_argument(
         "-q", "--quiet",

@@ -1,7 +1,8 @@
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -12,6 +13,10 @@ from .pack_sampler import DocPlacement
 
 
 logger = logging.getLogger(__name__)
+
+
+# Cache for formatter instances per dataset directory
+_formatter_cache: Dict[str, Any] = {}
 
 
 @dataclass
@@ -77,12 +82,52 @@ def _slice_body_tokens(
     return full_body[:k]
 
 
+def get_title_formatter(run_directory: Path):
+    """
+    Get the appropriate title formatter for a dataset.
+    
+    Loads the dataset config and returns the corresponding formatter.
+    Caches formatters to avoid repeated file reads.
+    
+    Args:
+        run_directory: Path to pretokenized dataset directory
+        
+    Returns:
+        TitleFormatter instance for this dataset
+    """
+    from .dataset_config import load_config_from_pretokenized_dir
+    
+    cache_key = str(run_directory.resolve())
+    
+    if cache_key not in _formatter_cache:
+        try:
+            config = load_config_from_pretokenized_dir(run_directory)
+            formatter = config.get_formatter()
+            _formatter_cache[cache_key] = formatter
+            logger.info(
+                f"Loaded title formatter for dataset '{config.name}': "
+                f"{formatter.__class__.__name__}"
+            )
+        except FileNotFoundError:
+            # Fall back to flat formatter if no config
+            from model.title_formats import FlatTitleFormatter
+            logger.warning(
+                f"No dataset_config.json found in {run_directory}, "
+                f"using default FlatTitleFormatter"
+            )
+            formatter = FlatTitleFormatter()
+            _formatter_cache[cache_key] = formatter
+    
+    return _formatter_cache[cache_key]
+
+
 def build_packed_batch(
     graph: GraphIndex,
     backend: PretokShardedBackend,
     layout: DocLayoutPolicy,
     placements: List[DocPlacement],
     as_2d: bool = True,
+    formatter: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Materialise a single packed batch from an ordered list of ``DocPlacement``.
@@ -142,9 +187,12 @@ def build_packed_batch(
         title = graph.get_title(p.doc_id)
         outgoing_titles = graph.get_outgoing_links(title)
         
-        # Strip hash to get clean title: title_hash -> title
-        # Hash is always last 7 chars: _xxxxxx
-        clean_title = re.sub(r'_[0-9a-f]{6}$', '', title)
+        # Strip hash to get clean title using formatter if available
+        if formatter is not None:
+            clean_title = formatter.strip_hash(title)
+        else:
+            # Fall back to default pattern (6-char hex hash)
+            clean_title = re.sub(r'_[0-9a-f]{6}$', '', title)
         
         span = DocSpan(
             doc_id=p.doc_id,
