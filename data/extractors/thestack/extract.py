@@ -1,14 +1,20 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-GitHub Data Extractor: Extract dependency links from GitHub repository code.
+TheStack (GitHub) Data Extractor: Extract dependency links from repository code.
 Processes Python repositories to extract import relationships as links.
 """
 import re
-import hashlib
 import json
 import os
 from typing import Dict, List, Set
+
+# Import shared normalizers
+from data.extractors.normalization import PythonModuleNormalizer, FilesafeNormalizer
+
+# Module-level normalizer instances (reused for all calls)
+_module_normalizer = PythonModuleNormalizer()
+_repo_normalizer = FilesafeNormalizer()  # Generic for repo names
 
 # ======================================================================
 # Main Processing Pipeline
@@ -65,17 +71,45 @@ def extract_and_normalize_imports(content: str) -> str:
 def normalize_package_name(package_name: str) -> str:
     """
     Normalize a Python package/module name for use in links.
-    Similar to the wiki title normalization but adapted for Python packages.
+    
+    This is a convenience wrapper for backward compatibility with existing code.
+    Uses PythonModuleNormalizer internally.
+    
+    Args:
+        package_name: Python module or package name (e.g., "foo.bar.baz")
+    
+    Returns:
+        Filesystem-safe identifier: {readable_part}_{6char_hash}
+    
+    Examples:
+        >>> normalize_package_name("numpy.array")
+        'numpy_array_a1b2c3'
+        >>> normalize_package_name("my_package")
+        'my_package_4f3d2e'
     """
-    # Convert dots to underscores and clean up
-    clean_name = package_name.replace('.', '_').lower()
-    clean_name = re.sub(r'[^a-z0-9\-_]', '_', clean_name)
-    clean_name = re.sub(r'__+', '_', clean_name)
-    clean_name = clean_name.strip('_')
+    return _module_normalizer.normalize(package_name)
 
-    # Create hash for uniqueness (similar to wiki normalization)
-    package_hash = hashlib.md5(clean_name.encode('utf-8')).hexdigest()[:6]
-    return f"{clean_name}_{package_hash}"
+
+def normalize_repository_name(repo_name: str) -> str:
+    """
+    Normalize a GitHub repository name for use as a node identifier.
+    
+    This is a convenience wrapper for backward compatibility with existing code.
+    Uses generic FilesafeNormalizer internally.
+    
+    Args:
+        repo_name: Repository name (e.g., "owner/repo-name")
+    
+    Returns:
+        Filesystem-safe identifier: {readable_part}_{6char_hash}
+    
+    Examples:
+        >>> normalize_repository_name("numpy/numpy")
+        'numpy_numpy_a1b2c3'
+        >>> normalize_repository_name("microsoft/TypeScript")
+        'microsoft_typescript_4f3d2e'
+    """
+    return _repo_normalizer.normalize(repo_name)
 
 def extract_file_imports(content: str, file_path: str, repo_name: str) -> Set[str]:
     """
@@ -132,20 +166,6 @@ def _is_potential_repo_file_import(module_name: str, file_path: str, repo_name: 
     # If the import looks like it could be part of this repository
     # (not starting with known external packages)
     return True
-
-def normalize_repository_name(repo_name: str) -> str:
-    """
-    Normalize a GitHub repository name for use as a node title.
-    """
-    # Clean up the repo name
-    clean_name = repo_name.replace('/', '_').replace('-', '_').lower()
-    clean_name = re.sub(r'[^a-z0-9\-_]', '_', clean_name)
-    clean_name = re.sub(r'__+', '_', clean_name)
-    clean_name = clean_name.strip('_')
-
-    # Create hash for uniqueness
-    repo_hash = hashlib.md5(clean_name.encode('utf-8')).hexdigest()[:6]
-    return f"{clean_name}_{repo_hash}"
 
 # ======================================================================
 # Helper Functions

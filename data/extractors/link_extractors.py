@@ -23,13 +23,12 @@ class MarkdownLinkExtractor(LinkExtractor):
     # The negative lookbehind (?<!\!) ensures the [ is not preceded by !
     LINK_PATTERN = re.compile(r'(?<!\!)\[([^\]]*?)\]\((.*?)\)')
     
-    def extract_links(self, content: str, context: LinkContext) -> Set[str]:
+    def extract_links(self, context: LinkContext) -> Set[str]:
         """
         Extract markdown link targets.
         
         Args:
-            content: Document content to extract links from
-            context: Context containing document metadata
+            context: Context containing document and metadata
         
         Returns:
             Set of link targets (the part in parentheses)
@@ -37,7 +36,7 @@ class MarkdownLinkExtractor(LinkExtractor):
         from urllib.parse import unquote
         
         # Find all matches - group(2) contains the URL part
-        matches = self.LINK_PATTERN.finditer(content)
+        matches = self.LINK_PATTERN.finditer(context.document.content)
         links = [match.group(2) for match in matches]
         
         # Unquote any URL encoding
@@ -79,13 +78,12 @@ class PythonImportExtractor(LinkExtractor):
         'flask', 'requests', 'urllib', 'http', 'xml', 'html', 'email', 'smtplib'
     }
     
-    def extract_links(self, content: str, context: LinkContext) -> Set[str]:
+    def extract_links(self, context: LinkContext) -> Set[str]:
         """
         Extract Python imports.
         
         Args:
-            content: Python source code
-            context: Context containing document metadata
+            context: Context containing document and metadata
         
         Returns:
             Set of imported module names
@@ -93,7 +91,7 @@ class PythonImportExtractor(LinkExtractor):
         imports = set()
         
         for pattern in self.PATTERNS:
-            matches = pattern.findall(content)
+            matches = pattern.findall(context.document.content)
             for match in matches:
                 module_name = match.strip()
                 

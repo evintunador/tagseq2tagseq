@@ -1,9 +1,5 @@
 """
 Core graph building logic using pluggable components.
-
-Combines logic from:
-- wiki_graph_extractor/build_graph.py (lines 156-288)
-- github_graph_extractor/build_graph_streaming.py (lines 248-336)
 """
 import json
 import logging
@@ -21,22 +17,28 @@ logger = logging.getLogger(__name__)
 
 class GraphNode:
     """A node in the document graph."""
-    
-    def __init__(self, title: str, char_count: int = 0):
+
+    def __init__(self, identifier: str, normalized_identifier: str, char_count: int = 0):
         """
         Args:
-            title: Normalized title/identifier for this node
+            identifier: Native identifier for this node
+            normalized_identifier: Filesystem-safe, normalized identifier for this node
             char_count: Number of characters in document content
         """
-        self.title = title
+        self.identifier = identifier
+        self.normalized_identifier = normalized_identifier
         self.char_count = char_count
         self.outgoing: Set[str] = set()
         self.incoming: Set[str] = set()
         self.metadata: Dict[str, Any] = {}
-    
+
     def __repr__(self):
-        return (f"GraphNode(title={self.title!r}, char_count={self.char_count}, "
-                f"outgoing={len(self.outgoing)}, incoming={len(self.incoming)})")
+        return (f"GraphNode(identifier={self.identifier!r}, "
+                f"normalized_identifier={self.normalized_identifier!r}, "
+                f"char_count={self.char_count}, "
+                f"outgoing={len(self.outgoing)}, "
+                f"incoming={len(self.incoming)}, "
+                f"metadata={self.metadata})")
 
 
 class GraphBuilder:
@@ -68,7 +70,7 @@ class GraphBuilder:
             source: Content source providing documents
             link_extractor: Extracts raw links from content
             normalizer: Normalizes links to canonical identifiers
-            source_type: Type of source for logging/context ("wiki", "github", etc.)
+            source_type: Type of source for logging/context ("wikipedia", "thestack", etc.)
             show_progress: Show progress bars via tqdm
         """
         self.source = source
@@ -92,42 +94,38 @@ class GraphBuilder:
         # Phase 1: Extract links from all documents
         graph: Dict[str, GraphNode] = {}
         
-        # Load all documents into memory first so we can show progress
-        # For very large datasets, this could be made streaming
-        documents = list(self.source.iter_documents())
-        logger.info(f"Processing {len(documents)} documents...")
-        
+        logger.info("Processing documents (streaming)...")
         iterator = tqdm(
-            documents, 
+            self.source.iter_documents(),
             disable=not self.show_progress, 
-            desc="Extracting links", 
-            unit="docs"
+            desc="Extracting links",
+            unit="docs",
+            bar_format="{desc}: {n_fmt} docs [{elapsed}, {rate_fmt}]"
         )
         
         for doc in iterator:
-            # Normalize document identifier
+            # Use the normalized identifier from the document
             context = LinkContext(doc, self.source_type)
-            normalized_title = self.normalizer.normalize(doc.identifier, context)
+            normalized_id = doc.normalized_identifier
             
             # Create node if it doesn't exist
-            if normalized_title not in graph:
+            if normalized_id not in graph:
                 node = GraphNode(
-                    title=normalized_title,
+                    identifier=doc.identifier,
+                    normalized_identifier=normalized_id,
                     char_count=len(doc.content)
                 )
-                # Store mapping from source identifier to normalized title
-                node.metadata['source_identifier'] = doc.identifier
                 # Include any additional metadata from the document
                 node.metadata.update(doc.metadata)
-                graph[normalized_title] = node
+                graph[normalized_id] = node
             
             # Extract links from content
-            raw_links = self.link_extractor.extract_links(doc.content, context)
+            raw_links = self.link_extractor.extract_links(context)
             
             # Normalize link targets and add to outgoing set
             for raw_link in raw_links:
-                normalized_link = self.normalizer.normalize(raw_link, context)
-                graph[normalized_title].outgoing.add(normalized_link)
+                normalized_link = self.normalizer.normalize(raw_link)
+                graph[normalized_id].outgoing.add(normalized_link)
         
         # Phase 2: Build incoming links
         logger.info("Building incoming link relationships...")

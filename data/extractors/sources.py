@@ -48,10 +48,12 @@ class MarkdownFileSource(ContentSource):
                 continue
             
             # Title from filename (without extension)
+            # For markdown files, the filename IS already normalized by dump_extractor.py
             identifier = filepath.stem
             
             yield Document(
                 identifier=identifier,
+                normalized_identifier=identifier,  # Already normalized in filename
                 content=content,
                 metadata={'filepath': str(filepath)}
             )
@@ -123,8 +125,11 @@ class JSONLSource(ContentSource):
                 # Add line number for debugging
                 metadata['line_number'] = line_num
                 
+                # For JSONL, identifier needs normalization
+                # We'll let the normalizer handle this in the graph builder
                 yield Document(
                     identifier=identifier,
+                    normalized_identifier=identifier,  # Will be normalized by graph builder
                     content=content or "",
                     metadata=metadata
                 )
@@ -194,8 +199,10 @@ class GitHubJSONLSource(ContentSource):
                     'line_number': line_num
                 }
                 
+                # For GitHub, identifier needs normalization
                 yield Document(
                     identifier=identifier,
+                    normalized_identifier=identifier,  # Will be normalized by graph builder
                     content=content or "",
                     metadata=metadata
                 )

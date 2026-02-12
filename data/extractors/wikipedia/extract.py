@@ -1,6 +1,18 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Wikipedia article extraction and cleaning utilities.
+
+Converts raw Wikipedia wikitext into clean Markdown while preserving internal links.
+"""
 import re
 import html
-import hashlib
+
+# Import shared normalizer
+from data.extractors.normalization import WikiTitleNormalizer
+
+# Module-level normalizer instance (reused for all calls)
+_title_normalizer = WikiTitleNormalizer()
 
 # ======================================================================
 # Main Processing Pipeline
@@ -542,44 +554,26 @@ def fix_date_ranges(text):
     text = re.sub(r'\((\d{4})(\d{4})\)', r'(\1-\2)', text)
     return text
 
-def normalize_title(title):
+def normalize_title(title: str) -> str:
     """
-    Normalizes a title for use in filenames and link targets.
-    Strict normalization to ensure alignment:
-    - Lowercase
-    - Replace spaces and special characters with underscores
-    - Limit length
-    - Appends a hash of the pre-stripped title to ensure distinct documents
-      (e.g. 'A+B' vs 'A-B') don't collide.
+    Normalizes a Wikipedia title for use in filenames and link targets.
+    
+    This is a convenience wrapper for backward compatibility with existing code
+    that calls normalize_title() as a function. Uses WikiTitleNormalizer internally.
+    
+    Args:
+        title: Raw Wikipedia title string
+    
+    Returns:
+        Filesystem-safe identifier: {readable_part}_{6char_hash}
+    
+    Examples:
+        >>> normalize_title("Albert Einstein")
+        'albert_einstein_a1b2c3'
+        >>> normalize_title("C++")  # Special chars preserved in hash
+        'c_4f3d2e'
     """
-    # Decode HTML entities
-    title = html.unescape(title)
-    
-    # Pre-normalization canonicalization (soft) to determine identity
-    # This handles case-insensitivity and space/underscore equivalence
-    canonical = title.lower().strip().replace(' ', '_')
-    
-    # Compute hash of the canonical form to distinguish different symbols
-    # e.g. "a+b" vs "a-b" which both normalize to "a_b" below.
-    # We use MD5 and take the first 6 chars for a compact suffix.
-    title_hash = hashlib.md5(canonical.encode('utf-8')).hexdigest()[:6]
-
-    # Apply strict normalization for the filename part
-    clean_title = canonical
-    
-    # Replace invalid chars with underscores (keep only alphanumeric, hyphen, underscore)
-    clean_title = re.sub(r'[^a-z0-9\-_]', '_', clean_title)
-    # Collapse underscores
-    clean_title = re.sub(r'__+', '_', clean_title)
-    # Strip leading/trailing underscores
-    clean_title = clean_title.strip('_')
-    
-    # Limit length (leave room for hash and separator)
-    # 200 - 1 (separator) - 6 (hash) = 193
-    if len(clean_title) > 193:
-        clean_title = clean_title[:193]
-        
-    return f"{clean_title}_{title_hash}"
+    return _title_normalizer.normalize(title)
 
 def convert_bold_and_italics(text):
     """Converts wikitext bold/italics to Markdown."""

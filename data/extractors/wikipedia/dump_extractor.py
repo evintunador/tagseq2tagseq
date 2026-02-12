@@ -16,7 +16,7 @@ from functools import partial
 import glob
 from tqdm import tqdm
 
-from data.wiki_graph_extractor.extract import process_wikitext, normalize_title
+from data.extractors.wikipedia.extract import process_wikitext, normalize_title
 
 # ===========================================================================
 # Worker Process Function

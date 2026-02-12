@@ -1,7 +1,7 @@
 """
-GitHub intra-repository dependency graph builder using shared framework.
+TheStack intra-repository dependency graph builder using shared framework.
 
-This module extends the generic GraphBuilder with GitHub-specific logic:
+This module extends the generic GraphBuilder with TheStack-specific logic:
 - Groups files by repository
 - Resolves imports to actual files within the same repository
 - Only creates links between files in the same repo (intra-repo dependencies)
@@ -77,11 +77,11 @@ def _resolve_import_to_file(
     return None
 
 
-class GitHubGraphBuilder(GraphBuilder):
+class TheStackGraphBuilder(GraphBuilder):
     """
-    Extended graph builder for GitHub with intra-repository import resolution.
+    Extended graph builder for TheStack with intra-repository import resolution.
     
-    GitHub has additional complexity:
+    TheStack has additional complexity:
     - Needs to group files by repository
     - Must resolve imports to actual files within repo
     - Only creates links between files in the same repository
@@ -107,7 +107,7 @@ class GitHubGraphBuilder(GraphBuilder):
         Returns:
             Filtered graph with only nodes having 2+ intra-repo links
         """
-        logger.info("Building GitHub intra-repository dependency graph...")
+        logger.info("Building TheStack intra-repository dependency graph...")
         
         # Phase 1: Group files by repository and extract imports
         repo_files = {}  # repo_name -> [(file_path, content, imports)]
@@ -166,12 +166,11 @@ class GitHubGraphBuilder(GraphBuilder):
                 k = f"{norm_repo}:{file_path}"
                 path_to_key[file_path] = k
                 node = GraphNode(
-                    title=k,
+                    identifier=f"{repo_name}:{file_path}",  # Original repo:path
+                    normalized_identifier=k,  # Normalized repo:path
                     char_count=len(content)
                 )
-                # Store source identifier as repo_name:file_path (not normalized)
-                # This allows matching back to original JSONL records
-                node.metadata['source_identifier'] = f"{repo_name}:{file_path}"
+                # Include metadata
                 node.metadata['max_stars_repo_name'] = repo_name
                 node.metadata['max_stars_repo_path'] = file_path
                 repo_graph[k] = node
@@ -229,13 +228,13 @@ class GitHubGraphBuilder(GraphBuilder):
         return filtered
 
 
-def build_github_graph(
+def build_thestack_graph(
     input_file: Path,
     output_path: Path,
     show_progress: bool = True,
 ) -> Dict[str, GraphNode]:
     """
-    Build GitHub intra-repository dependency graph.
+    Build TheStack intra-repository dependency graph.
     
     This processes a JSONL file from download_sample.py and builds
     a graph showing file-to-file dependencies within repositories.
@@ -250,13 +249,13 @@ def build_github_graph(
     
     Example:
         >>> from pathlib import Path
-        >>> graph = build_github_graph(
+        >>> graph = build_thestack_graph(
         ...     input_file=Path("sample_100k.jsonl"),
-        ...     output_path=Path("github_graph.jsonl")
+        ...     output_path=Path("thestack_graph.jsonl")
         ... )
         >>> print(f"Built graph with {len(graph)} nodes")
     """
-    builder = GitHubGraphBuilder(
+    builder = TheStackGraphBuilder(
         source=JSONLSource(
             input_file,
             identifier_field="max_stars_repo_path",
@@ -264,7 +263,7 @@ def build_github_graph(
         ),
         link_extractor=PythonImportExtractor(),
         normalizer=PythonModuleNormalizer(),
-        source_type="github",
+        source_type="thestack",
         show_progress=show_progress,
     )
     

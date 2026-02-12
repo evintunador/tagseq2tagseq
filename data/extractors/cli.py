@@ -3,8 +3,8 @@
 Unified CLI for graph extraction from multiple sources.
 
 Usage:
-    python -m data.extractors.cli wiki <input_dir> -o graph.jsonl
-    python -m data.extractors.cli github <input_file> -o graph.jsonl
+    python -m data.extractors.cli wikipedia <input_dir> -o graph.jsonl
+    python -m data.extractors.cli thestack <input_file> -o graph.jsonl
 """
 import argparse
 import logging
@@ -38,48 +38,36 @@ def main():
         required=True, 
         help="Output path for graph.jsonl"
     )
-    wiki_parser.add_argument(
-        "-q", "--quiet", 
-        action="store_true",
-        help="Suppress progress bars"
-    )
     
-    # GitHub subcommand
-    github_parser = subparsers.add_parser(
-        "github", 
-        help="Extract GitHub dependency graph",
-        description="Build intra-repository dependency graph from GitHub data"
+    # thestack subcommand
+    thestack_parser = subparsers.add_parser(
+        "thestack", 
+        help="Extract thestack dependency graph",
+        description="Build intra-repository dependency graph from thestack data"
     )
-    github_parser.add_argument(
+    thestack_parser.add_argument(
         "input_file", 
         type=Path, 
         help="Input JSONL file from download_sample.py"
     )
-    github_parser.add_argument(
+    thestack_parser.add_argument(
         "-o", "--output", 
         type=Path, 
         required=True, 
         help="Output path for graph.jsonl"
     )
-    github_parser.add_argument(
-        "-q", "--quiet", 
-        action="store_true",
-        help="Suppress progress bars"
-    )
     
     args = parser.parse_args()
     
-    # Configure logging
-    log_level = logging.WARNING if args.quiet else logging.INFO
     logging.basicConfig(
-        level=log_level, 
+        level=logging.INFO, 
         format='%(levelname)s: %(message)s'
     )
     
     # Route to appropriate builder
     try:
         if args.source == "wiki":
-            from data.wiki_graph_extractor.builder import build_wiki_graph
+            from data.extractors.wikipedia.builder import build_wiki_graph
             
             if not args.input_dir.exists():
                 logging.error(f"Input directory does not exist: {args.input_dir}")
@@ -88,23 +76,21 @@ def main():
             logging.info(f"Building Wikipedia graph from {args.input_dir}")
             graph = build_wiki_graph(
                 input_dir=args.input_dir, 
-                output_path=args.output, 
-                show_progress=not args.quiet
+                output_path=args.output
             )
             logging.info(f"Built graph with {len(graph)} nodes -> {args.output}")
         
-        elif args.source == "github":
-            from data.github_graph_extractor.builder import build_github_graph
+        elif args.source == "thestack":
+            from data.extractors.thestack.builder import build_thestack_graph
             
             if not args.input_file.exists():
                 logging.error(f"Input file does not exist: {args.input_file}")
                 sys.exit(1)
             
-            logging.info(f"Building GitHub graph from {args.input_file}")
-            graph = build_github_graph(
+            logging.info(f"Building thestack graph from {args.input_file}")
+            graph = build_thestack_graph(
                 input_file=args.input_file, 
-                output_path=args.output, 
-                show_progress=not args.quiet
+                output_path=args.output
             )
             logging.info(f"Built graph with {len(graph)} nodes -> {args.output}")
         

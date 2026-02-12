@@ -8,7 +8,8 @@ from dataclasses import dataclass
 @dataclass
 class Document:
     """A document from any source."""
-    identifier: str          # Filename, repo:path, etc.
+    identifier: str             # Filename, repo:path, etc.
+    normalized_identifier: str  # for unique, filesystem-safe identifiers
     content: str
     metadata: Dict[str, Any]
 
@@ -17,13 +18,13 @@ class Document:
 class LinkContext:
     """Context for link extraction."""
     document: Document
-    source_type: str         # "wiki", "github", etc.
+    source_type: str         # "wikipedia", "thestack", etc.
 
 
 class LinkExtractor(Protocol):
     """Extract raw link targets from document content."""
     
-    def extract_links(self, content: str, context: LinkContext) -> Set[str]:
+    def extract_links(self, context: LinkContext) -> Set[str]:
         """Returns set of raw link targets found in content."""
         ...
 
@@ -31,7 +32,7 @@ class LinkExtractor(Protocol):
 class LinkNormalizer(Protocol):
     """Normalize raw links into canonical identifiers."""
     
-    def normalize(self, link: str, context: LinkContext) -> str:
+    def normalize(self, link: str) -> str:
         """Returns normalized, filesystem-safe identifier."""
         ...
 
