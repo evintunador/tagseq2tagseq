@@ -6,7 +6,7 @@ from various sources (Wikipedia, GitHub, LaTeX, etc.).
 """
 
 from .protocols import Document, LinkContext, LinkExtractor, LinkNormalizer, ContentSource
-from .normalization import HashingNormalizer, PassthroughNormalizer, WikiTitleNormalizer, PythonModuleNormalizer
+from .normalization import FilesafeNormalizer, PassthroughNormalizer, WikiTitleNormalizer, PythonModuleNormalizer
 from .sources import MarkdownFileSource, JSONLSource
 from .link_extractors import MarkdownLinkExtractor, PythonImportExtractor
 from .graph_builder import GraphBuilder, GraphNode
@@ -19,17 +19,17 @@ __all__ = [
     "LinkNormalizer",
     "ContentSource",
     # Normalizers
-    "HashingNormalizer",
+    "FilesafeNormalizer",
     "PassthroughNormalizer",
     "WikiTitleNormalizer",
     "PythonModuleNormalizer",
+    # Core Builder
+    "GraphBuilder",
+    "GraphNode",
     # Sources
     "MarkdownFileSource",
     "JSONLSource",
     # Link Extractors
     "MarkdownLinkExtractor",
     "PythonImportExtractor",
-    # Core Builder
-    "GraphBuilder",
-    "GraphNode",
 ]

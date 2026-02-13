@@ -43,13 +43,15 @@ class FilesafeNormalizer(LinkNormalizer):
         'a_b_4c614e'
     """
     
-    def __init__(self, max_length: int = 193):
+    def __init__(self, max_length: int = 193, hash_length: int = 6):
         """
         Args:
             max_length: Max length before hash suffix (default 193 for 200-char limit).
                         200 - 1 (underscore) - 6 (hash) = 193
+            hash_length: Number of hex characters in hash suffix (default 6)
         """
         self.max_length = max_length
+        self.hash_length = hash_length
     
     def normalize(self, text: str) -> str:
         """
@@ -62,7 +64,7 @@ class FilesafeNormalizer(LinkNormalizer):
             text: Raw string to normalize
         
         Returns:
-            Normalized identifier: {readable_part}_{6char_hash}
+            Normalized identifier: {readable_part}_{hash} where hash length is configurable
         """
         # Step 1: Domain-specific preprocessing (HOOK for subclasses)
         text = self.preprocess(text)
@@ -124,7 +126,7 @@ class FilesafeNormalizer(LinkNormalizer):
     
     def _compute_hash(self, text: str) -> str:
         """
-        Compute 6-character MD5 hash for uniqueness.
+        Compute MD5 hash for uniqueness with configurable length.
         
         Always hashes the canonical form (before cleaning) to maintain collision
         resistance. This ensures "A+B" and "A-B" get different identifiers even
@@ -134,9 +136,9 @@ class FilesafeNormalizer(LinkNormalizer):
             text: Canonical text to hash
         
         Returns:
-            6-character hex hash
+            hex hash with length specified by self.hash_length
         """
-        return hashlib.md5(text.encode('utf-8')).hexdigest()[:6]
+        return hashlib.md5(text.encode('utf-8')).hexdigest()[:self.hash_length]
 
 
 class PassthroughNormalizer(LinkNormalizer):

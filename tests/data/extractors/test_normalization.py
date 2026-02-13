@@ -3,13 +3,13 @@ Tests for link normalization logic.
 """
 import unittest
 from data.extractors.normalization import (
-    HashingNormalizer, WikiTitleNormalizer, PythonModuleNormalizer
+    FilesafeNormalizer, WikiTitleNormalizer, PythonModuleNormalizer
 )
 
 
-class TestHashingNormalizer(unittest.TestCase):
+class TestFilesafeNormalizer(unittest.TestCase):
     def setUp(self):
-        self.normalizer = HashingNormalizer()
+        self.normalizer = FilesafeNormalizer()
     
     def test_basic_normalization(self):
         """Test basic normalization with spaces and mixed case."""

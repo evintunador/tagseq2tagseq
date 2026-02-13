@@ -35,10 +35,11 @@ def dummy_pretokenize_input(tmpdir_factory):
             f.write(f"# {title}\n{content}")
 
     # Create dummy graph.jsonl (titles must match filenames without .md extension)
+    # Include source_identifier which maps back to the filename
     graph_data = [
-        {"title": "Doc_A", "outgoing": ["Doc_B"], "incoming": []},
-        {"title": "Doc_B", "outgoing": [], "incoming": ["Doc_A"]},
-        {"title": "Doc_C", "outgoing": [], "incoming": []},
+        {"title": "Doc_A", "source_identifier": "Doc_A", "outgoing": ["Doc_B"], "incoming": []},
+        {"title": "Doc_B", "source_identifier": "Doc_B", "outgoing": [], "incoming": ["Doc_A"]},
+        {"title": "Doc_C", "source_identifier": "Doc_C", "outgoing": [], "incoming": []},
     ]
     graph_file_path = input_dir / "graph.jsonl"
     with open(graph_file_path, "w") as f:
@@ -60,10 +61,18 @@ def test_pretokenize_script_with_tiktoken(dummy_pretokenize_input, tmpdir_factor
         input_dir=input_dir,
         graph_file=graph_file_path,
         runs_dir=runs_dir,
+        source_type='markdown',
+        input_file=None,
+        identifier_field='identifier',
+        content_field='content',
+        repo_field=None,
+        path_field=None,
+        additional_fields=None,
         tokenizer_file=None,
         tokenizer_name="gpt2",
         shard_size_gb=0.01,  # Small shard size to ensure it gets created
         processes=1,
+        dataset_name=None,
         quiet=True
     )
     

@@ -90,6 +90,7 @@ def tokenize_worker(
     encode_fn: Callable[[str], List[int]],
     dtype: np.dtype,
     source_id_to_title: dict,
+    hash_length: int,
 ):
     """
     Tokenizes a document and puts the result onto the queue.
@@ -100,6 +101,7 @@ def tokenize_worker(
         encode_fn: Tokenization function
         dtype: NumPy dtype for tokens
         source_id_to_title: Mapping from source identifiers to normalized titles
+        hash_length: Length of hash suffix to strip from links
     """
     source_id, content = doc_tuple
     
@@ -112,13 +114,14 @@ def tokenize_worker(
             
         # Clean hashes from links in the text to avoid polluting the model with implementation details.
         # We want [Link](Title) instead of [Link](Title_123456).
-        # The hash is defined as exactly 6 hex characters at the end of the target.
+        # The hash is defined as exactly hash_length hex characters at the end of the target.
         # Match pattern: ](target_hash) -> ](target)
         # Regex explanation:
         #   (\]\(.*?)   -> Group 1: Capture "](" and the start of the target
-        #   _[0-9a-f]{6} -> Match underscore followed by 6 hex chars (the hash)
+        #   _[0-9a-f]{N} -> Match underscore followed by N hex chars (the hash)
         #   (\))        -> Group 2: Capture the closing parenthesis
-        content = re.sub(r'(\]\(.*?)_[0-9a-f]{6}(\))', r'\1\2', content)
+        hash_pattern = rf'(\]\(.*?)_[0-9a-f]{{{hash_length}}}(\))'
+        content = re.sub(hash_pattern, r'\1\2', content)
 
         tokens = encode_fn(content)
         tokens_np = np.asarray(tokens, dtype=dtype)
@@ -326,12 +329,12 @@ def run_preprocessing(args, rep: ReproducibilityManager):
             content_field=args.content_field,
             additional_fields=args.additional_fields or []
         )
-    elif args.source_type == "github":
-        from data.extractors.sources import GitHubJSONLSource
+    elif args.source_type == "thestack":
+        from data.extractors.sources import TheStackJSONLSource
         if not args.input_file:
-            logger.error("--input-file required for github source type")
+            logger.error("--input-file required for thestack source type")
             return
-        source = GitHubJSONLSource(
+        source = TheStackJSONLSource(
             args.input_file,
             repo_field=args.repo_field or "max_stars_repo_name",
             path_field=args.path_field or "max_stars_repo_path",
@@ -360,6 +363,36 @@ def run_preprocessing(args, rep: ReproducibilityManager):
     if mappable < len(documents):
         unmapped = len(documents) - mappable
         logger.warning(f"{unmapped} documents not found in graph and will be skipped")
+
+    # --- Create Dataset Config Early ---
+    # We need this early to get hash_length for tokenization
+    sample_titles = list(graph_data.keys())[:10] if graph_data else []
+    
+    # Auto-detect title format from actual graph titles
+    if any(':' in title for title in sample_titles):
+        title_format = 'colon_separated'  # GitHub style: repo:path
+    elif any('/' in title for title in sample_titles):
+        title_format = 'hierarchical'  # Nested paths
+    else:
+        title_format = 'flat'  # Simple names
+    
+    # Auto-detect link format from source type
+    if args.source_type == 'thestack':
+        link_format = 'python_import'
+        normalizer_type = 'python_module'
+    else:
+        link_format = 'markdown'
+        normalizer_type = 'passthrough'  # Assume pre-normalized for markdown sources
+    
+    dataset_config = DatasetConfig(
+        name=args.dataset_name or f"Dataset from {args.input_dir.name if args.input_dir else args.input_file.name}",
+        title_format=title_format,
+        link_format=link_format,
+        normalizer_type=normalizer_type,
+        hash_length=6,  # TODO: Make this configurable via CLI
+        description=f"Pretokenized from {args.source_type} source"
+    )
+    logger.info(f"Dataset configuration: {dataset_config.name} (title: {title_format}, links: {link_format}, hash: {dataset_config.hash_length})")
 
     # --- Multiprocessing Setup ---
     manager = mp.Manager()
@@ -393,6 +426,7 @@ def run_preprocessing(args, rep: ReproducibilityManager):
             encode_fn=encode_fn,
             dtype=token_dtype,
             source_id_to_title=source_id_to_title,
+            hash_length=dataset_config.hash_length,
         )
         # Using imap_unordered for potentially better performance as results are processed as they complete
         list(tqdm(pool.imap_unordered(worker_fn, documents), total=len(documents), desc="Tokenizing"))
@@ -403,32 +437,9 @@ def run_preprocessing(args, rep: ReproducibilityManager):
     writer.join()
     logger.info("All processes finished.")
     
-    # Determine title and link format from graph content and source type
-    sample_titles = list(graph_data.keys())[:10] if graph_data else []
-    
-    # Auto-detect title format from actual graph titles
-    if any(':' in title for title in sample_titles):
-        title_format = 'colon_separated'  # GitHub style: repo:path
-    elif any('/' in title for title in sample_titles):
-        title_format = 'hierarchical'  # Nested paths
-    else:
-        title_format = 'flat'  # Simple names
-    
-    # Auto-detect link format from source type
-    if args.source_type == 'github':
-        link_format = 'python_import'
-    else:
-        link_format = 'markdown'
-    
-    dataset_config = DatasetConfig(
-        name=args.dataset_name or f"Dataset from {args.input_dir.name if args.input_dir else args.input_file.name}",
-        title_format=title_format,
-        link_format=link_format,
-        hash_length=6,
-        description=f"Pretokenized from {args.source_type} source"
-    )
+    # Save dataset config to output directory
     save_config_to_pretokenized_dir(dataset_config, Path(rep.output_dir))
-    logger.info(f"Saved dataset configuration: {dataset_config.name} (title: {title_format}, links: {link_format})")
+    logger.info(f"Saved dataset configuration to {rep.output_dir}")
 
 
 def main():
@@ -451,9 +462,9 @@ def main():
     parser.add_argument(
         "--source-type",
         type=str,
-        choices=['markdown', 'jsonl', 'github'],
+        choices=['markdown', 'jsonl', 'thestack'],
         default='markdown',
-        help="Type of content source: 'markdown' (.md files), 'jsonl' (generic JSON Lines), or 'github' (GitHub repository data)."
+        help="Type of content source: 'markdown' (.md files), 'jsonl' (generic JSON Lines), or 'thestack' (TheStack repository data)."
     )
     parser.add_argument(
         "--input-file",
@@ -470,17 +481,17 @@ def main():
         "--content-field",
         type=str,
         default="content",
-        help="JSON field containing document content (for jsonl/github source)."
+        help="JSON field containing document content (for jsonl/thestack source)."
     )
     parser.add_argument(
         "--repo-field",
         type=str,
-        help="JSON field containing repository name (for github source, default: max_stars_repo_name)."
+        help="JSON field containing repository name (for thestack source, default: max_stars_repo_name)."
     )
     parser.add_argument(
         "--path-field",
         type=str,
-        help="JSON field containing file path (for github source, default: max_stars_repo_path)."
+        help="JSON field containing file path (for thestack source, default: max_stars_repo_path)."
     )
     parser.add_argument(
         "--additional-fields",
@@ -535,7 +546,7 @@ def main():
     if args.source_type == 'markdown':
         if not args.input_dir:
             parser.error("input_dir is required for markdown source type")
-    elif args.source_type in ['jsonl', 'github']:
+    elif args.source_type in ['jsonl', 'thestack']:
         if not args.input_file:
             parser.error(f"--input-file is required for {args.source_type} source type")
 

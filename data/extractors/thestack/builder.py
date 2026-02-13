@@ -15,7 +15,7 @@ import os
 from data.extractors.graph_builder import GraphBuilder, GraphNode
 from data.extractors.sources import JSONLSource
 from data.extractors.link_extractors import PythonImportExtractor
-from data.extractors.normalization import PythonModuleNormalizer
+from data.dataset_config import DatasetConfig, THESTACK_CONFIG
 from .extract import extract_file_imports, normalize_repository_name
 
 
@@ -232,6 +232,7 @@ def build_thestack_graph(
     input_file: Path,
     output_path: Path,
     show_progress: bool = True,
+    dataset_config: Optional[DatasetConfig] = None,
 ) -> Dict[str, GraphNode]:
     """
     Build TheStack intra-repository dependency graph.
@@ -243,6 +244,8 @@ def build_thestack_graph(
         input_file: JSONL file from download_sample.py
         output_path: Path for output graph.jsonl
         show_progress: Show progress bars
+        dataset_config: Optional DatasetConfig to use. If None, uses THESTACK_CONFIG.
+                       The normalizer will be obtained from this config.
     
     Returns:
         Dictionary of graph nodes (filtered to 2+ links)
@@ -255,6 +258,13 @@ def build_thestack_graph(
         ... )
         >>> print(f"Built graph with {len(graph)} nodes")
     """
+    # Use default TheStack config if not provided
+    if dataset_config is None:
+        dataset_config = THESTACK_CONFIG
+    
+    # Get normalizer from config (ensures hash_length is consistent)
+    normalizer = dataset_config.get_normalizer()
+    
     builder = TheStackGraphBuilder(
         source=JSONLSource(
             input_file,
@@ -262,9 +272,19 @@ def build_thestack_graph(
             additional_fields=["max_stars_repo_name"]
         ),
         link_extractor=PythonImportExtractor(),
-        normalizer=PythonModuleNormalizer(),
+        normalizer=normalizer,
         source_type="thestack",
         show_progress=show_progress,
     )
     
-    return builder.build_graph(output_path)
+    graph = builder.build_graph(output_path)
+    
+    # Save dataset config alongside graph
+    config_path = output_path.parent / "dataset_config.json"
+    dataset_config.save(config_path)
+    
+    return graph
+
+
+# Alias for backward compatibility
+build_github_graph = build_thestack_graph

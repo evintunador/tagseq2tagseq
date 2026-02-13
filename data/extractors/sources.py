@@ -135,11 +135,11 @@ class JSONLSource(ContentSource):
                 )
 
 
-class GitHubJSONLSource(ContentSource):
+class TheStackJSONLSource(ContentSource):
     """
-    Specialized source for GitHub data that constructs repo:path identifiers.
+    Specialized source for TheStack dataset that constructs repo:path identifiers.
     
-    Used by GitHub graph extractor to read repository data and construct
+    Used by TheStack graph extractor to read repository data and construct
     identifiers in the format "repo_name:file_path" to match graph titles.
     """
     
