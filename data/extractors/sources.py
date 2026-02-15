@@ -2,8 +2,9 @@
 Content source implementations for different data formats.
 
 Provides iterators over documents from various sources:
-- MarkdownFileSource: Read .md files from directory
+- FileSource: Read text files from directory (supports any extension)
 - JSONLSource: Stream JSON Lines files
+- TheStackJSONLSource: Specialized source for TheStack dataset
 """
 import json
 from pathlib import Path
@@ -11,20 +12,23 @@ from typing import Iterator, Optional, List
 from .protocols import Document, ContentSource
 
 
-class MarkdownFileSource(ContentSource):
+class FileSource(ContentSource):
     """
-    Reads .md files from a directory.
+    Reads text files from a directory with specified extension.
     
-    Used by Wikipedia graph extractor to read extracted markdown files.
+    Used by graph extractors to read text files (markdown, Python, LaTeX, etc.).
+    The extension parameter determines which files to read.
     """
     
-    def __init__(self, input_dir: Path, recursive: bool = True):
+    def __init__(self, input_dir: Path, extension: str = '.md', recursive: bool = True):
         """
         Args:
-            input_dir: Directory containing markdown files
+            input_dir: Directory containing text files
+            extension: File extension to match (e.g., '.md', '.py', '.tex')
             recursive: If True, search subdirectories recursively
         """
         self.input_dir = Path(input_dir)
+        self.extension = extension if extension.startswith('.') else f'.{extension}'
         self.recursive = recursive
         
         if not self.input_dir.is_dir():
@@ -32,12 +36,12 @@ class MarkdownFileSource(ContentSource):
     
     def iter_documents(self) -> Iterator[Document]:
         """
-        Yield Document for each .md file.
+        Yield Document for each file matching the extension.
         
         The identifier is the filename without extension.
         The filepath is stored in metadata for reference.
         """
-        pattern = '**/*.md' if self.recursive else '*.md'
+        pattern = f'**/*{self.extension}' if self.recursive else f'*{self.extension}'
         
         for filepath in self.input_dir.glob(pattern):
             try:
@@ -47,8 +51,7 @@ class MarkdownFileSource(ContentSource):
                 # Skip files that can't be read
                 continue
             
-            # Title from filename (without extension)
-            # For markdown files, the filename IS already normalized by dump_extractor.py
+            # Identifier from filename (without extension)
             identifier = filepath.stem
             
             yield Document(
@@ -57,6 +60,10 @@ class MarkdownFileSource(ContentSource):
                 content=content,
                 metadata={'filepath': str(filepath)}
             )
+
+
+# Backward compatibility alias
+MarkdownFileSource = FileSource
 
 
 class JSONLSource(ContentSource):

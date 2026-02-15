@@ -2,7 +2,7 @@
 Wikipedia graph builder using the shared framework.
 
 This module composes the generic GraphBuilder with Wikipedia-specific components:
-- MarkdownFileSource: Reads .md files from directory
+- FileSource: Reads .md files from directory
 - MarkdownLinkExtractor: Extracts [text](target) links
 - Normalizer from DatasetConfig (typically PassthroughNormalizer for pre-normalized files)
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from data.extractors.graph_builder import GraphBuilder, GraphNode
-from data.extractors.sources import MarkdownFileSource
+from data.extractors.sources import FileSource
 from data.extractors.link_extractors import MarkdownLinkExtractor
 from data.dataset_config import DatasetConfig, WIKIPEDIA_CONFIG
 
@@ -53,7 +53,7 @@ def build_wiki_graph(
     normalizer = dataset_config.get_normalizer()
     
     builder = GraphBuilder(
-        source=MarkdownFileSource(input_dir),
+        source=FileSource(input_dir, extension='.md'),
         link_extractor=MarkdownLinkExtractor(),
         normalizer=normalizer,
         source_type="wiki",

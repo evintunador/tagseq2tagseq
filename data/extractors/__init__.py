@@ -7,7 +7,7 @@ from various sources (Wikipedia, GitHub, LaTeX, etc.).
 
 from .protocols import Document, LinkContext, LinkExtractor, LinkNormalizer, ContentSource
 from .normalization import FilesafeNormalizer, PassthroughNormalizer, WikiTitleNormalizer, PythonModuleNormalizer
-from .sources import MarkdownFileSource, JSONLSource
+from .sources import FileSource, MarkdownFileSource, JSONLSource
 from .link_extractors import MarkdownLinkExtractor, PythonImportExtractor
 from .graph_builder import GraphBuilder, GraphNode
 
@@ -27,7 +27,8 @@ __all__ = [
     "GraphBuilder",
     "GraphNode",
     # Sources
-    "MarkdownFileSource",
+    "FileSource",
+    "MarkdownFileSource",  # Backward compatibility alias
     "JSONLSource",
     # Link Extractors
     "MarkdownLinkExtractor",

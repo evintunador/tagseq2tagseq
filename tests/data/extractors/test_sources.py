@@ -6,10 +6,10 @@ import tempfile
 import json
 from pathlib import Path
 
-from data.extractors.sources import MarkdownFileSource, JSONLSource
+from data.extractors.sources import FileSource, MarkdownFileSource, JSONLSource
 
 
-class TestMarkdownFileSource(unittest.TestCase):
+class TestFileSource(unittest.TestCase):
     def setUp(self):
         # Create temporary directory with test markdown files
         self.temp_dir = tempfile.mkdtemp()
@@ -30,7 +30,7 @@ class TestMarkdownFileSource(unittest.TestCase):
     
     def test_iterates_markdown_files(self):
         """Test that source iterates over .md files."""
-        source = MarkdownFileSource(self.temp_path)
+        source = FileSource(self.temp_path, extension='.md')
         documents = list(source.iter_documents())
         
         # Should find all 3 files (recursive by default)
@@ -42,7 +42,7 @@ class TestMarkdownFileSource(unittest.TestCase):
     
     def test_non_recursive(self):
         """Test non-recursive mode."""
-        source = MarkdownFileSource(self.temp_path, recursive=False)
+        source = FileSource(self.temp_path, extension='.md', recursive=False)
         documents = list(source.iter_documents())
         
         # Should only find 2 files in root
@@ -52,7 +52,7 @@ class TestMarkdownFileSource(unittest.TestCase):
     
     def test_content_is_read(self):
         """Test that file content is read correctly."""
-        source = MarkdownFileSource(self.temp_path)
+        source = FileSource(self.temp_path, extension='.md')
         documents = list(source.iter_documents())
         
         # Find page1
@@ -61,7 +61,7 @@ class TestMarkdownFileSource(unittest.TestCase):
     
     def test_metadata_includes_filepath(self):
         """Test that metadata includes filepath."""
-        source = MarkdownFileSource(self.temp_path)
+        source = FileSource(self.temp_path, extension='.md')
         documents = list(source.iter_documents())
         
         for doc in documents:
@@ -71,7 +71,53 @@ class TestMarkdownFileSource(unittest.TestCase):
     def test_invalid_directory_raises_error(self):
         """Test that non-existent directory raises error."""
         with self.assertRaises(ValueError):
-            MarkdownFileSource(Path("/nonexistent/path"))
+            FileSource(Path("/nonexistent/path"))
+    
+    def test_default_extension_is_md(self):
+        """Test that default extension is .md for backward compatibility."""
+        source = FileSource(self.temp_path)
+        documents = list(source.iter_documents())
+        
+        # Should find all .md files with default extension
+        self.assertEqual(len(documents), 3)
+        identifiers = {doc.identifier for doc in documents}
+        self.assertEqual(identifiers, {"page1", "page2", "page3"})
+    
+    def test_custom_extension(self):
+        """Test reading files with custom extension."""
+        # Create .py files
+        (self.temp_path / "script1.py").write_text("print('hello')")
+        (self.temp_path / "script2.py").write_text("print('world')")
+        
+        source = FileSource(self.temp_path, extension='.py')
+        documents = list(source.iter_documents())
+        
+        # Should only find .py files, not .md
+        identifiers = {doc.identifier for doc in documents}
+        self.assertEqual(identifiers, {"script1", "script2"})
+    
+    def test_extension_without_dot(self):
+        """Test that extension without dot is handled correctly."""
+        # Create .txt files
+        (self.temp_path / "file1.txt").write_text("Text content 1")
+        (self.temp_path / "file2.txt").write_text("Text content 2")
+        
+        # Should work with or without leading dot
+        source = FileSource(self.temp_path, extension='txt')
+        documents = list(source.iter_documents())
+        
+        identifiers = {doc.identifier for doc in documents}
+        self.assertEqual(identifiers, {"file1", "file2"})
+    
+    def test_markdown_file_source_alias(self):
+        """Test that MarkdownFileSource still works as backward compatibility alias."""
+        source = MarkdownFileSource(self.temp_path)
+        documents = list(source.iter_documents())
+        
+        # Should work exactly like FileSource with .md extension
+        self.assertEqual(len(documents), 3)
+        identifiers = {doc.identifier for doc in documents}
+        self.assertEqual(identifiers, {"page1", "page2", "page3"})
 
 
 class TestJSONLSource(unittest.TestCase):

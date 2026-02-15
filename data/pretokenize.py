@@ -316,8 +316,8 @@ def run_preprocessing(args, rep: ReproducibilityManager):
     logger.info(f"Creating content source (type: {args.source_type})...")
     
     if args.source_type == "markdown":
-        from data.extractors.sources import MarkdownFileSource
-        source = MarkdownFileSource(args.input_dir)
+        from data.extractors.sources import FileSource
+        source = FileSource(args.input_dir, extension='.md')
     elif args.source_type == "jsonl":
         from data.extractors.sources import JSONLSource
         if not args.input_file:
