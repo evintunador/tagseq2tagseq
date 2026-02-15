@@ -262,6 +262,7 @@ def create_cross_doc_link_mask(
     tokens: torch.Tensor, 
     doc_spans: List[Any], 
     link_format: str = 'markdown',
+    tokenizer_config=None,
     **kwargs
 ) -> BlockMask:
     """
@@ -273,6 +274,7 @@ def create_cross_doc_link_mask(
         tokens: Token tensor
         doc_spans: Document span metadata
         link_format: Type of links in content ('markdown' or 'python_import')
+        tokenizer_config: Optional TokenizerConfig. If None, uses GPT-2 defaults.
         **kwargs: Additional batch info
 
     Requires tiktoken to be installed.
@@ -285,13 +287,18 @@ def create_cross_doc_link_mask(
         
         enc = tiktoken.get_encoding('gpt2')
         
+        # Get tokenizer config
+        if tokenizer_config is None:
+            from model.tokenizer_config import TokenizerConfig
+            tokenizer_config = TokenizerConfig.gpt2_defaults()
+        
         # Create appropriate link detector
         if link_format == 'python_import':
             from model.graph_traversal.link_detectors import PythonImportDetector
-            detector = PythonImportDetector()
+            detector = PythonImportDetector(tokenizer_config)
         else:  # 'markdown' (default)
             from model.graph_traversal.link_detectors import MarkdownLinkDetector
-            detector = MarkdownLinkDetector()
+            detector = MarkdownLinkDetector(tokenizer_config)
         
         _cross_doc_link_creator = CrossDocLinkMaskCreator(
             tokenizer_decode_fn=enc.decode,

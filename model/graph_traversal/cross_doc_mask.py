@@ -32,20 +32,22 @@ class CrossDocLinkMaskCreator:
 
     Args:
         tokenizer_decode_fn: Function that takes List[int] and returns str (e.g., tokenizer.decode)
-        link_start_token_ids: Token IDs for '[' variants (default: [58, 685] for GPT-2)
-        link_mid_token_id: Token ID for '](' (default: 16151 for GPT-2)
-        link_end_token_id: Token ID for ')' (default: 8 for GPT-2)
+        link_detector: TokenizedLinkDetector implementation (e.g., MarkdownLinkDetector, PythonImportDetector)
         bos_token_id: Token ID for beginning of sequence (optional)
         eos_token_id: Token ID for end of sequence (optional)
 
     Example:
         >>> import tiktoken
+        >>> from model.tokenizer_config import TokenizerConfig
+        >>> from model.graph_traversal.link_detectors import MarkdownLinkDetector
+        >>> 
         >>> enc = tiktoken.get_encoding('gpt2')
+        >>> tokenizer_config = TokenizerConfig.from_tokenizer(enc, name='gpt2')
+        >>> link_detector = MarkdownLinkDetector(tokenizer_config)
+        >>> 
         >>> mask_creator = CrossDocLinkMaskCreator(
         ...     tokenizer_decode_fn=enc.decode,
-        ...     link_start_token_ids=[58, 685],
-        ...     link_mid_token_id=16151,
-        ...     link_end_token_id=8
+        ...     link_detector=link_detector
         ... )
         >>> model = DS2DSTrainingModule(
         ...     block_mask_creator=mask_creator,
@@ -75,7 +77,9 @@ class CrossDocLinkMaskCreator:
         # Default to markdown links if not specified
         if link_detector is None:
             from .link_detectors import MarkdownLinkDetector
-            link_detector = MarkdownLinkDetector()
+            from model.tokenizer_config import TokenizerConfig
+            # Use GPT-2 defaults if no detector provided
+            link_detector = MarkdownLinkDetector(TokenizerConfig.gpt2_defaults())
         
         self.link_detector = link_detector
         logger.info(f"Initialized CrossDocLinkMaskCreator with detector: {type(link_detector).__name__}")

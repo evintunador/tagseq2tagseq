@@ -1,11 +1,12 @@
 """
 Concrete implementations of TokenizedLinkDetector for different content types.
 """
-from typing import List, Callable, Optional
+from typing import List, Callable
 import torch
 import logging
 
 from .link_detector_protocol import LinkInfo, TokenizedLinkDetector
+from model.tokenizer_config import TokenizerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -26,28 +27,22 @@ class MarkdownLinkDetector(TokenizedLinkDetector):
     
     uses_outgoing_titles = False
     
-    def __init__(
-        self,
-        link_start_token_ids: Optional[List[int]] = None,
-        link_mid_token_id: int = 16151,   # '](' in GPT-2
-        link_end_token_id: int = 8,       # ')' in GPT-2
-    ):
+    def __init__(self, tokenizer_config: TokenizerConfig):
         """
-        Args:
-            link_start_token_ids: Token IDs for '[' (default: [58, 685] for GPT-2)
-            link_mid_token_id: Token ID for '](' 
-            link_end_token_id: Token ID for ')'
-        """
-        if link_start_token_ids is None:
-            link_start_token_ids = [58, 685]  # '[' and ' ['
+        Initialize with tokenizer configuration.
         
-        self.link_start_token_ids = set(link_start_token_ids)
-        self.link_mid_token_id = link_mid_token_id
-        self.link_end_token_id = link_end_token_id
+        Args:
+            tokenizer_config: Configuration containing token IDs
+        """
+        self.link_start_token_ids = set(tokenizer_config.bracket_open_ids)
+        self.link_mid_token_id = tokenizer_config.bracket_close_paren_open_id
+        self.link_end_token_id = tokenizer_config.paren_close_id
         
         logger.info(
             f"Initialized MarkdownLinkDetector with token IDs: "
-            f"'[' = {link_start_token_ids}, '](' = {link_mid_token_id}, ')' = {link_end_token_id}"
+            f"'[' = {tokenizer_config.bracket_open_ids}, "
+            f"'](' = {self.link_mid_token_id}, "
+            f"')' = {self.link_end_token_id}"
         )
     
     def detect_links(
@@ -122,28 +117,22 @@ class PythonImportDetector(TokenizedLinkDetector):
     
     uses_outgoing_titles = True
     
-    def __init__(
-        self,
-        import_token_id: int = 1330,     # 'import' in GPT-2
-        from_token_id: int = 6738,       # 'from' in GPT-2
-        newline_token_id: int = 198,     # '\n' in GPT-2
-        dot_token_id: int = 13,          # '.' in GPT-2
-    ):
+    def __init__(self, tokenizer_config: TokenizerConfig):
         """
+        Initialize with tokenizer configuration.
+        
         Args:
-            import_token_id: Token ID for 'import'
-            from_token_id: Token ID for 'from'
-            newline_token_id: Token ID for newline
-            dot_token_id: Token ID for '.'
+            tokenizer_config: Configuration containing token IDs
         """
-        self.import_token_id = import_token_id
-        self.from_token_id = from_token_id
-        self.newline_token_id = newline_token_id
-        self.dot_token_id = dot_token_id
+        self.import_token_id = tokenizer_config.import_keyword_id
+        self.from_token_id = tokenizer_config.from_keyword_id
+        self.newline_token_id = tokenizer_config.newline_id
+        self.dot_token_id = tokenizer_config.dot_id
         
         logger.info(
             f"Initialized PythonImportDetector with token IDs: "
-            f"'import' = {import_token_id}, 'from' = {from_token_id}"
+            f"'import' = {self.import_token_id}, "
+            f"'from' = {self.from_token_id}"
         )
     
     def detect_links(
