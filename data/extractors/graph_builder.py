@@ -176,12 +176,15 @@ class GraphBuilder:
                 node = graph[title]
                 node_data = {
                     'title': title,
+                    'source_identifier': node.identifier,
                     'char_count': node.char_count,
                     'outgoing': sorted(list(node.outgoing)),
                     'incoming': sorted(list(node.incoming)),
                 }
-                # Add any additional metadata
-                node_data.update(node.metadata)
+                # Add any additional metadata (won't overwrite explicit fields above)
+                for k, v in node.metadata.items():
+                    if k not in node_data:
+                        node_data[k] = v
                 
                 f.write(json.dumps(node_data) + '\n')
         

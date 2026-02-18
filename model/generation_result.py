@@ -10,8 +10,6 @@ from pathlib import Path
 
 import numpy as np
 
-from .title_utils import create_filename
-
 
 @dataclass
 class GeneratedDocument:
