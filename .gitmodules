@@ -1,3 +1,0 @@
-[submodule "data/wiki_graph_extractor"]
-	path = data/wiki_graph_extractor
-	url = git@github.com:evintunador/wiki_graph_extractor.git
