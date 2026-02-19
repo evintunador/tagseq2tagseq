@@ -1,1 +1,0 @@
-"""Wikipedia graph extractor module."""

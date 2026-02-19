@@ -4,7 +4,7 @@ Test script for cross-document link mask detection and matching.
 
 import torch
 import tiktoken
-from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+from cross_doc_mask import CrossDocLinkMaskCreator
 from dataclasses import dataclass
 from typing import List
 

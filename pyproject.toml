@@ -6,17 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "dagseq2dagseq"
 version = "0.1.0"
 dependencies = [
-    "tqdm",
-    "matplotlib",
-    "networkx",
-    "numpy",
     "torch",
     "numpy",
-
-    # how the heck to i make these installable
-    # "tunalab",
-    # "tunalab-common",
-    # "tunalab-nlp",
+    "tunalab",
+    "tunalab-nlp",
 ]
 
 [project.optional-dependencies]
@@ -28,4 +21,3 @@ include = ["data", "data.*", "model", "model.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]

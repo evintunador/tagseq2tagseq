@@ -4,7 +4,7 @@ from typing import Dict, List
 
 import pytest
 
-from data.traversal import (
+from experiments.dagseq2dagseq.data.traversal import (
     BFSStrategy,
     CompositeTraversalStrategy,
     DFSStrategy,

@@ -8,11 +8,30 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from model.generation_config import GenerationConfig
+from experiments.dagseq2dagseq.model.generation_config import GenerationConfig
 
 
 class TestGenerationConfigDefaults:
     """Test default values and basic instantiation."""
+    
+    def test_default_instantiation(self):
+        """Test creating config with defaults."""
+        config = GenerationConfig()
+        
+        assert config.max_new_tokens == 100
+        assert config.temperature == 1.0
+        assert config.top_k is None
+        assert config.top_p is None
+        assert config.max_tokens_per_document == 512
+        assert config.max_context_length == 2048
+        assert config.max_auxiliary_documents == 5
+        assert config.max_link_depth == 1
+        assert config.allow_corpus_fallback is True
+        assert config.eviction_policy == "drop_oldest"
+        assert config.process_prompt_links is True
+        assert config.allow_recursive_links is True
+        assert config.eos_token_id == 50256
+        assert config.device in ["cuda", "cpu"]
     
     def test_custom_values(self):
         """Test creating config with custom values."""

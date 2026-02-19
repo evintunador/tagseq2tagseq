@@ -51,17 +51,19 @@ Adding New Mask Types:
 3. Optionally add visualization logic in the __main__ section
 """
 
-from typing import Any, List
+import torch
+import matplotlib.pyplot as plt
+from torch.nn.attention.flex_attention import create_block_mask, BlockMask
+from typing import Any, Dict, List, Optional
 import sys
 import argparse
 from pathlib import Path
 import logging
-import os
-
-import matplotlib.pyplot as plt
 import numpy as np
-import torch
-from torch.nn.attention.flex_attention import create_block_mask, BlockMask
+
+# Adjust path to allow imports from local experiment modules
+sys.path.append(str(Path(__file__).parent))
+
 try:
     import tiktoken
 except ImportError:
@@ -70,7 +72,7 @@ except ImportError:
 from data.pack_sampler import PackBatchSampler
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.layout import NullLayoutPolicy
-from data.collate import build_packed_batch
+from data.collate import build_packed_batch, DocSpan
 from data.traversal import (
     BFSStrategy,
     DFSStrategy,
@@ -78,7 +80,7 @@ from data.traversal import (
     RandomSelectionStrategy,
     CompositeTraversalStrategy
 )
-from .cross_doc_mask import CrossDocLinkMaskCreator
+from cross_doc_mask import CrossDocLinkMaskCreator
 
 # =============================================================================
 # 1. Mask Logic
@@ -493,6 +495,7 @@ if __name__ == "__main__":
 
     plt.title(f"FlexAttention Mask: {args.mask_type} (Seed={args.seed})")
     plt.tight_layout()
+    import os
     this_dir = os.path.dirname(os.path.abspath(__file__))
     artifacts_dir = os.path.join(this_dir, 'artifacts')
     output_img = os.path.join(artifacts_dir, f"mask_viz_{args.mask_type}_seed{args.seed}.png")
