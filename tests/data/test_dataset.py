@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 from pathlib import Path
 
-from experiments.dagseq2dagseq.data.dataset import GraphIndex, PretokShardedBackend
+from data.dataset import GraphIndex, PretokShardedBackend
 
 
 @pytest.fixture(scope="module")
@@ -54,19 +54,19 @@ def dummy_run_directory(tmpdir_factory):
 
     graph_data = [
         {
-            "title": "Node A", "outgoing": ["Node B"], "incoming": [],
+            "normed_identifier": "Node A", "raw_identifier": "Node A", "outgoing": ["Node B"], "incoming": [],
             "tok_shard_idx": 0,
             "tok_offset_bytes": header_size_bytes + (0 * dtype_size_bytes),
             "tok_len": len(tokens_a)
         },
         {
-            "title": "Node B", "outgoing": ["Node C"], "incoming": ["Node A"],
+            "normed_identifier": "Node B", "raw_identifier": "Node B", "outgoing": ["Node C"], "incoming": ["Node A"],
             "tok_shard_idx": 0,
             "tok_offset_bytes": header_size_bytes + (len(tokens_a) * dtype_size_bytes),
             "tok_len": len(tokens_b)
         },
         {
-            "title": "Node C", "outgoing": [], "incoming": ["Node B"],
+            "normed_identifier": "Node C", "raw_identifier": "Node C", "outgoing": [], "incoming": ["Node B"],
             "tok_shard_idx": 0,
             "tok_offset_bytes": header_size_bytes + ((len(tokens_a) + len(tokens_b)) * dtype_size_bytes),
             "tok_len": len(tokens_c)
@@ -92,7 +92,7 @@ def test_graph_index_loading(dummy_run_directory):
 
     node_b = index.get_node("Node B")
     assert node_b is not None
-    assert node_b["title"] == "Node B"
+    assert node_b["normed_identifier"] == "Node B"
     assert node_b["outgoing"] == ["Node C"]
     assert node_b["incoming"] == ["Node A"]
     assert node_b["tok_len"] == 3
@@ -147,7 +147,8 @@ def test_graph_index_invalid_token_metadata_missing_field(tmp_path):
 
     # tokenized_graph.jsonl with a node missing tok_offset_bytes
     bad_node = {
-        "title": "Bad Node",
+        "normed_identifier": "Bad Node",
+        "raw_identifier": "Bad Node",
         "outgoing": [],
         "incoming": [],
         "tok_shard_idx": 0,
@@ -176,7 +177,8 @@ def test_graph_index_invalid_token_metadata_types(tmp_path):
 
     # tokenized_graph.jsonl with wrong types for tok_len
     bad_node = {
-        "title": "Bad Node",
+        "normed_identifier": "Bad Node",
+        "raw_identifier": "Bad Node",
         "outgoing": [],
         "incoming": [],
         "tok_shard_idx": 0,
@@ -247,3 +249,13 @@ def test_pretok_sharded_backend_get_tokens_by_id(dummy_run_directory):
     assert np.array_equal(tokens_c, np.array([20, 21, 22, 23, 24, 25], dtype=np.uint16))
 
     backend.close()
+
+
+def test_graph_index_get_raw_identifier(dummy_run_directory):
+    """Tests get_raw_identifier returns the raw_identifier field."""
+    index = GraphIndex(dummy_run_directory)
+
+    assert index.get_raw_identifier("Node A") == "Node A"
+    assert index.get_raw_identifier("Node B") == "Node B"
+    assert index.get_raw_identifier("Node C") == "Node C"
+    assert index.get_raw_identifier("Nonexistent") is None

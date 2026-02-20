@@ -56,9 +56,9 @@ class TestNormalizeRepoName:
 @pytest.fixture
 def markdown_dir(tmp_path):
     files = {
-        "Alpha": "# Alpha\nContent of alpha with [link](Beta_abc123).",
-        "Beta": "# Beta\nContent of beta.",
-        "Gamma": "# Gamma\nSome text here.",
+        "Alpha": "# Alpha\nContent of alpha with [link](Beta).\nAlpha",
+        "Beta": "# Beta\nContent of beta.\nBeta",
+        "Gamma": "# Gamma\nSome text here.\nGamma",
     }
     for name, content in files.items():
         (tmp_path / f"{name}.md").write_text(content, encoding="utf-8")
@@ -83,21 +83,20 @@ class TestMarkdownDirectorySource:
         results = dict(source)
         assert "Content of beta." in results["Beta"]
 
-    def test_strips_wiki_hashes_from_links(self, markdown_dir):
+    def test_strips_raw_title_marker_from_last_line(self, markdown_dir):
         directory, _ = markdown_dir
         source = MarkdownDirectorySource(directory)
         results = dict(source)
-        # ](Beta_abc123) should become ](Beta)
-        assert "](Beta)" in results["Alpha"]
-        assert "abc123" not in results["Alpha"]
+        # Last line (raw title marker) should not appear in yielded content
+        assert not results["Beta"].endswith("Beta")
+        assert not results["Gamma"].endswith("Gamma")
 
-    def test_non_hash_suffixes_not_stripped(self, tmp_path):
-        # Only exactly 6 hex chars should be stripped
-        (tmp_path / "Doc.md").write_text("[link](Title_toolong7) and [link](Title_xyz)", encoding="utf-8")
-        source = MarkdownDirectorySource(tmp_path)
-        _, content = next(iter(source))
-        assert "Title_toolong7" in content  # 8 chars after underscore → kept
-        assert "Title_xyz" in content       # 3 chars → kept
+    def test_raw_link_targets_passed_through_unchanged(self, markdown_dir):
+        directory, _ = markdown_dir
+        source = MarkdownDirectorySource(directory)
+        results = dict(source)
+        # Raw link target ](Beta) should pass through verbatim
+        assert "](Beta)" in results["Alpha"]
 
     def test_empty_directory(self, tmp_path):
         source = MarkdownDirectorySource(tmp_path)

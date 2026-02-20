@@ -1,5 +1,4 @@
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
@@ -139,21 +138,17 @@ def build_packed_batch(
         doc_tokens = np.concatenate([prefix_arr, body_arr, suffix_arr], axis=0)
         doc_len = int(doc_tokens.shape[0])
 
-        title = graph.get_title(p.doc_id)
-        outgoing_titles = graph.get_outgoing_links(title)
-        
-        # Strip hash to get clean title: title_hash -> title
-        # Hash is always last 7 chars: _xxxxxx
-        clean_title = re.sub(r'_[0-9a-f]{6}$', '', title)
-        
+        normed_id = graph.get_title(p.doc_id)
+        outgoing_titles = graph.get_outgoing_links(normed_id)
+
         span = DocSpan(
             doc_id=p.doc_id,
-            title=title,
+            title=normed_id,
             start=offset,
             end=offset + doc_len,
             truncated=p.truncated,
             outgoing_titles=outgoing_titles,
-            clean_title=clean_title,
+            clean_title=graph.get_raw_identifier(normed_id) or normed_id,
         )
 
         segments.append(doc_tokens)

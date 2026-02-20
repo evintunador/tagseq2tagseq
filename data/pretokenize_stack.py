@@ -82,7 +82,7 @@ def main():
     # Load graph titles into a set for O(1) lookup during JSONL scan.
     logger.info(f"Loading graph titles from {args.graph_file} ...")
     with open(args.graph_file, "r", encoding="utf-8") as f:
-        graph_titles = {json.loads(line)["title"] for line in f}
+        graph_titles = {json.loads(line)["normed_identifier"] for line in f}
     logger.info(f"Loaded {len(graph_titles):,} graph nodes.")
 
     source = StackJSONLSource(args.jsonl_file, graph_titles)

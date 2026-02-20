@@ -14,19 +14,13 @@ from typing import Iterator
 
 logger = logging.getLogger(__name__)
 
-# Matches the 6-char hex hash appended to Wikipedia link targets by the
-# wiki_graph_extractor so we can strip it before tokenizing.
-# e.g. ](Some_Article_a1b2c3) → ](Some_Article)
-_WIKI_HASH_LINK_RE = re.compile(r'(\]\(.*?)_[0-9a-f]{6}(\))')
-
 
 class MarkdownDirectorySource:
     """
     Yields (title, content) for every .md file under input_dir.
 
-    Title is the filename stem (no extension). Link-target hashes written
-    by the wiki_graph_extractor are stripped from content so the model
-    sees canonical titles.
+    Title is the filename stem (no extension). The raw title marker
+    written as the last line by dump_extractor.py is stripped from content.
     """
 
     def __init__(self, input_dir: Path):
@@ -40,7 +34,9 @@ class MarkdownDirectorySource:
             try:
                 content = filepath.read_text(encoding="utf-8")
                 title = filepath.stem
-                content = _WIKI_HASH_LINK_RE.sub(r"\1\2", content)
+                # Strip raw title marker from last line (written by dump_extractor.py)
+                lines = content.rsplit('\n', 1)
+                content = lines[0] if len(lines) > 1 else content
                 yield title, content
             except Exception as e:
                 logger.error(f"Could not read {filepath}: {e}")

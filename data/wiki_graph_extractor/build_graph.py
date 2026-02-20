@@ -28,31 +28,30 @@ import numpy as np
 
 def extract_links_worker(filepath):
     """
-    Reads a single markdown file, extracts its title from the filename,
-    and all outgoing links from the content.
+    Reads a single markdown file, extracts its normed identifier from the
+    filename, its raw identifier from the last line, and all outgoing links.
     Links are standard markdown [text](link) format.
     """
     try:
-        # Title is derived from the filename (minus extension)
         filename = os.path.basename(filepath)
-        title = os.path.splitext(filename)[0]
+        normed_identifier = os.path.splitext(filename)[0]
 
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-            char_count = len(content)
-            
-            # This regex finds links but avoids image links ![...](...)
-            # It captures the link target from [text](target)
-            links = re.findall(r'\[[^!\]]*?\]\((.*?)\)', content)
-            
-            # The link target is the title we want to link to
-            # Since extract.py now writes normalized targets, we just use them as is
-            # (except for potentially needing to unquote if there are URL encodings left, 
-            # though our strict normalization mostly avoids them)
-            from urllib.parse import unquote
-            outgoing_links = {unquote(link) for link in links}
 
-            return (title, list(outgoing_links), char_count)
+        # Raw identifier is the last line (appended by dump_extractor.py)
+        lines = content.rsplit('\n', 1)
+        raw_identifier = lines[-1].strip()
+        body = lines[0] if len(lines) > 1 else content   # content without marker
+
+        char_count = len(body)
+        links = re.findall(r'\[[^!\]]*?\]\((.*?)\)', body)
+        from urllib.parse import unquote
+        from data.wiki_graph_extractor.extract import normalize_title
+        # Normalize raw link targets → normed_identifier form for graph matching
+        outgoing_normed = {normalize_title(unquote(link)) for link in links}
+
+        return (normed_identifier, raw_identifier, list(outgoing_normed), char_count)
     except Exception as e:
         logging.warning(f"Could not process file {filepath}: {e}")
         return None
@@ -244,28 +243,24 @@ def main():
     graph = {}
 
     # First pass: add all nodes and their outgoing links
-    for title, outgoing_links, char_count in link_data:
-        if title not in graph:
-            graph[title] = {'outgoing': [], 'incoming': [], 'char_count': 0}
-        # We use a set to avoid duplicate links from the same article
-        graph[title]['outgoing'].extend(outgoing_links)
-        graph[title]['char_count'] = char_count
-    
+    for normed_id, raw_id, outgoing_links, char_count in link_data:
+        if normed_id not in graph:
+            graph[normed_id] = {'raw_identifier': raw_id, 'outgoing': [], 'incoming': [], 'char_count': 0}
+        graph[normed_id]['outgoing'].extend(outgoing_links)
+        graph[normed_id]['char_count'] = char_count
+
     # Second pass: build the incoming links
-    for source_title, data in graph.items():
-        for target_title in data['outgoing']:
-            if target_title in graph:
-                graph[target_title]['incoming'].append(source_title)
-            # Optional: handle dangling links (links to pages not in the dump)
-            # else:
-            #     logging.debug(f"Dangling link found from '{source_title}' to '{target_title}'")
+    for source_normed, data in graph.items():
+        for target_normed in data['outgoing']:
+            if target_normed in graph:
+                graph[target_normed]['incoming'].append(source_normed)
 
     # --- Sort and Write Output ---
     logging.info(f"Sorting and writing graph to {args.output}...")
     
-    # Sort the graph keys (article titles) alphabetically
+    # Sort the graph keys alphabetically
     sorted_titles = sorted(graph.keys())
-    
+
     with open(args.output, 'w', encoding='utf-8') as f:
         progress_bar = tqdm(
             sorted_titles,
@@ -273,12 +268,13 @@ def main():
             unit=" nodes",
             disable=args.quiet
         )
-        for title in progress_bar:
+        for normed_id in progress_bar:
             node_data = {
-                'title': title,
-                'char_count': graph[title]['char_count'],
-                'outgoing': sorted(list(set(graph[title]['outgoing']))),
-                'incoming': sorted(list(set(graph[title]['incoming'])))
+                'normed_identifier': normed_id,
+                'raw_identifier': graph[normed_id]['raw_identifier'],
+                'char_count': graph[normed_id]['char_count'],
+                'outgoing': sorted(list(set(graph[normed_id]['outgoing']))),
+                'incoming': sorted(list(set(graph[normed_id]['incoming']))),
             }
             f.write(json.dumps(node_data) + '\n')
             

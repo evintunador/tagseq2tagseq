@@ -301,7 +301,8 @@ def process_bucket_file(bucket_file: str):
             k = f"{norm_repo}:{file_path}"
             path_to_key[file_path] = k
             repo_graph[k] = {
-                "title": k,
+                "normed_identifier": k,
+                "raw_identifier": f"{repo_name}:{file_path}",
                 "char_count": char_count,
                 "import_count": import_count,
                 "outgoing": [],
@@ -315,17 +316,17 @@ def process_bucket_file(bucket_file: str):
             for imported_module in imported_modules:
                 target_file = _resolve_import_to_file(imported_module, module_to_file, file_path)
                 if target_file and target_file != file_path:
-                    outgoing_links.add(target_file)
+                    target_key = path_to_key.get(target_file)
+                    if target_key and target_key != path_to_key[file_path]:
+                        outgoing_links.add(target_key)
             if outgoing_links:
                 repo_graph[path_to_key[file_path]]["outgoing"] = sorted(outgoing_links)
 
         # incoming (O(E))
         for source_key, data in repo_graph.items():
-            source_path = source_key.split(":", 1)[1]
-            for target_file_path in data["outgoing"]:
-                target_key = path_to_key.get(target_file_path)
-                if target_key:
-                    repo_graph[target_key]["incoming"].append(source_path)
+            for target_key in data["outgoing"]:     # already full normed keys
+                if target_key in repo_graph:
+                    repo_graph[target_key]["incoming"].append(source_key)
 
         for data in repo_graph.values():
             data["incoming"] = sorted(set(data["incoming"]))
@@ -483,7 +484,8 @@ class StreamingGraphBuilder:
             for file_key in sorted_keys:
                 d = graph[file_key]
                 node_data = {
-                    "title": file_key,
+                    "normed_identifier": file_key,
+                    "raw_identifier": d.get("raw_identifier", ""),
                     "char_count": int(d.get("char_count", 0) or 0),
                     "import_count": int(d.get("import_count", 0) or 0),
                     "links_in_repo": int(d.get("links_in_repo", 0) or 0),
@@ -704,8 +706,7 @@ def compute_and_save_stats(graph_data, jsonl_output_path, input_file, skip_plots
             zero_imports += 1
 
         out_deg_val = 0
-        for target_path in (data.get("outgoing", []) or []):
-            target_key = path_to_key.get(target_path)
+        for target_key in (data.get("outgoing", []) or []):    # already full normed keys
             if target_key in in_deg:
                 in_deg[target_key] += 1
                 edges_internal += 1

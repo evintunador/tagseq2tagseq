@@ -65,7 +65,7 @@ class GraphIndex:
         with open(graph_path, "r", encoding="utf-8") as f:
             for line in f:
                 node_data = json.loads(line)
-                title = node_data["title"]
+                title = node_data["normed_identifier"]
                 self.nodes[title] = node_data
 
         # Create mappings between titles and integer ids, and validate the
@@ -115,6 +115,11 @@ class GraphIndex:
     def get_node(self, title: str) -> Optional[Dict[str, Any]]:
         """Returns the full metadata dictionary for a given node title."""
         return self.nodes.get(title)
+
+    def get_raw_identifier(self, normed_identifier: str) -> Optional[str]:
+        """Returns the human-readable raw identifier for a node."""
+        node = self.get_node(normed_identifier)
+        return node.get("raw_identifier") if node else None
 
     def get_outgoing_links(self, title: str) -> List[str]:
         """Returns the list of titles that the given title links to."""

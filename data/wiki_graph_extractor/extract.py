@@ -182,9 +182,9 @@ def fix_complex_wikilinks(text):
         full_title = match.group(1)  # e.g., "Help:IPA/Italian"
         content = match.group(2)     # e.g., "iˈtaːlja"
         
-        # Normalize the title to create the target URL
-        normalized_title = normalize_title(full_title)
-        
+        # Use raw (human-readable) link target
+        normalized_title = raw_link_target(full_title)
+
         # Return the proper markdown link
         return f'[{content}]({normalized_title})'
     
@@ -202,7 +202,7 @@ def fix_complex_wikilinks(text):
     def convert_general_link(match):
         title = match.group(1)
         content = match.group(2)
-        normalized_title = normalize_title(title)
+        normalized_title = raw_link_target(title)
         return f'[{content}]({normalized_title})'
     
     text = re.sub(
@@ -266,7 +266,7 @@ def convert_internal_links(text):
             res += f"{text[cur:s]}{label}"
 
         else:
-            encoded_title = normalize_title(title)
+            encoded_title = raw_link_target(title)
             res += f"{text[cur:s]}[{label}]({encoded_title}){trail}"
             
         cur = end
@@ -541,6 +541,12 @@ def fix_date_ranges(text):
     # Match 4-digit year pairs in parentheses and insert a dash
     text = re.sub(r'\((\d{4})(\d{4})\)', r'(\1-\2)', text)
     return text
+
+def raw_link_target(title: str) -> str:
+    """Human-readable link target: preserves casing, spaces→underscores, no hash."""
+    title = html.unescape(title).strip()
+    return title.replace(' ', '_')
+
 
 def normalize_title(title):
     """

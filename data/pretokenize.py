@@ -155,7 +155,7 @@ def writer_process(
             data.update(token_metadata[title])
             final_graph_data.append(data)
         else:
-            logger.warning(f"Title '{title}' from graph.jsonl not found in tokenized files. Excluding.")
+            logger.warning(f"normed_identifier '{title}' from graph.jsonl not found in tokenized files. Excluding.")
             
     # Write tokenized_graph.jsonl
     output_graph_file = output_dir / "tokenized_graph.jsonl"
@@ -252,7 +252,7 @@ def run_preprocessing(args, rep: ReproducibilityManager, source=None):
         with open(args.graph_file, "r", encoding="utf-8") as f:
             # Create a dictionary from the generator for the writer process
             lines = f.readlines()
-            graph_data = {json.loads(line)['title']: json.loads(line) for line in lines}
+            graph_data = {json.loads(line)['normed_identifier']: json.loads(line) for line in lines}
     except Exception as e:
         logger.error(f"Failed to load graph file: {e}")
         return
