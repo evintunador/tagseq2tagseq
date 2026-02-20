@@ -212,3 +212,5 @@ __marimo__/
 # Specific to this repo
 data/pretokenized_datasets/
 artifacts/
+.claude/
+data/wiki_articles/

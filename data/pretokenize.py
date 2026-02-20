@@ -1,13 +1,17 @@
 """
-DAGWiki Pre-tokenizer: A tool to pre-tokenize a graph dataset of Markdown files
-into sharded binary files for efficient loading during model training.
+Pre-tokenizer: Converts a graph dataset into sharded binary token files for
+efficient loading during model training.
+
+The content source is pluggable — pass any DocumentSource (see
+data/document_sources.py) to run_preprocessing. The default CLI entry
+point handles Wikipedia markdown directories; see pretokenize_stack.py
+for The Stack variant.
 """
 import argparse
 import json
 import logging
 import multiprocessing as mp
 import os
-import re
 from functools import partial
 from pathlib import Path
 from queue import Empty
@@ -46,37 +50,24 @@ def load_custom_tokenizer(tokenizer_path: Path):
 
 
 def tokenize_worker(
-    filepath: str,
+    record: tuple,
     queue: mp.Queue,
     encode_fn: Callable[[str], List[int]],
     dtype: np.dtype,
 ):
     """
-    Reads a single markdown file, extracts its title, tokenizes its content,
-    and puts the result onto the queue.
+    Tokenizes a (title, content_str) record and puts the result onto the queue.
+
+    Content pre-processing (e.g. hash-stripping for Wikipedia) is the
+    responsibility of the DocumentSource, not this worker.
     """
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-        title = os.path.splitext(os.path.basename(filepath))[0]
-            
-        # Clean hashes from links in the text to avoid polluting the model with implementation details.
-        # We want [Link](Title) instead of [Link](Title_123456).
-        # The hash is defined as exactly 6 hex characters at the end of the target.
-        # Match pattern: ](target_hash) -> ](target)
-        # Regex explanation:
-        #   (\]\(.*?)   -> Group 1: Capture "](" and the start of the target
-        #   _[0-9a-f]{6} -> Match underscore followed by 6 hex chars (the hash)
-        #   (\))        -> Group 2: Capture the closing parenthesis
-        content = re.sub(r'(\]\(.*?)_[0-9a-f]{6}(\))', r'\1\2', content)
-
+        title, content = record
         tokens = encode_fn(content)
         tokens_np = np.asarray(tokens, dtype=dtype)
         queue.put((title, tokens_np))
-
     except Exception as e:
-        logger.error(f"Could not process file {filepath}: {e}")
+        logger.error(f"Could not process record '{record[0] if record else '?'}': {e}")
 
 
 def writer_process(
@@ -204,8 +195,17 @@ def finalize_shard(file_handle, total_bytes: int, dtype_str: str):
 # Main Execution
 # ===========================================================================
 
-def run_preprocessing(args, rep: ReproducibilityManager):
-    """The main logic of the preprocessing script, wrapped to be called by the manager."""
+def run_preprocessing(args, rep: ReproducibilityManager, source=None):
+    """
+    Core pre-tokenization logic.
+
+    Args:
+        args: Parsed CLI arguments.
+        rep: ReproducibilityManager instance.
+        source: Any iterable of (title, content_str) pairs that also
+            supports len(). If None, falls back to a MarkdownDirectorySource
+            built from args.input_dir (original Wikipedia behaviour).
+    """
     
     # --- Setup Logging ---
     # The ReproducibilityManager gives us a unique output directory.
@@ -258,13 +258,14 @@ def run_preprocessing(args, rep: ReproducibilityManager):
         return
     logger.info(f"Loaded {len(graph_data):,} nodes from graph file.")
 
-    # --- File Discovery ---
-    logger.info("Discovering markdown files...")
-    md_files = sorted(list(args.input_dir.rglob("*.md")))
-    if not md_files:
-        logger.error("No markdown files found in the input directory.")
+    # --- Content Source ---
+    if source is None:
+        from data.document_sources import MarkdownDirectorySource
+        source = MarkdownDirectorySource(args.input_dir)
+    if len(source) == 0:
+        logger.error("Source contains no documents.")
         return
-    logger.info(f"Found {len(md_files)} markdown files to process.")
+    logger.info(f"Source has {len(source):,} documents to process.")
 
     # --- Multiprocessing Setup ---
     manager = mp.Manager()
@@ -282,11 +283,11 @@ def run_preprocessing(args, rep: ReproducibilityManager):
         target=writer_process,
         args=(
             queue,
-            Path(rep.output_dir), # Use the manager's unique output directory
+            Path(rep.output_dir),
             graph_data,
             dataset_metadata,
             args.shard_size_gb,
-            len(md_files)
+            len(source),
         ),
     )
     writer.start()
@@ -298,9 +299,7 @@ def run_preprocessing(args, rep: ReproducibilityManager):
             encode_fn=encode_fn,
             dtype=token_dtype,
         )
-        # Using imap_unordered for potentially better performance as results are processed as they complete
-        # A simple pool.map is also fine and was used before.
-        list(tqdm(pool.imap_unordered(worker_fn, md_files), total=len(md_files), desc="Tokenizing"))
+        list(tqdm(pool.imap_unordered(worker_fn, source), total=len(source), desc="Tokenizing"))
     
     # --- Signal writer to finish and wait ---
     queue.put((None, None)) # Sentinel value
