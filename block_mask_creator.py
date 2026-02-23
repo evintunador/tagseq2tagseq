@@ -80,7 +80,8 @@ from data.traversal import (
     RandomSelectionStrategy,
     CompositeTraversalStrategy
 )
-from cross_doc_mask import CrossDocLinkMaskCreator
+from cross_doc_mask import CrossDocLinkMaskCreator, MarkdownLinkDetector
+from python_import_detector import PythonImportDetector
 
 # =============================================================================
 # 1. Mask Logic
@@ -273,7 +274,8 @@ def create_cross_doc_link_mask(tokens: torch.Tensor, doc_spans: List[Any], **kwa
         if tiktoken is None:
             raise ImportError("tiktoken is required for cross_doc_link mask. Install with: pip install tiktoken")
         enc = tiktoken.get_encoding('gpt2')
-        _cross_doc_link_creator = CrossDocLinkMaskCreator(tokenizer_decode_fn=enc.decode)
+        detector = MarkdownLinkDetector(decode_fn=enc.decode)
+        _cross_doc_link_creator = CrossDocLinkMaskCreator(link_detector=detector)
 
     return _cross_doc_link_creator(tokens, doc_spans, **kwargs)
 
@@ -366,6 +368,15 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Random seed for batch selection")
     parser.add_argument("--token-budget", type=int, default=16_384, help="Max tokens per batch")
     parser.add_argument("--doc-budget", type=int, default=4096, help="Max tokens per document")
+    parser.add_argument(
+        "--link-detector", type=str, default="markdown",
+        choices=["markdown", "python"],
+        help=(
+            "Link detector to use with cross_doc_link mask. "
+            "'markdown' for Wikipedia-style [text](target) links; "
+            "'python' for Python import statements (use with Stack datasets)."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -424,11 +435,27 @@ if __name__ == "__main__":
     doc_spans = batch['doc_spans']
     
     logger.info(f"Batch generated. Tokens shape: {tokens.shape}")
-    doc_titles = [s.title for s in doc_spans]
-    logger.info(f"Docs in batch ({len(doc_titles)}): {doc_titles}")
+    doc_identifiers = [s.clean_title for s in doc_spans]
+    logger.info(f"Docs in batch ({len(doc_identifiers)}): {doc_identifiers}")
 
     # 4. Create Mask
-    mask_creator_fn = get_mask_creator(args.mask_type)
+    # For cross_doc_link, build a creator directly with the requested detector
+    # so that the visualization path uses the same instance (avoiding double detection).
+    cross_doc_creator = None
+    if args.mask_type == 'cross_doc_link':
+        if tiktoken is None:
+            logger.error("tiktoken is required for cross_doc_link mask.")
+            sys.exit(1)
+        enc = tiktoken.get_encoding('gpt2')
+        if args.link_detector == 'python':
+            detector = PythonImportDetector(decode_fn=enc.decode)
+        else:
+            detector = MarkdownLinkDetector(decode_fn=enc.decode)
+        cross_doc_creator = CrossDocLinkMaskCreator(link_detector=detector)
+        mask_creator_fn = cross_doc_creator
+    else:
+        mask_creator_fn = get_mask_creator(args.mask_type)
+
     block_mask = mask_creator_fn(tokens, doc_spans)
     logger.info(f"Block mask created using '{args.mask_type}' strategy.")
 
@@ -463,9 +490,8 @@ if __name__ == "__main__":
         # Same document only (bidirectional within docs)
         dense_mask = doc_map.unsqueeze(1) == doc_map.unsqueeze(0)
     elif args.mask_type == 'cross_doc_link':
-        # Use the EXACT same logic as the mask creator by calling its visualization method
-        # This ensures 100% consistency between visualization and actual mask
-        dense_mask = _cross_doc_link_creator.build_dense_mask_for_visualization(
+        # Reuse the same creator instance built above — no second detection pass.
+        dense_mask = cross_doc_creator.build_dense_mask_for_visualization(
             tokens, doc_spans, device=torch.device('cpu')
         )
     else:
@@ -485,8 +511,8 @@ if __name__ == "__main__":
         # Label
         mid = (max(0, span.start) + min(input_len, span.end)) / 2
         if 0 <= mid < input_len:
-            plt.text(mid, -1, span.title[:15], ha='center', rotation=45, color='red', fontsize=8)
-            plt.text(-1, mid, span.title[:15], va='center', color='red', fontsize=8)
+            plt.text(mid, -1, span.clean_title[:20], ha='center', rotation=45, color='red', fontsize=8)
+            plt.text(-1, mid, span.clean_title[:20], va='center', color='red', fontsize=8)
 
     valid_bounds = sorted(list(set([b for b in boundaries if 0 <= b <= input_len])))
     for b in valid_bounds:
@@ -519,7 +545,7 @@ if __name__ == "__main__":
         f.write(f"Number of Docs: {len(doc_spans)}\n\n")
         
         for i, span in enumerate(doc_spans):
-            f.write(f"--- Document {i}: {span.title} (ID: {span.doc_id}) ---\n")
+            f.write(f"--- Document {i}: {span.clean_title} (ID: {span.doc_id}) ---\n")
             f.write(f"Span: [{span.start}, {span.end})\n")
             f.write(f"Length: {span.end - span.start}\n")
             f.write(f"Truncated: {span.truncated}\n")

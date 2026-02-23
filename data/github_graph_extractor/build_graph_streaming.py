@@ -21,6 +21,7 @@ import argparse
 import json as stdlib_json  # Always use stdlib json for file writing
 import logging
 import os
+import random
 import tempfile
 import gc
 import re
@@ -180,6 +181,55 @@ def _path_to_module_name(file_path: str) -> str:
     return module_path.replace("/", ".").replace("\\", ".").strip(".")
 
 
+def _pick_from_candidates(candidates: list, direct_init: str) -> str:
+    """
+    Choose one file path from *candidates* using this priority:
+
+    1. The exact *direct_init* path (the __init__.py immediately under the
+       imported package directory) — most semantically correct target.
+    2. Files at the *same directory level* as *direct_init* — these are the
+       modules most likely to be exported through the package.  Sub-package
+       __init__.py files (deeper in the tree) are deliberately ranked lower
+       because they belong to sub-packages, not to the imported package itself.
+    3. A uniformly random pick from whatever remains — better than the
+       arbitrary dict-iteration order of the previous implementation.
+
+    Returns ``None`` if *candidates* is empty.
+    """
+    if not candidates:
+        return None
+    if direct_init in candidates:
+        return direct_init
+    # Files sitting directly inside the package directory (same level as
+    # where __init__.py would live), e.g. foo/bar/baz.py for foo.bar.
+    direct_dir = os.path.dirname(direct_init)
+    same_level = [f for f in candidates if os.path.dirname(f) == direct_dir]
+    if same_level:
+        return random.choice(same_level)
+    return random.choice(candidates)
+
+
+# TODO(@jamesljr): consider piping the imported *name* (the "baz" in
+# "from foo.bar import baz") into this function as a resolution hint.
+# Rough idea: try foo/bar/baz.py and foo/bar/baz/__init__.py before falling
+# back to the same-level heuristic below — which would align with the
+# priority order already used by PythonImportDetector.module_path_to_file_paths.
+# One possible implementation path:
+#   1. Update extract_file_imports to capture names after "import" and return
+#      Set[Tuple[module_str, from_name_str]] instead of Set[str].
+#   2. Add an optional `from_name: str = ""` param here.
+#   3. Try direct_dir/from_name.py and direct_dir/from_name/__init__.py
+#      ahead of the same-level fallback.
+# Not confident this is the right abstraction — "from foo import bar, baz"
+# would produce two edges (one per name) increasing graph density, and it is
+# unclear whether that is desirable.  Needs more thought before implementing.
+
+# TODO(@jamesljr): longer-term, consider a preprocessing pass that rewrites
+# import statements in the stored text to more explicit absolute paths before
+# tokenisation (e.g. making the __init__.py target explicit), so that
+# PythonImportDetector can produce exact matches at mask-creation time without
+# relying on the heuristics in this function.  The right shape of that rewrite
+# is still uncertain — worth revisiting once the Stack pipeline is more mature.
 def _resolve_import_to_file(imported_module: str, module_to_file: dict, importing_file: str) -> str:
     if imported_module.startswith("."):
         dot_count = len(imported_module) - len(imported_module.lstrip("."))
@@ -196,21 +246,29 @@ def _resolve_import_to_file(imported_module: str, module_to_file: dict, importin
 
         full_module_path = full_module_path.rstrip("/")
 
-        for file_path in module_to_file.values():
-            if file_path == full_module_path + ".py" or file_path.startswith(full_module_path + "/"):
-                return file_path
-        return None
+        # Exact .py file match takes priority with no ambiguity.
+        exact = full_module_path + ".py"
+        if exact in module_to_file.values():
+            return exact
 
+        # Otherwise collect all files under the directory and pick the best.
+        candidates = [
+            fp for fp in module_to_file.values()
+            if fp.startswith(full_module_path + "/")
+        ]
+        return _pick_from_candidates(candidates, full_module_path + "/__init__.py")
+
+    # Exact module-name match — unambiguous.
     if imported_module in module_to_file:
         return module_to_file[imported_module]
 
-    for module_name, file_path in module_to_file.items():
-        if module_name.startswith(imported_module + "."):
-            return file_path
-        if imported_module.startswith(module_name + "."):
-            return file_path
-
-    return None
+    # Prefix matches: collect all, then apply __init__.py preference.
+    candidates = [
+        fp for mn, fp in module_to_file.items()
+        if mn.startswith(imported_module + ".") or imported_module.startswith(mn + ".")
+    ]
+    direct_init = imported_module.replace(".", "/") + "/__init__.py"
+    return _pick_from_candidates(candidates, direct_init)
 
 
 # =============================================================================
