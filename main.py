@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import logging
 import os
 import datetime
@@ -14,11 +15,14 @@ from tunalab.distributed import DistributedManager
 from tunalab.reproducibility import ReproducibilityManager
 from tunalab import tracking
 from tunalab.smart_train import smart_train
+from tunalab.optimizers.muon import SingleDeviceMuonWithAuxAdam
+from tunalab.llm_compilers.auto import get_default_llm_client
 
 # Local imports
 from model import DS2DSTrainingModule
 from model.graph_traversal.block_mask_creator import make_mask_creator_callable
-from data.dataset import GraphIndex, PretokShardedBackend, PackedSequenceDataset
+from data.dataset import GraphIndex, PretokShardedBackend
+from data.packed_dataset import PackedSequenceDataset
 from data.layout import BOSEOSLayoutPolicy, NullLayoutPolicy
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
@@ -32,13 +36,22 @@ from data.traversal import (
 logger = logging.getLogger(__name__)
 
 
+class LimitedDataLoader:
+    """Wraps a DataLoader to yield at most ``max_batches`` items per iteration.
+
+    Creates a fresh islice on each call to ``__iter__``, so the underlying
+    loader can be iterated more than once (e.g. repeated validation passes).
+    """
+    def __init__(self, loader: DataLoader, max_batches: int) -> None:
+        self.loader = loader
+        self.max_batches = max_batches
+
+    def __iter__(self):
+        return itertools.islice(iter(self.loader), self.max_batches)
+
+
 def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityManager):
-    """
-    Main training entry point for dagseq2dagseq.
-    
-    This script is currently a template. It sets up the data pipeline using the
-    graph traversal logic but has the model training loop commented out.
-    """
+    """Main training entry point for dagseq2dagseq."""
     
     # -------------------------------------------------------------------------
     # 1. Setup Logging & Reproducibility
@@ -134,8 +147,49 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # For now, we assume 1 packed sequence per step.
     train_loader = DataLoader(
         dataset,
-        batch_size=None, 
+        batch_size=None,
         num_workers=0,  # Can experiment with multiprocessing later
+    )
+
+    # Validation loader — same dataset/graph but with a different seed so the
+    # sampler draws different packs.  We cap it at val_steps batches per pass
+    # since PackedSequenceDataset is an infinite iterable.
+    #
+    # TODO(@jamesljr): Replace this stopgap with proper held-out validation splits per dataset.
+    # The right strategy differs by dataset type:
+    #   - Stack (code repos): hold out some % of repositories entirely — clean since
+    #     repos are largely self-contained subgraphs with minimal cross-repo links.
+    #   - Wikipedia/SimpleWiki: random article splits are problematic because the
+    #     hyperlink graph is dense and nearly every article links to something in
+    #     train. Need to identify a densely-connected sub-graph (e.g., a topical
+    #     cluster) to use as val, so val packs contain enough internal links to be
+    #     representative of the training distribution.
+    # Until then, val is drawn from the same graph with a different RNG seed, which
+    # leaks data but is fine for loss tracking during initial development.
+    val_pack_sampler = PackBatchSampler(
+        graph=graph_index,
+        strategy_factory=strategy_factory,
+        token_budget=cfg.get('model', {}).get('max_seq_len', 2048),
+        doc_budget=cfg.get('data', {}).get('doc_budget'),
+        overflow_policy="truncate",
+        doc_level_trim_side="tail",
+        pack_level_trim_side="head",
+        max_candidates_per_component=1000,
+        seed=cfg.get("seed", 42) + 1,
+        order_mode=cfg.get('data', {}).get('order_mode', 'prefer_targets_first'),
+        layout_policy=layout_policy,
+    )
+    val_dataset = PackedSequenceDataset(
+        graph=graph_index,
+        backend=backend,
+        pack_sampler=val_pack_sampler,
+        layout_policy=layout_policy,
+        as_2d=True,
+    )
+    val_steps = cfg.get('train_loop', {}).get('val_steps', 10)
+    val_loader = LimitedDataLoader(
+        DataLoader(val_dataset, batch_size=None, num_workers=0),
+        max_batches=val_steps,
     )
 
     # -------------------------------------------------------------------------
@@ -167,6 +221,39 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         dtype=getattr(torch, cfg['model'].get('dtype', 'bfloat16')),
     ).to(dist.device)
     
+    # Build optimizer param groups from the uncompiled model so that
+    # named_parameters() gives clean names and weight-tied tensors are only
+    # counted once (PyTorch deduplicates via an internal memo set).
+    logger.info("Initializing Optimizer...")
+    muon_params, adamw_params = [], []
+    seen_ids: set = set()
+    for name, param in model.named_parameters():
+        if id(param) in seen_ids:
+            continue
+        seen_ids.add(id(param))
+        # Backbone 2-D weights use Muon; embedding, norms, biases use AdamW.
+        if 'backbone' in name and param.ndim >= 2:
+            muon_params.append(param)
+        else:
+            adamw_params.append(param)
+
+    optimizer = SingleDeviceMuonWithAuxAdam([
+        dict(
+            params=muon_params,
+            use_muon=True,
+            lr=cfg['optimizer']['muon_lr'],
+            momentum=cfg['optimizer'].get('momentum', 0.95),
+            weight_decay=cfg['optimizer']['wd'],
+        ),
+        dict(
+            params=adamw_params,
+            use_muon=False,
+            lr=cfg['optimizer']['adamw_lr'],
+            betas=(cfg['optimizer'].get('beta1', 0.9), cfg['optimizer'].get('beta2', 0.95)),
+            weight_decay=cfg['optimizer']['wd'],
+        ),
+    ])
+
     if cfg['model']['compile']:
         logger.info("Compiling model with torch.compile...")
         model = torch.compile(
@@ -174,14 +261,6 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             dynamic=False,
             mode=cfg['model']['compile_mode'],
         )
-    
-    logger.info("Initializing Optimizer...")
-    optimizer = torch.optim.AdamW(
-        model.parameters(), 
-        lr=cfg['optimizer']['max_lr'],
-        betas=(cfg['optimizer'].get('beta1', 0.9), cfg['optimizer'].get('beta2', 0.95)),
-        weight_decay=cfg['optimizer']['wd']
-    )
 
     # -------------------------------------------------------------------------
     # 4. Training Loop
@@ -191,16 +270,20 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     atomic_feature_kwargs = cfg.get('train_loop', {}).get('atomic_feature_kwargs', {})
     atomic_feature_kwargs.update({
         'enable_logging': True,
+        'save_best_model': True,
+        'val_loader': val_loader,
+        'val_interval': cfg['train_loop'].get('val_interval', 50),
         'output_dir': rep.output_dir,
-        'device': dist.device,
+        'device': str(dist.device),
         'use_tqdm': True,
-        'max_epochs': cfg['train_loop'].get('epochs', 1),
+        'num_epochs': cfg['train_loop'].get('epochs', 1),
     })
 
     result = smart_train(
-        model=model, 
-        optimizer=optimizer, 
-        train_loader=train_loader, 
+        model=model,
+        optimizer=optimizer,
+        train_loader=train_loader,
+        llm_client=get_default_llm_client(),
         **atomic_feature_kwargs
     )
     
