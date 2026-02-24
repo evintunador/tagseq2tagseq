@@ -179,9 +179,7 @@ class DS2DSTrainingModule(nn.Module):
                   (e.g., 'doc_spans' for document-aware masking)
         
         Returns:
-            Dictionary containing:
-                - 'loss': Scalar tensor with the training loss
-                - 'ce_loss': Cross-entropy loss (same as 'loss' in this implementation)
+            Scalar loss tensor (cross-entropy loss over the sequence).
         """
         tokens = batch['tokens']
         input_ids = tokens[:, :-1]
@@ -194,5 +192,5 @@ class DS2DSTrainingModule(nn.Module):
         x = self.norm(x)
         
         loss = self.loss_fn(x, target_ids)
-        
-        return {'loss': loss, 'ce_loss': loss}
+
+        return loss
