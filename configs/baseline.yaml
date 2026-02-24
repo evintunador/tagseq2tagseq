@@ -20,19 +20,18 @@ model:
   dtype: 'bfloat16'
 
 optimizer:
-  type: 'muon'  # 'adamw' or 'muon'
+  type: 'muon'
   wd: 0.1
-  beta1: 0.9
-  beta2: 0.95
-  init_lr: 0.000001
-  warmup_pct: 0.01
-  max_lr: 0.001
-  decay_type: 'cosine'
-  final_lr: 0.000001
-  plateau_pct: 0.3
+  momentum: 0.95   # Muon momentum
+  beta1: 0.9        # AdamW beta1 (for embed/norm params)
+  beta2: 0.95       # AdamW beta2
+  muon_lr: 0.02     # LR for backbone 2-D weights (spectral-norm units)
+  adamw_lr: 0.0003  # LR for embedding, norms, biases
 
-train_loop: 
+train_loop:
   epochs: 1
+  val_steps: 10     # Batches to run per validation pass
+  val_interval: 50  # Run validation every N training steps
   atomic_feature_kwargs: {}  # Additional training loop arguments
 
 seed: 42
