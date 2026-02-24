@@ -335,14 +335,17 @@ def make_mask_creator_callable(mask_type: str):
     mask_fn = get_mask_creator(mask_type)
 
     def callable_wrapper(**batch):
-        # Extract the required arguments from batch
+        # Extract the required arguments from batch, then remove them so they
+        # aren't passed again as **kwargs (which would cause "multiple values"
+        # for positional arguments already bound by name).
         tokens = batch.get('tokens')
         doc_spans = batch.get('doc_spans', [])
 
         if tokens is None:
             raise ValueError("Batch must contain 'tokens' key")
 
-        return mask_fn(tokens, doc_spans, **batch)
+        extra = {k: v for k, v in batch.items() if k not in ('tokens', 'doc_spans')}
+        return mask_fn(tokens, doc_spans, **extra)
 
     return callable_wrapper
 
