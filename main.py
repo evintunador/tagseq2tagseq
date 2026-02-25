@@ -150,6 +150,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         batch_size=None,
         num_workers=0,  # Can experiment with multiprocessing later
     )
+    max_steps = cfg.get('train_loop', {}).get('max_steps')
+    if max_steps is not None:
+        train_loader = LimitedDataLoader(train_loader, max_batches=max_steps)
 
     # Validation loader — same dataset/graph but with a different seed so the
     # sampler draws different packs.  We cap it at val_steps batches per pass
