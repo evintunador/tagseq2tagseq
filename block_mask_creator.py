@@ -511,8 +511,12 @@ if __name__ == "__main__":
         # Label
         mid = (max(0, span.start) + min(input_len, span.end)) / 2
         if 0 <= mid < input_len:
-            plt.text(mid, -1, span.clean_title[:20], ha='center', rotation=45, color='red', fontsize=8)
-            plt.text(-1, mid, span.clean_title[:20], va='center', color='red', fontsize=8)
+            # For Stack titles (repo:filepath), show just the filepath part
+            raw = span.clean_title
+            label = raw.split(':', 1)[-1] if ':' in raw else raw
+            label = label[-40:]  # last 40 chars keeps the meaningful filename
+            plt.text(mid, -1, label, ha='center', rotation=45, color='red', fontsize=8)
+            plt.text(-1, mid, label, va='center', color='red', fontsize=8)
 
     valid_bounds = sorted(list(set([b for b in boundaries if 0 <= b <= input_len])))
     for b in valid_bounds:
@@ -524,7 +528,8 @@ if __name__ == "__main__":
     import os
     this_dir = os.path.dirname(os.path.abspath(__file__))
     artifacts_dir = os.path.join(this_dir, 'artifacts')
-    output_img = os.path.join(artifacts_dir, f"mask_viz_{args.mask_type}_seed{args.seed}.png")
+    dataset_name = os.path.basename(os.path.normpath(str(args.dataset_dir)))
+    output_img = os.path.join(artifacts_dir, f"mask_viz_{dataset_name}_{args.mask_type}_seed{args.seed}.png")
     plt.savefig(output_img)
     logger.info(f"Saved visualization to {output_img}")
 
@@ -537,7 +542,7 @@ if __name__ == "__main__":
         except:
             pass
 
-    output_txt = os.path.join(artifacts_dir, f"batch_info_{args.mask_type}_seed{args.seed}.txt")
+    output_txt = os.path.join(artifacts_dir, f"batch_info_{dataset_name}_{args.mask_type}_seed{args.seed}.txt")
     with open(output_txt, "w") as f:
         f.write(f"Mask Type: {args.mask_type}\n")
         f.write(f"Seed: {args.seed}\n")
