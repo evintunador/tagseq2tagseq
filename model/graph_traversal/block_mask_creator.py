@@ -91,10 +91,7 @@ def create_doc_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **k
     2. Document isolation (can't attend to other documents).
 
     Args:
-        tokens: Tensor of shape [B, T] or [1, T]. The full sequence of tokens.
-                NOTE: The training module splits this into input/target.
-                input_ids = tokens[:, :-1]
-                So the mask must correspond to length T-1.
+        tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
         doc_spans: List of DocSpan objects with start, end, doc_id attributes.
         kwargs: Extra args from batch.
 
@@ -102,10 +99,7 @@ def create_doc_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **k
         BlockMask
     """
     device = tokens.device
-
-    # tokens is [B, T], usually B=1 for packed sequences
-    # We need the length of the inputs to the model, which is T-1
-    seq_len = tokens.shape[-1] - 1
+    seq_len = tokens.shape[-1]
 
     # Construct a tensor mapping each position to its doc_id
     # Initialize with -1 (or unique negative values) to represent "no document" / padding / layout
@@ -153,7 +147,7 @@ def create_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **kwarg
     Each position can attend to all previous positions, regardless of document boundaries.
 
     Args:
-        tokens: Tensor of shape [B, T] or [1, T].
+        tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
         doc_spans: List of DocSpan objects (unused, but kept for interface consistency).
         kwargs: Extra args from batch.
 
@@ -161,7 +155,7 @@ def create_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **kwarg
         BlockMask
     """
     device = tokens.device
-    seq_len = tokens.shape[-1] - 1
+    seq_len = tokens.shape[-1]
 
     def causal_mod(b, h, q_idx, kv_idx):
         return q_idx >= kv_idx
@@ -185,7 +179,7 @@ def create_full_attention_block_mask(tokens: torch.Tensor, doc_spans: List[Any],
     Useful for debugging or prefix-LM style training.
 
     Args:
-        tokens: Tensor of shape [B, T] or [1, T].
+        tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
         doc_spans: List of DocSpan objects (unused, but kept for interface consistency).
         kwargs: Extra args from batch.
 
@@ -193,7 +187,7 @@ def create_full_attention_block_mask(tokens: torch.Tensor, doc_spans: List[Any],
         BlockMask
     """
     device = tokens.device
-    seq_len = tokens.shape[-1] - 1
+    seq_len = tokens.shape[-1]
 
     def full_mod(b, h, q_idx, kv_idx):
         return True
@@ -217,7 +211,7 @@ def create_doc_bidirectional_block_mask(tokens: torch.Tensor, doc_spans: List[An
     but cannot attend across document boundaries.
 
     Args:
-        tokens: Tensor of shape [B, T] or [1, T].
+        tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
         doc_spans: List of DocSpan objects with start, end, doc_id attributes.
         kwargs: Extra args from batch.
 
@@ -225,7 +219,7 @@ def create_doc_bidirectional_block_mask(tokens: torch.Tensor, doc_spans: List[An
         BlockMask
     """
     device = tokens.device
-    seq_len = tokens.shape[-1] - 1
+    seq_len = tokens.shape[-1]
 
     document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
 
@@ -334,6 +328,9 @@ def make_mask_creator_callable(mask_type: str):
     """
     mask_fn = get_mask_creator(mask_type)
 
+    # Disable dynamo tracing so create_block_mask always runs eagerly and
+    # returns a real BlockMask (with a compiled .graph), not a traced proxy.
+    @torch._dynamo.disable
     def callable_wrapper(**batch):
         # Extract the required arguments from batch, then remove them so they
         # aren't passed again as **kwargs (which would cause "multiple values"
@@ -418,12 +415,10 @@ if __name__ == "__main__":
         as_2d=True
     )
     
-    if 'tokens' not in batch and 'input_ids' in batch:
-        batch['tokens'] = batch['input_ids']
-        
-    tokens = batch['tokens']
+    raw_tokens = batch['tokens']   # [B, T+1] from the collator
     doc_spans = batch['doc_spans']
-    
+    tokens = raw_tokens[:, :-1]    # [B, T] — what the model actually sees
+
     logger.info(f"Batch generated. Tokens shape: {tokens.shape}")
     doc_titles = [s.title for s in doc_spans]
     logger.info(f"Docs in batch ({len(doc_titles)}): {doc_titles}")
@@ -434,7 +429,7 @@ if __name__ == "__main__":
     logger.info(f"Block mask created using '{args.mask_type}' strategy.")
 
     # 5. Visualization
-    input_len = tokens.shape[-1] - 1
+    input_len = tokens.shape[-1]
 
     # Reconstruct the dense mask by re-applying the mask logic
     # This is generic and works for any mask type
@@ -467,7 +462,7 @@ if __name__ == "__main__":
         # Use the EXACT same logic as the mask creator by calling its visualization method
         # This ensures 100% consistency between visualization and actual mask
         dense_mask = _cross_doc_link_creator.build_dense_mask_for_visualization(
-            tokens, doc_spans, device=torch.device('cpu')
+            input_ids, doc_spans, device=torch.device('cpu')
         )
     else:
         # Fallback: try to reconstruct generically (might not match all custom masks)

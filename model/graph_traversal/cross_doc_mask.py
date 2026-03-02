@@ -277,7 +277,7 @@ class CrossDocLinkMaskCreator:
         Create a cross-document link-aware attention mask.
 
         Args:
-            tokens: Tensor of shape [B, T] with token IDs (full sequence including target)
+            tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
             doc_spans: List of DocSpan objects with start, end, doc_id, clean_title
             **kwargs: Additional batch information
 
@@ -285,18 +285,17 @@ class CrossDocLinkMaskCreator:
             BlockMask for FlexAttention
         """
         device = tokens.device
-        # Input sequence length (model sees tokens[:-1])
-        seq_len = tokens.shape[-1] - 1
+        seq_len = tokens.shape[-1]
 
-        # Get input_ids as 1D tensor for link detection
-        input_ids = tokens[0, :-1]  # [seq_len]
+        # Flatten to 1D for link detection
+        tokens_1d = tokens[0]  # [seq_len]
 
         # Step 2: Detect all links in the sequence
-        links = self._detect_links(input_ids)
+        links = self._detect_links(tokens_1d)
         logger.info(f"Found {len(links)} links in batch")
 
         # Step 3: Match links to documents in the batch
-        link_to_target = self._match_links_to_docs(links, input_ids, doc_spans)
+        link_to_target = self._match_links_to_docs(links, tokens_1d, doc_spans)
 
         # Step 4: Build cross-doc attention mask (2D)
         cross_doc_mask = self._build_cross_doc_mask(
@@ -351,7 +350,7 @@ class CrossDocLinkMaskCreator:
         the logic is identical.
 
         Args:
-            tokens: Tensor of shape [B, T] with token IDs
+            tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
             doc_spans: List of DocSpan objects
             device: Device for tensors (defaults to tokens.device)
 
@@ -361,14 +360,14 @@ class CrossDocLinkMaskCreator:
         if device is None:
             device = tokens.device
 
-        seq_len = tokens.shape[-1] - 1
-        input_ids = tokens[0, :-1]
+        seq_len = tokens.shape[-1]
+        tokens_1d = tokens[0]
 
         # Step 1: Detect links
-        links = self._detect_links(input_ids)
+        links = self._detect_links(tokens_1d)
 
         # Step 2: Match links to docs
-        link_to_target = self._match_links_to_docs(links, input_ids, doc_spans)
+        link_to_target = self._match_links_to_docs(links, tokens_1d, doc_spans)
 
         # Step 3: Build cross-doc mask
         cross_doc_mask = self._build_cross_doc_mask(

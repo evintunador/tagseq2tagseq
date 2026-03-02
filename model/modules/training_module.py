@@ -177,20 +177,25 @@ class DS2DSTrainingModule(nn.Module):
                 - 'tokens': Tensor of shape (B, T+1) with token IDs
                 - Additional keys may be used by block_mask_creator
                   (e.g., 'doc_spans' for document-aware masking)
+                The mask creator receives 'tokens' as (B, T) — the input slice only.
         
         Returns:
             Scalar loss tensor (cross-entropy loss over the sequence).
         """
         tokens = batch['tokens']
-        input_ids = tokens[:, :-1]
-        target_ids = tokens[:, 1:]
+        input_ids = tokens[:, :-1].contiguous()
+        target_ids = tokens[:, 1:].contiguous()
 
-        block_mask = self.block_mask_creator(**batch)
+        mask_batch = {**batch, 'tokens': input_ids}
+        block_mask = self.block_mask_creator(**mask_batch)
         
         x = self.embedding(input_ids)
         x = self.backbone(x, block_mask=block_mask)
         x = self.norm(x)
         
-        loss = self.loss_fn(x, target_ids)
+        # Disable dynamo tracing for the Liger loss: its AOT-compiled forward has
+        # a buffer overread bug (inductor sizes intermediate buffers incorrectly
+        # for the chunked accumulation loop), causing CUDA illegal memory access.
+        loss = torch._dynamo.disable(self.loss_fn)(x, target_ids)
 
         return loss
