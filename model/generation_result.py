@@ -1,5 +1,5 @@
 """
-Data structures for DS2DS generation results.
+Data structures for TS2TS generation results.
 
 Defines GeneratedDocument and GenerationResult classes for storing and
 accessing the outputs of a generation run.

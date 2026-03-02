@@ -1,5 +1,5 @@
-from .modules import DS2DSTrainingModule, DS2DSBackbone
-from .model import DS2DSModel
+from .modules import TS2TSTrainingModule, TS2TSBackbone
+from .model import TS2TSModel
 
 # Generation components (Phase 1 Foundation)
 from .title_utils import (
@@ -16,9 +16,9 @@ from .generation_result import GeneratedDocument, GenerationResult
 
 __all__ = [
     # Model components
-    "DS2DSTrainingModule",
-    "DS2DSBackbone",
-    "DS2DSModel",
+    "TS2TSTrainingModule",
+    "TS2TSBackbone",
+    "TS2TSModel",
     # Title utilities
     "normalize_title",
     "generate_title_hash",

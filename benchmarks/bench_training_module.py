@@ -2,7 +2,7 @@ import torch
 from torch.nn.attention.flex_attention import create_block_mask, BlockMask
 
 from tunalab.benchmarking import ModuleBenchmarkRunner
-from tunalab.modules.training_module import DS2DSTrainingModule
+from tunalab.modules.training_module import TS2TSTrainingModule
 
 
 def causal(b, h, q_idx, kv_idx):
@@ -19,8 +19,8 @@ def main():
     runner = ModuleBenchmarkRunner()
     
     results = runner.run_module_benchmark(
-        module_class=DS2DSTrainingModule,
-        module_name='DS2DSTrainingModule',
+        module_class=TS2TSTrainingModule,
+        module_name='TS2TSTrainingModule',
         parameter_space={
             'model_dim': [512, 1024],
             'num_heads': [8],
@@ -53,8 +53,8 @@ def main():
         devices=['cuda'],  # FlexAttention requires CUDA
     )
     
-    print(f"\nBenchmarked {len(results)} configurations for DS2DSTrainingModule")
-    print(f"Results saved to artifacts/modules/DS2DSTrainingModule_*.csv")
+    print(f"\nBenchmarked {len(results)} configurations for TS2TSTrainingModule")
+    print(f"Results saved to artifacts/modules/TS2TSTrainingModule_*.csv")
 
 
 if __name__ == '__main__':

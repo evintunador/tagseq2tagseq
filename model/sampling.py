@@ -1,5 +1,5 @@
 """
-Token sampling utilities for DS2DS generation.
+Token sampling utilities for TS2TS generation.
 
 Provides functions for sampling next tokens from model logits using various
 sampling strategies (greedy, temperature, top-k, nucleus/top-p).

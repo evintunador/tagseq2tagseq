@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
-from model.modules.backbone import DS2DSBackbone
+from model.modules.backbone import TS2TSBackbone
 
 
 def causal(b, h, q_idx, kv_idx):
@@ -21,7 +21,7 @@ def test_backbone_forward_backward(model_dim, num_heads, num_layers, max_seq_len
     if device != 'cuda':
         pytest.skip("FlexAttention requires CUDA")
     
-    module = DS2DSBackbone(
+    module = TS2TSBackbone(
         num_layers=num_layers,
         model_dim=model_dim,
         num_heads=num_heads,
@@ -53,7 +53,7 @@ def test_backbone_skip_connections(num_layers, device, dtype):
     model_dim = 256
     max_seq_len = 128
     
-    module = DS2DSBackbone(
+    module = TS2TSBackbone(
         num_layers=num_layers,
         model_dim=model_dim,
         num_heads=4,
@@ -78,7 +78,7 @@ def test_backbone_module_list_structure(device, dtype):
         pytest.skip("FlexAttention requires CUDA")
     
     num_layers = 4
-    module = DS2DSBackbone(
+    module = TS2TSBackbone(
         num_layers=num_layers,
         model_dim=256,
         num_heads=4,

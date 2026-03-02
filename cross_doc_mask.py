@@ -191,7 +191,7 @@ class CrossDocLinkMaskCreator:
     """
     Creates attention masks that grant cross-document attention based on in-text links.
 
-    This is a callable class that can be passed to DS2DSTrainingModule as the
+    This is a callable class that can be passed to TS2TSTrainingModule as the
     block_mask_creator parameter.
 
     Args:
@@ -203,7 +203,7 @@ class CrossDocLinkMaskCreator:
         >>> enc = tiktoken.get_encoding('gpt2')
         >>> detector = MarkdownLinkDetector(decode_fn=enc.decode)
         >>> mask_creator = CrossDocLinkMaskCreator(link_detector=detector)
-        >>> model = DS2DSTrainingModule(
+        >>> model = TS2TSTrainingModule(
         ...     block_mask_creator=mask_creator,
         ...     vocab_size=50257,
         ...     ...

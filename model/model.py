@@ -7,12 +7,12 @@ import torch.nn as nn
 from tunalab.evaluation import register_handler
 from tunalab.modules.norms.rms_norm import RMSNorm
 from tunalab.modules.losses.fused_cross_entropy import FusedLinearCELoss
-from .modules import DS2DSBackbone
+from .modules import TS2TSBackbone
 
 
-class DS2DSModel:
+class TS2TSModel:
     """
-    Inference and evaluation wrapper for DS2DS models.
+    Inference and evaluation wrapper for TS2TS models.
     
     This class does NOT inherit from nn.Module, providing a cleaner interface
     for inference and evaluation without the nn.Module ceremony. It holds
@@ -36,7 +36,7 @@ class DS2DSModel:
     
     def __init__(
         self,
-        backbone: DS2DSBackbone,
+        backbone: TS2TSBackbone,
         embedding_weight: Tensor,
         lm_head_weight: Tensor,
         norm: nn.Module,
@@ -48,7 +48,7 @@ class DS2DSModel:
         Initialize the inference model with references to trained components.
         
         Args:
-            backbone: Pre-trained DS2DSBackbone instance
+            backbone: Pre-trained TS2TSBackbone instance
             embedding_weight: Token embedding tensor (reference, not Parameter)
             lm_head_weight: Output head weight tensor (reference, not Parameter)
             norm: RMS normalization layer
@@ -78,13 +78,13 @@ class DS2DSModel:
         fp8: bool = False,
         weight_tying: bool = True,
         ignore_index: int = -100,
-    ) -> 'DS2DSModel':
+    ) -> 'TS2TSModel':
         """
         Factory method to construct an inference model from configuration parameters.
         
-        This creates a fresh DS2DSModel with randomly initialized weights. For loading
+        This creates a fresh TS2TSModel with randomly initialized weights. For loading
         trained weights, use update_from_training_module() after creation or construct
-        directly from a trained DS2DSTrainingModule using its to_inference_model() method.
+        directly from a trained TS2TSTrainingModule using its to_inference_model() method.
         
         Args:
             vocab_size: Size of the vocabulary
@@ -100,10 +100,10 @@ class DS2DSModel:
             ignore_index: Index to ignore in computations
         
         Returns:
-            Configured DS2DSModel with fresh weights
+            Configured TS2TSModel with fresh weights
         """
         # Construct backbone
-        backbone = DS2DSBackbone(
+        backbone = TS2TSBackbone(
             num_layers=num_layers,
             model_dim=model_dim,
             num_heads=num_heads,
@@ -139,9 +139,9 @@ class DS2DSModel:
     def to_training_module(
         self,
         dtype: torch.dtype = torch.bfloat16,
-    ) -> 'DS2DSTrainingModule':
+    ) -> 'TS2TSTrainingModule':
         """
-        Convert this inference model to a training-ready DS2DSTrainingModule.
+        Convert this inference model to a training-ready TS2TSTrainingModule.
         
         This wraps the model's components in a training module that provides
         the "batch in, loss out" interface required for training loops. The
@@ -152,9 +152,9 @@ class DS2DSModel:
             dtype: Data type for loss computation
         
         Returns:
-            DS2DSTrainingModule ready for training, sharing weights with this model
+            TS2TSTrainingModule ready for training, sharing weights with this model
         """
-        from .modules.training_module import DS2DSTrainingModule
+        from .modules.training_module import TS2TSTrainingModule
         
         # Create embedding layer from weight reference
         embedding = nn.Embedding(self.vocab_size, self.embedding_weight.shape[1])
@@ -169,7 +169,7 @@ class DS2DSModel:
             weight=self.lm_head_weight
         )
         
-        return DS2DSTrainingModule(
+        return TS2TSTrainingModule(
             backbone=self.backbone,
             embedding=embedding,
             norm=self.norm,
@@ -179,7 +179,7 @@ class DS2DSModel:
             ignore_index=self.ignore_index,
         )
     
-    def update_from_training_module(self, training_module: 'DS2DSTrainingModule') -> 'DS2DSModel':
+    def update_from_training_module(self, training_module: 'TS2TSTrainingModule') -> 'TS2TSModel':
         """
         Update this model's weights and components from a trained training module.
         
@@ -187,7 +187,7 @@ class DS2DSModel:
         useful for updating an inference model after training or fine-tuning.
         
         Args:
-            training_module: Trained DS2DSTrainingModule to extract weights from
+            training_module: Trained TS2TSTrainingModule to extract weights from
         
         Returns:
             self for method chaining

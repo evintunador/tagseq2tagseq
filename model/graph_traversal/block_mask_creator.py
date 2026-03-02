@@ -3,7 +3,7 @@ Block Mask Creator for FlexAttention
 
 This module provides a registry of different attention mask strategies for use with
 PyTorch's FlexAttention API. It supports both standalone visualization and integration
-with the DS2DSTrainingModule.
+with the TS2TSTrainingModule.
 
 Available Mask Types:
 --------------------
@@ -28,7 +28,7 @@ Usage Examples:
 2. Importing in training code:
    >>> from block_mask_creator import make_mask_creator_callable
    >>> block_mask_creator = make_mask_creator_callable('doc_causal')
-   >>> model = DS2DSTrainingModule(
+   >>> model = TS2TSTrainingModule(
    ...     block_mask_creator=block_mask_creator,
    ...     vocab_size=50257,
    ...     ...
@@ -305,7 +305,7 @@ def list_mask_creators() -> List[str]:
 
 def make_mask_creator_callable(mask_type: str):
     """
-    Create a callable that can be passed to DS2DSTrainingModule.
+    Create a callable that can be passed to TS2TSTrainingModule.
 
     This is a convenience function that wraps get_mask_creator to provide
     a cleaner interface when initializing the training module.
@@ -319,7 +319,7 @@ def make_mask_creator_callable(mask_type: str):
     Example:
         >>> from block_mask_creator import make_mask_creator_callable
         >>> block_mask_creator = make_mask_creator_callable('doc_causal')
-        >>> model = DS2DSTrainingModule(
+        >>> model = TS2TSTrainingModule(
         ...     block_mask_creator=block_mask_creator,
         ...     vocab_size=50257,
         ...     num_layers=12,

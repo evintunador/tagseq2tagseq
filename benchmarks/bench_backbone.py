@@ -2,7 +2,7 @@ import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
 from tunalab.benchmarking import ModuleBenchmarkRunner
-from tunalab.modules.backbone import DS2DSBackbone
+from tunalab.modules.backbone import TS2TSBackbone
 
 
 def causal(b, h, q_idx, kv_idx):
@@ -17,8 +17,8 @@ def main():
     runner = ModuleBenchmarkRunner()
     
     results = runner.run_module_benchmark(
-        module_class=DS2DSBackbone,
-        module_name='DS2DSBackbone',
+        module_class=TS2TSBackbone,
+        module_name='TS2TSBackbone',
         parameter_space={
             'model_dim': [512, 1024],
             'num_heads': [8, 16],
@@ -42,8 +42,8 @@ def main():
         devices=['cuda'],  # FlexAttention requires CUDA
     )
     
-    print(f"\nBenchmarked {len(results)} configurations for DS2DSBackbone")
-    print(f"Results saved to artifacts/modules/DS2DSBackbone_*.csv")
+    print(f"\nBenchmarked {len(results)} configurations for TS2TSBackbone")
+    print(f"Results saved to artifacts/modules/TS2TSBackbone_*.csv")
 
 
 if __name__ == '__main__':

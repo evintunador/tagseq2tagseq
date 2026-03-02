@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.nn.attention.flex_attention import create_block_mask, BlockMask
 
-from model.modules.training_module import DS2DSTrainingModule
+from model.modules.training_module import TS2TSTrainingModule
 
 
 def causal(b, h, q_idx, kv_idx):
@@ -25,7 +25,7 @@ def test_training_module_forward(model_dim, vocab_size, num_layers, device, dtyp
     if device != 'cuda':
         pytest.skip("FlexAttention requires CUDA")
     
-    module = DS2DSTrainingModule(
+    module = TS2TSTrainingModule(
         block_mask_creator=simple_block_mask_creator,
         vocab_size=vocab_size,
         num_layers=num_layers,
@@ -61,7 +61,7 @@ def test_training_module_weight_tying(weight_tying, device, dtype):
     model_dim = 256
     vocab_size = 1024
     
-    module = DS2DSTrainingModule(
+    module = TS2TSTrainingModule(
         block_mask_creator=simple_block_mask_creator,
         vocab_size=vocab_size,
         num_layers=2,
@@ -94,7 +94,7 @@ def test_training_module_backward_pass(device, dtype):
     model_dim = 256
     vocab_size = 1024
     
-    module = DS2DSTrainingModule(
+    module = TS2TSTrainingModule(
         block_mask_creator=simple_block_mask_creator,
         vocab_size=vocab_size,
         num_layers=2,
@@ -127,7 +127,7 @@ def test_training_module_variable_sequence_lengths(max_seq_len, device, dtype):
     if device != 'cuda':
         pytest.skip("FlexAttention requires CUDA")
     
-    module = DS2DSTrainingModule(
+    module = TS2TSTrainingModule(
         block_mask_creator=simple_block_mask_creator,
         vocab_size=1024,
         num_layers=2,

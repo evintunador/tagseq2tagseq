@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from experiments.dagseq2dagseq.model.generation_config import GenerationConfig
+from experiments.tagseq2tagseq.model.generation_config import GenerationConfig
 
 
 class TestGenerationConfigDefaults:

@@ -1,5 +1,5 @@
 """
-Title normalization utilities for DS2DS generation.
+Title normalization utilities for TS2TS generation.
 
 These utilities handle title normalization and hashing to match the format used
 during training data preprocessing (data/pretokenize.py).

@@ -8,9 +8,9 @@ import torch.nn.functional as F
 from .layer import Layer
 
 
-class DS2DSBackbone(nn.Module):
+class TS2TSBackbone(nn.Module):
     """
-    The "spine" of the DS2DS transformer architecture.
+    The "spine" of the TS2TS transformer architecture.
     
     This module contains only the core transformer layers with skip connections,
     intentionally excluding the embedding and output head. This design follows

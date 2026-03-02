@@ -19,7 +19,7 @@ from tunalab.optimizers.muon import SingleDeviceMuonWithAuxAdam
 from tunalab.llm_compilers.auto import get_default_llm_client
 
 # Local imports
-from model import DS2DSTrainingModule
+from model import TS2TSTrainingModule
 from model.graph_traversal.block_mask_creator import make_mask_creator_callable
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
@@ -51,7 +51,7 @@ class LimitedDataLoader:
 
 
 def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityManager):
-    """Main training entry point for dagseq2dagseq."""
+    """Main training entry point for tagseq2tagseq."""
     
     # -------------------------------------------------------------------------
     # 1. Setup Logging & Reproducibility
@@ -209,7 +209,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     block_mask_creator = make_mask_creator_callable(mask_type)
     
     # Build model using from_config factory
-    model = DS2DSTrainingModule.from_config(
+    model = TS2TSTrainingModule.from_config(
         vocab_size=vocab_size,
         num_layers=cfg['model']['num_layers'],
         model_dim=cfg['model']['model_dim'],
@@ -298,7 +298,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train a DAGSeq2DAGSeq model on the TAGWiki dataset.",
+        description="Train a TAGSeq2TAGSeq model on the TAGWiki dataset.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     

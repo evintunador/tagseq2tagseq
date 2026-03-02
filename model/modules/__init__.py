@@ -1,10 +1,10 @@
 from .layer import Layer
-from .backbone import DS2DSBackbone
-from .training_module import DS2DSTrainingModule
+from .backbone import TS2TSBackbone
+from .training_module import TS2TSTrainingModule
 
 
 __all__ = [
     "Layer",
-    "DS2DSBackbone",
-    "DS2DSTrainingModule",
+    "TS2TSBackbone",
+    "TS2TSTrainingModule",
 ]

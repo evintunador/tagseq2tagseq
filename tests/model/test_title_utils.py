@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from experiments.dagseq2dagseq.model.title_utils import (
+from experiments.tagseq2tagseq.model.title_utils import (
     normalize_title,
     generate_title_hash,
     create_filename,

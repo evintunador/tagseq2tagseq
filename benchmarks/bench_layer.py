@@ -18,7 +18,7 @@ def main():
     
     results = runner.run_module_benchmark(
         module_class=Layer,
-        module_name='DS2DS_Layer',
+        module_name='TS2TS_Layer',
         parameter_space={
             'n_embd': [256, 512, 1024],
             'n_head': [4, 8],
@@ -40,8 +40,8 @@ def main():
         devices=['cuda'],  # FlexAttention requires CUDA
     )
     
-    print(f"\nBenchmarked {len(results)} configurations for DS2DS Layer")
-    print(f"Results saved to artifacts/modules/DS2DS_Layer_*.csv")
+    print(f"\nBenchmarked {len(results)} configurations for TS2TS Layer")
+    print(f"Results saved to artifacts/modules/TS2TS_Layer_*.csv")
 
 
 if __name__ == '__main__':

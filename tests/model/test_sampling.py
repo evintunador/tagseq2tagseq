@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from experiments.dagseq2dagseq.model.sampling import (
+from experiments.tagseq2tagseq.model.sampling import (
     greedy_sample,
     sample_token,
 )

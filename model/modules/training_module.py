@@ -7,12 +7,12 @@ from torch.nn.attention.flex_attention import BlockMask
 
 from tunalab.modules.norms.rms_norm import RMSNorm
 from tunalab.modules.losses.fused_cross_entropy import FusedLinearCELoss
-from .backbone import DS2DSBackbone
+from .backbone import TS2TSBackbone
 
 
-class DS2DSTrainingModule(nn.Module):
+class TS2TSTrainingModule(nn.Module):
     """
-    Training wrapper for DS2DS model that handles loss computation.
+    Training wrapper for TS2TS model that handles loss computation.
     
     This module follows the "batch in, loss out" abstraction for training loops.
     It combines the backbone architecture with embeddings, normalization, and
@@ -20,13 +20,13 @@ class DS2DSTrainingModule(nn.Module):
     
     The module can be constructed either directly via __init__ (for tests/benchmarks)
     or via the from_config classmethod (for standard training). After training,
-    use to_inference_model() to extract an inference-ready DS2DSModel.
+    use to_inference_model() to extract an inference-ready TS2TSModel.
     
     Architecture:
         Input Batch → Embedding → Backbone → Norm → Fused Linear + CE Loss
     
     Attributes:
-        backbone: The transformer layer stack (DS2DSBackbone)
+        backbone: The transformer layer stack (TS2TSBackbone)
         embedding: Token embedding layer
         norm: Final RMS normalization layer
         loss_fn: Fused linear projection + cross-entropy loss
@@ -35,7 +35,7 @@ class DS2DSTrainingModule(nn.Module):
     
     def __init__(
         self,
-        backbone: DS2DSBackbone,
+        backbone: TS2TSBackbone,
         embedding: nn.Embedding,
         norm: RMSNorm,
         loss_fn: FusedLinearCELoss,
@@ -47,7 +47,7 @@ class DS2DSTrainingModule(nn.Module):
         Initialize the training module with pre-constructed components.
         
         Args:
-            backbone: Pre-constructed DS2DSBackbone instance
+            backbone: Pre-constructed TS2TSBackbone instance
             embedding: Token embedding layer (nn.Embedding)
             norm: RMS normalization layer for final hidden states
             loss_fn: Fused linear + cross-entropy loss (contains lm_head weight)
@@ -79,7 +79,7 @@ class DS2DSTrainingModule(nn.Module):
         weight_tying: bool = True,
         ignore_index: int = -100,
         dtype: torch.dtype = torch.bfloat16,
-    ) -> 'DS2DSTrainingModule':
+    ) -> 'TS2TSTrainingModule':
         """
         Factory method to construct a training module from configuration parameters.
         
@@ -101,10 +101,10 @@ class DS2DSTrainingModule(nn.Module):
             dtype: Data type for loss computation
         
         Returns:
-            Configured DS2DSTrainingModule ready for training
+            Configured TS2TSTrainingModule ready for training
         """
         # Construct backbone
-        backbone = DS2DSBackbone(
+        backbone = TS2TSBackbone(
             num_layers=num_layers,
             model_dim=model_dim,
             num_heads=num_heads,
@@ -142,19 +142,19 @@ class DS2DSTrainingModule(nn.Module):
     
     def to_inference_model(self):
         """
-        Convert this training module to an inference-ready DS2DSModel.
+        Convert this training module to an inference-ready TS2TSModel.
         
-        This extracts the trained weights and passes them to a DS2DSModel instance
+        This extracts the trained weights and passes them to a TS2TSModel instance
         which provides generation and evaluation capabilities. The weights are
         passed as tensor references (not Parameters) to avoid unnecessary copying
         while maintaining gradient-free inference.
         
         Returns:
-            DS2DSModel instance ready for inference/evaluation
+            TS2TSModel instance ready for inference/evaluation
         """
-        from .model import DS2DSModel
+        from .model import TS2TSModel
         
-        return DS2DSModel(
+        return TS2TSModel(
             backbone=self.backbone,
             embedding_weight=self.embedding.weight,
             lm_head_weight=self.loss_fn.weight,

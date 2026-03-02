@@ -1,5 +1,5 @@
 """
-Configuration dataclass for DS2DS generation.
+Configuration dataclass for TS2TS generation.
 
 Defines all parameters that control generation behavior, including sampling
 parameters, context management, and document structure constraints.
