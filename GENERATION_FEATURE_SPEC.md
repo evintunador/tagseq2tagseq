@@ -17,7 +17,7 @@ The following foundation pieces are implemented and tested:
 - **GenerationResult / GeneratedDocument** (`model/generation_result.py`): Result data structures for generation output. Tracks root + auxiliary documents, their provenance (generated vs corpus), and parent relationships.
 - **GenerationConfig** (`model/generation_config.py`): Configuration dataclass covering sampling params, document structure limits, eviction policy, link handling, and stopping conditions.
 - **Token sampling** (`model/sampling.py`): `greedy_sample` and `sample_token` (temperature, top-k, top-p).
-- **Link detection** (`cross_doc_mask.py` and `model/graph_traversal/cross_doc_mask.py`): `LinkDetector` protocol with `MarkdownLinkDetector` (for Wikipedia) and `PythonImportDetector` (for TheStack) implementations. Produces `LinkInfo(link_end_pos, target_str)`. More detectors (e.g., LaTeX citations) to be added later.
+- **Link detection** (`cross_doc_mask.py`, `python_import_detector.py`): `LinkDetector` protocol with `MarkdownLinkDetector` (for Wikipedia) and `PythonImportDetector` (for TheStack) implementations. Produces `LinkInfo(link_end_pos, target_str)`. More detectors (e.g., LaTeX citations) to be added later. Both files will be moved to `model/graph_traversal/` in Stage 0 (replacing the older monolithic `model/graph_traversal/cross_doc_mask.py`).
 - **TS2TSModel** (`model/model.py`): Inference wrapper with stubbed `forward_inference` and `generate` methods (raise `NotImplementedError`).
 - **DocSpan** (`data/collate.py`): Dataclass tracking document boundaries in a packed sequence (`doc_id`, `title`, `start`, `end`, `truncated`, `outgoing_titles`, `clean_title`).
 - **Block mask creators** (`model/graph_traversal/block_mask_creator.py`): Callables that produce FlexAttention `BlockMask` from tokens + doc_spans. Supports `doc_causal`, `causal`, `full`, `doc_bidirectional`, and `cross_doc_link` strategies.
@@ -124,11 +124,11 @@ Generation should mirror the training layout policy. Currently `NullLayoutPolicy
 ### generate
 
 `TS2TSModel.generate()` is the user-facing entry point. Accepts:
-- `prompt: str | List[int]` (if `str`, requires a tokenizer)
+- `prompt: str` — tokenized internally using `self.tokenizer`
 - Optional corpus
 - `GenerationConfig`
-- A `LinkDetector` appropriate for the dataset
-- A `DocLayoutPolicy` matching the training configuration
+
+The model supplies its own `LinkDetector` and `DocLayoutPolicy` (stored at training time via Stage 0). The caller provides only what varies per-call: the prompt, an optional corpus, and generation config overrides.
 
 Returns a `GenerationResult`.
 
@@ -149,6 +149,8 @@ Returns a `GenerationResult`.
 | Multi-GPU | Single device for now; inference runs under `is_main_process()` when called from training loop |
 | Test data | Use existing training datasets (`data/pretokenized_datasets/`) |
 | Test checkpoints | Available in `runs/`; sanity-check that output looks like early-training LM, not random noise |
+| `LinkDetector` ownership | Model stores `self.link_detector`; same instance is passed to `CrossDocLinkMaskCreator` at construction. Two consumers (mask creator + generation loop), one object. |
+| `max_new_tokens` vs `max_tokens_per_document` | Both are kept. `max_new_tokens` caps tokens generated per `_generate_doc` call and does **not** set `truncated=True`. `max_tokens_per_document` caps total document length (including prefix/prompt) and **does** set `truncated=True`. |
 
 ---
 

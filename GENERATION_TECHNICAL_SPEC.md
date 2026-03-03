@@ -28,7 +28,31 @@ Settings that are fixed at training time (tokenizer, link detector, layout polic
 - `link_detector` — `LinkDetector` instance (e.g. `MarkdownLinkDetector` for simplewiki, `PythonImportDetector` for stack)
 - `layout_policy` — `DocLayoutPolicy` instance
 
-**`TS2TSTrainingModule.from_config()` updated** to accept these as required parameters. `main.py` constructs them explicitly and passes them in, instead of having them lazily initialized inside the mask creator.
+**`TS2TSTrainingModule.from_config()` updated** to accept these as required parameters. `main.py` constructs them explicitly and passes them in. Concretely, `main.py` does:
+
+```python
+link_detector = MarkdownLinkDetector(decode_fn=tokenizer.decode)   # or PythonImportDetector
+mask_creator  = CrossDocLinkMaskCreator(link_detector=link_detector)
+block_mask_creator = make_mask_creator_callable_from(mask_creator)
+model = TS2TSTrainingModule.from_config(...,
+    block_mask_creator=block_mask_creator,
+    link_detector=link_detector,   # stored on model; same object as inside mask_creator
+    ...)
+```
+
+The `link_detector` stored on the model is the **same instance** held by `CrossDocLinkMaskCreator`. There is no second copy. The generation loop accesses it via `model.link_detector`; the mask creator accesses it via its own reference — both point to the same object.
+
+**`cross_doc_mask.py` and `python_import_detector.py` are moved from the project root into `model/graph_traversal/`** as part of this stage. The old `model/graph_traversal/cross_doc_mask.py` (monolithic version) is deleted and replaced by the moved file. Final layout:
+
+```
+model/graph_traversal/
+    block_mask_creator.py        # unchanged; already imports from .cross_doc_mask
+    cross_doc_mask.py            # moved from root; canonical LinkDetector protocol +
+                                 #   MarkdownLinkDetector + CrossDocLinkMaskCreator
+    python_import_detector.py    # moved from root; PythonImportDetector
+```
+
+The `seq_len = tokens.shape[-1] - 1` bug in `cross_doc_mask.py.__call__` must be fixed to `seq_len = tokens.shape[-1]` as part of the move.
 
 **`to_inference_model()` updated** to pass `tokenizer`, `link_detector`, `layout_policy` through to `TS2TSModel`.
 
@@ -137,11 +161,21 @@ Internal state:
 Methods:
 
 **`add_root(raw_identifier, prompt_tokens, layout_policy) -> _DocEntry`**
-- `tokens = list(layout_policy.prefix_tokens(0)) + list(prompt_tokens)`
-- Sets `_root`
+- Assigns `doc_id = _next_doc_id` (always 0), increments `_next_doc_id`
+- `tokens = list(layout_policy.prefix_tokens(doc_id)) + list(prompt_tokens)`
+- Appends to `_docs`; sets `_root`
 
-**`insert_before(new_entry, before_entry) -> None`**
-- Inserts at index of `before_entry` in `_docs`
+**`add_corpus_doc(raw_identifier, corpus_tokens, layout_policy, parent_raw_identifier, depth, before_entry) -> _DocEntry`**
+- Assigns `doc_id = _next_doc_id`, increments `_next_doc_id`
+- `tokens = list(layout_policy.prefix_tokens(doc_id)) + list(corpus_tokens)`
+- Constructs `_DocEntry(done=True, source="corpus", ...)`; inserts before `before_entry` in `_docs`
+- Returns the new entry (caller may pass it to `_process_existing_doc_links`)
+
+**`add_generated_doc(raw_identifier, layout_policy, parent_raw_identifier, depth, before_entry) -> _DocEntry`**
+- Assigns `doc_id = _next_doc_id`, increments `_next_doc_id`
+- `tokens = list(layout_policy.prefix_tokens(doc_id))`  — body tokens accumulated later via `append_token`
+- Constructs `_DocEntry(done=False, source="generated", ...)`; inserts before `before_entry` in `_docs`
+- Returns the new entry (caller drives generation via `_generate_doc`)
 
 **`append_token(entry, token_id) -> None`**
 
@@ -219,8 +253,12 @@ while not entry.done:
     if next_token == config.eos_token_id:
         context.mark_done(entry, layout_policy)
     elif tokens_generated >= config.max_new_tokens:
+        # max_new_tokens: caps tokens generated in this _generate_doc call.
+        # Does NOT set truncated=True — this is a generation budget, not a hard structural limit.
         context.mark_done(entry, layout_policy)
     elif len(entry.tokens) >= config.max_tokens_per_document:
+        # max_tokens_per_document: caps total document length (prefix + body).
+        # Sets truncated=True — this is a hard structural limit.
         entry.truncated = True
         context.mark_done(entry, layout_policy)
 ```
@@ -258,16 +296,14 @@ if corpus is not None and corpus.has_document(target):
             return
     elif not context.can_add_document(len(corpus_tokens)):
         return
-    new_entry = _DocEntry(
-        normed_identifier=normalize_identifier(target),
+    new_entry = context.add_corpus_doc(
         raw_identifier=target,
-        tokens=list(layout_policy.prefix_tokens(context._next_doc_id)) + corpus_tokens,
-        done=True, source="corpus",
+        corpus_tokens=corpus_tokens,
+        layout_policy=layout_policy,
         parent_raw_identifier=active_entry.raw_identifier,
         depth=depth + 1,
-        ...
+        before_entry=active_entry,
     )
-    context.insert_before(new_entry, active_entry)
     # Corpus doc's own links are game at depth+1
     if depth + 1 <= config.max_link_depth:
         _process_existing_doc_links(new_entry, context, model, link_detector,
@@ -286,16 +322,13 @@ if config.eviction_policy == "drop_oldest":
 elif not context.can_add_document(0):
     return
 
-new_entry = _DocEntry(
-    normed_identifier=normalize_identifier(target),
+new_entry = context.add_generated_doc(
     raw_identifier=target,
-    tokens=list(layout_policy.prefix_tokens(context._next_doc_id)),
-    done=False, source="generated",
+    layout_policy=layout_policy,
     parent_raw_identifier=active_entry.raw_identifier,
     depth=depth + 1,
-    ...
+    before_entry=active_entry,
 )
-context.insert_before(new_entry, active_entry)
 
 if config.allow_recursive_links or depth == 0:
     _generate_doc(new_entry, context, model, link_detector,
@@ -319,9 +352,9 @@ Note: `normalize_identifier` from `model/title_utils.py`.
 
 ---
 
-### 4. `model/generation_config.py` — minor addition
+### 4. `model/generation_config.py` — minor additions
 
-Add `max_recent_link_tokens: int = 200`.
+Add `max_recent_link_tokens: int = 200`. This is used in `_generate_doc` to limit how many tokens of the active document are scanned for links on each step (efficiency — avoids re-scanning the full document every token).
 
 `eos_token_id` already exists (default 50256). Generation always stops on it.
 
@@ -342,6 +375,9 @@ The generation system should record what happened during a run. Exact scope TBD 
 
 ```
 Stage 0:
+  cross_doc_mask.py → model/graph_traversal/cross_doc_mask.py (move + fix seq_len bug)
+  python_import_detector.py → model/graph_traversal/python_import_detector.py (move)
+  model/graph_traversal/cross_doc_mask.py (old monolithic version — deleted)
   model/modules/training_module.py (stores tokenizer + link_detector + layout_policy)
   model/model.py (receives them via to_inference_model())
 
@@ -352,7 +388,7 @@ Stage 1 (depends on Stage 0):
   model/model.py → generate()
 
 Stage 2 (depends on Stage 1):
-  model/document_context.py (full: insert_before, make_room, eviction)
+  model/document_context.py (full: add_corpus_doc, add_generated_doc, make_room, eviction)
   model/generation_loop.py → _handle_link(), _process_existing_doc_links()
 
 Stage 3 (depends on Stage 2):

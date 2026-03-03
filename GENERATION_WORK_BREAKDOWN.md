@@ -8,11 +8,16 @@ Dependency-ordered stages for implementing the generation system. Each stage has
 *Prerequisite. Blocks all other stages.*
 
 ### 0.1 — Model stores its training settings
-Add `tokenizer`, `link_detector`, `layout_policy` as first-class attributes of `TS2TSTrainingModule` and `TS2TSModel`. Update `from_config()` to accept them. Update `to_inference_model()` to pass them through. Update `main.py` to construct them explicitly rather than relying on lazy initialization inside the mask creator.
+Add `tokenizer`, `link_detector`, `layout_policy` as first-class attributes of `TS2TSTrainingModule` and `TS2TSModel`. Update `from_config()` to accept them. Update `to_inference_model()` to pass them through. Update `main.py` to construct them explicitly: create the `LinkDetector`, pass it to both `CrossDocLinkMaskCreator` and `from_config()` so the model and mask creator share the same instance.
 
-**Touches**: `model/modules/training_module.py`, `model/model.py`, `main.py`
+Also in this stage:
+- Move `cross_doc_mask.py` (root) → `model/graph_traversal/cross_doc_mask.py`, replacing the old monolithic version. Fix the `seq_len = tokens.shape[-1] - 1` bug in `__call__` as part of the move.
+- Move `python_import_detector.py` (root) → `model/graph_traversal/python_import_detector.py`.
+- Add `max_recent_link_tokens: int = 200` to `GenerationConfig`.
 
-**Deliverable**: `TS2TSModel` is fully self-describing. All inference can be driven purely from the model object with no extra configuration.
+**Touches**: `model/modules/training_module.py`, `model/model.py`, `main.py`, `cross_doc_mask.py` (→ `model/graph_traversal/`), `python_import_detector.py` (→ `model/graph_traversal/`), `model/graph_traversal/block_mask_creator.py`, `model/generation_config.py`
+
+**Deliverable**: `TS2TSModel` is fully self-describing. All inference can be driven purely from the model object with no extra configuration. The single canonical `CrossDocLinkMaskCreator` is bug-free and wired into training.
 
 ---
 
@@ -47,7 +52,7 @@ Implement the `generate(prompt: str, corpus=None, config=GenerationConfig())` st
 *Depends on Stage 1. The core cross-doc generation feature.*
 
 ### 2.1 — Full `DocumentContext`
-Extend with topological insertion (`insert_before`), safe eviction loop (`make_room` — loops until enough space freed or gives up), and all DocSpan offset bookkeeping. Re-eviction (`find_evicted`, `restore_evicted`) deferred to Stage 3.
+Extend with `add_corpus_doc` and `add_generated_doc` factory methods (handle `doc_id` assignment, layout prefix seeding, `_DocEntry` construction, and topological insertion — all in one call), safe eviction loop (`make_room` — loops until enough space freed or gives up), and all DocSpan offset bookkeeping. Re-eviction (`find_evicted`, `restore_evicted`) deferred to Stage 3.
 
 **Touches**: `model/document_context.py`
 
