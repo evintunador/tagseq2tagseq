@@ -16,7 +16,7 @@ from .identifier_utils import create_normed_identifier
 class GeneratedDocument:
     """Represents a single document in the generation result."""
 
-    raw_identifier: str       # Human-readable identifier as decoded from link (or "root")
+    raw_identifier: str       # Human-readable identifier as decoded from link; "" for root document
     normed_identifier: str    # Normalized+hashed identifier for corpus lookup (e.g., "python_a7f8c3")
     tokens: Optional[np.ndarray]  # Token IDs (may be None for corpus docs if only text loaded)
     text: Optional[str]       # Decoded text (may be None if only tokens stored)

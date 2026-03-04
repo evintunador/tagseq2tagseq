@@ -147,13 +147,14 @@ Manages the growing packed sequence. Uses `raw_identifier` / `normed_identifier`
 **Internal dataclass `_DocEntry`** (not exported):
 ```
 normed_identifier: str        # normalized form (for DocSpan.title)
-raw_identifier: str           # human-readable form as decoded from link (DocSpan.clean_title)
+raw_identifier: str           # human-readable form as decoded from link (DocSpan.clean_title);
+                              #   empty string "" for the root document
 tokens: list[int]             # accumulated token IDs (seeded with layout prefix)
 done: bool
 truncated: bool
 doc_id: int                   # sequential counter, not tied to corpus
 source: Literal["generated", "corpus"]
-outgoing_identifiers: list[str]
+is_root: bool                 # True only for the root document; never matches link targets
 parent_raw_identifier: Optional[str]
 depth: int                    # recursion depth at which this doc was created
 ```
@@ -169,9 +170,12 @@ Internal state:
 Methods:
 
 **`add_root(raw_identifier, prompt_tokens, layout_policy) -> _DocEntry`**
+- `raw_identifier` should be `""` (empty string) — the root has no natural document identifier.
+  Empty string cannot be a real link target, so `has_identifier("")` will never accidentally match
+  a corpus or generated doc. `is_root=True` is the canonical way to identify this entry.
 - Assigns `doc_id = _next_doc_id` (always 0), increments `_next_doc_id`
 - `tokens = list(layout_policy.prefix_tokens(doc_id)) + list(prompt_tokens)`
-- Appends to `_docs`; sets `_root`
+- Constructs entry with `is_root=True`; appends to `_docs`; sets `_root`
 
 **`add_corpus_doc(raw_identifier, corpus_tokens, layout_policy, parent_raw_identifier, depth, before_entry) -> _DocEntry`**
 - Assigns `doc_id = _next_doc_id`, increments `_next_doc_id`
@@ -231,7 +235,7 @@ Methods:
 **`run_generation(model, prompt_tokens, corpus, config, link_detector, tokenizer_decode, layout_policy) -> GenerationResult`**
 
 1. Create `DocumentContext(config.max_context_length, config.max_auxiliary_documents, config.eviction_policy, config.device)`.
-2. `root_entry = context.add_root(raw_identifier="root", prompt_tokens=prompt_tokens, layout_policy=layout_policy)`.
+2. `root_entry = context.add_root(raw_identifier="", prompt_tokens=prompt_tokens, layout_policy=layout_policy)`.
 3. If `config.process_prompt_links`: scan `root_entry.tokens` with `link_detector.detect_links(tensor(root_entry.tokens))`; call `_handle_link` for each (no generation at depth -1 — corpus fetch or insert only, same depth rules apply as depth=0).
 4. Call `_generate_doc(root_entry, context, model, link_detector, corpus, config, layout_policy, depth=0)`.
 5. Populate `GeneratedDocument.text = tokenizer_decode(entry.tokens)` for each doc if `tokenizer_decode` is provided.
@@ -249,11 +253,14 @@ while not entry.done:
     context.append_token(entry, next_token)
     tokens_generated += 1
 
-    # Link detection — run every token, scan last max_recent_link_tokens of active doc only
+    # Link detection — run every token, scan last max_recent_link_tokens of active doc only.
+    # link_end_pos is a position offset relative to `recent` (the tensor passed to detect_links),
+    # not relative to the full document. len(recent) == the exclusive end of that window,
+    # so the condition below fires exactly when the closing token is the most-recently-appended one.
     recent = torch.tensor(entry.tokens[-config.max_recent_link_tokens:], dtype=torch.long)
     links = link_detector.detect_links(recent)
     for link in links:
-        if link.link_end_pos == len(recent):   # link_end_pos is exclusive; link closed at last token
+        if link.link_end_pos == len(recent):   # link closed at last token of this window
             _handle_link(link, entry, context, model, link_detector,
                          corpus, config, layout_policy, depth)
             break  # at most one new doc triggered per token step
