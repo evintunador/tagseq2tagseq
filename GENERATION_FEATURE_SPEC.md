@@ -13,8 +13,8 @@ This is a **behavioral spec**, not an implementation guide. It describes *what* 
 The following foundation pieces are implemented and tested:
 
 - **DocumentCorpus** (`model/document_corpus.py`): Wraps `GraphIndex` + `PretokShardedBackend` for retrieving pretokenized documents by identifier (handles normalized+hashed lookup).
-- **Identifier utilities** (`model/title_utils.py`): `normalize_title`, `generate_title_hash`, `create_filename`, `strip_hash`, `verify_title_hash`.
-- **GenerationResult / GeneratedDocument** (`model/generation_result.py`): Result data structures for generation output. Tracks root + auxiliary documents, their provenance (generated vs corpus), and parent relationships.
+- **Identifier utilities** (`model/identifier_utils.py`): `normalize_identifier`, `generate_identifier_hash`, `create_normed_identifier`, `strip_hash`, `verify_identifier_hash`. (`model/title_utils.py` is a backward-compat shim re-exporting these under the old names.)
+- **GenerationResult / GeneratedDocument** (`model/generation_result.py`): Result data structures for generation output. Tracks root + auxiliary documents with fields `raw_identifier`, `normed_identifier`, `source`, `parent_raw_identifier`, `depth`, `truncated`, `tokens`, `text`, `is_root`.
 - **GenerationConfig** (`model/generation_config.py`): Configuration dataclass covering sampling params, document structure limits, eviction policy, link handling, and stopping conditions.
 - **Token sampling** (`model/sampling.py`): `greedy_sample` and `sample_token` (temperature, top-k, top-p).
 - **Link detection** (`cross_doc_mask.py`, `python_import_detector.py`): `LinkDetector` protocol with `MarkdownLinkDetector` (for Wikipedia) and `PythonImportDetector` (for TheStack) implementations. Produces `LinkInfo(link_end_pos, target_str)`. More detectors (e.g., LaTeX citations) to be added later. Both files will be moved to `model/graph_traversal/` in Stage 0 (replacing the older monolithic `model/graph_traversal/cross_doc_mask.py`).
@@ -141,7 +141,7 @@ Returns a `GenerationResult`.
 | Mask type for generation | `cross_doc_link`; `doc_causal` only for no-link baseline |
 | BOS/EOS handling | Mirrors training layout policy (configurable); EOS token always terminates a document when sampled regardless |
 | Identifier collision | Reuse the first occurrence; skip if already in context window |
-| Re-eviction | If a previously evicted doc is linked to again, re-insert it (potentially evicting another) |
+| Re-eviction | If a previously evicted doc is linked to again, re-insert it (potentially evicting another). Always re-process its links at depth+1, regardless of whether it was originally corpus or generated. |
 | Empty link target `[text]()` | Skip |
 | Link detection frequency | Every token; scan only last `max_recent_link_tokens` of active doc for efficiency |
 | Dataset-specific link syntax | Fully pluggable via `LinkDetector` protocol; no hardcoded assumptions about link delimiters |

@@ -213,7 +213,8 @@ Methods:
 - True if found in `_docs` (active window only; evicted docs do not count)
 
 **`get_all_documents() -> List[GeneratedDocument]`**
-- Returns `_docs + _evicted`; root doc first regardless of eviction order
+- Converts each `_DocEntry` to `GeneratedDocument` (fields: `raw_identifier`, `normed_identifier`, `tokens`, `text=None`, `source`, `is_root`, `parent_raw_identifier`, `depth`, `truncated`)
+- Returns root first, then active aux docs in topological order, then evicted docs
 
 ---
 
@@ -282,8 +283,8 @@ if evicted is not None:
     elif not context.can_add_document(len(evicted.tokens)):
         return
     context.restore_evicted(evicted, before_entry=active_entry)
-    # A restored corpus doc may still have unprocessed links at depth+1 — fall through
-    if evicted.source == "corpus" and depth + 1 <= config.max_link_depth:
+    # A restored doc (corpus or generated) may have links at depth+1 — always process
+    if depth + 1 <= config.max_link_depth:
         _process_existing_doc_links(evicted, context, model, link_detector,
                                     corpus, config, layout_policy, depth + 1)
     return
@@ -317,9 +318,9 @@ if depth >= config.max_link_depth:
     return
 
 if config.eviction_policy == "drop_oldest":
-    if not context.make_room(0):  # just need a slot
+    if not context.make_room(config.max_tokens_per_document):
         return
-elif not context.can_add_document(0):
+elif not context.can_add_document(config.max_tokens_per_document):
     return
 
 new_entry = context.add_generated_doc(
@@ -348,7 +349,7 @@ for link in all_links:
                  corpus, config, layout_policy, depth)
 ```
 
-Note: `normalize_identifier` from `model/title_utils.py`.
+Note: `normalize_identifier`, `create_normed_identifier` from `model/identifier_utils.py`.
 
 ---
 
