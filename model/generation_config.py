@@ -34,10 +34,16 @@ class GenerationConfig:
     
     # Link handling
     process_prompt_links: bool = True  # Process links in initial prompt
-    allow_recursive_links: bool = True  # Allow aux docs to create links (respects max_link_depth)
+    # Recursive link depth is controlled solely by max_link_depth (no separate allow_recursive_links)
     
+    # Link detection
+    max_recent_link_tokens: int = 200  # How many trailing tokens of the active doc to scan per step
+
     # Stopping
     eos_token_id: int = 50256  # GPT-2 <|endoftext|>
+
+    # Trace
+    record_trace: bool = True  # Whether to populate GenerationResult.trace
     
     # Device
     device: str = "cuda" if torch.cuda.is_available() else "cpu"

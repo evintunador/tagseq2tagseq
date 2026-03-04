@@ -95,16 +95,14 @@ Before generation starts, scan the initial prompt tokens for any already-present
 **Touches**: `model/generation_loop.py`
 
 ### 3.3 — Metrics / generation trace
-Record what happened during a run: links detected, corpus fetches, docs generated, docs evicted, max depth reached, total forward passes, per-doc token counts.
+Add a `GenerationTrace` dataclass (global counters: total_forward_passes, total_tokens_generated, links_detected, corpus_fetches, docs_generated, docs_evicted, max_depth_reached) stored as `GenerationResult.trace`. Also emit `logging.DEBUG` per-event and `logging.INFO` run summary. Controlled by `GenerationConfig.record_trace: bool = True`. See technical spec for full field list.
 
-*Open question*: Should this be (a) a structured `GenerationTrace` object embedded in `GenerationResult`, (b) live-logged via Python `logging`, or (c) both? Recommendation is both — structured trace for programmatic use, logging for interactive runs — but needs sign-off on exact fields and format before implementation.
-
-**Touches**: `model/generation_result.py`, `model/generation_loop.py`
+**Touches**: `model/generation_result.py`, `model/generation_loop.py`, `model/generation_config.py`
 
 ### 3.4 — Edge case hardening & config validation
 - `max_auxiliary_documents` enforcement throughout
 - Depth-0 root doc still generates correctly with no links
-- `allow_recursive_links=False` still allows depth-1 links from root
+- `max_link_depth=0` disables all aux doc insertion (corpus and generation)
 - Very large corpus docs that alone exceed `max_context_length` — handled gracefully (skip, not crash)
 - Validation in `GenerationConfig.__post_init__` for nonsensical combos
 

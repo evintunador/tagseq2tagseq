@@ -169,6 +169,8 @@ Internal state:
 
 Methods:
 
+All three factory methods compute `normed_identifier = create_normed_identifier(raw_identifier)` internally. Callers only provide `raw_identifier`. For `raw_identifier=""` (root), `normed_identifier=""`.
+
 **`add_root(raw_identifier, prompt_tokens, layout_policy) -> _DocEntry`**
 - `raw_identifier` should be `""` (empty string) — the root has no natural document identifier.
   Empty string cannot be a real link target, so `has_identifier("")` will never accidentally match
@@ -236,10 +238,20 @@ Methods:
 
 1. Create `DocumentContext(config.max_context_length, config.max_auxiliary_documents, config.eviction_policy, config.device)`.
 2. `root_entry = context.add_root(raw_identifier="", prompt_tokens=prompt_tokens, layout_policy=layout_policy)`.
-3. If `config.process_prompt_links`: scan `root_entry.tokens` with `link_detector.detect_links(tensor(root_entry.tokens))`; call `_handle_link` for each (no generation at depth -1 — corpus fetch or insert only, same depth rules apply as depth=0).
+3. If `config.process_prompt_links`: scan `root_entry.tokens` with `link_detector.detect_links(tensor(root_entry.tokens))`; call `_handle_link(link, root_entry, context, ..., depth=0)` for each. The same rules apply as for links detected mid-generation: corpus fetch, re-eviction, and generation fallback all apply at depth=0.
 4. Call `_generate_doc(root_entry, context, model, link_detector, corpus, config, layout_policy, depth=0)`.
 5. Populate `GeneratedDocument.text = tokenizer_decode(entry.tokens)` for each doc if `tokenizer_decode` is provided.
-6. Return `GenerationResult` from `context.get_all_documents()`.
+6. Convert `context.get_all_documents()` into a `GenerationResult`:
+   - `get_all_documents()` always returns root first, so `docs[0]` is the root.
+   - `docs[1:]` are the auxiliary documents (active aux in topological order, then evicted in eviction order).
+   ```python
+   docs = context.get_all_documents()
+   return GenerationResult(
+       root_document=docs[0],
+       auxiliary_documents=docs[1:],
+       generation_config=config.to_dict(),
+   )
+   ```
 
 **`_generate_doc(entry, context, model, link_detector, corpus, config, layout_policy, depth) -> None`**
 
@@ -346,11 +358,8 @@ new_entry = context.add_generated_doc(
     before_entry=active_entry,
 )
 
-if config.allow_recursive_links or depth == 0:
-    _generate_doc(new_entry, context, model, link_detector,
-                  corpus, config, layout_policy, depth + 1)
-else:
-    context.mark_done(new_entry, layout_policy)
+_generate_doc(new_entry, context, model, link_detector,
+              corpus, config, layout_policy, depth + 1)
 ```
 
 **`_process_existing_doc_links(entry, context, model, link_detector, corpus, config, layout_policy, depth) -> None`**
@@ -378,12 +387,27 @@ Add `max_recent_link_tokens: int = 200`. This is used in `_generate_doc` to limi
 
 ## Metrics / Generation Trace
 
-The generation system should record what happened during a run. Exact scope TBD (see open question below), but at minimum useful to track:
+**Decision: both structured trace + logging.** A `GenerationTrace` dataclass is stored in `GenerationResult` for programmatic analysis. Python `logging` at DEBUG level provides live output during interactive runs.
 
-- Per-document: token count, source (generated/corpus/restored-evicted), recursion depth, parent identifier, whether truncated
-- Global: total tokens generated, total forward passes, number of links detected, number of corpus fetches, number of docs generated, number of evictions, max depth reached
+**`GenerationTrace` fields (Stage 3.3):**
 
-**Open question — format**: Should this be (a) live-logged via Python `logging` during generation, (b) a structured `GenerationTrace` object stored in `GenerationResult`, or (c) both? Option (b) enables programmatic analysis post-run. Option (a) is useful for long-running interactive use. Recommendation: both, with (b) as the primary record and (a) as optional debug output.
+Per-document information is already captured in each `GeneratedDocument` (`source`, `depth`, `parent_raw_identifier`, `truncated`, token count via `len(tokens)`). The trace adds global counters:
+
+```python
+@dataclass
+class GenerationTrace:
+    total_forward_passes: int
+    total_tokens_generated: int   # generated-source docs only
+    links_detected: int           # total link triggers across all _generate_doc calls
+    corpus_fetches: int
+    docs_generated: int
+    docs_evicted: int
+    max_depth_reached: int
+```
+
+**Logging**: Emit at `logging.DEBUG` level — one line per significant event (link detected, corpus fetch, doc generated, eviction). Use `logging.INFO` for run summary at the end (forward passes, docs, max depth). No logging inside the per-token loop (too noisy).
+
+**`GenerationResult`** gains a `trace: Optional[GenerationTrace] = None` field (None when trace collection is disabled via `GenerationConfig.record_trace: bool = True`).
 
 ---
 

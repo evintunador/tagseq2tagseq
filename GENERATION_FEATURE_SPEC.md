@@ -14,7 +14,7 @@ The following foundation pieces are implemented and tested:
 
 - **DocumentCorpus** (`model/document_corpus.py`): Wraps `GraphIndex` + `PretokShardedBackend` for retrieving pretokenized documents by identifier (handles normalized+hashed lookup).
 - **Identifier utilities** (`model/identifier_utils.py`): `normalize_identifier`, `generate_identifier_hash`, `create_normed_identifier`, `strip_hash`, `verify_identifier_hash`. (`model/title_utils.py` is a backward-compat shim re-exporting these under the old names.)
-- **GenerationResult / GeneratedDocument** (`model/generation_result.py`): Result data structures for generation output. Tracks root + auxiliary documents with fields `raw_identifier`, `normed_identifier`, `source`, `parent_raw_identifier`, `depth`, `truncated`, `tokens`, `text`, `is_root`.
+- **GenerationResult / GeneratedDocument** (`model/generation_result.py`): Result data structures for generation output. Currently has fields `title`, `title_normalized`, `parent_title` (legacy names, no `depth` or `truncated`). **Needs to be updated in Stage 0** to use `raw_identifier`, `normed_identifier`, `source`, `parent_raw_identifier`, `depth`, `truncated`, `tokens`, `text`, `is_root`. Also add `GenerationTrace` and `GenerationResult.trace` in Stage 3.3.
 - **GenerationConfig** (`model/generation_config.py`): Configuration dataclass covering sampling params, document structure limits, eviction policy, link handling, and stopping conditions.
 - **Token sampling** (`model/sampling.py`): `greedy_sample` and `sample_token` (temperature, top-k, top-p).
 - **Link detection** (`cross_doc_mask.py`, `python_import_detector.py`): `LinkDetector` protocol with `MarkdownLinkDetector` (for Wikipedia) and `PythonImportDetector` (for TheStack) implementations. Produces `LinkInfo(link_end_pos, target_str)`. More detectors (e.g., LaTeX citations) to be added later. Both files will be moved to `model/graph_traversal/` in Stage 0 (replacing the older monolithic `model/graph_traversal/cross_doc_mask.py`).
@@ -151,6 +151,7 @@ Returns a `GenerationResult`.
 | Test checkpoints | Available in `runs/`; sanity-check that output looks like early-training LM, not random noise |
 | `LinkDetector` ownership | Model stores `self.link_detector`; same instance is passed to `CrossDocLinkMaskCreator` at construction. Two consumers (mask creator + generation loop), one object. |
 | `max_new_tokens` vs `max_tokens_per_document` | Both are kept. `max_new_tokens` caps tokens generated per `_generate_doc` call and does **not** set `truncated=True`. `max_tokens_per_document` caps total document length (including prefix/prompt) and **does** set `truncated=True`. |
+| `allow_recursive_links` | Removed. `max_link_depth` is the sole knob for controlling recursion depth. `allow_recursive_links=False` was functionally equivalent to `max_link_depth=1` and would have produced empty doc stubs (unintended). |
 
 ---
 
