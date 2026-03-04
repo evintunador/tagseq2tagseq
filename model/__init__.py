@@ -1,13 +1,13 @@
 from .modules import TS2TSTrainingModule, TS2TSBackbone
 from .model import TS2TSModel
 
-# Generation components (Phase 1 Foundation)
-from .title_utils import (
-    normalize_title,
-    generate_title_hash,
-    create_filename,
+# Generation components
+from .identifier_utils import (
+    normalize_identifier,
+    generate_identifier_hash,
+    create_normed_identifier,
     strip_hash,
-    verify_title_hash,
+    verify_identifier_hash,
 )
 from .sampling import greedy_sample, sample_token
 from .generation_config import GenerationConfig
@@ -19,12 +19,12 @@ __all__ = [
     "TS2TSTrainingModule",
     "TS2TSBackbone",
     "TS2TSModel",
-    # Title utilities
-    "normalize_title",
-    "generate_title_hash",
-    "create_filename",
+    # Identifier utilities
+    "normalize_identifier",
+    "generate_identifier_hash",
+    "create_normed_identifier",
     "strip_hash",
-    "verify_title_hash",
+    "verify_identifier_hash",
     # Sampling
     "greedy_sample",
     "sample_token",

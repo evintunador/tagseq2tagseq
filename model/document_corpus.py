@@ -10,119 +10,111 @@ from typing import Optional
 import numpy as np
 
 from data.dataset import GraphIndex, PretokShardedBackend
-from .title_utils import create_filename
+from .identifier_utils import create_normed_identifier
 
 
 class DocumentCorpus:
     """
     Wrapper around GraphIndex and PretokShardedBackend for corpus access.
-    
+
     Provides a clean interface for retrieving documents during generation.
-    Handles title normalization and hash matching automatically.
+    Handles identifier normalization and hash matching automatically.
     """
-    
+
     def __init__(self, dataset_path: Path):
         """
         Initialize the corpus from a pretokenized dataset directory.
-        
+
         Args:
             dataset_path: Path to directory containing metadata.json,
                          tokenized_graph.jsonl, and shard files
-                         
+
         Raises:
             FileNotFoundError: If dataset_path doesn't exist or is missing required files
         """
         self.dataset_path = Path(dataset_path)
-        
+
         # Initialize GraphIndex and PretokShardedBackend
         self.index = GraphIndex(self.dataset_path)
         self.backend = PretokShardedBackend(self.index)
-    
-    def get_document(self, title: str) -> Optional[np.ndarray]:
+
+    def get_document(self, identifier: str) -> Optional[np.ndarray]:
         """
-        Retrieve a document's tokens by its title.
-        
-        The title can be either:
-        - The original title (e.g., "Python")
-        - The normalized+hashed title (e.g., "python_a7f8c3")
-        
+        Retrieve a document's tokens by its identifier.
+
+        The identifier can be either:
+        - The raw identifier (e.g., "Python")
+        - The normed_identifier (e.g., "python_a7f8c3")
+
         Args:
-            title: Document title (original or normalized+hashed)
-            
+            identifier: Document identifier (raw or normalized+hashed)
+
         Returns:
             Numpy array of token IDs, or None if not found
-            
+
         Examples:
             >>> corpus = DocumentCorpus(Path("data/wiki_pretok"))
             >>> tokens = corpus.get_document("Python")
             >>> tokens = corpus.get_document("python_a7f8c3")  # Also works
         """
-        # Try direct lookup first (in case it's already normalized+hashed)
-        if title in self.index:
-            return self.backend.get_tokens(title)
-        
-        # Try creating the filename from the original title
-        filename = create_filename(title)
-        if filename in self.index:
-            return self.backend.get_tokens(filename)
-        
-        # Not found
+        # Try direct lookup first (in case it's already a normed_identifier)
+        if identifier in self.index:
+            return self.backend.get_tokens(identifier)
+
+        # Try constructing the normed_identifier from the raw identifier
+        normed = create_normed_identifier(identifier)
+        if normed in self.index:
+            return self.backend.get_tokens(normed)
+
         return None
-    
-    def has_document(self, title: str) -> bool:
+
+    def has_document(self, identifier: str) -> bool:
         """
         Check if a document exists in the corpus.
-        
+
         Args:
-            title: Document title (original or normalized+hashed)
-            
+            identifier: Document identifier (raw or normalized+hashed)
+
         Returns:
             True if the document exists, False otherwise
         """
-        # Try direct lookup
-        if title in self.index:
+        if identifier in self.index:
             return True
-        
-        # Try creating filename from original title
-        filename = create_filename(title)
-        return filename in self.index
-    
-    def get_title(self, title: str) -> Optional[str]:
+        normed = create_normed_identifier(identifier)
+        return normed in self.index
+
+    def get_normed_identifier(self, identifier: str) -> Optional[str]:
         """
-        Get the exact title as stored in the corpus.
-        
-        Given either an original title or normalized+hashed title,
-        returns the exact title string used in the corpus index.
-        
+        Get the normed_identifier as stored in the corpus.
+
+        Given either a raw identifier or a normed_identifier, returns the
+        exact key used in the corpus index.
+
         Args:
-            title: Document title (original or normalized+hashed)
-            
+            identifier: Document identifier (raw or normalized+hashed)
+
         Returns:
-            Exact title as stored in corpus, or None if not found
-            
+            normed_identifier as stored in corpus, or None if not found
+
         Examples:
-            >>> corpus.get_title("Python")
-            'python_a7f8c3'  # Returns the normalized+hashed version
+            >>> corpus.get_normed_identifier("Python")
+            'python_a7f8c3'
         """
-        # Try direct lookup
-        if title in self.index:
-            return title
-        
-        # Try creating filename from original title
-        filename = create_filename(title)
-        if filename in self.index:
-            return filename
-        
+        if identifier in self.index:
+            return identifier
+        normed = create_normed_identifier(identifier)
+        if normed in self.index:
+            return normed
         return None
-    
+
     def close(self):
         """Close backend resources (memory-mapped files)."""
         self.backend.close()
-    
+
     def __enter__(self):
         """Context manager entry."""
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit - closes resources."""
         self.close()
