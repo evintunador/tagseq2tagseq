@@ -201,15 +201,15 @@ class TS2TSModel:
         self.ignore_index = training_module.ignore_index
         return self
     
-    # def eval(self):
-    #     """Set the backbone to evaluation mode."""
-    #     self.backbone.eval()
-    #     return self
-    
-    # def train(self, mode: bool = True):
-    #     """Set the backbone to training mode."""
-    #     self.backbone.train(mode)
-    #     return self
+    def eval(self):
+        """Set the backbone to evaluation mode (disables dropout)."""
+        self.backbone.eval()
+        return self
+
+    def train(self, mode: bool = True):
+        """Set the backbone to training mode."""
+        self.backbone.train(mode)
+        return self
     
     def to(self, device: torch.device):
         """

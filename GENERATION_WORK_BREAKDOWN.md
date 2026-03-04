@@ -8,14 +8,14 @@ Dependency-ordered stages for implementing the generation system. Each stage has
 *Prerequisite. Blocks all other stages.*
 
 ### 0.1 — Model stores its training settings
-Add `tokenizer`, `link_detector`, `layout_policy` as first-class attributes of `TS2TSTrainingModule` and `TS2TSModel`. Update `from_config()` to accept them. Update `to_inference_model()` to pass them through. Update `main.py` to construct them explicitly: create the `LinkDetector`, pass it to both `CrossDocLinkMaskCreator` and `from_config()` so the model and mask creator share the same instance.
+Add `tokenizer`, `link_detector`, `layout_policy` as first-class attributes of `TS2TSModel` (inference model only — the training module does not need them). Update `TS2TSModel.__init__` and `from_config()` to accept them. Update `to_inference_model()` to take them as explicit arguments (not read from `self` on the training module). Update `main.py` to construct them explicitly: create the `LinkDetector`, pass it to both `CrossDocLinkMaskCreator` and `to_inference_model()` so the mask creator and generation loop share the same instance. Uncomment `TS2TSModel.eval()` / `train()`.
 
 Also in this stage:
 - Move `cross_doc_mask.py` (root) → `model/graph_traversal/cross_doc_mask.py`, replacing the old monolithic version. Fix the `seq_len = tokens.shape[-1] - 1` bug in `__call__` as part of the move.
 - Move `python_import_detector.py` (root) → `model/graph_traversal/python_import_detector.py`.
 - Add `max_recent_link_tokens: int = 200` to `GenerationConfig`.
 
-**Touches**: `model/modules/training_module.py`, `model/model.py`, `main.py`, `cross_doc_mask.py` (→ `model/graph_traversal/`), `python_import_detector.py` (→ `model/graph_traversal/`), `model/graph_traversal/block_mask_creator.py`, `model/generation_config.py`
+**Touches**: `model/model.py`, `main.py`, `cross_doc_mask.py` (→ `model/graph_traversal/`), `python_import_detector.py` (→ `model/graph_traversal/`), `model/graph_traversal/block_mask_creator.py`, `model/generation_config.py`
 
 **Deliverable**: `TS2TSModel` is fully self-describing. All inference can be driven purely from the model object with no extra configuration. The single canonical `CrossDocLinkMaskCreator` is bug-free and wired into training.
 

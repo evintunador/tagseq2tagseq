@@ -21,26 +21,20 @@ Implementation guide for the generation system. See `GENERATION_FEATURE_SPEC.md`
 
 ### 0.1 — Training Settings Stored in Model Hierarchy
 
-Settings that are fixed at training time (tokenizer, link detector, layout policy) should live in the model so inference cannot silently use wrong settings.
+Settings that are fixed at training time (tokenizer, link detector, layout policy) should live in the inference model so generation cannot silently use wrong settings.
 
-**New attributes on `TS2TSTrainingModule`:**
-- `tokenizer` — object with `.encode(str) -> List[int]` and `.decode(List[int]) -> str`
-- `link_detector` — `LinkDetector` instance (e.g. `MarkdownLinkDetector` for simplewiki, `PythonImportDetector` for stack)
-- `layout_policy` — `DocLayoutPolicy` instance
+**`TS2TSTrainingModule` is unchanged.** It has no need for tokenizer (data is pre-tokenized on disk), layout policy (applied at data-loading time, not inside the module), or link detector (already embedded inside `block_mask_creator`). Do not add these to the training module.
 
-**`TS2TSTrainingModule.from_config()` updated** to accept these as required parameters. `main.py` constructs them explicitly and passes them in. Concretely, `main.py` does:
+**`main.py` constructs them explicitly:**
 
 ```python
 link_detector = MarkdownLinkDetector(decode_fn=tokenizer.decode)   # or PythonImportDetector
 mask_creator  = CrossDocLinkMaskCreator(link_detector=link_detector)
 block_mask_creator = make_mask_creator_callable_from(mask_creator)
-model = TS2TSTrainingModule.from_config(...,
-    block_mask_creator=block_mask_creator,
-    link_detector=link_detector,   # stored on model; same object as inside mask_creator
-    ...)
+training_module = TS2TSTrainingModule.from_config(..., block_mask_creator=block_mask_creator, ...)
 ```
 
-The `link_detector` stored on the model is the **same instance** held by `CrossDocLinkMaskCreator`. There is no second copy. The generation loop accesses it via `model.link_detector`; the mask creator accesses it via its own reference — both point to the same object.
+The `link_detector` here is the same instance held inside `CrossDocLinkMaskCreator`. It is also passed to `to_inference_model()` (see below) so the generation loop and the mask creator share one object — no second copy.
 
 **`cross_doc_mask.py` and `python_import_detector.py` are moved from the project root into `model/graph_traversal/`** as part of this stage. The old `model/graph_traversal/cross_doc_mask.py` (monolithic version) is deleted and replaced by the moved file. Final layout:
 
@@ -54,13 +48,25 @@ model/graph_traversal/
 
 The `seq_len = tokens.shape[-1] - 1` bug in `cross_doc_mask.py.__call__` must be fixed to `seq_len = tokens.shape[-1]` as part of the move.
 
-**`to_inference_model()` updated** to pass `tokenizer`, `link_detector`, `layout_policy` through to `TS2TSModel`.
+**`to_inference_model(tokenizer, link_detector, layout_policy)` gains three arguments.** The training module doesn't store them; they're passed in at call time. `main.py` calls:
 
-**New attributes on `TS2TSModel`:** same three, plus anything else derivable at training time that inference needs (e.g. `eos_token_id` from the tokenizer or config).
+```python
+inference_model = training_module.to_inference_model(
+    tokenizer=tokenizer,
+    link_detector=link_detector,   # same instance as inside mask_creator
+    layout_policy=layout_policy,
+)
+```
+
+For standalone inference (`generate.py`), these are reconstructed from the saved training config before calling `to_inference_model()`.
+
+**New attributes on `TS2TSModel`:** `tokenizer`, `link_detector`, `layout_policy`. Update `__init__`, `from_config`, and `to_inference_model()` accordingly.
 
 **Impact on `generate()`:** signature simplifies to:
 ```python
 def generate(self, prompt: str, corpus=None, config=GenerationConfig()) -> GenerationResult:
+    self.eval()   # disable dropout for generation
+    ...
 ```
 The model tokenizes the prompt with `self.tokenizer.encode`, uses `self.link_detector` for link detection, and applies `self.layout_policy` for document prefix/suffix tokens. Nothing training-specific is re-specified by the caller.
 
@@ -119,6 +125,7 @@ Wrap in `torch.no_grad()`.
 **`generate(prompt: str, corpus=None, config=GenerationConfig()) -> GenerationResult`**
 
 ```python
+self.eval()   # disable dropout
 prompt_tokens = self.tokenizer.encode(prompt)
 return run_generation(
     model=self,
@@ -380,8 +387,8 @@ Stage 0:
   cross_doc_mask.py → model/graph_traversal/cross_doc_mask.py (move + fix seq_len bug)
   python_import_detector.py → model/graph_traversal/python_import_detector.py (move)
   model/graph_traversal/cross_doc_mask.py (old monolithic version — deleted)
-  model/modules/training_module.py (stores tokenizer + link_detector + layout_policy)
-  model/model.py (receives them via to_inference_model())
+  model/modules/training_module.py (no new attributes; unchanged)
+  model/model.py (gains tokenizer, link_detector, layout_policy; to_inference_model() takes them as args; eval()/train() uncommented)
 
 Stage 1 (depends on Stage 0):
   model/model.py → forward_inference()
