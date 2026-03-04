@@ -17,7 +17,7 @@ Also in this stage:
 
 **Touches**: `model/model.py`, `main.py`, `cross_doc_mask.py` (→ `model/graph_traversal/`), `python_import_detector.py` (→ `model/graph_traversal/`), `model/graph_traversal/block_mask_creator.py`, `model/generation_config.py`
 
-**Deliverable**: `TS2TSModel` is fully self-describing. All inference can be driven purely from the model object with no extra configuration. The single canonical `CrossDocLinkMaskCreator` is bug-free and wired into training.
+**Deliverable**: `TS2TSModel` has explicit `tokenizer`, `link_detector`, and `layout_policy` attributes available at runtime. These are always reconstructed from the saved training config at load time — they are not persisted in the checkpoint (which saves weights only). The single canonical `CrossDocLinkMaskCreator` is bug-free and wired into training. `main.py` constructs all non-weight components explicitly from config rather than relying on lazy initialization.
 
 ---
 
