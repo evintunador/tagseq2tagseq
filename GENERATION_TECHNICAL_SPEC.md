@@ -64,6 +64,7 @@ def generate(self, prompt: str, corpus=None, config=GenerationConfig()) -> Gener
 ```
 The model tokenizes the prompt with `self.tokenizer.encode`, uses `self.link_detector` for link detection, and applies `self.layout_policy` for document prefix/suffix tokens. Nothing training-specific is re-specified by the caller.
 
+
 ---
 
 ## Document Ordering
@@ -312,7 +313,7 @@ if corpus is not None and corpus.has_document(target):
     return
 
 # Generate the aux doc
-if not config.allow_corpus_fallback:
+if not config.allow_generation_fallback:
     return
 if depth >= config.max_link_depth:
     return

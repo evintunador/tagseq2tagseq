@@ -66,7 +66,7 @@ Implement the full link-handling decision tree:
 - Skip empty targets and duplicates already in context
 - Corpus fetch: insert, then recursively process corpus doc's own links at depth+1
 - Generate: insert empty entry, recurse into `_generate_doc()` at depth+1
-- Respect `max_link_depth`, `allow_corpus_fallback`, eviction policy
+- Respect `max_link_depth`, `allow_generation_fallback`, eviction policy
 
 Includes `_process_existing_doc_links()` for scanning corpus docs and restored-evicted docs.
 

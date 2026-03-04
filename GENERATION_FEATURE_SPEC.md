@@ -84,7 +84,7 @@ generate(prompt, corpus, config, link_detector, layout_policy):
                 ii.  If already in the active window, skip (cross-doc mask handles it).
                 iii. If previously evicted, re-insert it (evicting another if needed).
                 iv.  If in the corpus, insert corpus doc into context before the active doc.
-                v.   Else if depth < max_link_depth and allow_corpus_fallback:
+                v.   Else if depth < max_link_depth and allow_generation_fallback:
                      pause generation, recursively generate the aux doc
                      (inserted before the active doc), then resume.
         e. Stop if: EOS token generated (if layout policy uses EOS), max_new_tokens

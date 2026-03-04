@@ -27,7 +27,7 @@ class GenerationConfig:
     max_link_depth: int = 1
     
     # Corpus integration
-    allow_corpus_fallback: bool = True  # Generate if corpus doesn't have doc
+    allow_generation_fallback: bool = True  # Generate aux doc if not found in corpus
     
     # Eviction policy
     eviction_policy: Literal["drop_oldest", "stop_new"] = "drop_oldest"
