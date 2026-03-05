@@ -4,11 +4,7 @@ Unit tests for GenerationConfig dataclass.
 import pytest
 import torch
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
-
-from experiments.tagseq2tagseq.model.generation_config import GenerationConfig
+from model.generation_config import GenerationConfig
 
 
 class TestGenerationConfigDefaults:
@@ -23,13 +19,12 @@ class TestGenerationConfigDefaults:
         assert config.top_k is None
         assert config.top_p is None
         assert config.max_tokens_per_document == 512
-        assert config.max_context_length == 2048
-        assert config.max_auxiliary_documents == 5
+        assert config.max_context_length == 4096
+        assert config.max_auxiliary_documents == 6
         assert config.max_link_depth == 1
-        assert config.allow_corpus_fallback is True
+        assert config.allow_generation_fallback is True
         assert config.eviction_policy == "drop_oldest"
         assert config.process_prompt_links is True
-        assert config.allow_recursive_links is True
         assert config.eos_token_id == 50256
         assert config.device in ["cuda", "cpu"]
     
@@ -44,14 +39,13 @@ class TestGenerationConfigDefaults:
             max_context_length=4096,
             max_auxiliary_documents=10,
             max_link_depth=2,
-            allow_corpus_fallback=False,
+            allow_generation_fallback=False,
             eviction_policy="stop_new",
             process_prompt_links=False,
-            allow_recursive_links=False,
             eos_token_id=0,
             device="cpu",
         )
-        
+
         assert config.max_new_tokens == 200
         assert config.temperature == 0.8
         assert config.top_k == 50
@@ -60,10 +54,9 @@ class TestGenerationConfigDefaults:
         assert config.max_context_length == 4096
         assert config.max_auxiliary_documents == 10
         assert config.max_link_depth == 2
-        assert config.allow_corpus_fallback is False
+        assert config.allow_generation_fallback is False
         assert config.eviction_policy == "stop_new"
         assert config.process_prompt_links is False
-        assert config.allow_recursive_links is False
         assert config.eos_token_id == 0
         assert config.device == "cpu"
 
@@ -188,9 +181,8 @@ class TestGenerationConfigMethods:
             "max_new_tokens", "temperature", "top_k", "top_p",
             "max_tokens_per_document", "max_context_length",
             "max_auxiliary_documents", "max_link_depth",
-            "allow_corpus_fallback", "eviction_policy",
-            "process_prompt_links", "allow_recursive_links",
-            "eos_token_id", "device"
+            "allow_generation_fallback", "eviction_policy",
+            "process_prompt_links", "eos_token_id", "device"
         ]
         
         for field in expected_fields:

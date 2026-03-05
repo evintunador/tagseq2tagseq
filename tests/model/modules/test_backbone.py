@@ -91,6 +91,6 @@ def test_backbone_module_list_structure(device, dtype):
     assert hasattr(module, 'layers')
     assert len(module.layers) == num_layers
     
-    from tunalab.modules.layer import Layer
+    from model.modules.layer import Layer
     for layer in module.layers:
         assert isinstance(layer, Layer)

@@ -3,11 +3,7 @@ Unit tests for identifier normalization utilities.
 """
 import pytest
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
-
-from experiments.tagseq2tagseq.model.identifier_utils import (
+from model.identifier_utils import (
     normalize_identifier,
     generate_identifier_hash,
     create_normed_identifier,

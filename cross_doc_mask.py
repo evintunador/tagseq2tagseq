@@ -130,8 +130,13 @@ class MarkdownLinkDetector:
         self.link_mid_token_id = link_mid_token_id
 
     def index_doc_span(self, span: Any) -> str:
-        """Exact match against ``clean_title`` (markdown targets are full titles)."""
-        return span.clean_title
+        """Match against ``clean_title`` normalized to Wikipedia link format.
+
+        Wikipedia internal links use underscores for spaces, e.g.
+        ``[text](Sunshine_Coast,_Queensland)``.  We replace spaces with
+        underscores so the key matches what ``detect_links`` returns.
+        """
+        return span.clean_title.replace(' ', '_')
 
     def detect_links(self, input_ids: torch.Tensor) -> List[LinkInfo]:
         """
