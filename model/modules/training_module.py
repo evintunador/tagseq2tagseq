@@ -140,20 +140,25 @@ class TS2TSTrainingModule(nn.Module):
             ignore_index=ignore_index,
         )
     
-    def to_inference_model(self):
+    def to_inference_model(self, tokenizer, link_detector=None, layout_policy=None):
         """
         Convert this training module to an inference-ready TS2TSModel.
-        
-        This extracts the trained weights and passes them to a TS2TSModel instance
-        which provides generation and evaluation capabilities. The weights are
-        passed as tensor references (not Parameters) to avoid unnecessary copying
-        while maintaining gradient-free inference.
-        
+
+        Weights are passed as tensor references (not Parameters) to avoid
+        unnecessary copying while maintaining gradient-free inference.
+
+        Args:
+            tokenizer: Tokenizer for encoding prompts and decoding output text.
+                Required for generate(). Must match the tokenizer used during
+                data pre-tokenization.
+            link_detector: LinkDetector for cross-doc link detection (Stage 2+).
+            layout_policy: DocLayoutPolicy for document prefix/suffix tokens (Stage 2+).
+
         Returns:
-            TS2TSModel instance ready for inference/evaluation
+            TS2TSModel instance ready for inference/evaluation.
         """
-        from .model import TS2TSModel
-        
+        from model.model import TS2TSModel
+
         return TS2TSModel(
             backbone=self.backbone,
             embedding_weight=self.embedding.weight,
@@ -162,6 +167,9 @@ class TS2TSTrainingModule(nn.Module):
             block_mask_creator=self.block_mask_creator,
             vocab_size=self.vocab_size,
             ignore_index=self.ignore_index,
+            tokenizer=tokenizer,
+            link_detector=link_detector,
+            layout_policy=layout_policy,
         )
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Type[Tensor] | Any]:

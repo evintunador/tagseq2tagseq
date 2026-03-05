@@ -1,6 +1,7 @@
 from typing import List, Any, Dict, Callable, Optional
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 import torch.nn as nn
 
@@ -8,22 +9,20 @@ from tunalab.evaluation import register_handler
 from tunalab.modules.norms.rms_norm import RMSNorm
 from tunalab.modules.losses.fused_cross_entropy import FusedLinearCELoss
 from .modules import TS2TSBackbone
+from .generation_config import GenerationConfig
+from .generation_loop import run_generation
+from .generation_result import GenerationResult
 
 
 class TS2TSModel:
     """
     Inference and evaluation wrapper for TS2TS models.
-    
+
     This class does NOT inherit from nn.Module, providing a cleaner interface
     for inference and evaluation without the nn.Module ceremony. It holds
     references to the trained components (backbone, weights, norms) and provides
     methods for generation and benchmark evaluation.
-    
-    The model is designed for graph-aware sequence generation with custom
-    attention patterns over packed document sequences. Generation and evaluation
-    methods are left as stubs for implementation of the unique graph-traversal
-    and document-aware logic.
-    
+
     Attributes:
         backbone: The transformer layer stack (nn.Module)
         embedding_weight: Token embedding matrix (Tensor reference)
@@ -32,8 +31,11 @@ class TS2TSModel:
         block_mask_creator: Callable for creating attention masks
         vocab_size: Vocabulary size
         ignore_index: Index to ignore in loss/eval computations
+        tokenizer: Tokenizer for prompt encoding / output decoding (required for generate())
+        link_detector: LinkDetector for cross-doc link detection (Stage 2+)
+        layout_policy: DocLayoutPolicy for document prefix/suffix tokens (Stage 2+)
     """
-    
+
     def __init__(
         self,
         backbone: TS2TSBackbone,
@@ -43,19 +45,10 @@ class TS2TSModel:
         block_mask_creator: Callable,
         vocab_size: int,
         ignore_index: int = -100,
+        tokenizer=None,
+        link_detector=None,
+        layout_policy=None,
     ):
-        """
-        Initialize the inference model with references to trained components.
-        
-        Args:
-            backbone: Pre-trained TS2TSBackbone instance
-            embedding_weight: Token embedding tensor (reference, not Parameter)
-            lm_head_weight: Output head weight tensor (reference, not Parameter)
-            norm: RMS normalization layer
-            block_mask_creator: Callable that creates attention masks from inputs
-            vocab_size: Size of the vocabulary
-            ignore_index: Index to ignore in computations (e.g., padding token)
-        """
         self.backbone = backbone
         self.embedding_weight = embedding_weight
         self.lm_head_weight = lm_head_weight
@@ -63,6 +56,9 @@ class TS2TSModel:
         self.block_mask_creator = block_mask_creator
         self.vocab_size = vocab_size
         self.ignore_index = ignore_index
+        self.tokenizer = tokenizer
+        self.link_detector = link_detector
+        self.layout_policy = layout_policy
     
     @classmethod
     def from_config(
@@ -78,30 +74,10 @@ class TS2TSModel:
         fp8: bool = False,
         weight_tying: bool = True,
         ignore_index: int = -100,
+        tokenizer=None,
+        link_detector=None,
+        layout_policy=None,
     ) -> 'TS2TSModel':
-        """
-        Factory method to construct an inference model from configuration parameters.
-        
-        This creates a fresh TS2TSModel with randomly initialized weights. For loading
-        trained weights, use update_from_training_module() after creation or construct
-        directly from a trained TS2TSTrainingModule using its to_inference_model() method.
-        
-        Args:
-            vocab_size: Size of the vocabulary
-            num_layers: Number of transformer layers
-            model_dim: Hidden dimension size (d_model)
-            num_heads: Number of attention heads per layer
-            max_seq_len: Maximum sequence length
-            dropout: Dropout probability for channel mixing
-            drop_path_rate: Stochastic depth probability
-            block_mask_creator: Callable that creates attention masks from inputs
-            fp8: Whether to use FP8 precision for linear layers
-            weight_tying: Whether to tie embedding and output head weights
-            ignore_index: Index to ignore in computations
-        
-        Returns:
-            Configured TS2TSModel with fresh weights
-        """
         # Construct backbone
         backbone = TS2TSBackbone(
             num_layers=num_layers,
@@ -134,8 +110,11 @@ class TS2TSModel:
             block_mask_creator=block_mask_creator,
             vocab_size=vocab_size,
             ignore_index=ignore_index,
+            tokenizer=tokenizer,
+            link_detector=link_detector,
+            layout_policy=layout_policy,
         )
-    
+
     def to_training_module(
         self,
         dtype: torch.dtype = torch.bfloat16,
@@ -211,22 +190,28 @@ class TS2TSModel:
         self.backbone.train(mode)
         return self
     
-    def to(self, device: torch.device):
+    def to(self, device, dtype=None):
         """
-        Move all components to the specified device.
-        
+        Move all components to the specified device (and optionally dtype).
+
         Args:
-            device: Target device (e.g., torch.device('cuda'))
-        
+            device: Target device or torch.dtype (passed through to nn.Module.to).
+            dtype: Optional dtype (e.g. torch.bfloat16).
+
         Returns:
             self for method chaining
         """
-        self.backbone.to(device)
-        # Weights are references to Parameters in backbone/embedding,
-        # so they move automatically when their parent modules move
-        self.norm.to(device)
+        self.backbone.to(device, dtype)
+        self.norm.to(device, dtype)
+        # embedding_weight and lm_head_weight may not be owned by any nn.Module
+        # stored on this object (e.g. when constructed via from_config), so we
+        # must move them explicitly.  Handle the tied case (same object) carefully.
+        tied = self.lm_head_weight is self.embedding_weight
+        self.embedding_weight = self.embedding_weight.to(device=device, dtype=dtype)
+        self.lm_head_weight = self.embedding_weight if tied else self.lm_head_weight.to(device=device, dtype=dtype)
         return self
     
+    @torch.no_grad()
     def forward_inference(
         self,
         tokens: Tensor,
@@ -235,76 +220,60 @@ class TS2TSModel:
     ) -> Tensor:
         """
         Forward pass for inference: tokens in, logits out.
-        
-        TODO: Implement this method with the following logic:
-        1. Create block_mask from tokens and doc_spans using self.block_mask_creator
-        2. Embed tokens using self.embedding_weight
-        3. Pass through self.backbone with block_mask
-        4. Apply self.norm
-        5. Project to vocabulary using self.lm_head_weight
-        6. Return logits of shape (B, T, V)
-        
+
         Args:
-            tokens: Input token IDs of shape (B, T)
-            doc_spans: Optional list of DocSpan objects for document-aware masking
-            **kwargs: Additional arguments for block_mask_creator
-        
+            tokens: Input token IDs of shape [1, T]
+            doc_spans: List of DocSpan objects for document-aware masking
+            **kwargs: Additional arguments forwarded to block_mask_creator
+
         Returns:
-            Logits tensor of shape (B, T, vocab_size)
-        
-        Raises:
-            NotImplementedError: This is a stub for user implementation
+            Logits tensor of shape [1, T, vocab_size]
         """
-        raise NotImplementedError(
-            "forward_inference must be implemented with graph-aware masking logic. "
-            "See docstring for implementation guidance."
-        )
-    
+        block_mask = self.block_mask_creator(tokens=tokens, doc_spans=doc_spans or [], **kwargs)
+        x = F.embedding(tokens, self.embedding_weight)   # [1, T, D]
+        x = self.backbone(x, block_mask=block_mask)      # [1, T, D]
+        x = self.norm(x)
+        logits = F.linear(x, self.lm_head_weight)        # [1, T, V]
+        return logits
+
     def generate(
         self,
-        prompt: Optional[str] = None,
-        prompt_tokens: Optional[Tensor] = None,
-        max_new_tokens: int = 100,
-        temperature: float = 1.0,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        **kwargs
-    ) -> str:
+        prompt: str,
+        corpus=None,
+        config=None,
+    ) -> GenerationResult:
         """
-        Generate text using graph-aware attention patterns.
-        
-        TODO: Implement this method with your unique generation strategy:
-        - Option A: Standard autoregressive generation within a single document
-        - Option B: Generate across a pack of documents (matches training)
-        - Option C: Generate one document while attending to context documents
-        
-        The implementation should handle:
-        1. Graph traversal to select context documents
-        2. Creating packed sequences with doc_spans
-        3. Generating block masks for each step
-        4. Autoregressive token prediction
-        5. Sampling with temperature/top-k/top-p
-        
+        Generate text autoregressively, returning a structured GenerationResult.
+
         Args:
-            prompt: Optional text prompt (requires tokenizer)
-            prompt_tokens: Optional pre-tokenized prompt of shape (1, T)
-            max_new_tokens: Maximum number of tokens to generate
-            temperature: Sampling temperature (higher = more random)
-            top_k: If set, only sample from top k tokens
-            top_p: If set, nucleus sampling threshold
-            **kwargs: Additional arguments (e.g., graph_context, traversal_strategy)
-        
+            prompt: Text prompt to condition on. Encoded using self.tokenizer.
+            corpus: Optional DocumentCorpus for cross-doc link resolution (Stage 2+).
+            config: GenerationConfig. Defaults to GenerationConfig() if None.
+
         Returns:
-            Generated text as a string
-        
+            GenerationResult with the root document (and aux docs in Stage 2+).
+
         Raises:
-            NotImplementedError: This is a stub for user implementation
+            RuntimeError: If self.tokenizer is not set.
         """
-        raise NotImplementedError(
-            "generate must be implemented with graph-aware generation logic. "
-            "See docstring for implementation guidance. Consider the unique "
-            "challenges of generating with packed document sequences and "
-            "custom attention patterns."
+        if self.tokenizer is None:
+            raise RuntimeError(
+                "tokenizer must be set on TS2TSModel before calling generate(). "
+                "Pass tokenizer= to to_inference_model() or TS2TSModel.__init__()."
+            )
+        if config is None:
+            config = GenerationConfig()
+
+        self.eval()
+        prompt_tokens = list(self.tokenizer.encode(prompt))
+        return run_generation(
+            model=self,
+            prompt_tokens=prompt_tokens,
+            corpus=corpus,
+            config=config,
+            link_detector=self.link_detector,
+            tokenizer_decode=self.tokenizer.decode,
+            layout_policy=self.layout_policy,
         )
     
     @register_handler("perplexity")

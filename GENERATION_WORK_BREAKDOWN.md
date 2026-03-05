@@ -4,7 +4,7 @@ Dependency-ordered stages for implementing the generation system. Each stage has
 
 ---
 
-## Stage 0 — Foundations
+## Stage 0 — Foundations ⚠️ PARTIALLY COMPLETE
 *Prerequisite. Blocks all other stages.*
 
 ### 0.1 — Model stores its training settings
@@ -19,32 +19,27 @@ Also in this stage:
 
 **Deliverable**: `TS2TSModel` has explicit `tokenizer`, `link_detector`, and `layout_policy` attributes available at runtime. These are always reconstructed from the saved training config at load time — they are not persisted in the checkpoint (which saves weights only). The single canonical `CrossDocLinkMaskCreator` is bug-free and wired into training. `main.py` constructs all non-weight components explicitly from config rather than relying on lazy initialization.
 
+**Status**: `tokenizer`, `link_detector`, `layout_policy` added to `TS2TSModel` and `to_inference_model()` ✅. File moves (`cross_doc_mask.py`, `python_import_detector.py`) and `main.py` wiring deferred to Stage 2 (not needed until link detection is active) ⏳.
+
 ---
 
-## Stage 1 — Single-Document Baseline
+## Stage 1 — Single-Document Baseline ✅ COMPLETE
 *Depends on Stage 0. No cross-doc features — just autoregressive text generation.*
 
-### 1.1 — `forward_inference()`
-Implement the stubbed method: block mask → embed → backbone → norm → project → logits. Straightforward given the Stage 0 refactor.
+### 1.1 — `forward_inference()` ✅
+### 1.2 — Minimal `DocumentContext` (single doc) ✅
+### 1.3 — Basic generation loop (no link handling) ✅
+### 1.4 — `generate()` wired end-to-end ✅
 
-**Touches**: `model/model.py`
+**Files created/modified**: `model/model.py`, `model/document_context.py` (new), `model/generation_loop.py` (new), `model/modules/training_module.py`, `model/__init__.py`
 
-### 1.2 — Minimal `DocumentContext` (single doc)
-The context management class, scoped to the single-document case: no `insert_before`, no eviction, no re-eviction. Just: initialize with root, append tokens, build packed sequence + DocSpans for forward pass.
+**Tests**: `tests/model/test_document_context.py` (22 tests), `tests/model/test_generation.py` (14 CPU + 5 CUDA = 19 tests). 279 total tests pass.
 
-**Touches**: `model/document_context.py` (new)
+**Smoke test**: `smoke_test_generation.py` — loads trained checkpoint, verifies shape/NaN/entropy.
 
-### 1.3 — Basic generation loop (no link handling)
-`run_generation()` and `_generate_doc()` without any link detection or aux doc logic. Token sampling, stopping conditions (EOS / max tokens), `GenerationResult` returned with just the root doc.
+**Known deferred issue**: `DocLayoutPolicy.prefix_tokens(doc_id: int)` receives a meaningless counter in the generation path (not a graph node ID). When identifier-in-prefix is implemented, the protocol must be extended to accept `raw_identifier`/`normed_identifier`. A TODO comment marks the call site in `document_context.py`.
 
-**Touches**: `model/generation_loop.py` (new)
-
-### 1.4 — `generate()` wired end-to-end
-Implement the `generate(prompt: str, corpus=None, config=GenerationConfig())` stub. Tokenize prompt, delegate to `run_generation()`, return result.
-
-**Touches**: `model/model.py`
-
-**Deliverable**: `model.generate("some prompt")` returns coherent-ish text from a trained checkpoint. Single document, no links. Validate against both random weights (should terminate) and trained checkpoint (should produce non-random output).
+**Deliverable**: `model.generate("some prompt")` returns coherent text from a trained checkpoint. Single document, no links. Validated against both random weights (terminates) and trained checkpoint (entropy_frac ~0.2–0.4 vs ~1.0 for random).
 
 ---
 
