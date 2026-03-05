@@ -97,16 +97,16 @@ def test_graph_index_loading(dummy_run_directory):
     assert node_b["incoming"] == ["Node A"]
     assert node_b["tok_len"] == 3
 
-    assert index.get_all_titles() == ["Node A", "Node B", "Node C"]
+    assert index.get_all_normed_identifiers() == ["Node A", "Node B", "Node C"]
 
     # Basic id mapping sanity checks
     node_a_id = index.get_id("Node A")
     node_b_id = index.get_id("Node B")
     node_c_id = index.get_id("Node C")
 
-    assert index.get_title(node_a_id) == "Node A"
-    assert index.get_title(node_b_id) == "Node B"
-    assert index.get_title(node_c_id) == "Node C"
+    assert index.get_normed_identifier(node_a_id) == "Node A"
+    assert index.get_normed_identifier(node_b_id) == "Node B"
+    assert index.get_normed_identifier(node_c_id) == "Node C"
 
     # Neighbor helpers should reflect the simple chain A -> B -> C
     assert index.neighbors_out(node_a_id) == [node_b_id]

@@ -420,8 +420,8 @@ if __name__ == "__main__":
     tokens = raw_tokens[:, :-1]    # [B, T] — what the model actually sees
 
     logger.info(f"Batch generated. Tokens shape: {tokens.shape}")
-    doc_titles = [s.title for s in doc_spans]
-    logger.info(f"Docs in batch ({len(doc_titles)}): {doc_titles}")
+    doc_identifiers = [s.normed_identifier for s in doc_spans]
+    logger.info(f"Docs in batch ({len(doc_identifiers)}): {doc_identifiers}")
 
     # 4. Create Mask
     mask_creator_fn = get_mask_creator(args.mask_type)

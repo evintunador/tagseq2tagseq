@@ -16,7 +16,7 @@ from functools import partial
 import glob
 from tqdm import tqdm
 
-from data.wiki_graph_extractor.extract import process_wikitext, normalize_title
+from data.wiki_graph_extractor.extract import process_wikitext, normalize_identifier
 
 # ===========================================================================
 # Worker Process Function
@@ -25,17 +25,17 @@ from data.wiki_graph_extractor.extract import process_wikitext, normalize_title
 def process_article_worker(article_data, output_dir):
     """
     A single worker's task: process one article's text and save it
-    into a subdirectory based on the first letter of its title.
+    into a subdirectory based on the first letter of its normed_identifier.
     """
-    title = None # Initialize for robust error logging
+    raw_identifier = None # Initialize for robust error logging
     try:
-        title, source_text, page_id = article_data
+        raw_identifier, source_text, page_id = article_data
 
         # Process the raw wikitext through our cleaning pipeline
         final_text = process_wikitext(source_text)
 
         # Generate a safe, normalized filename for the article
-        output_filename = normalize_title(title) + '.md'
+        output_filename = normalize_identifier(raw_identifier) + '.md'
 
         # Determine the subdirectory and handle problematic filenames
         if output_filename and output_filename[0].isalnum():
@@ -57,12 +57,10 @@ def process_article_worker(article_data, output_dir):
 
         with open(output_path, 'w', encoding='utf-8') as out_file:
             out_file.write(final_text)
-            out_file.write(f"\n{title}")      # bare raw title, last line
+            out_file.write(f"\n{raw_identifier}")  # bare raw_identifier, last line
         return 1 # Return 1 for success
     except Exception as e:
-        # Safely log the title if it was assigned
-        article_title = title if title else "Unknown Article"
-        logging.error(f"Error processing article: {article_title} - {e}")
+        logging.error(f"Error processing article: {raw_identifier or 'Unknown'} - {e}")
         return 0 # Return 0 for failure
 
 # ===========================================================================

@@ -3,7 +3,7 @@ Cross-Document Link Attention Mask
 
 This module implements a custom attention mask that allows tokens to attend to
 previously-linked documents in the batch. When a document contains a markdown link
-[text](target_title), all tokens appearing AFTER that link can attend to the
+[text](target), all tokens appearing AFTER that link can attend to the
 target document if it appears earlier in the batch.
 
 Key Features:
@@ -168,9 +168,9 @@ class CrossDocLinkMaskCreator:
             Only includes links where the target document appears earlier in the batch.
         """
         # Build a mapping from raw_identifier to (doc_id, start_pos)
-        title_to_doc = {}
+        identifier_to_doc = {}
         for span in doc_spans:
-            title_to_doc[span.raw_identifier] = (span.doc_id, span.start)
+            identifier_to_doc[span.raw_identifier] = (span.doc_id, span.start)
 
         link_to_target = {}
 
@@ -178,22 +178,22 @@ class CrossDocLinkMaskCreator:
             # Extract and decode target title tokens
             target_tokens = input_ids[link.target_start:link.target_end].tolist()
             try:
-                target_title = self.tokenizer_decode_fn(target_tokens)
+                target_identifier = self.tokenizer_decode_fn(target_tokens)
             except Exception as e:
                 logger.warning(f"Failed to decode link target tokens {target_tokens}: {e}")
                 continue
 
             # Check if this title exists in the batch
-            if target_title not in title_to_doc:
-                logger.debug(f"Link target '{target_title}' not found in batch, skipping")
+            if target_identifier not in identifier_to_doc:
+                logger.debug(f"Link target '{target_identifier}' not found in batch, skipping")
                 continue
 
-            target_doc_id, target_start_pos = title_to_doc[target_title]
+            target_doc_id, target_start_pos = identifier_to_doc[target_identifier]
 
             # Ensure DAG property: target must appear EARLIER in the sequence
             if target_start_pos >= link.link_end_pos:
                 logger.debug(
-                    f"Link at {link.link_end_pos} to '{target_title}' violates DAG "
+                    f"Link at {link.link_end_pos} to '{target_identifier}' violates DAG "
                     f"(target starts at {target_start_pos}), skipping"
                 )
                 continue
@@ -201,7 +201,7 @@ class CrossDocLinkMaskCreator:
             # Valid link! Map the link end position to the target doc
             link_to_target[link.link_end_pos] = target_doc_id
             logger.debug(
-                f"Matched link at {link.link_end_pos} -> doc {target_doc_id} ('{target_title}')"
+                f"Matched link at {link.link_end_pos} -> doc {target_doc_id} ('{target_identifier}')"
             )
 
         logger.info(f"Matched {len(link_to_target)}/{len(links)} links to documents in batch")

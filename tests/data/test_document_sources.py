@@ -71,11 +71,11 @@ class TestMarkdownDirectorySource:
         source = MarkdownDirectorySource(directory)
         assert len(source) == 3
 
-    def test_yields_correct_titles(self, markdown_dir):
+    def test_yields_correct_normed_ids(self, markdown_dir):
         directory, _ = markdown_dir
         source = MarkdownDirectorySource(directory)
-        titles = {title for title, _ in source}
-        assert titles == {"Alpha", "Beta", "Gamma"}
+        normed_ids = {normed_id for normed_id, _ in source}
+        assert normed_ids == {"Alpha", "Beta", "Gamma"}
 
     def test_yields_correct_content(self, markdown_dir):
         directory, raw = markdown_dir
@@ -153,48 +153,48 @@ def stack_data(tmp_path):
         },
     ]
     jsonl_path = _make_jsonl(tmp_path, records)
-    graph_titles = {
+    graph_normed_ids = {
         _graph_title("user/repo-alpha", "src/main.py"),
         _graph_title("user/repo-alpha", "src/utils.py"),
         _graph_title("other/project", "app.py"),
     }
-    return jsonl_path, graph_titles, records
+    return jsonl_path, graph_normed_ids, records
 
 
 class TestStackJSONLSource:
-    def test_len_equals_graph_titles(self, stack_data):
-        jsonl_path, graph_titles, _ = stack_data
-        source = StackJSONLSource(jsonl_path, graph_titles)
-        assert len(source) == len(graph_titles) == 3
+    def test_len_equals_graph_normed_ids(self, stack_data):
+        jsonl_path, graph_normed_ids, _ = stack_data
+        source = StackJSONLSource(jsonl_path, graph_normed_ids)
+        assert len(source) == len(graph_normed_ids) == 3
 
     def test_yields_only_graph_members(self, stack_data):
-        jsonl_path, graph_titles, _ = stack_data
-        source = StackJSONLSource(jsonl_path, graph_titles)
-        titles = {title for title, _ in source}
-        assert titles == graph_titles
+        jsonl_path, graph_normed_ids, _ = stack_data
+        source = StackJSONLSource(jsonl_path, graph_normed_ids)
+        titles = {normed_id for normed_id, _ in source}
+        assert titles == graph_normed_ids
 
     def test_does_not_yield_non_graph_records(self, stack_data):
-        jsonl_path, graph_titles, _ = stack_data
-        source = StackJSONLSource(jsonl_path, graph_titles)
-        titles = {title for title, _ in source}
+        jsonl_path, graph_normed_ids, _ = stack_data
+        source = StackJSONLSource(jsonl_path, graph_normed_ids)
+        normed_ids = {normed_id for normed_id, _ in source}
         excluded = _graph_title("unrelated/repo", "script.py")
-        assert excluded not in titles
+        assert excluded not in normed_ids
 
     def test_yields_correct_content(self, stack_data):
-        jsonl_path, graph_titles, _ = stack_data
-        source = StackJSONLSource(jsonl_path, graph_titles)
+        jsonl_path, graph_normed_ids, _ = stack_data
+        source = StackJSONLSource(jsonl_path, graph_normed_ids)
         results = dict(source)
         main_title = _graph_title("user/repo-alpha", "src/main.py")
         assert results[main_title] == "def main(): pass"
 
     def test_iterable_multiple_times(self, stack_data):
-        jsonl_path, graph_titles, _ = stack_data
-        source = StackJSONLSource(jsonl_path, graph_titles)
+        jsonl_path, graph_normed_ids, _ = stack_data
+        source = StackJSONLSource(jsonl_path, graph_normed_ids)
         first = list(source)
         second = list(source)
-        assert sorted(t for t, _ in first) == sorted(t for t, _ in second)
+        assert sorted(nid for nid, _ in first) == sorted(nid for nid, _ in second)
 
-    def test_empty_graph_titles_yields_nothing(self, stack_data):
+    def test_empty_graph_normed_ids_yields_nothing(self, stack_data):
         jsonl_path, _, _ = stack_data
         source = StackJSONLSource(jsonl_path, set())
         assert list(source) == []

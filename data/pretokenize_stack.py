@@ -82,10 +82,10 @@ def main():
     # Load graph titles into a set for O(1) lookup during JSONL scan.
     logger.info(f"Loading graph titles from {args.graph_file} ...")
     with open(args.graph_file, "r", encoding="utf-8") as f:
-        graph_titles = {json.loads(line)["normed_identifier"] for line in f}
-    logger.info(f"Loaded {len(graph_titles):,} graph nodes.")
+        graph_normed_ids = {json.loads(line)["normed_identifier"] for line in f}
+    logger.info(f"Loaded {len(graph_normed_ids):,} graph nodes.")
 
-    source = StackJSONLSource(args.jsonl_file, graph_titles)
+    source = StackJSONLSource(args.jsonl_file, graph_normed_ids)
 
     with ReproducibilityManager(output_dir=str(args.runs_dir), is_main_process=True) as rep:
         run_preprocessing(args, rep, source)

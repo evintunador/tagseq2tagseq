@@ -65,7 +65,7 @@ def extract_and_normalize_imports(content: str) -> str:
 def normalize_package_name(package_name: str) -> str:
     """
     Normalize a Python package/module name for use in links.
-    Similar to the wiki title normalization but adapted for Python packages.
+    Similar to the wiki identifier normalization but adapted for Python packages.
     """
     # Convert dots to underscores and clean up
     clean_name = package_name.replace('.', '_').lower()
@@ -135,7 +135,7 @@ def _is_potential_repo_file_import(module_name: str, file_path: str, repo_name: 
 
 def normalize_repository_name(repo_name: str) -> str:
     """
-    Normalize a GitHub repository name for use as a node title.
+    Normalize a GitHub repository name for use as a node identifier.
     """
     # Clean up the repo name
     clean_name = repo_name.replace('/', '_').replace('-', '_').lower()

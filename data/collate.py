@@ -138,7 +138,7 @@ def build_packed_batch(
         doc_tokens = np.concatenate([prefix_arr, body_arr, suffix_arr], axis=0)
         doc_len = int(doc_tokens.shape[0])
 
-        normed_id = graph.get_title(p.doc_id)
+        normed_id = graph.get_normed_identifier(p.doc_id)
         outgoing_identifiers = graph.get_outgoing_links(normed_id)
 
         span = DocSpan(

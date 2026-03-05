@@ -27,7 +27,7 @@ class LinkInfo(NamedTuple):
     """Metadata about a detected link in the token sequence."""
     link_end_pos: int   # Token position just after the link's closing delimiter;
                         # attention to the target is granted from this position onward.
-    target_str: str     # Decoded target identifier string (matched against DocSpan.clean_title)
+    target_str: str     # Decoded target identifier string (matched against DocSpan.raw_identifier)
 
 
 @runtime_checkable
@@ -58,7 +58,7 @@ class LinkDetector(Protocol):
     # those datasets are added.  The right abstraction here is uncertain — the
     # examples below are illustrative guesses, not a confident design.  Open
     # questions include: one detector per language vs. a dispatch wrapper,
-    # whether to identify language from the file extension in clean_title or
+    # whether to identify language from the file extension in raw_identifier or
     # store it as metadata, and how import semantics differ enough across
     # languages to require fundamentally different logic vs. just different
     # regex patterns.  Revisit once a second code dataset is being added.
@@ -87,8 +87,8 @@ class LinkDetector(Protocol):
         Return the lookup key for a DocSpan when building the target-matching index.
 
         Defaults to ``span.raw_identifier`` (exact match).  Detectors for datasets
-        whose ``target_str`` is only a sub-component of ``clean_title`` (e.g.
-        ``PythonImportDetector`` returns a bare file path while ``clean_title``
+        whose ``target_str`` is only a sub-component of ``raw_identifier`` (e.g.
+        ``PythonImportDetector`` returns a bare file path while ``raw_identifier``
         includes a repo prefix) should override this to return the matching
         sub-component.
         """
@@ -103,7 +103,7 @@ class MarkdownLinkDetector:
     then decodes a growing window of tokens forward until ) appears in the decoded
     text.  This avoids relying on a single fixed token ID for ) — a bare ) shares
     a token with many other contexts — and makes the approach robust to BPE splits
-    inside the target title.
+    inside the target identifier.
 
     Args:
         decode_fn:             Function mapping List[int] -> str (e.g. tiktoken enc.decode).
@@ -130,7 +130,7 @@ class MarkdownLinkDetector:
         self.link_mid_token_id = link_mid_token_id
 
     def index_doc_span(self, span: Any) -> str:
-        """Exact match against ``raw_identifier`` (the original article title with spaces)."""
+        """Exact match against ``raw_identifier`` (the original article identifier with spaces)."""
         return span.raw_identifier
 
     def detect_links(self, input_ids: torch.Tensor) -> List[LinkInfo]:
@@ -227,7 +227,7 @@ class CrossDocLinkMaskCreator:
 
         Uses ``self.link_detector.index_doc_span(span)`` to build the lookup
         key for each span.  This lets dataset-specific detectors (e.g.
-        ``PythonImportDetector``) match on a sub-component of ``clean_title``
+        ``PythonImportDetector``) match on a sub-component of ``raw_identifier``
         (e.g. the bare file path) rather than the full identifier.
 
         Multiple ``LinkInfo`` objects can share the same ``link_end_pos`` when
@@ -344,7 +344,7 @@ class CrossDocLinkMaskCreator:
 
         Args:
             tokens:    Tensor of shape [B, T] with token IDs (full sequence including target)
-            doc_spans: List of DocSpan objects with start, end, doc_id, clean_title
+            doc_spans: List of DocSpan objects with start, end, doc_id, raw_identifier
             **kwargs:  Additional batch information (unused)
 
         Returns:

@@ -30,7 +30,7 @@ class GraphIndex:
         The initializer also performs basic validation to ensure that each
         node contains the fields required for locating its tokens in the
         binary shards (``tok_shard_idx``, ``tok_offset_bytes``, ``tok_len``)
-        and constructs title/id lookup tables.
+        and constructs normed_identifier/id lookup tables.
 
         Args:
             run_directory: The path to the specific experiment run directory
@@ -65,23 +65,23 @@ class GraphIndex:
         with open(graph_path, "r", encoding="utf-8") as f:
             for line in f:
                 node_data = json.loads(line)
-                title = node_data["normed_identifier"]
-                self.nodes[title] = node_data
+                normed_id = node_data["normed_identifier"]
+                self.nodes[normed_id] = node_data
 
-        # Create mappings between titles and integer ids, and validate the
-        # presence and types of token-location fields required by the
-        # pre-tokenized backend.
-        self._title_to_id: Dict[str, int] = {}
-        self._id_to_title: List[str] = []
+        # Create mappings between normed_identifiers and integer ids, and
+        # validate the presence and types of token-location fields required
+        # by the pre-tokenized backend.
+        self._normed_to_id: Dict[str, int] = {}
+        self._id_to_normed: List[str] = []
 
         required_fields = ("tok_shard_idx", "tok_offset_bytes", "tok_len")
 
-        for idx, (title, node) in enumerate(self.nodes.items()):
+        for idx, (normed_id, node) in enumerate(self.nodes.items()):
             # Validate that required token-location metadata is present.
             missing = [field for field in required_fields if field not in node]
             if missing:
                 raise ValueError(
-                    f"Node '{title}' is missing required token metadata fields: {missing}"
+                    f"Node '{normed_id}' is missing required token metadata fields: {missing}"
                 )
 
             # Validate basic types for token-location metadata.
@@ -91,83 +91,83 @@ class GraphIndex:
 
             if not isinstance(shard_idx, int):
                 raise ValueError(
-                    f"Node '{title}' has invalid tok_shard_idx={shard_idx!r}; "
+                    f"Node '{normed_id}' has invalid tok_shard_idx={shard_idx!r}; "
                     "expected an integer."
                 )
             if not isinstance(offset_bytes, int):
                 raise ValueError(
-                    f"Node '{title}' has invalid tok_offset_bytes={offset_bytes!r}; "
+                    f"Node '{normed_id}' has invalid tok_offset_bytes={offset_bytes!r}; "
                     "expected an integer."
                 )
             if not isinstance(tok_len, int):
                 raise ValueError(
-                    f"Node '{title}' has invalid tok_len={tok_len!r}; expected an integer."
+                    f"Node '{normed_id}' has invalid tok_len={tok_len!r}; expected an integer."
                 )
 
-            self._title_to_id[title] = idx
-            self._id_to_title.append(title)
+            self._normed_to_id[normed_id] = idx
+            self._id_to_normed.append(normed_id)
 
         logger.info(
             f"Graph index loaded. Found {len(self.nodes):,} nodes across "
             f"{len(self.shard_filenames)} shards."
         )
 
-    def get_node(self, title: str) -> Optional[Dict[str, Any]]:
-        """Returns the full metadata dictionary for a given node title."""
-        return self.nodes.get(title)
+    def get_node(self, normed_identifier: str) -> Optional[Dict[str, Any]]:
+        """Returns the full metadata dictionary for a given normed_identifier."""
+        return self.nodes.get(normed_identifier)
 
     def get_raw_identifier(self, normed_identifier: str) -> Optional[str]:
         """Returns the human-readable raw identifier for a node."""
         node = self.get_node(normed_identifier)
         return node.get("raw_identifier") if node else None
 
-    def get_outgoing_links(self, title: str) -> List[str]:
-        """Returns the list of titles that the given title links to."""
-        node = self.get_node(title)
+    def get_outgoing_links(self, normed_identifier: str) -> List[str]:
+        """Returns the normed_identifiers that the given node links to."""
+        node = self.get_node(normed_identifier)
         return node.get("outgoing", []) if node else []
 
-    def get_incoming_links(self, title: str) -> List[str]:
-        """Returns the list of titles that link to the given title."""
-        node = self.get_node(title)
+    def get_incoming_links(self, normed_identifier: str) -> List[str]:
+        """Returns the normed_identifiers that link to the given node."""
+        node = self.get_node(normed_identifier)
         return node.get("incoming", []) if node else []
 
-    def get_id(self, title: str) -> int:
+    def get_id(self, normed_identifier: str) -> int:
         """
-        Returns the integer id corresponding to ``title``.
+        Returns the integer id corresponding to ``normed_identifier``.
 
         Raises:
-            KeyError: If the title is not present in the index.
+            KeyError: If the identifier is not present in the index.
         """
         try:
-            return self._title_to_id[title]
+            return self._normed_to_id[normed_identifier]
         except KeyError as exc:
-            raise KeyError(f"Unknown document title: {title!r}") from exc
+            raise KeyError(f"Unknown normed_identifier: {normed_identifier!r}") from exc
 
-    def get_title(self, doc_id: int) -> str:
+    def get_normed_identifier(self, doc_id: int) -> str:
         """
-        Returns the document title associated with ``doc_id``.
+        Returns the normed_identifier associated with ``doc_id``.
 
         Raises:
             IndexError: If ``doc_id`` is out of range.
         """
-        if doc_id < 0 or doc_id >= len(self._id_to_title):
+        if doc_id < 0 or doc_id >= len(self._id_to_normed):
             raise IndexError(f"Document id out of range: {doc_id}")
-        return self._id_to_title[doc_id]
+        return self._id_to_normed[doc_id]
 
     def neighbors_out(self, doc_id: int) -> List[int]:
         """
         Returns the ids of all outgoing neighbors from the node ``doc_id``.
 
-        Unknown neighbor titles (if any) are silently skipped.
+        Unknown neighbors (if any) are silently skipped.
         """
-        title = self.get_title(doc_id)
-        node = self.get_node(title)
+        normed_id = self.get_normed_identifier(doc_id)
+        node = self.get_node(normed_id)
         if not node:
             return []
 
         neighbor_ids: List[int] = []
-        for neighbor_title in node.get("outgoing", []):
-            doc_idx = self._title_to_id.get(neighbor_title)
+        for neighbor_normed in node.get("outgoing", []):
+            doc_idx = self._normed_to_id.get(neighbor_normed)
             if doc_idx is not None:
                 neighbor_ids.append(doc_idx)
         return neighbor_ids
@@ -176,16 +176,16 @@ class GraphIndex:
         """
         Returns the ids of all incoming neighbors to the node ``doc_id``.
 
-        Unknown neighbor titles (if any) are silently skipped.
+        Unknown neighbors (if any) are silently skipped.
         """
-        title = self.get_title(doc_id)
-        node = self.get_node(title)
+        normed_id = self.get_normed_identifier(doc_id)
+        node = self.get_node(normed_id)
         if not node:
             return []
 
         neighbor_ids: List[int] = []
-        for neighbor_title in node.get("incoming", []):
-            doc_idx = self._title_to_id.get(neighbor_title)
+        for neighbor_normed in node.get("incoming", []):
+            doc_idx = self._normed_to_id.get(neighbor_normed)
             if doc_idx is not None:
                 neighbor_ids.append(doc_idx)
         return neighbor_ids
@@ -195,8 +195,8 @@ class GraphIndex:
         Returns the precomputed token length (``tok_len``) for the document
         identified by ``doc_id``.
         """
-        title = self.get_title(doc_id)
-        node = self.get_node(title)
+        normed_id = self.get_normed_identifier(doc_id)
+        node = self.get_node(normed_id)
         if not node:
             raise KeyError(f"No node metadata found for document id {doc_id}")
         return int(node["tok_len"])
@@ -204,11 +204,11 @@ class GraphIndex:
     def __len__(self) -> int:
         return len(self.nodes)
 
-    def __contains__(self, title: str) -> bool:
-        return title in self.nodes
+    def __contains__(self, normed_identifier: str) -> bool:
+        return normed_identifier in self.nodes
 
-    def get_all_titles(self) -> List[str]:
-        """Returns a list of all document titles in the graph."""
+    def get_all_normed_identifiers(self) -> List[str]:
+        """Returns a list of all normed_identifiers in the graph."""
         return list(self.nodes.keys())
 
 
@@ -253,19 +253,19 @@ class PretokShardedBackend:
             )
         return self._memmaps[shard_idx]
 
-    def get_tokens(self, title: str) -> Optional[np.ndarray]:
+    def get_tokens(self, normed_identifier: str) -> Optional[np.ndarray]:
         """
-        Retrieves the token array for a given document title.
+        Retrieves the token array for a given normed_identifier.
 
         Args:
-            title: The title of the document.
+            normed_identifier: The normed identifier of the document.
 
         Returns:
-            A numpy array of tokens, or ``None`` if the title is not found.
+            A numpy array of tokens, or ``None`` if the identifier is not found.
         """
-        node_data = self.index.get_node(title)
+        node_data = self.index.get_node(normed_identifier)
         if not node_data:
-            logger.warning(f"Title '{title}' not found in graph index.")
+            logger.warning(f"Identifier '{normed_identifier}' not found in graph index.")
             return None
 
         shard_idx = node_data["tok_shard_idx"]
@@ -286,7 +286,7 @@ class PretokShardedBackend:
         # It's good practice to ensure the length matches, as a sanity check.
         if len(tokens) != num_tokens:
             logger.error(
-                f"Token length mismatch for '{title}'. Expected {num_tokens}, got {len(tokens)}. "
+                f"Token length mismatch for '{normed_identifier}'. Expected {num_tokens}, got {len(tokens)}. "
                 f"Shard: {shard_idx}, Byte Offset: {offset_bytes}"
             )
             return None
@@ -297,12 +297,12 @@ class PretokShardedBackend:
         """
         Retrieves the token array for a document identified by integer id.
 
-        This is a thin convenience wrapper that converts the id to a title via
+        This is a thin convenience wrapper that converts the id to a normed_identifier via
         the associated ``GraphIndex`` and then delegates to ``get_tokens`` to
         preserve the existing behavior and validation logic.
         """
-        title = self.index.get_title(doc_id)
-        return self.get_tokens(title)
+        normed_id = self.index.get_normed_identifier(doc_id)
+        return self.get_tokens(normed_id)
 
     def close(self):
         """Closes all open memory-mapped files."""

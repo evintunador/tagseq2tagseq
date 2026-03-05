@@ -179,14 +179,9 @@ def fix_complex_wikilinks(text):
     Converts them to proper markdown links preserving both the content and target.
     """
     def convert_ipa_link(match):
-        full_title = match.group(1)  # e.g., "Help:IPA/Italian"
-        content = match.group(2)     # e.g., "iˈtaːlja"
-        
-        # Use raw (human-readable) link target
-        normalized_title = raw_link_target(full_title)
-
-        # Return the proper markdown link
-        return f'[{content}]({normalized_title})'
+        raw = match.group(1)     # e.g., "Help:IPA/Italian"
+        content = match.group(2) # e.g., "iˈtaːlja"
+        return f'[{content}]({raw_link_target(raw)})'
     
     # Pattern for IPA pronunciation links: [[Help:IPA/Language|[pronunciation]]]
     # Convert to proper markdown links: [pronunciation](help_ipa_language_hash)
@@ -200,10 +195,9 @@ def fix_complex_wikilinks(text):
     # More general pattern for any link with nested brackets in the display text
     # [[link|[content]]] -> [content](link_normalized)
     def convert_general_link(match):
-        title = match.group(1)
+        raw = match.group(1)
         content = match.group(2)
-        normalized_title = raw_link_target(title)
-        return f'[{content}]({normalized_title})'
+        return f'[{content}]({raw_link_target(raw)})'
     
     text = re.sub(
         r'\[\[([^|]+)\|\[([^\]]+)\]\]\]',
@@ -233,41 +227,37 @@ def convert_internal_links(text):
         inner = text[s + 2:e - 2]
         pipe = inner.rfind('|')
         
-        title = inner[:pipe].rstrip() if pipe > -1 else inner
-        label = inner[pipe + 1:].strip() if pipe > -1 else title
-        
+        raw = inner[:pipe].rstrip() if pipe > -1 else inner
+        label = inner[pipe + 1:].strip() if pipe > -1 else raw
+
         # Clean brackets from label if it's enclosed (like IPA pronunciation)
         if label.startswith('[') and label.endswith(']'):
             label = label[1:-1]
-        
-        # Clean title for checking prefixes
-        clean_title = title.strip().lower()
+
+        # Normalised form for prefix checks only
+        normed = raw.strip().lower()
 
         # Handle wikt: prefix
-        if clean_title.startswith('wikt:'):
-            # preserve original casing/spacing after prefix if needed, 
-            # but usually we just want the content.
-            # Find where the prefix ends in the original title
-            prefix_match = re.match(r'\s*wikt:', title, re.IGNORECASE)
+        if normed.startswith('wikt:'):
+            prefix_match = re.match(r'\s*wikt:', raw, re.IGNORECASE)
             if prefix_match:
-                title = title[prefix_match.end():]
-            
+                raw = raw[prefix_match.end():]
+
             if pipe == -1:
-                label = title
+                label = raw
 
         # Check for standard prefixes (embedded images/files/categories)
         # These are typically stripped entirely.
-        if any(clean_title.startswith(p) for p in ['file:', 'image:', 'category:', 'media:']):
-            res += text[cur:s] 
-        
+        if any(normed.startswith(p) for p in ['file:', 'image:', 'category:', 'media:']):
+            res += text[cur:s]
+
         # Check for colon prefixes (text links to files/images/categories)
         # e.g. [[:Image:Foo.jpg|Label]] -> Label
-        elif any(clean_title.startswith(':' + p) for p in ['file:', 'image:', 'category:', 'media:']):
+        elif any(normed.startswith(':' + p) for p in ['file:', 'image:', 'category:', 'media:']):
             res += f"{text[cur:s]}{label}"
 
         else:
-            encoded_title = raw_link_target(title)
-            res += f"{text[cur:s]}[{label}]({encoded_title}){trail}"
+            res += f"{text[cur:s]}[{label}]({raw_link_target(raw)}){trail}"
             
         cur = end
         
@@ -542,56 +532,56 @@ def fix_date_ranges(text):
     text = re.sub(r'\((\d{4})(\d{4})\)', r'(\1-\2)', text)
     return text
 
-def raw_link_target(title: str) -> str:
+def raw_link_target(raw: str) -> str:
     """Human-readable link target: preserves casing and spaces, no hash.
 
     Spaces are intentionally kept so that the token stream the LLM trains on
-    contains the natural article title (e.g. ``Sunshine Coast, Queensland``)
+    contains the natural article identifier (e.g. ``Sunshine Coast, Queensland``)
     rather than URL-encoded underscores.  The MarkdownLinkDetector matches
-    against DocSpan.raw_identifier which also stores the original-casing title
-    with spaces, so no normalization is needed at detection time.
+    against DocSpan.raw_identifier directly, so no normalization is needed at
+    detection time.
     """
-    return html.unescape(title).strip()
+    return html.unescape(raw).strip()
 
 
-def normalize_title(title):
+def normalize_identifier(raw):
     """
-    Normalizes a title for use in filenames and link targets.
+    Produces a normed_identifier from a raw article identifier.
     Strict normalization to ensure alignment:
     - Lowercase
     - Replace spaces and special characters with underscores
     - Limit length
-    - Appends a hash of the pre-stripped title to ensure distinct documents
+    - Appends a hash of the pre-stripped form to ensure distinct identifiers
       (e.g. 'A+B' vs 'A-B') don't collide.
     """
     # Decode HTML entities
-    title = html.unescape(title)
-    
+    raw = html.unescape(raw)
+
     # Pre-normalization canonicalization (soft) to determine identity
     # This handles case-insensitivity and space/underscore equivalence
-    canonical = title.lower().strip().replace(' ', '_')
-    
+    canonical = raw.lower().strip().replace(' ', '_')
+
     # Compute hash of the canonical form to distinguish different symbols
     # e.g. "a+b" vs "a-b" which both normalize to "a_b" below.
     # We use MD5 and take the first 6 chars for a compact suffix.
     title_hash = hashlib.md5(canonical.encode('utf-8')).hexdigest()[:6]
 
     # Apply strict normalization for the filename part
-    clean_title = canonical
+    normed = canonical
     
     # Replace invalid chars with underscores (keep only alphanumeric, hyphen, underscore)
-    clean_title = re.sub(r'[^a-z0-9\-_]', '_', clean_title)
+    normed = re.sub(r'[^a-z0-9\-_]', '_', normed)
     # Collapse underscores
-    clean_title = re.sub(r'__+', '_', clean_title)
+    normed = re.sub(r'__+', '_', normed)
     # Strip leading/trailing underscores
-    clean_title = clean_title.strip('_')
+    normed = normed.strip('_')
     
     # Limit length (leave room for hash and separator)
     # 200 - 1 (separator) - 6 (hash) = 193
-    if len(clean_title) > 193:
-        clean_title = clean_title[:193]
+    if len(normed) > 193:
+        normed = normed[:193]
         
-    return f"{clean_title}_{title_hash}"
+    return f"{normed}_{title_hash}"
 
 def convert_bold_and_italics(text):
     """Converts wikitext bold/italics to Markdown."""

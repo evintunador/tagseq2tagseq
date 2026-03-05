@@ -56,16 +56,16 @@ def tokenize_worker(
     dtype: np.dtype,
 ):
     """
-    Tokenizes a (title, content_str) record and puts the result onto the queue.
+    Tokenizes a (normed_id, content_str) record and puts the result onto the queue.
 
     Content pre-processing (e.g. hash-stripping for Wikipedia) is the
     responsibility of the DocumentSource, not this worker.
     """
     try:
-        title, content = record
+        normed_id, content = record
         tokens = encode_fn(content)
         tokens_np = np.asarray(tokens, dtype=dtype)
-        queue.put((title, tokens_np))
+        queue.put((normed_id, tokens_np))
     except Exception as e:
         logger.error(f"Could not process record '{record[0] if record else '?'}': {e}")
 
@@ -98,9 +98,9 @@ def writer_process(
             try:
                 # Wait for an item, but with a timeout to check for the sentinel
                 # This helps prevent hanging if the producers die unexpectedly
-                title, tokens = queue.get(timeout=10)
-                
-                if title is None: # Sentinel value
+                normed_id, tokens = queue.get(timeout=10)
+
+                if normed_id is None: # Sentinel value
                     logger.info("Writer process received sentinel. Finalizing...")
                     break
 
@@ -108,11 +108,11 @@ def writer_process(
                 if current_shard_file is None or (current_shard_offset + tokens.nbytes) > shard_size_bytes:
                     if current_shard_file:
                         finalize_shard(current_shard_file, current_shard_offset, metadata["dtype_str"])
-                    
+
                     shard_filename = output_dir / f"shard_{shard_idx:06d}.bin"
                     shard_filenames.append(shard_filename.name)
                     logger.info(f"Creating new shard: {shard_filename}")
-                    
+
                     current_shard_file = open(shard_filename, "wb")
                     # Write a placeholder header, we'll fill it in at the end
                     current_shard_file.write(np.zeros(256, dtype=np.int32).tobytes())
@@ -123,8 +123,8 @@ def writer_process(
                 start_offset = current_shard_offset
                 current_shard_file.write(tokens.tobytes())
                 current_shard_offset += tokens.nbytes
-                
-                token_metadata[title] = {
+
+                token_metadata[normed_id] = {
                     "tok_shard_idx": shard_idx - 1,
                     "tok_offset_bytes": start_offset,
                     "tok_len": len(tokens),
@@ -150,12 +150,12 @@ def writer_process(
     # --- Finalization ---
     logger.info("Aggregating final graph data...")
     final_graph_data = []
-    for title, data in tqdm(graph_data.items(), desc="Merging graph data"):
-        if title in token_metadata:
-            data.update(token_metadata[title])
+    for normed_id, data in tqdm(graph_data.items(), desc="Merging graph data"):
+        if normed_id in token_metadata:
+            data.update(token_metadata[normed_id])
             final_graph_data.append(data)
         else:
-            logger.warning(f"normed_identifier '{title}' from graph.jsonl not found in tokenized files. Excluding.")
+            logger.warning(f"normed_identifier '{normed_id}' from graph.jsonl not found in tokenized files. Excluding.")
             
     # Write tokenized_graph.jsonl
     output_graph_file = output_dir / "tokenized_graph.jsonl"
@@ -202,7 +202,7 @@ def run_preprocessing(args, rep: ReproducibilityManager, source=None):
     Args:
         args: Parsed CLI arguments.
         rep: ReproducibilityManager instance.
-        source: Any iterable of (title, content_str) pairs that also
+        source: Any iterable of (normed_id, content_str) pairs that also
             supports len(). If None, falls back to a MarkdownDirectorySource
             built from args.input_dir (original Wikipedia behaviour).
     """

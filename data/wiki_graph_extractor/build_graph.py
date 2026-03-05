@@ -47,9 +47,9 @@ def extract_links_worker(filepath):
         char_count = len(body)
         links = re.findall(r'\[[^!\]]*?\]\((.*?)\)', body)
         from urllib.parse import unquote
-        from data.wiki_graph_extractor.extract import normalize_title
+        from data.wiki_graph_extractor.extract import normalize_identifier
         # Normalize raw link targets → normed_identifier form for graph matching
-        outgoing_normed = {normalize_title(unquote(link)) for link in links}
+        outgoing_normed = {normalize_identifier(unquote(link)) for link in links}
 
         return (normed_identifier, raw_identifier, list(outgoing_normed), char_count)
     except Exception as e:
@@ -67,8 +67,8 @@ def compute_and_save_stats(graph_data, jsonl_output_path):
     G = nx.DiGraph()
     
     # Add all nodes first
-    for title in graph_data:
-        G.add_node(title)
+    for normed_id in graph_data:
+        G.add_node(normed_id)
         
     # Add edges (only considering links within the set of files we processed)
     edge_count = 0

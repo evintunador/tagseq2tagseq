@@ -6,7 +6,7 @@ from data.wiki_graph_extractor.extract import (
     remove_comments, remove_templates, remove_stub_templates, remove_wikitables, remove_reference_tags,
     remove_external_links, convert_internal_links, convert_html_formatting, remove_file_references,
     convert_bold_and_italics, fix_indented_math, format_sections_and_whitespace, fix_definition_lists,
-    normalize_title, remove_unwanted_sections, fix_date_ranges, protect_math_from_templates, restore_math_content, fix_complex_wikilinks,
+    normalize_identifier, remove_unwanted_sections, fix_date_ranges, protect_math_from_templates, restore_math_content, fix_complex_wikilinks,
     fix_corrupted_asterisks, fix_mediawiki_links, fix_excessive_whitespace, fix_malformed_formatting
 )
 
@@ -234,9 +234,9 @@ class TestExtract(unittest.TestCase):
         text2 = "Link [http://example.com]."
         self.assertEqual(remove_external_links(text2), "Link .")
 
-    def test_normalize_title(self):
-        title = "Title"
-        normalized = normalize_title(title)
+    def test_normalize_identifier(self):
+        raw = "Title"
+        normalized = normalize_identifier(raw)
         # Check prefix and that it ends with 6 char hash
         self.assertTrue(normalized.startswith("title_"))
         self.assertRegex(normalized, r"_[a-f0-9]{6}$")
