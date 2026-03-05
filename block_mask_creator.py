@@ -435,7 +435,7 @@ if __name__ == "__main__":
     doc_spans = batch['doc_spans']
     
     logger.info(f"Batch generated. Tokens shape: {tokens.shape}")
-    doc_identifiers = [s.clean_title for s in doc_spans]
+    doc_identifiers = [s.raw_identifier for s in doc_spans]
     logger.info(f"Docs in batch ({len(doc_identifiers)}): {doc_identifiers}")
 
     # 4. Create Mask
@@ -512,7 +512,7 @@ if __name__ == "__main__":
         mid = (max(0, span.start) + min(input_len, span.end)) / 2
         if 0 <= mid < input_len:
             # For Stack titles (repo:filepath), show just the filepath part
-            raw = span.clean_title
+            raw = span.raw_identifier
             label = raw.split(':', 1)[-1] if ':' in raw else raw
             label = label[-40:]  # last 40 chars keeps the meaningful filename
             plt.text(mid, -1, label, ha='center', rotation=45, color='red', fontsize=8)
@@ -550,11 +550,11 @@ if __name__ == "__main__":
         f.write(f"Number of Docs: {len(doc_spans)}\n\n")
         
         for i, span in enumerate(doc_spans):
-            f.write(f"--- Document {i}: {span.clean_title} (ID: {span.doc_id}) ---\n")
+            f.write(f"--- Document {i}: {span.raw_identifier} (ID: {span.doc_id}) ---\n")
             f.write(f"Span: [{span.start}, {span.end})\n")
             f.write(f"Length: {span.end - span.start}\n")
             f.write(f"Truncated: {span.truncated}\n")
-            f.write(f"Outgoing Links: {span.outgoing_titles}\n")
+            f.write(f"Outgoing Links: {span.outgoing_identifiers}\n")
             
             # Decode text
             if enc:

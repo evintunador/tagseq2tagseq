@@ -543,9 +543,15 @@ def fix_date_ranges(text):
     return text
 
 def raw_link_target(title: str) -> str:
-    """Human-readable link target: preserves casing, spaces→underscores, no hash."""
-    title = html.unescape(title).strip()
-    return title.replace(' ', '_')
+    """Human-readable link target: preserves casing and spaces, no hash.
+
+    Spaces are intentionally kept so that the token stream the LLM trains on
+    contains the natural article title (e.g. ``Sunshine Coast, Queensland``)
+    rather than URL-encoded underscores.  The MarkdownLinkDetector matches
+    against DocSpan.raw_identifier which also stores the original-casing title
+    with spaces, so no normalization is needed at detection time.
+    """
+    return html.unescape(title).strip()
 
 
 def normalize_title(title):

@@ -86,13 +86,13 @@ class LinkDetector(Protocol):
         """
         Return the lookup key for a DocSpan when building the target-matching index.
 
-        Defaults to ``span.clean_title`` (exact match).  Detectors for datasets
+        Defaults to ``span.raw_identifier`` (exact match).  Detectors for datasets
         whose ``target_str`` is only a sub-component of ``clean_title`` (e.g.
         ``PythonImportDetector`` returns a bare file path while ``clean_title``
         includes a repo prefix) should override this to return the matching
         sub-component.
         """
-        return span.clean_title
+        return span.raw_identifier
 
 
 class MarkdownLinkDetector:
@@ -130,13 +130,8 @@ class MarkdownLinkDetector:
         self.link_mid_token_id = link_mid_token_id
 
     def index_doc_span(self, span: Any) -> str:
-        """Match against ``clean_title`` normalized to Wikipedia link format.
-
-        Wikipedia internal links use underscores for spaces, e.g.
-        ``[text](Sunshine_Coast,_Queensland)``.  We replace spaces with
-        underscores so the key matches what ``detect_links`` returns.
-        """
-        return span.clean_title.replace(' ', '_')
+        """Exact match against ``raw_identifier`` (the original article title with spaces)."""
+        return span.raw_identifier
 
     def detect_links(self, input_ids: torch.Tensor) -> List[LinkInfo]:
         """

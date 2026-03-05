@@ -385,8 +385,8 @@ class TestDetectLinks:
 class TestIndexDocSpan:
 
     class _Span:
-        def __init__(self, clean_title):
-            self.clean_title = clean_title
+        def __init__(self, raw_identifier):
+            self.raw_identifier = raw_identifier
 
     def test_strips_repo_prefix(self, detector):
         span = self._Span("myrepo_abc123:src/foo/bar.py")

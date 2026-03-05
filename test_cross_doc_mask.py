@@ -1,5 +1,8 @@
 """
 Tests for cross-document link mask detection and matching.
+
+Link targets in Wikipedia .md files use the original article title with spaces
+(e.g. ``(Sunshine Coast, Queensland)``), matching DocSpan.raw_identifier directly.
 """
 
 import torch
@@ -14,24 +17,24 @@ from typing import List
 class MockDocSpan:
     """Mock DocSpan for testing."""
     doc_id: int
-    clean_title: str
+    raw_identifier: str
     start: int
     end: int
     truncated: bool = False
-    outgoing_titles: List[str] = field(default_factory=list)
+    outgoing_identifiers: List[str] = field(default_factory=list)
 
 
-def make_batch(texts, enc):
+def make_batch(texts, titles, enc):
     """Encode a list of text segments and return (tokens_2d, doc_spans)."""
     all_tokens = []
     spans = []
-    for i, text in enumerate(texts):
+    for i, (text, title) in enumerate(zip(texts, titles)):
         toks = enc.encode(text)
         start = len(all_tokens)
         all_tokens.extend(toks)
         spans.append(MockDocSpan(
             doc_id=i,
-            clean_title=f"doc_{i}",
+            raw_identifier=title,
             start=start,
             end=len(all_tokens),
         ))
@@ -41,34 +44,35 @@ def make_batch(texts, enc):
 
 
 def test_link_detection_and_matching():
-    """Detected links must map to correct in-batch doc spans."""
+    """Detected links map to correct in-batch doc spans.
+
+    Link targets use the original title with spaces, matching raw_identifier directly.
+    """
     enc = tiktoken.get_encoding('gpt2')
     detector = MarkdownLinkDetector(decode_fn=enc.decode)
     creator = CrossDocLinkMaskCreator(link_detector=detector)
 
-    # Doc 0 (target): plain text, no links
-    # Doc 1 (linker): contains a link to doc_0 and a link to a missing doc
     texts = [
         "This is the target document.",
-        " Here is [a link](doc_0) to the first doc and [bad](missing_doc).",
+        " Here is [a link](Target Doc) to the first doc and [bad](Missing Doc).",
     ]
-    tokens_2d, doc_spans = make_batch(texts, enc)
+    titles = ["Target Doc", "Linker Doc"]
+    tokens_2d, doc_spans = make_batch(texts, titles, enc)
     input_ids = tokens_2d[0, :-1]
 
     links = detector.detect_links(input_ids)
-    assert len(links) >= 1, "Should detect at least the link to doc_0"
+    assert len(links) >= 1, "Should detect at least the link to Target Doc"
 
     target_strs = [lnk.target_str for lnk in links]
-    assert "doc_0" in target_strs, f"Expected 'doc_0' in detected links, got {target_strs}"
+    assert "Target Doc" in target_strs, (
+        f"Expected 'Target Doc' in detected links, got {target_strs}"
+    )
 
     link_to_target = creator._match_links_to_docs(links, doc_spans)
 
-    # At least the doc_0 link should match (doc_0 is before the linker in the batch)
     assert len(link_to_target) >= 1, "Expected at least one matched link"
-
-    # The matched targets should all be doc_id=0
     matched_doc_ids = {doc_id for targets in link_to_target.values() for doc_id in targets}
-    assert 0 in matched_doc_ids, "Expected doc_id=0 to be a match target"
+    assert 0 in matched_doc_ids, "Expected doc_id=0 (Target Doc) to be a match target"
 
 
 def test_dag_property_enforced():
@@ -77,21 +81,21 @@ def test_dag_property_enforced():
     detector = MarkdownLinkDetector(decode_fn=enc.decode)
     creator = CrossDocLinkMaskCreator(link_detector=detector)
 
-    # Doc 0 links to doc_1, but doc_1 appears AFTER doc_0 → should not match (DAG violation)
+    # Doc 0 links to "Doc One", but Doc One appears AFTER Doc Zero → DAG violation
     texts = [
-        " See [this](doc_1) for more.",
-        "I am doc 1.",
+        " See [this](Doc One) for more.",
+        "I am Doc One.",
     ]
-    tokens_2d, doc_spans = make_batch(texts, enc)
+    titles = ["Doc Zero", "Doc One"]
+    tokens_2d, doc_spans = make_batch(texts, titles, enc)
     input_ids = tokens_2d[0, :-1]
 
     links = detector.detect_links(input_ids)
     link_to_target = creator._match_links_to_docs(links, doc_spans)
 
-    # doc_1 starts after the link position → DAG violation → should not be matched
     matched_doc_ids = {doc_id for targets in link_to_target.values() for doc_id in targets}
     assert 1 not in matched_doc_ids, (
-        "doc_1 appears after the link; DAG property should prevent the match"
+        "Doc One appears after the link; DAG property should prevent the match"
     )
 
 
@@ -103,9 +107,10 @@ def test_cross_doc_mask_shape_and_causality():
 
     texts = [
         "Target text here.",
-        " Link to [doc](doc_0) is here.",
+        " Link to [doc](Target Doc) is here.",
     ]
-    tokens_2d, doc_spans = make_batch(texts, enc)
+    titles = ["Target Doc", "Linker Doc"]
+    tokens_2d, doc_spans = make_batch(texts, titles, enc)
     seq_len = tokens_2d.shape[1] - 1
 
     dense = creator.build_dense_mask_for_visualization(tokens_2d, doc_spans, device=torch.device('cpu'))
@@ -121,7 +126,6 @@ def test_cross_doc_mask_shape_and_causality():
 
 def test_block_mask_creation_succeeds():
     """CrossDocLinkMaskCreator.__call__ must return a valid BlockMask on CUDA."""
-    import pytest
     if not torch.cuda.is_available():
         pytest.skip("FlexAttention requires CUDA")
 
@@ -131,9 +135,10 @@ def test_block_mask_creation_succeeds():
 
     texts = [
         "Target document content.",
-        " References [target](doc_0) document.",
+        " References [target](Target Doc) document.",
     ]
-    tokens_2d, doc_spans = make_batch(texts, enc)
+    titles = ["Target Doc", "Linker Doc"]
+    tokens_2d, doc_spans = make_batch(texts, titles, enc)
     tokens_2d = tokens_2d.cuda()
 
     from torch.nn.attention.flex_attention import BlockMask
@@ -141,17 +146,25 @@ def test_block_mask_creation_succeeds():
     assert isinstance(block_mask, BlockMask)
 
 
-def test_index_doc_span_normalizes_spaces():
-    """MarkdownLinkDetector.index_doc_span must replace spaces with underscores."""
+def test_detect_links_space_form_target():
+    """detect_links returns the link target exactly as it appears in the token stream.
+
+    With the fixed raw_link_target, Wikipedia .md files store link targets with
+    spaces matching raw_identifier directly — no normalization needed.
+    """
     enc = tiktoken.get_encoding('gpt2')
     detector = MarkdownLinkDetector(decode_fn=enc.decode)
 
-    span = MockDocSpan(doc_id=0, clean_title="Sunshine Coast, Queensland", start=0, end=10)
-    key = detector.index_doc_span(span)
-    assert key == "Sunshine_Coast,_Queensland", (
-        f"Expected underscores in key, got {repr(key)}"
+    text = "See [Queensland](Sunshine Coast, Queensland) for details."
+    input_ids = torch.tensor(enc.encode(text), dtype=torch.long)
+
+    links = detector.detect_links(input_ids)
+    target_strs = [lnk.target_str for lnk in links]
+
+    assert any("Sunshine Coast, Queensland" == t for t in target_strs), (
+        f"Expected space-form target matching raw_identifier; got {target_strs}"
     )
 
-    # Single-word title: no change expected
-    span2 = MockDocSpan(doc_id=1, clean_title="Australia", start=10, end=20)
-    assert detector.index_doc_span(span2) == "Australia"
+    # index_doc_span returns raw_identifier unchanged
+    span = MockDocSpan(doc_id=0, raw_identifier="Sunshine Coast, Queensland", start=0, end=10)
+    assert detector.index_doc_span(span) == "Sunshine Coast, Queensland"

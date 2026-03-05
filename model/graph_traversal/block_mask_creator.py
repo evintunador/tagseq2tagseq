@@ -481,8 +481,8 @@ if __name__ == "__main__":
         # Label
         mid = (max(0, span.start) + min(input_len, span.end)) / 2
         if 0 <= mid < input_len:
-            plt.text(mid, -1, span.title[:15], ha='center', rotation=45, color='red', fontsize=8)
-            plt.text(-1, mid, span.title[:15], va='center', color='red', fontsize=8)
+            plt.text(mid, -1, span.normed_identifier[:15], ha='center', rotation=45, color='red', fontsize=8)
+            plt.text(-1, mid, span.normed_identifier[:15], va='center', color='red', fontsize=8)
 
     valid_bounds = sorted(list(set([b for b in boundaries if 0 <= b <= input_len])))
     for b in valid_bounds:
@@ -514,11 +514,11 @@ if __name__ == "__main__":
         f.write(f"Number of Docs: {len(doc_spans)}\n\n")
         
         for i, span in enumerate(doc_spans):
-            f.write(f"--- Document {i}: {span.title} (ID: {span.doc_id}) ---\n")
+            f.write(f"--- Document {i}: {span.normed_identifier} (ID: {span.doc_id}) ---\n")
             f.write(f"Span: [{span.start}, {span.end})\n")
             f.write(f"Length: {span.end - span.start}\n")
             f.write(f"Truncated: {span.truncated}\n")
-            f.write(f"Outgoing Links: {span.outgoing_titles}\n")
+            f.write(f"Outgoing Links: {span.outgoing_identifiers}\n")
             
             # Decode text
             if enc:

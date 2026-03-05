@@ -25,12 +25,12 @@ class DocSpan:
     """
 
     doc_id: int
-    title: str
+    normed_identifier: str
     start: int  # inclusive
     end: int  # exclusive
     truncated: bool
-    outgoing_titles: List[str]
-    clean_title: str
+    outgoing_identifiers: List[str]
+    raw_identifier: str
 
 
 def _slice_body_tokens(
@@ -139,16 +139,16 @@ def build_packed_batch(
         doc_len = int(doc_tokens.shape[0])
 
         normed_id = graph.get_title(p.doc_id)
-        outgoing_titles = graph.get_outgoing_links(normed_id)
+        outgoing_identifiers = graph.get_outgoing_links(normed_id)
 
         span = DocSpan(
             doc_id=p.doc_id,
-            title=normed_id,
+            normed_identifier=normed_id,
             start=offset,
             end=offset + doc_len,
             truncated=p.truncated,
-            outgoing_titles=outgoing_titles,
-            clean_title=graph.get_raw_identifier(normed_id) or normed_id,
+            outgoing_identifiers=outgoing_identifiers,
+            raw_identifier=graph.get_raw_identifier(normed_id) or normed_id,
         )
 
         segments.append(doc_tokens)
@@ -169,7 +169,7 @@ def build_packed_batch(
         "tokens": tokens,
         "doc_spans": spans,
         "doc_ids": [span.doc_id for span in spans],
-        "titles": [span.title for span in spans],
+        "normed_identifiers": [span.normed_identifier for span in spans],
     }
 
 

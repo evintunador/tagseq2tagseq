@@ -167,10 +167,10 @@ class CrossDocLinkMaskCreator:
             Dictionary mapping link_end_pos -> target_doc_id for valid links.
             Only includes links where the target document appears earlier in the batch.
         """
-        # Build a mapping from clean_title to (doc_id, start_pos)
+        # Build a mapping from raw_identifier to (doc_id, start_pos)
         title_to_doc = {}
         for span in doc_spans:
-            title_to_doc[span.clean_title] = (span.doc_id, span.start)
+            title_to_doc[span.raw_identifier] = (span.doc_id, span.start)
 
         link_to_target = {}
 
@@ -278,7 +278,7 @@ class CrossDocLinkMaskCreator:
 
         Args:
             tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
-            doc_spans: List of DocSpan objects with start, end, doc_id, clean_title
+            doc_spans: List of DocSpan objects with start, end, doc_id, raw_identifier
             **kwargs: Additional batch information
 
         Returns:

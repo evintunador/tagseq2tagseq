@@ -182,7 +182,7 @@ def main() -> None:
         for span in doc_spans:
             length = span.end - span.start
             print(
-                f"  doc_id={span.doc_id}, title={span.title!r}, "
+                f"  doc_id={span.doc_id}, normed_identifier={span.normed_identifier!r}, "
                 f"start={span.start}, end={span.end}, "
                 f"length={length}, truncated={span.truncated}"
             )
@@ -207,7 +207,7 @@ def main() -> None:
                 if nbr in doc_id_to_index
             ]
 
-            print(f"  [{idx}] {span.title!r}")
+            print(f"  [{idx}] {span.normed_identifier!r}")
             if out_in_batch:
                 print(
                     "    outgoing ->",
@@ -257,7 +257,7 @@ def main() -> None:
 
                 # Keep snippets reasonably small for terminal output.
                 snippet = text.replace("\n", " ")[:400]
-                print(f"  [{idx}] {span.title!r}:")
+                print(f"  [{idx}] {span.normed_identifier!r}:")
                 print(f"    {snippet!r}")
 
         print("\nFirst 20 token ids:", flat[:20].tolist())

@@ -197,7 +197,7 @@ class PythonImportDetector:
     ``foo/bar/__init__.py`` for ``import foo.bar``).
 
     Matching against ``DocSpan`` identifiers uses the path component only
-    (everything after ``':'`` in the ``clean_title``), so the repo-prefix part
+    (everything after ``':'`` in the ``raw_identifier``), so the repo-prefix part
     of the identifier is ignored during lookup.
 
     Args:
@@ -251,14 +251,14 @@ class PythonImportDetector:
 
     def index_doc_span(self, span: Any) -> str:
         """
-        Return the path component of a span's ``clean_title`` for matching.
+        Return the path component of a span's ``raw_identifier`` for matching.
 
         For Stack identifiers of the form ``'repo/name:path/to/file.py'``
         this returns ``'path/to/file.py'``.  For titles without ``':'``
-        the full ``clean_title`` is returned as a fallback.
+        the full ``raw_identifier`` is returned as a fallback.
         """
-        parts = span.clean_title.split(":", 1)
-        return parts[1] if len(parts) > 1 else span.clean_title
+        parts = span.raw_identifier.split(":", 1)
+        return parts[1] if len(parts) > 1 else span.raw_identifier
 
     # ------------------------------------------------------------------
     # Internal helpers
