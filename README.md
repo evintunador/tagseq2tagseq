@@ -134,67 +134,79 @@ python demo_traversal.py data/pretokenized_datasets/stack_10m \
 
 ### Attention mask images
 
-`block_mask_creator.py` renders the FlexAttention mask for a real batch and saves a PNG to `artifacts/`. Output filenames include the dataset name to avoid collisions.
+`model/graph_traversal/block_mask_creator.py` renders the FlexAttention mask for a real batch and saves a PNG to `artifacts/`. Run as a module from the project root:
 
 ```bash
 # doc_causal mask — Wikipedia
-python block_mask_creator.py data/pretokenized_datasets/simplewiki \
-    --mask-type doc_causal --strategy dfs --seed 42
+python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/simplewiki \
+    --mask-type doc_causal --strategy bfs --seed 42
 
-# cross-document link mask — Wikipedia (uses markdown link detector)
-python block_mask_creator.py data/pretokenized_datasets/simplewiki \
-    --mask-type cross_doc_link --link-detector markdown --strategy dfs --seed 42
+# cross-document link mask — Wikipedia (markdown link detector)
+python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/simplewiki \
+    --mask-type cross_doc_link --link-detector markdown --strategy bfs --seed 42
 
 # doc_causal mask — The Stack
-python block_mask_creator.py data/pretokenized_datasets/stack_10m \
-    --mask-type doc_causal --strategy dfs --seed 42
+python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/stack_10m \
+    --mask-type doc_causal --strategy bfs --seed 42
 
-# cross-document link mask — The Stack (uses Python import detector)
-python block_mask_creator.py data/pretokenized_datasets/stack_10m \
-    --mask-type cross_doc_link --link-detector python --strategy dfs --seed 42
-```
-
-Output images (in `artifacts/`):
-
-```
-mask_viz_simplewiki_doc_causal_seed42.png
-mask_viz_simplewiki_cross_doc_link_seed42.png
-mask_viz_stack_10m_doc_causal_seed42.png
-mask_viz_stack_10m_cross_doc_link_seed42.png
+# cross-document link mask — The Stack (Python import detector)
+python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/stack_10m \
+    --mask-type cross_doc_link --link-detector python --strategy bfs --seed 42
 ```
 
 Available mask types: `doc_causal`, `causal`, `full`, `doc_bidirectional`, `cross_doc_link`.
 Available strategies: `dfs`, `bfs`, `random_walk`, `random`.
+`--link-detector` is only used with `cross_doc_link`: `markdown` for Wikipedia, `python` for TheStack.
 
 ---
 
 ## Training
 
-```bash
-python main.py \
-    --config configs/baseline.yaml \
-    --dataset-dir <dataset_dir> \
-    --strategy dfs \
-    --model.compile false
-```
-
 > **Note:** `--model.compile false` is required — `torch.compile` currently conflicts with FlexAttention's `create_block_mask`. Run artifacts are saved to timestamped directories under `runs/`.
+
+### Baseline runs (doc_causal, random traversal)
+
+The baseline uses document-causal masking (each document attends only to itself) with random graph traversal. `data.strategy` defaults to `random` in `baseline.yaml` so no override is needed.
 
 **Wikipedia:**
 ```bash
 python main.py --config configs/baseline.yaml \
     --dataset-dir data/pretokenized_datasets/simplewiki \
-    --strategy dfs --model.compile false
+    --model.compile false
 ```
 
 **The Stack:**
 ```bash
 python main.py --config configs/baseline.yaml \
     --dataset-dir data/pretokenized_datasets/stack_10m \
-    --strategy dfs --model.compile false
+    --model.compile false
 ```
 
-Key config options (`configs/baseline.yaml`):
+### Cross-document runs (cross_doc_link, BFS traversal)
+
+BFS traversal places linked documents adjacently in the packed sequence, which is required for cross-doc attention to be meaningful. Set `model.link_detector` to match the dataset.
+
+**Wikipedia:**
+```bash
+python main.py --config configs/baseline.yaml \
+    --dataset-dir data/pretokenized_datasets/simplewiki \
+    --strategy bfs \
+    --model.mask_type cross_doc_link \
+    --model.link_detector markdown \
+    --model.compile false
+```
+
+**The Stack:**
+```bash
+python main.py --config configs/baseline.yaml \
+    --dataset-dir data/pretokenized_datasets/stack_10m \
+    --strategy bfs \
+    --model.mask_type cross_doc_link \
+    --model.link_detector python \
+    --model.compile false
+```
+
+### Key config options (`configs/baseline.yaml`)
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -202,6 +214,7 @@ Key config options (`configs/baseline.yaml`):
 | `model.num_layers` | 12 | Transformer layers |
 | `model.max_seq_len` | 2048 | Token budget per batch |
 | `model.mask_type` | `doc_causal` | Attention mask strategy |
+| `model.link_detector` | *(unset)* | Required when `mask_type` is `cross_doc_link`: `markdown` or `python` |
 | `data.strategy` | `random` | Graph traversal strategy |
 | `optimizer.muon_lr` | 0.02 | LR for 2D backbone weights (Muon) |
 | `optimizer.adamw_lr` | 0.0003 | LR for embeddings/norms (AdamW) |

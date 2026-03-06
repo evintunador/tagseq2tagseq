@@ -36,17 +36,19 @@ training_module = TS2TSTrainingModule.from_config(..., block_mask_creator=block_
 
 The `link_detector` here is the same instance held inside `CrossDocLinkMaskCreator`. It is also passed to `to_inference_model()` (see below) so the generation loop and the mask creator share one object — no second copy.
 
-**`cross_doc_mask.py` and `python_import_detector.py` are moved from the project root into `model/graph_traversal/`** as part of this stage. The old `model/graph_traversal/cross_doc_mask.py` (monolithic version) is deleted and replaced by the moved file. Final layout:
+**`cross_doc_mask.py` and `python_import_detector.py` are moved from the project root into `model/graph_traversal/`** as part of this stage. The old `model/graph_traversal/cross_doc_mask.py` (monolithic version) is deleted. The protocol and `MarkdownLinkDetector` were also extracted into their own files for symmetry with `PythonImportDetector`. Final layout:
 
 ```
 model/graph_traversal/
-    block_mask_creator.py        # unchanged; already imports from .cross_doc_mask
-    cross_doc_mask.py            # moved from root; canonical LinkDetector protocol +
-                                 #   MarkdownLinkDetector + CrossDocLinkMaskCreator
-    python_import_detector.py    # moved from root; PythonImportDetector
+    block_mask_creator.py        # dispatcher/factory; make_mask_creator_callable_from()
+    link_detector.py             # LinkInfo NamedTuple + LinkDetector Protocol
+    markdown_link_detector.py    # MarkdownLinkDetector (Wikipedia / Markdown datasets)
+    python_import_detector.py    # PythonImportDetector (Python / TheStack dataset)
+    cross_doc_mask.py            # CrossDocLinkMaskCreator only; imports LinkDetector
+                                 #   from link_detector.py
 ```
 
-The `seq_len = tokens.shape[-1] - 1` bug in `cross_doc_mask.py.__call__` must be fixed to `seq_len = tokens.shape[-1]` as part of the move.
+The `seq_len = tokens.shape[-1] - 1` bug in `cross_doc_mask.py.__call__` was fixed as part of the move.
 
 **`to_inference_model(tokenizer, link_detector, layout_policy)` gains three arguments.** The training module doesn't store them; they're passed in at call time. `main.py` calls:
 

@@ -4,22 +4,23 @@ Dependency-ordered stages for implementing the generation system. Each stage has
 
 ---
 
-## Stage 0 — Foundations ⚠️ PARTIALLY COMPLETE
+## Stage 0 — Foundations ✅ COMPLETE
 *Prerequisite. Blocks all other stages.*
 
-### 0.1 — Model stores its training settings
+### 0.1 — Model stores its training settings ✅
 Add `tokenizer`, `link_detector`, `layout_policy` as first-class attributes of `TS2TSModel` (inference model only — the training module does not need them). Update `TS2TSModel.__init__` and `from_config()` to accept them. Update `to_inference_model()` to take them as explicit arguments (not read from `self` on the training module). Update `main.py` to construct them explicitly: create the `LinkDetector`, pass it to both `CrossDocLinkMaskCreator` and `to_inference_model()` so the mask creator and generation loop share the same instance. Uncomment `TS2TSModel.eval()` / `train()`.
 
 Also in this stage:
-- Move `cross_doc_mask.py` (root) → `model/graph_traversal/cross_doc_mask.py`, replacing the old monolithic version. Fix the `seq_len = tokens.shape[-1] - 1` bug in `__call__` as part of the move.
-- Move `python_import_detector.py` (root) → `model/graph_traversal/python_import_detector.py`.
-- Add `max_recent_link_tokens: int = 200` to `GenerationConfig`.
+- Move `cross_doc_mask.py` (root) → `model/graph_traversal/cross_doc_mask.py`, replacing the old monolithic version. Fix the `seq_len = tokens.shape[-1] - 1` bug in `__call__` as part of the move. ✅
+- Move `python_import_detector.py` (root) → `model/graph_traversal/python_import_detector.py`. ✅
+- Extract `LinkDetector` protocol and `LinkInfo` into `model/graph_traversal/link_detector.py`; `MarkdownLinkDetector` into `model/graph_traversal/markdown_link_detector.py` (beyond original plan, done for symmetry with `PythonImportDetector`). ✅
+- Add `max_recent_link_tokens: int = 200` to `GenerationConfig`. ✅
+- Remove hardcoded `MarkdownLinkDetector` from the mask registry; add `make_mask_creator_callable_from(creator)` to `block_mask_creator.py`. ✅
+- `main.py` dispatches `cross_doc_link` mask type by reading `model.link_detector` config key (`markdown` or `python`). ✅
 
-**Touches**: `model/model.py`, `main.py`, `cross_doc_mask.py` (→ `model/graph_traversal/`), `python_import_detector.py` (→ `model/graph_traversal/`), `model/graph_traversal/block_mask_creator.py`, `model/generation_config.py`
+**Touches**: `model/model.py`, `main.py`, `model/graph_traversal/cross_doc_mask.py`, `model/graph_traversal/link_detector.py` (new), `model/graph_traversal/markdown_link_detector.py` (new), `model/graph_traversal/python_import_detector.py`, `model/graph_traversal/block_mask_creator.py`, `model/generation_config.py`
 
-**Deliverable**: `TS2TSModel` has explicit `tokenizer`, `link_detector`, and `layout_policy` attributes available at runtime. These are always reconstructed from the saved training config at load time — they are not persisted in the checkpoint (which saves weights only). The single canonical `CrossDocLinkMaskCreator` is bug-free and wired into training. `main.py` constructs all non-weight components explicitly from config rather than relying on lazy initialization.
-
-**Status**: `tokenizer`, `link_detector`, `layout_policy` added to `TS2TSModel` and `to_inference_model()` ✅. File moves (`cross_doc_mask.py`, `python_import_detector.py`) and `main.py` wiring deferred to Stage 2 (not needed until link detection is active) ⏳.
+**Deliverable**: `TS2TSModel` has explicit `tokenizer`, `link_detector`, and `layout_policy` attributes. `CrossDocLinkMaskCreator` is bug-free, takes a pluggable `LinkDetector`, and is wired into `main.py` via `model.link_detector` config key with no hardcoded detector. `main.py` constructs all non-weight components explicitly from config. The `link_detector` instance shared between mask creator and generation loop is wired at Stage 4.1 (end-of-training demo) when `main.py` calls `to_inference_model()`.
 
 ---
 
