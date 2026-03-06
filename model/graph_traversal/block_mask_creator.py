@@ -249,33 +249,15 @@ def create_doc_bidirectional_block_mask(tokens: torch.Tensor, doc_spans: List[An
 # Registry System
 # =============================================================================
 
-# Global instance for cross_doc_link (initialized when needed)
-_cross_doc_link_creator = None
-
-def create_cross_doc_link_mask(tokens: torch.Tensor, doc_spans: List[Any], **kwargs) -> BlockMask:
-    """
-    Creates a cross-document link-aware attention mask.
-    Tokens after markdown links [text](target) can attend to the target document.
-
-    Requires tiktoken to be installed.
-    """
-    global _cross_doc_link_creator
-
-    if _cross_doc_link_creator is None:
-        if tiktoken is None:
-            raise ImportError("tiktoken is required for cross_doc_link mask. Install with: pip install tiktoken")
-        enc = tiktoken.get_encoding('gpt2')
-        _cross_doc_link_creator = CrossDocLinkMaskCreator(tokenizer_decode_fn=enc.decode)
-
-    return _cross_doc_link_creator(tokens, doc_spans, **kwargs)
-
-
 MASK_CREATORS = {
     'doc_causal': create_doc_causal_block_mask,
     'causal': create_causal_block_mask,
     'full': create_full_attention_block_mask,
     'doc_bidirectional': create_doc_bidirectional_block_mask,
-    'cross_doc_link': create_cross_doc_link_mask,
+    # 'cross_doc_link' is intentionally absent: it requires a dataset-specific
+    # LinkDetector and cannot be constructed from a name alone. Use
+    # make_mask_creator_callable_from(CrossDocLinkMaskCreator(link_detector=...))
+    # to build the callable, then pass it directly to TS2TSTrainingModule.
 }
 
 
@@ -303,48 +285,53 @@ def list_mask_creators() -> List[str]:
     return list(MASK_CREATORS.keys())
 
 
-def make_mask_creator_callable(mask_type: str):
+def make_mask_creator_callable_from(creator):
     """
-    Create a callable that can be passed to TS2TSTrainingModule.
+    Wrap any mask creator callable into the **batch interface for TS2TSTrainingModule.
 
-    This is a convenience function that wraps get_mask_creator to provide
-    a cleaner interface when initializing the training module.
+    Use this when you need to control construction — for example, to pick which
+    LinkDetector a CrossDocLinkMaskCreator uses:
+
+        detector = MarkdownLinkDetector(decode_fn=tokenizer.decode)
+        creator  = CrossDocLinkMaskCreator(link_detector=detector)
+        block_mask_creator = make_mask_creator_callable_from(creator)
+        training_module = TS2TSTrainingModule(..., block_mask_creator=block_mask_creator)
 
     Args:
-        mask_type: Name of the mask creator (e.g., 'doc_causal', 'causal', 'full').
+        creator: Any callable with signature (tokens, doc_spans, **kwargs) -> BlockMask.
 
     Returns:
-        A callable that takes (**batch) and returns a BlockMask.
-
-    Example:
-        >>> from block_mask_creator import make_mask_creator_callable
-        >>> block_mask_creator = make_mask_creator_callable('doc_causal')
-        >>> model = TS2TSTrainingModule(
-        ...     block_mask_creator=block_mask_creator,
-        ...     vocab_size=50257,
-        ...     num_layers=12,
-        ...     ...
-        ... )
+        A callable with signature (**batch) -> BlockMask.
     """
-    mask_fn = get_mask_creator(mask_type)
-
     # Disable dynamo tracing so create_block_mask always runs eagerly and
     # returns a real BlockMask (with a compiled .graph), not a traced proxy.
     @torch._dynamo.disable
     def callable_wrapper(**batch):
-        # Extract the required arguments from batch, then remove them so they
-        # aren't passed again as **kwargs (which would cause "multiple values"
-        # for positional arguments already bound by name).
         tokens = batch.get('tokens')
         doc_spans = batch.get('doc_spans', [])
-
         if tokens is None:
             raise ValueError("Batch must contain 'tokens' key")
-
         extra = {k: v for k, v in batch.items() if k not in ('tokens', 'doc_spans')}
-        return mask_fn(tokens, doc_spans, **extra)
+        return creator(tokens, doc_spans, **extra)
 
     return callable_wrapper
+
+
+def make_mask_creator_callable(mask_type: str):
+    """
+    Create a **batch callable for a named mask type (e.g. 'doc_causal').
+
+    For cross_doc_link, construct CrossDocLinkMaskCreator with the appropriate
+    LinkDetector yourself and use make_mask_creator_callable_from() instead.
+
+    Args:
+        mask_type: One of the keys in MASK_CREATORS ('doc_causal', 'causal',
+                   'full', 'doc_bidirectional').
+
+    Returns:
+        A callable with signature (**batch) -> BlockMask.
+    """
+    return make_mask_creator_callable_from(get_mask_creator(mask_type))
 
 
 # =============================================================================
@@ -355,15 +342,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize FlexAttention mask for a real batch.")
     parser.add_argument("dataset_dir", type=Path,
                         help="Path to pretokenized dataset directory (REQUIRED)")
+    _viz_mask_types = list_mask_creators() + ['cross_doc_link']
     parser.add_argument("--mask-type", type=str, default="doc_causal",
-                        choices=list_mask_creators(),
-                        help=f"Type of attention mask to create. Available: {', '.join(list_mask_creators())}")
+                        choices=_viz_mask_types,
+                        help=f"Type of attention mask to create. Available: {', '.join(_viz_mask_types)}")
     parser.add_argument("--strategy", type=str, default="bfs",
                         choices=['bfs', 'dfs', 'random_walk', 'random'],
                         help="Graph traversal strategy (bfs=breadth-first, dfs=depth-first, random_walk=Markov walk, random=uniform random)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for batch selection")
     parser.add_argument("--token-budget", type=int, default=16_384, help="Max tokens per batch")
     parser.add_argument("--doc-budget", type=int, default=4096, help="Max tokens per document")
+    parser.add_argument("--link-detector", type=str, default="markdown",
+                        choices=["markdown", "python"],
+                        help="Link detector for cross_doc_link: 'markdown' (Wikipedia) or 'python' (TheStack)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -424,8 +415,21 @@ if __name__ == "__main__":
     logger.info(f"Docs in batch ({len(doc_identifiers)}): {doc_identifiers}")
 
     # 4. Create Mask
-    mask_creator_fn = get_mask_creator(args.mask_type)
-    block_mask = mask_creator_fn(tokens, doc_spans)
+    cross_doc_creator = None
+    if args.mask_type == 'cross_doc_link':
+        if tiktoken is None:
+            raise ImportError("tiktoken is required for cross_doc_link visualization. Install with: pip install tiktoken")
+        enc = tiktoken.get_encoding('gpt2')
+        if args.link_detector == 'python':
+            from model.graph_traversal.python_import_detector import PythonImportDetector
+            detector = PythonImportDetector(decode_fn=enc.decode)
+        else:
+            from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+            detector = MarkdownLinkDetector(decode_fn=enc.decode)
+        cross_doc_creator = CrossDocLinkMaskCreator(link_detector=detector)
+        block_mask = cross_doc_creator(tokens, doc_spans)
+    else:
+        block_mask = get_mask_creator(args.mask_type)(tokens, doc_spans)
     logger.info(f"Block mask created using '{args.mask_type}' strategy.")
 
     # 5. Visualization
@@ -459,10 +463,8 @@ if __name__ == "__main__":
         # Same document only (bidirectional within docs)
         dense_mask = doc_map.unsqueeze(1) == doc_map.unsqueeze(0)
     elif args.mask_type == 'cross_doc_link':
-        # Use the EXACT same logic as the mask creator by calling its visualization method
-        # This ensures 100% consistency between visualization and actual mask
-        dense_mask = _cross_doc_link_creator.build_dense_mask_for_visualization(
-            input_ids, doc_spans, device=torch.device('cpu')
+        dense_mask = cross_doc_creator.build_dense_mask_for_visualization(
+            tokens, doc_spans, device=torch.device('cpu')
         )
     else:
         # Fallback: try to reconstruct generically (might not match all custom masks)
