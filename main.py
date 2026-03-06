@@ -20,7 +20,15 @@ from tunalab.llm_compilers.auto import get_default_llm_client
 
 # Local imports
 from model import TS2TSTrainingModule
-from model.graph_traversal.block_mask_creator import make_mask_creator_callable
+import tiktoken
+
+from model.graph_traversal.block_mask_creator import (
+    make_mask_creator_callable,
+    make_mask_creator_callable_from,
+)
+from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+from model.graph_traversal.python_import_detector import PythonImportDetector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
 from data.layout import BOSEOSLayoutPolicy, NullLayoutPolicy
@@ -206,7 +214,28 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     
     # Create block mask creator
     mask_type = cfg.get('model', {}).get('mask_type', 'doc_causal')
-    block_mask_creator = make_mask_creator_callable(mask_type)
+    if mask_type == 'cross_doc_link':
+        link_detector_name = cfg.get('model', {}).get('link_detector')
+        if not link_detector_name:
+            raise ValueError(
+                "model.link_detector must be set to 'markdown' or 'python' "
+                "when model.mask_type is 'cross_doc_link'"
+            )
+        enc = tiktoken.get_encoding('gpt2')
+        if link_detector_name == 'markdown':
+            detector = MarkdownLinkDetector(decode_fn=enc.decode)
+        elif link_detector_name == 'python':
+            detector = PythonImportDetector(decode_fn=enc.decode)
+        else:
+            raise ValueError(
+                f"Unknown model.link_detector '{link_detector_name}'. "
+                "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
+            )
+        block_mask_creator = make_mask_creator_callable_from(
+            CrossDocLinkMaskCreator(link_detector=detector)
+        )
+    else:
+        block_mask_creator = make_mask_creator_callable(mask_type)
     
     # Build model using from_config factory
     model = TS2TSTrainingModule.from_config(
