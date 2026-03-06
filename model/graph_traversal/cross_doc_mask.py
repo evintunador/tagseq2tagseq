@@ -1,33 +1,24 @@
 """
-Cross-Document Link Attention Mask
+CrossDocLinkMaskCreator — FlexAttention mask for cross-document link attention.
 
-This module implements a custom attention mask that allows tokens to attend to
-previously-linked documents in the batch. When a document contains a markdown link
-[text](target), all tokens appearing AFTER that link can attend to the
-target document if it appears earlier in the batch.
+Combines a doc_causal base mask with cross-document attention grants derived from
+in-text links detected by a pluggable LinkDetector.
 
-Key Features:
-- Link-aware attention: tokens after links gain access to linked documents
-- Cumulative access: multiple links accumulate, granting access to multiple docs
-- Causal by default: maintains causality within and across documents
-- DAG-aware: only works for forward references (earlier docs in batch)
+See also:
+    link_detector.py         — LinkInfo, LinkDetector protocol
+    markdown_link_detector.py — MarkdownLinkDetector (Wikipedia / Markdown)
+    python_import_detector.py — PythonImportDetector (Python / TheStack)
 """
 
-import torch
-from torch.nn.attention.flex_attention import create_block_mask, BlockMask
-from typing import List, Any, Optional, NamedTuple, Callable, Dict
 import logging
+from typing import Any, Dict, List
+
+import torch
+from torch.nn.attention.flex_attention import BlockMask, create_block_mask
+
+from .link_detector import LinkDetector, LinkInfo
 
 logger = logging.getLogger(__name__)
-
-
-class LinkInfo(NamedTuple):
-    """Metadata about a detected link in the token sequence."""
-    link_start_pos: int  # Position of '[' token
-    link_mid_pos: int    # Position of '](' token
-    link_end_pos: int    # Position of ')' token
-    target_start: int    # First token of target title (after '](' )
-    target_end: int      # Last token of target title (before ')')
 
 
 class CrossDocLinkMaskCreator:
@@ -38,22 +29,15 @@ class CrossDocLinkMaskCreator:
     block_mask_creator parameter.
 
     Args:
-        tokenizer_decode_fn: Function that takes List[int] and returns str (e.g., tokenizer.decode)
-        link_start_token_ids: Token IDs for '[' variants (default: [58, 685] for GPT-2)
-        link_mid_token_id: Token ID for '](' (default: 16151 for GPT-2)
-        link_end_token_id: Token ID for ')' (default: 8 for GPT-2)
-        bos_token_id: Token ID for beginning of sequence (optional)
-        eos_token_id: Token ID for end of sequence (optional)
+        link_detector: A LinkDetector implementation appropriate for the dataset
+                       (e.g. MarkdownLinkDetector for Wikipedia).
 
     Example:
         >>> import tiktoken
         >>> enc = tiktoken.get_encoding('gpt2')
-        >>> mask_creator = CrossDocLinkMaskCreator(
-        ...     tokenizer_decode_fn=enc.decode,
-        ...     link_start_token_ids=[58, 685],
-        ...     link_mid_token_id=16151,
-        ...     link_end_token_id=8
-        ... )
+        >>> from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+        >>> detector = MarkdownLinkDetector(decode_fn=enc.decode)
+        >>> mask_creator = CrossDocLinkMaskCreator(link_detector=detector)
         >>> model = TS2TSTrainingModule(
         ...     block_mask_creator=mask_creator,
         ...     vocab_size=50257,
@@ -61,214 +45,131 @@ class CrossDocLinkMaskCreator:
         ... )
     """
 
-    def __init__(
-        self,
-        tokenizer_decode_fn: Callable[[List[int]], str],
-        link_start_token_ids: Optional[List[int]] = None,  # Possible '[' tokens
-        link_mid_token_id: int = 16151,   # '](' in GPT-2
-        link_end_token_id: int = 8,       # ')' in GPT-2
-        bos_token_id: Optional[int] = None,
-        eos_token_id: Optional[int] = None,
-    ):
-        # Default to common '[' token variants in GPT-2
-        if link_start_token_ids is None:
-            link_start_token_ids = [58, 685]  # '[' and ' ['
-
-        self.tokenizer_decode_fn = tokenizer_decode_fn
-        self.link_start_token_ids = set(link_start_token_ids)
-        self.link_mid_token_id = link_mid_token_id
-        self.link_end_token_id = link_end_token_id
-        self.bos_token_id = bos_token_id
-        self.eos_token_id = eos_token_id
-
+    def __init__(self, link_detector: LinkDetector):
+        self.link_detector = link_detector
         logger.info(
-            f"Initialized CrossDocLinkMaskCreator with token IDs: "
-            f"'[' variants = {link_start_token_ids}, '](' = {link_mid_token_id}, ')' = {link_end_token_id}"
+            f"Initialized CrossDocLinkMaskCreator with detector: "
+            f"{type(link_detector).__name__}"
         )
-
-    def _detect_links(self, input_ids: torch.Tensor) -> List[LinkInfo]:
-        """
-        Detect all markdown link patterns [text](target) in the token sequence.
-
-        Args:
-            input_ids: 1D tensor of token IDs (shape [seq_len])
-
-        Returns:
-            List of LinkInfo objects describing each detected link
-        """
-        links = []
-        seq_len = input_ids.shape[0]
-
-        # Find all positions of '](' token
-        link_mid_positions = (input_ids == self.link_mid_token_id).nonzero(as_tuple=True)[0]
-
-        for mid_pos in link_mid_positions:
-            mid_pos = mid_pos.item()
-
-            # Search backwards for '[' token (check multiple possible token IDs)
-            link_start_pos = None
-            for i in range(mid_pos - 1, -1, -1):
-                if input_ids[i].item() in self.link_start_token_ids:
-                    link_start_pos = i
-                    break
-                # Stop searching if we've gone too far (e.g., 100 tokens)
-                if mid_pos - i > 100:
-                    break
-
-            if link_start_pos is None:
-                # No matching '[' found, skip this ']('
-                continue
-
-            # Search forwards for ')' token
-            link_end_pos = None
-            for i in range(mid_pos + 1, min(mid_pos + 101, seq_len)):
-                if input_ids[i] == self.link_end_token_id:
-                    link_end_pos = i
-                    break
-
-            if link_end_pos is None:
-                # No matching ')' found, skip this link
-                continue
-
-            # Calculate target title span (tokens between '](' and ')')
-            target_start = mid_pos + 1
-            target_end = link_end_pos  # exclusive
-
-            if target_start >= target_end:
-                # Empty target, skip
-                continue
-
-            links.append(LinkInfo(
-                link_start_pos=link_start_pos,
-                link_mid_pos=mid_pos,
-                link_end_pos=link_end_pos,
-                target_start=target_start,
-                target_end=target_end
-            ))
-
-        logger.debug(f"Detected {len(links)} links in sequence of length {seq_len}")
-        return links
 
     def _match_links_to_docs(
         self,
         links: List[LinkInfo],
-        input_ids: torch.Tensor,
-        doc_spans: List[Any]
-    ) -> Dict[int, int]:
+        doc_spans: List[Any],
+    ) -> Dict[int, List[int]]:
         """
         Match detected links to documents in the batch.
 
+        Uses ``self.link_detector.index_doc_span(span)`` to build the lookup
+        key for each span.  This lets dataset-specific detectors (e.g.
+        ``PythonImportDetector``) match on a sub-component of ``raw_identifier``
+        (e.g. the bare file path) rather than the full identifier.
+
+        Multiple ``LinkInfo`` objects can share the same ``link_end_pos`` when
+        a single import generates several candidate file paths; all matches are
+        collected in a list so every valid target receives cross-doc attention.
+
         Args:
-            links: List of detected LinkInfo objects
-            input_ids: 1D tensor of token IDs
-            doc_spans: List of DocSpan objects
+            links:     List of LinkInfo objects from the detector.
+            doc_spans: List of DocSpan objects for the current batch.
 
         Returns:
-            Dictionary mapping link_end_pos -> target_doc_id for valid links.
-            Only includes links where the target document appears earlier in the batch.
+            Mapping ``link_end_pos -> [target_doc_id, ...]`` for valid links.
+            Only includes links where the target document appears earlier in
+            the batch (DAG property).
         """
-        # Build a mapping from raw_identifier to (doc_id, start_pos)
-        identifier_to_doc = {}
+        # Build detector-key -> (doc_id, start_pos) mapping
+        index_to_doc: Dict[str, tuple] = {}
         for span in doc_spans:
-            identifier_to_doc[span.raw_identifier] = (span.doc_id, span.start)
+            key = self.link_detector.index_doc_span(span)
+            index_to_doc[key] = (span.doc_id, span.start)
 
-        link_to_target = {}
+        link_to_target: Dict[int, List[int]] = {}
+        matched = 0
 
         for link in links:
-            # Extract and decode target title tokens
-            target_tokens = input_ids[link.target_start:link.target_end].tolist()
-            try:
-                target_identifier = self.tokenizer_decode_fn(target_tokens)
-            except Exception as e:
-                logger.warning(f"Failed to decode link target tokens {target_tokens}: {e}")
+            if link.target_str not in index_to_doc:
+                logger.debug(
+                    f"Link target '{link.target_str}' not found in batch, skipping"
+                )
                 continue
 
-            # Check if this title exists in the batch
-            if target_identifier not in identifier_to_doc:
-                logger.debug(f"Link target '{target_identifier}' not found in batch, skipping")
-                continue
+            target_doc_id, target_start_pos = index_to_doc[link.target_str]
 
-            target_doc_id, target_start_pos = identifier_to_doc[target_identifier]
-
-            # Ensure DAG property: target must appear EARLIER in the sequence
+            # Enforce DAG property: target must start before the link position
             if target_start_pos >= link.link_end_pos:
                 logger.debug(
-                    f"Link at {link.link_end_pos} to '{target_identifier}' violates DAG "
+                    f"Link at {link.link_end_pos} to '{link.target_str}' violates DAG "
                     f"(target starts at {target_start_pos}), skipping"
                 )
                 continue
 
-            # Valid link! Map the link end position to the target doc
-            link_to_target[link.link_end_pos] = target_doc_id
+            link_to_target.setdefault(link.link_end_pos, []).append(target_doc_id)
+            matched += 1
             logger.debug(
-                f"Matched link at {link.link_end_pos} -> doc {target_doc_id} ('{target_identifier}')"
+                f"Matched link at {link.link_end_pos} -> "
+                f"doc {target_doc_id} ('{link.target_str}')"
             )
 
-        logger.info(f"Matched {len(link_to_target)}/{len(links)} links to documents in batch")
+        logger.info(
+            f"Matched {matched}/{len(links)} links to documents in batch"
+        )
         return link_to_target
 
     def _build_cross_doc_mask(
         self,
         seq_len: int,
         doc_spans: List[Any],
-        link_to_target: Dict[int, int],
-        device: torch.device
+        link_to_target: Dict[int, List[int]],
+        device: torch.device,
     ) -> torch.Tensor:
         """
         Build a 2D cross-document attention mask for link-based attention.
 
-        Args:
-            seq_len: Length of the input sequence
-            doc_spans: List of DocSpan objects
-            link_to_target: Mapping from link_end_pos to target_doc_id
-            device: Device to create tensors on
-
         Returns:
             cross_doc_mask: Tensor of shape [seq_len, seq_len] where
-                           cross_doc_mask[q, kv] = True if position q can attend
-                           to position kv via a link (not including same-doc attention).
+                            cross_doc_mask[q, kv] = True if position q can attend
+                            to position kv via a link (not including same-doc attention).
         """
         cross_doc_mask = torch.zeros((seq_len, seq_len), dtype=torch.bool, device=device)
 
-        # For each link, grant cross-document access
-        for link_pos, target_doc_id in sorted(link_to_target.items()):
-            # Find the document containing this link
-            link_doc_span = None
-            for span in doc_spans:
-                if span.start <= link_pos < span.end:
-                    link_doc_span = span
-                    break
+        for link_pos, target_doc_ids in sorted(link_to_target.items()):
+            for target_doc_id in target_doc_ids:
+                # Find the source document containing this link
+                link_doc_span = None
+                for span in doc_spans:
+                    if span.start <= link_pos < span.end:
+                        link_doc_span = span
+                        break
 
-            if link_doc_span is None:
-                logger.warning(f"Link at position {link_pos} not in any document span")
-                continue
+                if link_doc_span is None:
+                    logger.warning(f"Link at position {link_pos} not in any document span")
+                    continue
 
-            # Find the target document span
-            target_doc_span = None
-            for span in doc_spans:
-                if span.doc_id == target_doc_id:
-                    target_doc_span = span
-                    break
+                # Find the target document span
+                target_doc_span = None
+                for span in doc_spans:
+                    if span.doc_id == target_doc_id:
+                        target_doc_span = span
+                        break
 
-            if target_doc_span is None:
-                logger.warning(f"Target doc {target_doc_id} not found in doc_spans")
-                continue
+                if target_doc_span is None:
+                    logger.warning(f"Target doc {target_doc_id} not found in doc_spans")
+                    continue
 
-            # Grant access: positions after the link in the source doc
-            # can attend to all positions in the target doc
-            grant_start = link_pos + 1
-            grant_end = min(seq_len, link_doc_span.end)
-            target_start = max(0, target_doc_span.start)
-            target_end = min(seq_len, target_doc_span.end)
+                # Grant access: positions from link_pos onward (within source doc)
+                # can attend to all positions in the target doc
+                grant_start = link_pos
+                grant_end = min(seq_len, link_doc_span.end)
+                target_start = max(0, target_doc_span.start)
+                target_end = min(seq_len, target_doc_span.end)
 
-            if grant_start < grant_end and target_start < target_end:
-                # Set cross_doc_mask[q, kv] = True for all q in [grant_start, grant_end)
-                # and kv in [target_start, target_end)
-                cross_doc_mask[grant_start:grant_end, target_start:target_end] = True
-                logger.debug(
-                    f"Link at {link_pos}: positions [{grant_start}, {grant_end}) "
-                    f"can attend to doc {target_doc_id} at [{target_start}, {target_end})"
-                )
+                if grant_start < grant_end and target_start < target_end:
+                    cross_doc_mask[grant_start:grant_end, target_start:target_end] = True
+                    logger.debug(
+                        f"Link at {link_pos}: positions [{grant_start}, {grant_end}) "
+                        f"can attend to doc {target_doc_id} at [{target_start}, {target_end})"
+                    )
 
         return cross_doc_mask
 
@@ -277,9 +178,9 @@ class CrossDocLinkMaskCreator:
         Create a cross-document link-aware attention mask.
 
         Args:
-            tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
+            tokens:    Tensor of shape [B, T] with token IDs (input sequence only)
             doc_spans: List of DocSpan objects with start, end, doc_id, raw_identifier
-            **kwargs: Additional batch information
+            **kwargs:  Additional batch information (unused)
 
         Returns:
             BlockMask for FlexAttention
@@ -287,17 +188,13 @@ class CrossDocLinkMaskCreator:
         device = tokens.device
         seq_len = tokens.shape[-1]
 
-        # Flatten to 1D for link detection
-        tokens_1d = tokens[0]  # [seq_len]
+        input_ids = tokens[0]  # [seq_len]
 
-        # Step 2: Detect all links in the sequence
-        links = self._detect_links(tokens_1d)
+        links = self.link_detector.detect_links(input_ids)
         logger.info(f"Found {len(links)} links in batch")
 
-        # Step 3: Match links to documents in the batch
-        link_to_target = self._match_links_to_docs(links, tokens_1d, doc_spans)
+        link_to_target = self._match_links_to_docs(links, doc_spans)
 
-        # Step 4: Build cross-doc attention mask (2D)
         cross_doc_mask = self._build_cross_doc_mask(
             seq_len, doc_spans, link_to_target, device
         )
@@ -310,18 +207,10 @@ class CrossDocLinkMaskCreator:
             if start < end:
                 document_ids[start:end] = span.doc_id
 
-        # Create the combined attention mask function
         def cross_doc_link_mod(b, h, q_idx, kv_idx):
-            # Base causal constraint (always required)
             causal = q_idx >= kv_idx
-
-            # Same document (always allowed if causal)
             same_doc = document_ids[q_idx] == document_ids[kv_idx]
-
-            # Cross-document via link (precomputed 2D mask)
             cross_doc_link = cross_doc_mask[q_idx, kv_idx]
-
-            # Allow if: causal AND (same_doc OR cross_doc_link)
             return causal & (same_doc | cross_doc_link)
 
         block_mask = create_block_mask(
@@ -340,41 +229,26 @@ class CrossDocLinkMaskCreator:
         self,
         tokens: torch.Tensor,
         doc_spans: List[Any],
-        device: torch.device = None
+        device: torch.device = None,
     ) -> torch.Tensor:
         """
         Build a dense 2D boolean mask for visualization.
 
-        This uses the EXACT same logic as __call__ but returns a dense tensor
-        instead of a FlexAttention BlockMask. Use this for visualization to ensure
-        the logic is identical.
-
-        Args:
-            tokens: Tensor of shape [B, T] — the token sequence to build the mask for.
-            doc_spans: List of DocSpan objects
-            device: Device for tensors (defaults to tokens.device)
-
-        Returns:
-            Dense boolean mask of shape [seq_len, seq_len]
+        Uses the exact same logic as __call__ but returns a dense tensor instead
+        of a FlexAttention BlockMask.
         """
         if device is None:
             device = tokens.device
 
         seq_len = tokens.shape[-1]
-        tokens_1d = tokens[0]
+        input_ids = tokens[0]
 
-        # Step 1: Detect links
-        links = self._detect_links(tokens_1d)
-
-        # Step 2: Match links to docs
-        link_to_target = self._match_links_to_docs(links, tokens_1d, doc_spans)
-
-        # Step 3: Build cross-doc mask
+        links = self.link_detector.detect_links(input_ids)
+        link_to_target = self._match_links_to_docs(links, doc_spans)
         cross_doc_mask = self._build_cross_doc_mask(
             seq_len, doc_spans, link_to_target, device
         )
 
-        # Step 4: Build document IDs tensor
         document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
         for span in doc_spans:
             start = max(0, span.start)
@@ -382,18 +256,11 @@ class CrossDocLinkMaskCreator:
             if start < end:
                 document_ids[start:end] = span.doc_id
 
-        # Step 5: Build dense mask with SAME logic as mask_mod in __call__
         q_indices = torch.arange(seq_len, device=device).unsqueeze(1)  # [T, 1]
         k_indices = torch.arange(seq_len, device=device).unsqueeze(0)  # [1, T]
 
-        # Causal constraint
         causal_mask = q_indices >= k_indices
-
-        # Same document
         same_doc_mask = document_ids.unsqueeze(1) == document_ids.unsqueeze(0)
 
-        # Final combination: causal AND (same_doc OR cross_doc_link)
-        # This mirrors the logic in the mask_mod function
         dense_mask = causal_mask & (same_doc_mask | cross_doc_mask)
-
         return dense_mask

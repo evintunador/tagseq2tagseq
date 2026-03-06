@@ -43,7 +43,7 @@ from typing import Any, Callable, List, Tuple
 
 import torch
 
-from cross_doc_mask import LinkInfo
+from .link_detector import LinkInfo
 
 logger = logging.getLogger(__name__)
 

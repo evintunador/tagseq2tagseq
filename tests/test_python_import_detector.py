@@ -9,16 +9,11 @@ Coverage:
   - PythonImportDetector._build_char_to_token_index / _char_pos_to_token_pos
 """
 
-import sys
-from pathlib import Path
-
 import pytest
 import tiktoken
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from python_import_detector import (
+from model.graph_traversal.python_import_detector import (
     PythonImportDetector,
     _parse_imports,
     module_path_to_file_paths,

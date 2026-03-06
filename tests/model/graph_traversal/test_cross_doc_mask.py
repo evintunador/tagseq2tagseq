@@ -8,7 +8,8 @@ Link targets in Wikipedia .md files use the original article title with spaces
 import torch
 import tiktoken
 import pytest
-from cross_doc_mask import CrossDocLinkMaskCreator, MarkdownLinkDetector
+from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
 from dataclasses import dataclass, field
 from typing import List
 
@@ -111,7 +112,7 @@ def test_cross_doc_mask_shape_and_causality():
     ]
     titles = ["Target Doc", "Linker Doc"]
     tokens_2d, doc_spans = make_batch(texts, titles, enc)
-    seq_len = tokens_2d.shape[1] - 1
+    seq_len = tokens_2d.shape[1]
 
     dense = creator.build_dense_mask_for_visualization(tokens_2d, doc_spans, device=torch.device('cpu'))
     assert dense.shape == (seq_len, seq_len)
