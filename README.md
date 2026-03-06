@@ -111,6 +111,27 @@ python demo_traversal.py <dataset_dir> --strategy dfs --token-budget 2048
 
 Prints a packed-batch summary: doc spans, graph connectivity within the batch, and decoded text snippets.
 
+The `--layout-policy` flag controls per-document token decoration:
+
+| Value | Behaviour |
+|-------|-----------|
+| `null` (default) | No decoration — raw body tokens only |
+| `bos-eos` | Wrap each document body with BOS/EOS tokens |
+| `identifier-prefix` | Prepend `# {raw_identifier}\n\n` before each body |
+
+```bash
+# Default (no decoration)
+python demo_traversal.py data/pretokenized_datasets/simplewiki --strategy dfs
+
+# With identifier prefix (e.g. "# Water\n\n..." before each article)
+python demo_traversal.py data/pretokenized_datasets/simplewiki \
+    --strategy dfs --layout-policy identifier-prefix
+
+# The Stack with identifier prefix (e.g. "# repo:src/file.py\n\n...")
+python demo_traversal.py data/pretokenized_datasets/stack_10m \
+    --strategy dfs --layout-policy identifier-prefix
+```
+
 ### Attention mask images
 
 `block_mask_creator.py` renders the FlexAttention mask for a real batch and saves a PNG to `artifacts/`. Output filenames include the dataset name to avoid collisions.

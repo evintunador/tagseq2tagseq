@@ -37,8 +37,6 @@ Also in this stage:
 
 **Smoke test**: `smoke_test_generation.py` — loads trained checkpoint, verifies shape/NaN/entropy.
 
-**Known deferred issue**: `DocLayoutPolicy.prefix_tokens(doc_id: int)` receives a meaningless counter in the generation path (not a graph node ID). When identifier-in-prefix is implemented, the protocol must be extended to accept `raw_identifier`/`normed_identifier`. A TODO comment marks the call site in `document_context.py`.
-
 **Deliverable**: `model.generate("some prompt")` returns coherent text from a trained checkpoint. Single document, no links. Validated against both random weights (terminates) and trained checkpoint (entropy_frac ~0.2–0.4 vs ~1.0 for random).
 
 ---

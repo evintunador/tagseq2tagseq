@@ -101,7 +101,11 @@ With training settings stored in the model, the tokenizer touches generation at:
 
 `DocLayoutPolicy` (from `data/layout.py`) controls prefix/suffix tokens per document. Currently `NullLayoutPolicy` (adds nothing). Stored in the model; applied consistently at generation time.
 
-When a document is initialized (root or aux), its token list is seeded with `self.layout_policy.prefix_tokens(doc_id)`. When marked done, `self.layout_policy.suffix_tokens(doc_id)` is appended. When training later adds identifier-in-prefix support, the stored policy will handle it automatically.
+All four protocol methods (`prefix_length`, `suffix_length`, `prefix_tokens`, `suffix_tokens`) receive a `DocLayoutInfo` object (defined in `data/layout.py`) rather than a raw `doc_id`. `DocLayoutInfo` carries `raw_identifier`, `normed_identifier`, `outgoing_identifiers`, `incoming_identifiers`, and `body_tokens` (the last three default to `[]`/`[]`/`None` when unavailable). This lets future policies use any combination of document metadata without changing call-site signatures.
+
+When a document is initialized (root or aux), its token list is seeded with `layout_policy.prefix_tokens(DocLayoutInfo(...))`. When marked done, `layout_policy.suffix_tokens(DocLayoutInfo(...))` is stored in `entry.suffix_tokens` (a separate field, not appended to `entry.tokens`). `build_sequence()` concatenates `entry.tokens + entry.suffix_tokens` when building the packed tensor; `total_tokens` counts both.
+
+In the generation path `incoming_identifiers` is always `[]` — a full reverse index of the corpus is not available at inference time. In training (`build_packed_batch`) all fields including `body_tokens` are populated from `GraphIndex` and `PretokShardedBackend`.
 
 ---
 
@@ -149,7 +153,8 @@ Manages the growing packed sequence. Uses `raw_identifier` / `normed_identifier`
 normed_identifier: str        # normalized form (for DocSpan.title)
 raw_identifier: str           # human-readable form as decoded from link (DocSpan.clean_title);
                               #   empty string "" for the root document
-tokens: list[int]             # accumulated token IDs (seeded with layout prefix)
+tokens: list[int]             # accumulated token IDs: layout prefix + body only
+suffix_tokens: list[int]      # layout suffix, stored separately; populated by mark_done
 done: bool
 truncated: bool
 doc_id: int                   # sequential counter, not tied to corpus
@@ -176,25 +181,29 @@ All three factory methods compute `normed_identifier = create_normed_identifier(
   Empty string cannot be a real link target, so `has_identifier("")` will never accidentally match
   a corpus or generated doc. `is_root=True` is the canonical way to identify this entry.
 - Assigns `doc_id = _next_doc_id` (always 0), increments `_next_doc_id`
-- `tokens = list(layout_policy.prefix_tokens(doc_id)) + list(prompt_tokens)`
-- Constructs entry with `is_root=True`; appends to `_docs`; sets `_root`
+- Constructs a `DocLayoutInfo(raw_identifier, normed, body_tokens=list(prompt_tokens))`
+- `tokens = list(layout_policy.prefix_tokens(info)) + list(prompt_tokens)`
+- Constructs entry with `is_root=True`, `suffix_tokens=[]`; appends to `_docs`; sets `_root`
 
 **`add_corpus_doc(raw_identifier, corpus_tokens, layout_policy, parent_raw_identifier, depth, before_entry) -> _DocEntry`**
 - Assigns `doc_id = _next_doc_id`, increments `_next_doc_id`
-- `tokens = list(layout_policy.prefix_tokens(doc_id)) + list(corpus_tokens)`
-- Constructs `_DocEntry(done=True, source="corpus", ...)`; inserts before `before_entry` in `_docs`
+- Constructs a `DocLayoutInfo(raw_identifier, normed, body_tokens=list(corpus_tokens))`
+- `tokens = list(layout_policy.prefix_tokens(info)) + list(corpus_tokens)`
+- Constructs `_DocEntry(done=True, source="corpus", suffix_tokens=[])`; inserts before `before_entry` in `_docs`
 - Returns the new entry (caller may pass it to `_process_existing_doc_links`)
 
 **`add_generated_doc(raw_identifier, layout_policy, parent_raw_identifier, depth, before_entry) -> _DocEntry`**
 - Assigns `doc_id = _next_doc_id`, increments `_next_doc_id`
-- `tokens = list(layout_policy.prefix_tokens(doc_id))`  — body tokens accumulated later via `append_token`
-- Constructs `_DocEntry(done=False, source="generated", ...)`; inserts before `before_entry` in `_docs`
+- Constructs a `DocLayoutInfo(raw_identifier, normed, body_tokens=[])`
+- `tokens = list(layout_policy.prefix_tokens(info))` — body tokens accumulated later via `append_token`
+- Constructs `_DocEntry(done=False, source="generated", suffix_tokens=[])`; inserts before `before_entry` in `_docs`
 - Returns the new entry (caller drives generation via `_generate_doc`)
 
 **`append_token(entry, token_id) -> None`**
 
 **`mark_done(entry, layout_policy) -> None`**
-- Appends `layout_policy.suffix_tokens(entry.doc_id)` to `entry.tokens`
+- Constructs a `DocLayoutInfo(entry.raw_identifier, entry.normed_identifier, body_tokens=list(entry.tokens))`
+- Stores `layout_policy.suffix_tokens(info)` in `entry.suffix_tokens` (does not append to `entry.tokens`)
 - Sets `entry.done = True`
 
 **`build_sequence() -> (Tensor[1,T], List[DocSpan])`**

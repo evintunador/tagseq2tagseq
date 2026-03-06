@@ -31,6 +31,18 @@ class DummyGraph:
     def neighbors_in(self, doc_id: int) -> List[int]:
         return self.incoming.get(doc_id, [])
 
+    def get_normed_identifier(self, doc_id: int) -> str:
+        return str(doc_id)
+
+    def get_raw_identifier(self, normed_identifier: str) -> str:
+        return normed_identifier
+
+    def get_outgoing_links(self, normed_identifier: str) -> list:
+        return []
+
+    def get_incoming_links(self, normed_identifier: str) -> list:
+        return []
+
 
 class _FixedSeedRng:
     """Deterministic RNG stub that always returns the same value for randrange."""

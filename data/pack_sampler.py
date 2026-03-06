@@ -5,7 +5,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set
 
 from .dataset import GraphIndex
 from .traversal import TraversalStrategy
-from .layout import DocLayoutPolicy, NullLayoutPolicy
+from .layout import DocLayoutInfo, DocLayoutPolicy, NullLayoutPolicy
 
 
 logger = logging.getLogger(__name__)
@@ -201,6 +201,22 @@ class PackBatchSampler:
     # Internal helpers                                                      #
     # --------------------------------------------------------------------- #
 
+    def _layout_lengths(self, doc_id: int) -> tuple[int, int]:
+        """Return (prefix_length, suffix_length) for doc_id via the layout policy."""
+        normed = self.graph.get_normed_identifier(doc_id)
+        raw = self.graph.get_raw_identifier(normed) or normed
+        info = DocLayoutInfo(
+            raw_identifier=raw,
+            normed_identifier=normed,
+            outgoing_identifiers=self.graph.get_outgoing_links(normed),
+            incoming_identifiers=self.graph.get_incoming_links(normed),
+            body_tokens=None,  # body not available during length-budgeting
+        )
+        return (
+            self.layout_policy.prefix_length(info),
+            self.layout_policy.suffix_length(info),
+        )
+
     def _compute_budgeted_length(self, full_len: int) -> Optional[tuple[int, bool]]:
         """
         Apply per-document budget and overflow policy to a raw token length.
@@ -260,12 +276,10 @@ class PackBatchSampler:
                 break
 
         placements = [p for p in placements if p.effective_len > 0]
-        current_total_tokens = sum(
-            self.layout_policy.prefix_length(p.doc_id)
-            + p.effective_len
-            + self.layout_policy.suffix_length(p.doc_id)
-            for p in placements
-        )
+        current_total_tokens = 0
+        for p in placements:
+            pre, suf = self._layout_lengths(p.doc_id)
+            current_total_tokens += pre + p.effective_len + suf
         return placements, current_total_tokens
 
     def _seed_and_grow_subgraph(
@@ -313,9 +327,7 @@ class PackBatchSampler:
 
             # Accept seed.
             first_doc_id = candidate
-            
-            prefix_len = self.layout_policy.prefix_length(first_doc_id)
-            suffix_len = self.layout_policy.suffix_length(first_doc_id)
+            prefix_len, suffix_len = self._layout_lengths(first_doc_id)
             doc_total = prefix_len + per_doc_len + suffix_len
 
             placements.append(
@@ -367,8 +379,7 @@ class PackBatchSampler:
                 continue
 
             # Accept candidate.
-            prefix_len = self.layout_policy.prefix_length(candidate)
-            suffix_len = self.layout_policy.suffix_length(candidate)
+            prefix_len, suffix_len = self._layout_lengths(candidate)
             doc_total = prefix_len + per_doc_len + suffix_len
 
             placements.append(

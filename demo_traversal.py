@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import tiktoken
 
 from data.dataset import GraphIndex, PretokShardedBackend
-from data.layout import BOSEOSLayoutPolicy, NullLayoutPolicy
+from data.layout import BOSEOSLayoutPolicy, IdentifierPrefixLayoutPolicy, NullLayoutPolicy
 from data.packed_dataset import PackedSequenceDataset
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
@@ -56,9 +56,16 @@ def main() -> None:
         help="Optional per-document body token budget. Use None for no limit.",
     )
     parser.add_argument(
-        "--use-bos-eos",
-        action="store_true",
-        help="If set, wrap each document with BOS/EOS tokens via BOSEOSLayoutPolicy.",
+        "--layout-policy",
+        type=str,
+        choices=("null", "bos-eos", "identifier-prefix"),
+        default="null",
+        help=(
+            "Layout policy applied to each document: "
+            "'null' (no decoration), "
+            "'bos-eos' (BOS/EOS tokens around each document body), "
+            "'identifier-prefix' (prepend '# {raw_identifier}\\n\\n' before each body)."
+        ),
     )
     parser.add_argument(
         "--strategy",
@@ -102,18 +109,35 @@ def main() -> None:
         logger.info("Initializing PretokShardedBackend...")
         backend = PretokShardedBackend(graph_index)
 
-        # Choose a simple layout policy. For the demo we support either:
-        #   - NullLayoutPolicy(): no decoration
-        #   - BOSEOSLayoutPolicy(): add BOS/EOS around each document
-        if args.use_bos_eos:
-            # These token ids are experiment-specific; for a demo we use
-            # placeholder values that can be wired up to a real tokenizer later.
-            bos_id = 1
-            eos_id = 2
-            layout_policy = BOSEOSLayoutPolicy(bos_token_id=bos_id, eos_token_id=eos_id)
-            logger.info(
-                "Using BOSEOSLayoutPolicy with BOS id=%d and EOS id=%d.", bos_id, eos_id
+        # Resolve tokenizer from graph metadata (needed for some policies).
+        tokenizer_name = getattr(graph_index, "metadata", {}).get("tokenizer")
+        encoding = None
+        if tokenizer_name is not None:
+            try:
+                encoding = tiktoken.get_encoding(tokenizer_name)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Unable to load tiktoken encoding %r.", tokenizer_name
+                )
+
+        # Choose a layout policy.
+        if args.layout_policy == "identifier-prefix":
+            if encoding is None:
+                logger.error(
+                    "IdentifierPrefixLayoutPolicy requires a tokenizer but none "
+                    "could be loaded from dataset metadata. Aborting."
+                )
+                return
+            layout_policy = IdentifierPrefixLayoutPolicy(
+                encode_fn=encoding.encode_ordinary
             )
+            logger.info(
+                "Using IdentifierPrefixLayoutPolicy (tokenizer=%r).", tokenizer_name
+            )
+        elif args.layout_policy == "bos-eos":
+            bos_id = encoding.eot_token if encoding is not None else 1
+            layout_policy = BOSEOSLayoutPolicy(bos_token_id=bos_id, eos_token_id=bos_id)
+            logger.info("Using BOSEOSLayoutPolicy with BOS/EOS id=%d.", bos_id)
         else:
             layout_policy = NullLayoutPolicy()
             logger.info("Using NullLayoutPolicy (no per-doc decoration).")
@@ -232,16 +256,6 @@ def main() -> None:
 
         # Attempt to decode token ids back into text so that we can inspect
         # what the documents actually say and why they might be connected.
-        tokenizer_name = getattr(graph_index, "metadata", {}).get("tokenizer")
-        encoding = None
-        if tokenizer_name is not None:
-            try:
-                encoding = tiktoken.get_encoding(tokenizer_name)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Unable to load tiktoken encoding %r; skipping text decoding.",
-                    tokenizer_name,
-                )
 
         if encoding is not None:
             print("\nDecoded text snippets (prefix + body + suffix) per doc:")

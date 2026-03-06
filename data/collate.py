@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from .dataset import GraphIndex, PretokShardedBackend
-from .layout import DocLayoutPolicy
+from .layout import DocLayoutInfo, DocLayoutPolicy
 from .pack_sampler import DocPlacement
 
 
@@ -103,8 +103,8 @@ def build_packed_batch(
     offset = 0
 
     for p in placements:
-        prefix_ids = layout.prefix_tokens(p.doc_id)
-        suffix_ids = layout.suffix_tokens(p.doc_id)
+        normed_id = graph.get_normed_identifier(p.doc_id)
+        raw_id = graph.get_raw_identifier(normed_id) or normed_id
 
         body = backend.get_tokens_by_id(p.doc_id)
         if body is None:
@@ -118,6 +118,18 @@ def build_packed_batch(
             trim_side=p.doc_trim_side,
             doc_id=p.doc_id,
         )
+
+        outgoing_identifiers = graph.get_outgoing_links(normed_id)
+        info = DocLayoutInfo(
+            raw_identifier=raw_id,
+            normed_identifier=normed_id,
+            outgoing_identifiers=outgoing_identifiers,
+            incoming_identifiers=graph.get_incoming_links(normed_id),
+            body_tokens=body_slice.tolist(),
+        )
+
+        prefix_ids = layout.prefix_tokens(info)
+        suffix_ids = layout.suffix_tokens(info)
 
         if body_slice.size == 0 and not prefix_ids and not suffix_ids:
             # Entirely empty contribution; skip to avoid degenerate spans.
@@ -138,9 +150,6 @@ def build_packed_batch(
         doc_tokens = np.concatenate([prefix_arr, body_arr, suffix_arr], axis=0)
         doc_len = int(doc_tokens.shape[0])
 
-        normed_id = graph.get_normed_identifier(p.doc_id)
-        outgoing_identifiers = graph.get_outgoing_links(normed_id)
-
         span = DocSpan(
             doc_id=p.doc_id,
             normed_identifier=normed_id,
@@ -148,7 +157,7 @@ def build_packed_batch(
             end=offset + doc_len,
             truncated=p.truncated,
             outgoing_identifiers=outgoing_identifiers,
-            raw_identifier=graph.get_raw_identifier(normed_id) or normed_id,
+            raw_identifier=raw_id,
         )
 
         segments.append(doc_tokens)

@@ -18,6 +18,7 @@ import torch
 from torch import Tensor
 
 from data.collate import DocSpan
+from data.layout import DocLayoutInfo
 from model.generation_result import GeneratedDocument
 from model.identifier_utils import create_normed_identifier
 
@@ -27,7 +28,8 @@ class _DocEntry:
     """Internal per-document state. Not exported."""
     normed_identifier: str        # normalized form (for DocSpan.normed_identifier)
     raw_identifier: str           # human-readable form (for DocSpan.raw_identifier)
-    tokens: List[int]             # accumulated token IDs
+    tokens: List[int]             # accumulated token IDs: prefix + body only
+    suffix_tokens: List[int]      # layout suffix, stored separately from body
     done: bool
     truncated: bool
     doc_id: int                   # sequential counter, not tied to corpus
@@ -71,7 +73,7 @@ class DocumentContext:
 
     @property
     def total_tokens(self) -> int:
-        return sum(len(e.tokens) for e in self._docs)
+        return sum(len(e.tokens) + len(e.suffix_tokens) for e in self._docs)
 
     @property
     def num_aux_docs(self) -> int:
@@ -93,19 +95,22 @@ class DocumentContext:
         doc_id = self._next_doc_id
         self._next_doc_id += 1
 
-        # TODO: when identifier-in-prefix is added, DocLayoutPolicy.prefix_tokens
-        # will need to accept raw_identifier/normed_identifier in addition to doc_id.
-        # In generation, doc_id is a meaningless sequential counter (not a graph node
-        # ID), so the current signature cannot support identifier-aware prefixes.
-        # Fix: extend the protocol to prefix_tokens(doc_id, *, raw_identifier="",
-        # normed_identifier="") and pass entry fields here.
-        prefix = list(layout_policy.prefix_tokens(doc_id)) if layout_policy is not None else []
         normed = create_normed_identifier(raw_identifier) if raw_identifier else ""
+        if layout_policy is not None:
+            info = DocLayoutInfo(
+                raw_identifier=raw_identifier,
+                normed_identifier=normed,
+                body_tokens=list(prompt_tokens),
+            )
+            prefix = list(layout_policy.prefix_tokens(info))
+        else:
+            prefix = []
 
         entry = _DocEntry(
             normed_identifier=normed,
             raw_identifier=raw_identifier,
             tokens=prefix + list(prompt_tokens),
+            suffix_tokens=[],
             done=False,
             truncated=False,
             doc_id=doc_id,
@@ -123,9 +128,14 @@ class DocumentContext:
         entry.tokens.append(token_id)
 
     def mark_done(self, entry: _DocEntry, layout_policy=None) -> None:
-        """Mark the document as complete, appending any layout suffix tokens."""
+        """Mark the document as complete, storing any layout suffix tokens separately."""
         if layout_policy is not None:
-            entry.tokens.extend(list(layout_policy.suffix_tokens(entry.doc_id)))
+            info = DocLayoutInfo(
+                raw_identifier=entry.raw_identifier,
+                normed_identifier=entry.normed_identifier,
+                body_tokens=list(entry.tokens),
+            )
+            entry.suffix_tokens = list(layout_policy.suffix_tokens(info))
         entry.done = True
 
     def build_sequence(self) -> Tuple[Tensor, List[DocSpan]]:
@@ -143,7 +153,7 @@ class DocumentContext:
         offset = 0
         for entry in self._docs:
             start = offset
-            end = offset + len(entry.tokens)
+            end = offset + len(entry.tokens) + len(entry.suffix_tokens)
             doc_spans.append(DocSpan(
                 doc_id=entry.doc_id,
                 normed_identifier=entry.normed_identifier,
@@ -154,6 +164,7 @@ class DocumentContext:
                 raw_identifier=entry.raw_identifier,
             ))
             all_tokens.extend(entry.tokens)
+            all_tokens.extend(entry.suffix_tokens)
             offset = end
 
         tokens_tensor = torch.tensor(
@@ -180,7 +191,7 @@ def _entry_to_doc(entry: _DocEntry) -> GeneratedDocument:
     return GeneratedDocument(
         raw_identifier=entry.raw_identifier,
         normed_identifier=entry.normed_identifier,
-        tokens=np.array(entry.tokens, dtype=np.int32),
+        tokens=np.array(entry.tokens + entry.suffix_tokens, dtype=np.int32),
         text=None,
         source=entry.source,
         is_root=entry.is_root,

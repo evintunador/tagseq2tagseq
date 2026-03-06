@@ -7,7 +7,9 @@ import numpy as np
 import pytest
 import torch
 
+from data.layout import DocLayoutInfo
 from model.document_context import DocumentContext, _DocEntry
+from model.identifier_utils import create_normed_identifier
 
 
 # ---------------------------------------------------------------------------
@@ -61,10 +63,10 @@ def test_add_root_only_once():
 def test_add_root_with_layout_policy():
     """Layout policy prefix tokens are prepended to the prompt."""
     class FakePolicy:
-        def prefix_tokens(self, doc_id):
-            return [999]
-        def suffix_tokens(self, doc_id):
-            return [888]
+        def prefix_length(self, info: DocLayoutInfo): return 1
+        def suffix_length(self, info: DocLayoutInfo): return 1
+        def prefix_tokens(self, info: DocLayoutInfo): return [999]
+        def suffix_tokens(self, info: DocLayoutInfo): return [888]
 
     ctx = make_context()
     entry = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2], layout_policy=FakePolicy())
@@ -95,18 +97,51 @@ def test_mark_done_sets_flag():
     assert entry.done is True
 
 
-def test_mark_done_appends_suffix():
+def test_mark_done_stores_suffix_separately():
     class FakePolicy:
-        def prefix_tokens(self, doc_id):
-            return []
-        def suffix_tokens(self, doc_id):
-            return [777]
+        def prefix_length(self, info: DocLayoutInfo): return 0
+        def suffix_length(self, info: DocLayoutInfo): return 1
+        def prefix_tokens(self, info: DocLayoutInfo): return []
+        def suffix_tokens(self, info: DocLayoutInfo): return [777]
 
     ctx = make_context()
     entry = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2])
     ctx.mark_done(entry, layout_policy=FakePolicy())
-    assert entry.tokens[-1] == 777
+    # Suffix stored separately — body tokens unchanged
+    assert entry.tokens == [1, 2]
+    assert entry.suffix_tokens == [777]
     assert entry.done is True
+
+
+def test_build_sequence_includes_suffix():
+    class FakePolicy:
+        def prefix_length(self, info: DocLayoutInfo): return 0
+        def suffix_length(self, info: DocLayoutInfo): return 1
+        def prefix_tokens(self, info: DocLayoutInfo): return []
+        def suffix_tokens(self, info: DocLayoutInfo): return [777]
+
+    ctx = make_context()
+    entry = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2])
+    ctx.mark_done(entry, layout_policy=FakePolicy())
+    tokens, doc_spans = ctx.build_sequence()
+
+    assert tokens.shape == (1, 3)
+    assert tokens[0].tolist() == [1, 2, 777]
+    assert doc_spans[0].end == 3
+
+
+def test_total_tokens_includes_suffix():
+    class FakePolicy:
+        def prefix_length(self, info: DocLayoutInfo): return 0
+        def suffix_length(self, info: DocLayoutInfo): return 1
+        def prefix_tokens(self, info: DocLayoutInfo): return []
+        def suffix_tokens(self, info: DocLayoutInfo): return [777]
+
+    ctx = make_context()
+    entry = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2])
+    assert ctx.total_tokens == 2
+    ctx.mark_done(entry, layout_policy=FakePolicy())
+    assert ctx.total_tokens == 3
 
 
 # ---------------------------------------------------------------------------
@@ -221,3 +256,55 @@ def test_get_all_documents_fields():
     assert doc.depth == 0
     assert doc.truncated is True
     assert doc.parent_raw_identifier is None
+
+
+# ---------------------------------------------------------------------------
+# Layout policy receives correct identifiers (not doc_id counter)
+# ---------------------------------------------------------------------------
+
+def test_add_root_layout_policy_receives_identifier():
+    """prefix_tokens receives a DocLayoutInfo with correct identifier fields."""
+    received = []
+
+    class SpyPolicy:
+        def prefix_length(self, info: DocLayoutInfo): return 0
+        def suffix_length(self, info: DocLayoutInfo): return 0
+        def prefix_tokens(self, info: DocLayoutInfo):
+            received.append(info)
+            return []
+        def suffix_tokens(self, info: DocLayoutInfo): return []
+
+    ctx = make_context()
+    ctx.add_root(
+        raw_identifier="Python (programming language)",
+        prompt_tokens=[1],
+        layout_policy=SpyPolicy(),
+    )
+    assert len(received) == 1
+    info = received[0]
+    assert info.raw_identifier == "Python (programming language)"
+    assert info.normed_identifier == create_normed_identifier("Python (programming language)")
+    assert info.body_tokens == [1]  # prompt tokens available at prefix time
+
+
+def test_mark_done_layout_policy_receives_identifier():
+    """suffix_tokens receives a DocLayoutInfo with the document's body tokens."""
+    received = []
+
+    class SpyPolicy:
+        def prefix_length(self, info: DocLayoutInfo): return 0
+        def suffix_length(self, info: DocLayoutInfo): return 0
+        def prefix_tokens(self, info: DocLayoutInfo): return []
+        def suffix_tokens(self, info: DocLayoutInfo):
+            received.append(info)
+            return []
+
+    ctx = make_context()
+    entry = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    ctx.append_token(entry, 2)
+    ctx.mark_done(entry, layout_policy=SpyPolicy())
+    assert len(received) == 1
+    info = received[0]
+    assert info.raw_identifier == ""
+    assert info.normed_identifier == ""
+    assert info.body_tokens == [1, 2]  # full body (prefix + generated) at suffix time
