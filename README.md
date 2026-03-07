@@ -162,7 +162,7 @@ Available strategies: `dfs`, `bfs`, `random_walk`, `random`.
 
 ## Training
 
-> **Note:** `--model.compile false` is required — `torch.compile` currently conflicts with FlexAttention's `create_block_mask`. Run artifacts are saved to timestamped directories under `runs/`.
+Run artifacts are saved to timestamped directories under `runs/`.
 
 ### Baseline runs (doc_causal, random traversal)
 
@@ -171,15 +171,13 @@ The baseline uses document-causal masking (each document attends only to itself)
 **Wikipedia:**
 ```bash
 python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/simplewiki \
-    --model.compile false
+    --dataset-dir data/pretokenized_datasets/simplewiki
 ```
 
 **The Stack:**
 ```bash
 python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/stack_10m \
-    --model.compile false
+    --dataset-dir data/pretokenized_datasets/stack_10m
 ```
 
 ### Cross-document runs (cross_doc_link, BFS traversal)
@@ -192,8 +190,7 @@ python main.py --config configs/baseline.yaml \
     --dataset-dir data/pretokenized_datasets/simplewiki \
     --strategy bfs \
     --model.mask_type cross_doc_link \
-    --model.link_detector markdown \
-    --model.compile false
+    --model.link_detector markdown
 ```
 
 **The Stack:**
@@ -202,8 +199,7 @@ python main.py --config configs/baseline.yaml \
     --dataset-dir data/pretokenized_datasets/stack_10m \
     --strategy bfs \
     --model.mask_type cross_doc_link \
-    --model.link_detector python \
-    --model.compile false
+    --model.link_detector python
 ```
 
 ### Key config options (`configs/baseline.yaml`)

@@ -287,9 +287,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     ])
 
     if cfg['model']['compile']:
-        logger.info("Compiling model with torch.compile...")
-        model = torch.compile(
-            model,
+        logger.info("Compiling model backbone with torch.compile...")
+        model.backbone = torch.compile(
+            model.backbone,
             dynamic=False,
             mode=cfg['model']['compile_mode'],
         )
