@@ -42,36 +42,45 @@ Also in this stage:
 
 ---
 
-## Stage 2 — Multi-Document MVP
+## Stage 2 — Multi-Document MVP ✅ COMPLETE
 *Depends on Stage 1. The core cross-doc generation feature.*
 
-### 2.1 — Full `DocumentContext`
-Extend with `add_corpus_doc` and `add_generated_doc` factory methods (handle `doc_id` assignment, layout prefix seeding, `_DocEntry` construction, and topological insertion — all in one call), safe eviction loop (`make_room` — loops until enough space freed or gives up), and all DocSpan offset bookkeeping. Re-eviction (`find_evicted`, `restore_evicted`) deferred to Stage 3.
+### 2.1 — Full `DocumentContext` ✅
+`add_corpus_doc`, `add_generated_doc`, `can_add_document`, `make_room`, `evict_oldest_aux`,
+`has_identifier`. `_DocEntry` now splits `prefix_tokens` / `tokens` (body) / `suffix_tokens`
+so layout policies are applied correctly at construction and at `mark_done`. `add_corpus_doc`
+applies both prefix and suffix (matching the training distribution). `get_all_documents()`
+returns root first, then active aux in topological order, then evicted.
 
 **Touches**: `model/document_context.py`
 
-### 2.2 — Link detection in generation loop
-Add per-token link detection to `_generate_doc()`. Scan last `max_recent_link_tokens` of active doc on every step. Call `_handle_link()` when a complete link is detected at the current token.
+### 2.2 — Link detection in generation loop ✅
+Per-token link detection in `_generate_doc()`. Scans last `max_recent_link_tokens` of the
+active doc each step; calls `_handle_link()` when a complete link closes on the just-appended
+token. `link_detector=None` is handled gracefully (single-doc baseline still works).
 
 **Touches**: `model/generation_loop.py`
 
-### 2.3 — `_handle_link()` — corpus and generation branches
-Implement the full link-handling decision tree:
-- Skip empty targets and duplicates already in context
-- Corpus fetch: insert, then recursively process corpus doc's own links at depth+1
-- Generate: insert empty entry, recurse into `_generate_doc()` at depth+1
-- Respect `max_link_depth`, `allow_generation_fallback`, eviction policy
+### 2.3 — `_handle_link()` — corpus and generation branches ✅
+Full decision tree: skip empty / duplicate, re-eviction stub (returns None), corpus fetch with
+layout-aware token-count estimation for `make_room`, recursive generation fallback. Includes
+`_process_existing_doc_links()` for scanning corpus docs at depth+1. Bug fixed in
+`cross_doc_mask.py`: `link_end_pos` is exclusive, containment check corrected to
+`span.start < link_pos <= span.end`.
 
-Includes `_process_existing_doc_links()` for scanning corpus docs and restored-evicted docs.
+**Touches**: `model/generation_loop.py`, `model/graph_traversal/cross_doc_mask.py`
 
-**Touches**: `model/generation_loop.py`
+### 2.4 — `GenerationResult` fully populated ✅
+All aux documents appear with correct `source`, `parent_raw_identifier`, `depth`, `truncated`,
+decoded `text`. `GenerationConfig` gains `repetition_penalty` (default 1.0 in config; 1.3
+recommended in `generate.py`) applied per-document before sampling to prevent mode collapse.
 
-### 2.4 — `GenerationResult` fully populated
-Ensure all auxiliary documents (corpus + generated) appear in the result with correct metadata: `source`, `parent_raw_identifier`, `depth`, `truncated`, decoded `text` if tokenizer available.
+**Touches**: `model/generation_loop.py`, `model/generation_config.py`
 
-**Touches**: `model/generation_loop.py`, `model/generation_result.py` (minor)
-
-**Deliverable**: `model.generate("See [Python](Python) for details.")` with simplewiki corpus produces a `GenerationResult` containing the root doc plus a fetched/generated `Python` aux doc. Recursive links at depth 2 work. Eviction handles context overflow without crashing.
+**Deliverable**: `model.generate("See [Python](Python) for details.")` with simplewiki corpus
+produces a `GenerationResult` containing the root doc plus a fetched/generated `Python` aux doc.
+Recursive links at depth 2 work. Eviction handles context overflow without crashing. Validated
+end-to-end with `generate.py` against trained checkpoints.
 
 ---
 
@@ -114,12 +123,24 @@ After the training loop, under `if is_main_process():`: load best checkpoint, ca
 
 **Touches**: `main.py`
 
-### 4.2 — Standalone `generate.py`
-CLI script at project root. Accepts `--checkpoint`, `--dataset` (corpus path), `--prompt`, and key `GenerationConfig` overrides. Outputs formatted result: root doc + each aux doc with identifier, source, parent, depth. For post-training exploration without modifying training code.
+### 4.2 — Standalone `generate.py` ✅ COMPLETE
+CLI script at project root. Accepts `--checkpoint`, `--dataset`, `--prompt`, `--max-link-depth`,
+`--max-new-tokens`, `--temperature`, `--top-k`, `--repetition-penalty`, `--max-display-tokens`,
+`--allow-generation-fallback`, `--no-color`. Outputs formatted result with ANSI link highlighting,
+per-doc truncation with full link list, and per-generated-doc quality metrics (entropy_frac,
+bits/tok). `--allow-generation-fallback` defaults to off when `--dataset` is provided.
 
-**Touches**: `generate.py` (new)
+FlexAttention is compiled by patching `flex_attention` in the tunalab module namespace
+(`dynamic=True` for variable-length inference contexts). Compiled kernels cached at
+`.torch_compile_cache/` (stable across runs; overridable via `TORCHINDUCTOR_CACHE_DIR`).
 
-**Deliverable**: `python generate.py --checkpoint runs/best/checkpoints/best_model.pt --prompt "Python is"` produces readable output.
+Shared `load_inference_model(checkpoint_path)` helper reconstructs architecture, weights,
+tokenizer, link detector, and layout policy from the run's `hyperparameters.json`.
+`PretokCorpus` wraps `GraphIndex` + `PretokShardedBackend` for corpus lookup.
+
+**Touches**: `generate.py` (new), `configs/large_32k.yaml` (new training config)
+
+**Deliverable**: `python generate.py --checkpoint runs/.../best_model.pt --prompt "Python is"` produces readable output with root + aux docs, link highlights, and quality metrics.
 
 ---
 

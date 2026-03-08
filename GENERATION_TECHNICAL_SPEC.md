@@ -152,11 +152,13 @@ Manages the growing packed sequence. Uses `raw_identifier` / `normed_identifier`
 
 **Internal dataclass `_DocEntry`** (not exported):
 ```
-normed_identifier: str        # normalized form (for DocSpan.title)
-raw_identifier: str           # human-readable form as decoded from link (DocSpan.clean_title);
+normed_identifier: str        # normalized form (for DocSpan.normed_identifier)
+raw_identifier: str           # human-readable form as decoded from link (DocSpan.raw_identifier);
                               #   empty string "" for the root document
-tokens: list[int]             # accumulated token IDs: layout prefix + body only
-suffix_tokens: list[int]      # layout suffix, stored separately; populated by mark_done
+prefix_tokens: list[int]      # layout prefix, fixed at construction time
+tokens: list[int]             # body token IDs only (prompt for root; generated/corpus body for others)
+suffix_tokens: list[int]      # layout suffix; set by mark_done (generated docs) or at
+                              #   construction (corpus docs, which are done=True from the start)
 done: bool
 truncated: bool
 doc_id: int                   # sequential counter, not tied to corpus
@@ -165,6 +167,13 @@ is_root: bool                 # True only for the root document; never matches l
 parent_raw_identifier: Optional[str]
 depth: int                    # recursion depth at which this doc was created
 ```
+
+`build_sequence()` emits `prefix_tokens + tokens + suffix_tokens` per entry. `total_tokens`
+sums all three. Keeping prefix separate means `mark_done` correctly passes only the body
+(`tokens`) as `body_tokens` to the layout policy's suffix method.
+
+`add_corpus_doc` applies both prefix and suffix from the layout policy so the inserted
+sequence matches the training distribution (prefix + body + suffix).
 
 **`DocumentContext(max_context_length, max_auxiliary_documents, eviction_policy, device)`**
 
@@ -439,8 +448,15 @@ Stage 1 (depends on Stage 0):
   model/model.py → generate()
 
 Stage 2 (depends on Stage 1):
-  model/document_context.py (full: add_corpus_doc, add_generated_doc, make_room, eviction)
+  model/document_context.py (full: add_corpus_doc, add_generated_doc, make_room, eviction;
+      _DocEntry prefix_tokens/tokens/suffix_tokens split for correct layout policy application)
   model/generation_loop.py → _handle_link(), _process_existing_doc_links()
+  model/generation_config.py → repetition_penalty field
+  model/graph_traversal/cross_doc_mask.py → containment check bug fix (link_end_pos exclusive)
+
+Stage 4.2 (depends on Stage 2):
+  generate.py (new standalone CLI; load_inference_model, PretokCorpus, metrics, rendering)
+  configs/large_32k.yaml (36L/1280D training config for 32k context)
 
 Stage 3 (depends on Stage 2):
   model/document_context.py (find_evicted, restore_evicted)

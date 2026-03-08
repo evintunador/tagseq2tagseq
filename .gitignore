@@ -210,8 +210,10 @@ __marimo__/
 .DS_Store
 
 # Specific to this repo
+runs/
+logs/
 data/pretokenized_datasets/
 artifacts/
 .claude/
 data/wiki_articles/
-runs/
+.torch_compile_cache/

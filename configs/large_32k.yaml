@@ -1,0 +1,39 @@
+data:
+  strategy: 'dfs'
+  use_bos_eos: false
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+
+model:
+  compile: true
+  compile_mode: 'default'
+  mask_type: 'doc_causal'         # override per run: doc_causal | cross_doc_link
+  # link_detector: 'markdown'     # set to 'markdown' or 'python' when mask_type=cross_doc_link
+  model_dim: 1280
+  num_layers: 36
+  num_heads: 20
+  max_seq_len: 32768
+  dropout: 0.1
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  ignore_index: -100
+  dtype: 'bfloat16'
+
+optimizer:
+  type: 'muon'
+  wd: 0.1
+  momentum: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.003
+  adamw_lr: 0.00004
+
+train_loop:
+  epochs: 1
+  max_steps: 16000
+  val_steps: 20
+  val_interval: 100
+  atomic_feature_kwargs: {}
+
+seed: 42

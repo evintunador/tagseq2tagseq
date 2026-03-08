@@ -36,6 +36,11 @@ class GenerationConfig:
     process_prompt_links: bool = True  # Process links in initial prompt
     # Recursive link depth is controlled solely by max_link_depth (no separate allow_recursive_links)
     
+    # Repetition penalty: values > 1.0 reduce probability of already-seen tokens.
+    # Applied to all tokens in the current document's token list before sampling.
+    # 1.0 = disabled; 1.3 is a reasonable starting value.
+    repetition_penalty: float = 1.0
+
     # Link detection
     max_recent_link_tokens: int = 200  # How many trailing tokens of the active doc to scan per step
 

@@ -215,3 +215,55 @@ python main.py --config configs/baseline.yaml \
 | `optimizer.muon_lr` | 0.02 | LR for 2D backbone weights (Muon) |
 | `optimizer.adamw_lr` | 0.0003 | LR for embeddings/norms (AdamW) |
 | `train_loop.val_interval` | 50 | Steps between validation passes |
+
+For larger models and longer contexts use `configs/large_32k.yaml` (36L/1280D, 32k context,
+fitted for a single A100 80GB with `torch.compile`).
+
+---
+
+## Generation
+
+After training, generate text from a checkpoint using `generate.py`. The script auto-reads
+`hyperparameters.json` from the run directory to reconstruct the architecture, tokenizer,
+link detector, and layout policy — no manual config needed.
+
+### Single-document baseline (no corpus)
+
+```bash
+python generate.py \
+    --checkpoint runs/YYYYMMDD_HHMMSS/checkpoints/best_model.pt \
+    --prompt "Python is a high-level programming language." \
+    --max-link-depth 0 \
+    --max-new-tokens 300
+```
+
+### Cross-document generation (with corpus)
+
+```bash
+python generate.py \
+    --checkpoint runs/YYYYMMDD_HHMMSS/checkpoints/best_model.pt \
+    --prompt "Python is a high-level programming language." \
+    --dataset data/pretokenized_datasets/simplewiki \
+    --max-link-depth 2 \
+    --max-new-tokens 300
+```
+
+With `--dataset` provided, links detected in generated text are looked up in the corpus. Matched
+documents are inserted into the attention context before the active document. Set
+`--allow-generation-fallback` to also generate aux docs for links not found in the corpus.
+
+### Key options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--max-link-depth` | `2` | `0` = single-doc baseline; `≥1` enables aux doc insertion |
+| `--repetition-penalty` | `1.3` | Values `>1` reduce probability of already-seen tokens; helps with mode collapse on undertrained models |
+| `--temperature` | `0.8` | Sampling temperature |
+| `--top-k` | `50` | Top-k sampling |
+| `--max-display-tokens` | `200` | Truncate displayed text per doc; full links list still shown |
+| `--allow-generation-fallback` | off (with `--dataset`) | Generate aux docs for unresolved links |
+| `--no-color` | off | Disable ANSI colour for piping/logs |
+
+FlexAttention is compiled on first use (`dynamic=True` for variable-length inference contexts).
+Compiled kernels are cached in `.torch_compile_cache/` and reused on subsequent runs.
+Override the cache location with `TORCHINDUCTOR_CACHE_DIR`.

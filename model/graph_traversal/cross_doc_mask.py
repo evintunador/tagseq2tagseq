@@ -138,10 +138,12 @@ class CrossDocLinkMaskCreator:
                 # Find the source document containing this link
                 link_doc_span = None
                 for span in doc_spans:
-                    if span.start <= link_pos < span.end:
+                    if span.start < link_pos <= span.end:
                         link_doc_span = span
                         break
 
+                # link_end_pos is exclusive (one past the closing token), so the
+                # correct containment check is span.start < link_pos <= span.end.
                 if link_doc_span is None:
                     logger.warning(f"Link at position {link_pos} not in any document span")
                     continue
