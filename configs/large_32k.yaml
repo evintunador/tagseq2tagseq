@@ -9,6 +9,7 @@ model:
   compile_mode: 'default'
   mask_type: 'doc_causal'         # override per run: doc_causal | cross_doc_link
   # link_detector: 'markdown'     # set to 'markdown' or 'python' when mask_type=cross_doc_link
+  # max_grants: 256               # cross_doc_link only; 256 covers observed max for all datasets
   model_dim: 1280
   num_layers: 36
   num_heads: 20
@@ -31,7 +32,7 @@ optimizer:
 
 train_loop:
   epochs: 1
-  max_steps: 16000
+  max_optimizer_steps: 16000
   val_steps: 20
   val_interval: 100
   atomic_feature_kwargs: {}

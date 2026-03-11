@@ -160,9 +160,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         batch_size=None,
         num_workers=0,
     )
-    max_steps = cfg.get('train_loop', {}).get('max_steps')
-    if max_steps is not None:
-        train_loader = LimitedDataLoader(train_loader, max_batches=max_steps)
+    max_optimizer_steps = cfg.get('train_loop', {}).get('max_optimizer_steps')
+    if max_optimizer_steps is not None:
+        accum_steps = cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1)
+        train_loader = LimitedDataLoader(train_loader, max_batches=max_optimizer_steps * accum_steps)
 
     # Validation loader — same dataset/graph but with a different seed so the
     # sampler draws different packs.  We cap it at val_steps batches per pass
@@ -233,7 +234,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
             )
         block_mask_creator = make_mask_creator_callable_from(
-            CrossDocLinkMaskCreator(link_detector=detector)
+            CrossDocLinkMaskCreator(
+                link_detector=detector,
+                max_grants=cfg.get('model', {}).get('max_grants', 64),
+            )
         )
     else:
         block_mask_creator = make_mask_creator_callable(mask_type)
@@ -299,15 +303,21 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # interfering with the compiled graph.
     if cfg['model']['compile']:
         logger.info("Compiling model backbone with torch.compile...")
+        # optimize_ddp=True lets dynamo insert all-reduce graph breaks at the
+        # right points during backbone backward, enabling overlap between
+        # gradient compute and DDP bucket all-reduces.
+        torch._dynamo.config.optimize_ddp = True
         model.backbone = torch.compile(
             model.backbone,
-            dynamic=False,
+            dynamic=True,
             mode=cfg['model']['compile_mode'],
         )
 
     # Wrap in DDP for multi-GPU / multi-node training.
     # static_graph=True is safe because our forward graph is identical every
     # step (same mask type, same model structure).
+    # bucket_cap_mb=256 reduces the number of all-reduce calls (default is
+    # 25 MB, which creates ~36 buckets for a 900 MB gradient blob).
     if dist.is_distributed:
         logger.info(
             "Wrapping model in DDP (rank=%d, local_rank=%d, world_size=%d)",
@@ -318,6 +328,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             device_ids=[dist.local_rank],
             static_graph=True,
             find_unused_parameters=False,
+            bucket_cap_mb=256,
         )
 
     # -------------------------------------------------------------------------

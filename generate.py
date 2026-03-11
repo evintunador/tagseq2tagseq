@@ -102,7 +102,10 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
                 "Expected 'markdown' or 'python'."
             )
         block_mask_creator = make_mask_creator_callable_from(
-            CrossDocLinkMaskCreator(link_detector=link_detector)
+            CrossDocLinkMaskCreator(
+                link_detector=link_detector,
+                max_grants=model_cfg.get('max_grants', 64),
+            )
         )
     else:
         block_mask_creator = make_mask_creator_callable(mask_type)

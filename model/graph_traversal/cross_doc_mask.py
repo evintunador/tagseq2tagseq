@@ -11,7 +11,7 @@ See also:
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import torch
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask
@@ -45,11 +45,14 @@ class CrossDocLinkMaskCreator:
         ... )
     """
 
-    def __init__(self, link_detector: LinkDetector):
+    def __init__(self, link_detector: LinkDetector, max_grants: int = 64):
         self.link_detector = link_detector
+        self.max_grants = max_grants
+        self._n_chunks = max(1, (max_grants + 63) // 64)
         logger.info(
             f"Initialized CrossDocLinkMaskCreator with detector: "
-            f"{type(link_detector).__name__}"
+            f"{type(link_detector).__name__}, max_grants={max_grants} "
+            f"({self._n_chunks} int64 chunk(s))"
         )
 
     def _match_links_to_docs(
@@ -175,6 +178,96 @@ class CrossDocLinkMaskCreator:
 
         return cross_doc_mask
 
+    def _build_grant_bitmasks(
+        self,
+        seq_len: int,
+        doc_spans: List[Any],
+        link_to_target: Dict[int, List[int]],
+        device: torch.device,
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        """
+        Build lists of int64 bitmask tensors encoding cross-doc grants.
+
+        Returns ``(q_bitmasks, kv_bitmasks)``, each a list of ``n_chunks``
+        tensors of shape [seq_len], where ``n_chunks = ceil(max_grants / 64)``.
+
+        Grant k uses chunk ``k // 64``, bit position ``k % 64``.  Bit 63 of
+        each chunk is stored as INT64_MIN (the signed representation of 2^63),
+        which has the same bit pattern and works correctly with ``!= 0``.
+
+        The mask_mod ORs across all chunks::
+
+            in_grant = any((q_bitmasks[c][q_idx] & kv_bitmasks[c][kv_idx]) != 0
+                           for c in range(n_chunks))
+
+        Fully pointwise — no reductions over the sequence dimension.
+
+        Memory: 2 × n_chunks × seq_len × 8 bytes.
+        At seq_len=32768: 512 KB (n_chunks=1) to 2 MB (n_chunks=4),
+        vs the original O(seq_len²) dense bool mask (1 GB).
+        """
+        q_bitmasks = [torch.zeros(seq_len, dtype=torch.int64, device=device)
+                      for _ in range(self._n_chunks)]
+        kv_bitmasks = [torch.zeros(seq_len, dtype=torch.int64, device=device)
+                       for _ in range(self._n_chunks)]
+
+        grant_idx = 0
+        truncated = False
+        for link_pos, target_doc_ids in sorted(link_to_target.items()):
+            if truncated:
+                break
+            for target_doc_id in target_doc_ids:
+                if grant_idx >= self.max_grants:
+                    logger.warning(
+                        f"Batch has >{self.max_grants} grants; ignoring remainder. "
+                        f"Consider increasing max_grants (currently {self.max_grants})."
+                    )
+                    truncated = True
+                    break
+
+                link_doc_span = None
+                for span in doc_spans:
+                    if span.start < link_pos <= span.end:
+                        link_doc_span = span
+                        break
+                if link_doc_span is None:
+                    logger.warning(f"Link at position {link_pos} not in any document span")
+                    continue
+
+                target_doc_span = None
+                for span in doc_spans:
+                    if span.doc_id == target_doc_id:
+                        target_doc_span = span
+                        break
+                if target_doc_span is None:
+                    logger.warning(f"Target doc {target_doc_id} not found in doc_spans")
+                    continue
+
+                grant_start = link_pos
+                grant_end = min(seq_len, link_doc_span.end)
+                target_start = max(0, target_doc_span.start)
+                target_end = min(seq_len, target_doc_span.end)
+
+                if grant_start < grant_end and target_start < target_end:
+                    chunk = grant_idx // 64
+                    bit_pos = grant_idx % 64
+                    # bit_pos 63 would be 2^63, which overflows signed int64;
+                    # use INT64_MIN (same bit pattern, valid as signed int64).
+                    bit = (1 << bit_pos) if bit_pos < 63 else -(1 << 63)
+                    q_bitmasks[chunk][grant_start:grant_end] |= bit
+                    kv_bitmasks[chunk][target_start:target_end] |= bit
+                    logger.debug(
+                        f"Grant {grant_idx} (chunk {chunk}, bit {bit_pos}): "
+                        f"q[{grant_start},{grant_end}) → kv[{target_start},{target_end})"
+                    )
+                    grant_idx += 1
+
+        logger.info(
+            f"Built {grant_idx} cross-doc attention grants "
+            f"across {self._n_chunks} chunk(s)"
+        )
+        return q_bitmasks, kv_bitmasks
+
     def __call__(self, tokens: torch.Tensor, doc_spans: List[Any], **kwargs) -> BlockMask:
         """
         Create a cross-document link-aware attention mask.
@@ -197,10 +290,6 @@ class CrossDocLinkMaskCreator:
 
         link_to_target = self._match_links_to_docs(links, doc_spans)
 
-        cross_doc_mask = self._build_cross_doc_mask(
-            seq_len, doc_spans, link_to_target, device
-        )
-
         # Build document_ids tensor for base doc_causal mask
         document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
         for span in doc_spans:
@@ -209,11 +298,25 @@ class CrossDocLinkMaskCreator:
             if start < end:
                 document_ids[start:end] = span.doc_id
 
+        # Lists of n_chunks int64 bitmask tensors: O(n_chunks × seq_len).
+        # At seq_len=32768: 512 KB (1 chunk) to 2 MB (4 chunks) vs 1 GB for
+        # the O(seq_len²) dense bool mask.
+        # mask_mod ORs across chunks (all pointwise, no sequence-dimension
+        # reductions), satisfying FlexAttention's mask_mod constraint.
+        q_bms, kv_bms = self._build_grant_bitmasks(
+            seq_len, doc_spans, link_to_target, device
+        )
+
         def cross_doc_link_mod(b, h, q_idx, kv_idx):
             causal = q_idx >= kv_idx
             same_doc = document_ids[q_idx] == document_ids[kv_idx]
-            cross_doc_link = cross_doc_mask[q_idx, kv_idx]
-            return causal & (same_doc | cross_doc_link)
+            # OR across chunks: bit k in chunk c is set in both iff grant
+            # (64*c + k) covers this (q, kv) pair. The Python loop over a
+            # fixed-length list unrolls at trace time.
+            in_grant = (q_bms[0][q_idx] & kv_bms[0][kv_idx]) != 0
+            for i in range(1, len(q_bms)):
+                in_grant = in_grant | ((q_bms[i][q_idx] & kv_bms[i][kv_idx]) != 0)
+            return causal & (same_doc | in_grant)
 
         block_mask = create_block_mask(
             cross_doc_link_mod,
