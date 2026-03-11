@@ -1,4 +1,3 @@
-import abc
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol
 
@@ -155,3 +154,99 @@ class IdentifierPrefixLayoutPolicy(DocLayoutPolicy):
 
     def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
         return []
+
+
+class IdentifierPrefixBOSEOSLayoutPolicy(DocLayoutPolicy):
+    """
+    Layout policy that combines a title prefix with BOS/EOS wrapping.
+
+    Each document is laid out as:
+
+        [BOS] + encode("# {raw_identifier}\\n\\n") + [body] + [EOS]
+
+    This gives the model both a clear document boundary signal (BOS/EOS) and
+    a human-readable identifier that names the document before its content —
+    useful for code (filename/module path) and prose (article title).
+
+    Token counts: prefix = 1 + len(encode("# {title}\\n\\n")), suffix = 1.
+    """
+
+    def __init__(
+        self,
+        encode_fn: Callable[[str], List[int]],
+        bos_token_id: int,
+        eos_token_id: int,
+    ):
+        self._encode = encode_fn
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
+        self._cache: Dict[str, List[int]] = {}
+
+    def _get_title_tokens(self, raw_identifier: str) -> List[int]:
+        if raw_identifier not in self._cache:
+            self._cache[raw_identifier] = self._encode(f"# {raw_identifier}\n\n")
+        return self._cache[raw_identifier]
+
+    def prefix_length(self, info: DocLayoutInfo) -> int:
+        return 1 + len(self._get_title_tokens(info.raw_identifier))
+
+    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
+        return 1
+
+    def prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
+        return [self.bos_token_id] + list(self._get_title_tokens(info.raw_identifier))
+
+    def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
+        return [self.eos_token_id]
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+_GPT2_BOS_EOS = 50256  # <|endoftext|> is used for both in GPT-2
+
+
+def make_layout_policy(
+    name: str,
+    encode_fn: Optional[Callable[[str], List[int]]] = None,
+    bos_token_id: int = _GPT2_BOS_EOS,
+    eos_token_id: int = _GPT2_BOS_EOS,
+) -> DocLayoutPolicy:
+    """
+    Construct a layout policy by name.
+
+    Args:
+        name: One of ``"null"``, ``"bos_eos"``, ``"identifier_prefix"``,
+              ``"identifier_prefix_bos_eos"``.
+        encode_fn: Required for policies that tokenise the identifier
+            (``"identifier_prefix"`` and ``"identifier_prefix_bos_eos"``).
+        bos_token_id: BOS token id (default: GPT-2 ``<|endoftext|>`` = 50256).
+        eos_token_id: EOS token id (default: GPT-2 ``<|endoftext|>`` = 50256).
+
+    Returns:
+        A ``DocLayoutPolicy`` instance.
+
+    Raises:
+        ValueError: If ``name`` is unknown or ``encode_fn`` is missing where required.
+    """
+    if name == "null":
+        return NullLayoutPolicy()
+    if name == "bos_eos":
+        return BOSEOSLayoutPolicy(bos_token_id=bos_token_id, eos_token_id=eos_token_id)
+    if name in ("identifier_prefix", "identifier_prefix_bos_eos"):
+        if encode_fn is None:
+            raise ValueError(
+                f"layout_policy='{name}' requires encode_fn (a tokeniser callable)."
+            )
+        if name == "identifier_prefix":
+            return IdentifierPrefixLayoutPolicy(encode_fn)
+        return IdentifierPrefixBOSEOSLayoutPolicy(
+            encode_fn=encode_fn,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+        )
+    raise ValueError(
+        f"Unknown layout_policy '{name}'. "
+        "Valid options: 'null', 'bos_eos', 'identifier_prefix', 'identifier_prefix_bos_eos'."
+    )

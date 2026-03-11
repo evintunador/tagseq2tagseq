@@ -1,6 +1,6 @@
 data:
   strategy: 'random'  # Options: random, random_walk, bfs, dfs
-  use_bos_eos: false
+  layout_policy: 'bos_eos'  # null | bos_eos | identifier_prefix | identifier_prefix_bos_eos
   order_mode: 'prefer_targets_first'  # Options: as_traversed, prefer_targets_first
   doc_budget: null  # Optional per-document token limit (null = no limit)
 
