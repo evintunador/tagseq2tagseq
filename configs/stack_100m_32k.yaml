@@ -1,0 +1,40 @@
+data:
+  strategy: 'bfs'
+  layout_policy: 'identifier_prefix_bos_eos'  # null | bos_eos | identifier_prefix | identifier_prefix_bos_eos
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+
+model:
+  compile: true
+  compile_mode: 'default'
+  mask_type: 'cross_doc_link'
+  link_detector: 'python'
+  model_dim: 1024
+  num_layers: 24
+  num_heads: 16
+  max_seq_len: 32768
+  dropout: 0.1
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  ignore_index: -100
+  dtype: 'bfloat16'
+
+optimizer:
+  type: 'muon'
+  wd: 0.1
+  momentum: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.003
+  adamw_lr: 0.00004
+
+train_loop:
+  epochs: 1
+  max_steps: 60000   # 8 GPUs x 32k x accum_steps=2 = 524k tok/optimizer_step => 15.7B tokens total
+  val_steps: 30
+  val_interval: 300  # log ~every 1% of training
+  atomic_feature_kwargs:
+    accum_steps: 2
+
+seed: 42
