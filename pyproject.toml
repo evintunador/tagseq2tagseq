@@ -8,7 +8,8 @@ version = "0.1.0"
 dependencies = [
     "torch",
     "numpy",
-    "tunalab",
+    "tunalab>=0.1.4",
+    "tunalab-common>=0.1.1",
     "tunalab-nlp",
 ]
 

@@ -6,12 +6,36 @@ Trains language models on graph-structured text data. Documents are nodes in a g
 
 ## Datasets
 
-Two datasets are supported out of the box:
+Four pretokenized datasets are ready to use on `/fss`:
 
-| Dataset | Source | Graph edges | Pretokenized location |
-|---------|--------|-------------|----------------------|
-| **SimpleWiki** | `simplewiki-20251027-cirrussearch-content.json.gz` | Markdown hyperlinks | `data/pretokenized_datasets/simplewiki/` |
-| **The Stack (10M)** | `bigcode/the-stack-dedup` (Python, 10M files) | Python import statements | `data/pretokenized_datasets/stack_10m/` |
+| Dataset | Graph edges | Nodes | Tokens | Shards | Pretokenized location |
+|---------|-------------|-------|--------|--------|-----------------------|
+| **SimpleWiki** | Markdown hyperlinks | 275k | ~108M | 1 | `data/pretokenized_datasets/simplewiki/` |
+| **EnWikiSource** | Markdown hyperlinks | 662k | ~612M | 1 | `data/pretokenized_datasets/enwikisource/` |
+| **The Stack (10M)** | Python imports | 2.38M | ~7B | 6 | `data/pretokenized_datasets/stack_10m/` |
+| **The Stack (100M)** | Python imports | 3.56M | ~8.7B | 9 | `data/pretokenized_datasets/stack_100m/` |
+
+SimpleWiki and EnWikiSource use `--model.link_detector markdown`; both Stack datasets use `--model.link_detector python`.
+
+Raw dumps and JSONL source files:
+
+| Dataset | Raw source |
+|---------|-----------|
+| SimpleWiki | `/fss/evin_t/wiki_dumps/simplewiki-20251027-cirrussearch-content.json.gz` |
+| EnWikiSource | `/fss/evin_t/wiki_dumps/enwikisource-20251027-cirrussearch-content.json.gz` |
+| The Stack (10M) | `data/github_graph_extractor/sample_10M.jsonl` + `graph_10M.jsonl` |
+| The Stack (100M) | `data/github_graph_extractor/sample_100M.jsonl` + `graph_100M.jsonl` |
+
+---
+
+## Available Checkpoints
+
+| Checkpoint | Architecture | Dataset | Context | Mask | Steps | Val loss |
+|-----------|-------------|---------|---------|------|-------|----------|
+| `runs/20260224_212158/checkpoints/best_model.pt` | 12L / 768D | SimpleWiki | 2k | `doc_causal` | 38,500 | 2.07 |
+| `runs/run_20260308_201435_097608/checkpoints/best_model.pt` | 36L / 1280D | Stack 100M | 32k | `cross_doc_link` | — | — |
+
+> The Stack 100M checkpoint is currently training (job 29501). Path will be final once complete.
 
 ---
 
@@ -168,35 +192,41 @@ Run artifacts are saved to timestamped directories under `runs/`.
 
 The baseline uses document-causal masking (each document attends only to itself) with random graph traversal. `data.strategy` defaults to `random` in `baseline.yaml` so no override is needed.
 
-**Wikipedia:**
 ```bash
+# SimpleWiki (~108M tokens, fast iteration)
 python main.py --config configs/baseline.yaml \
     --dataset-dir data/pretokenized_datasets/simplewiki
-```
 
-**The Stack:**
-```bash
+# EnWikiSource (~612M tokens, longer literary texts)
+python main.py --config configs/baseline.yaml \
+    --dataset-dir data/pretokenized_datasets/enwikisource
+
+# The Stack 10M (~7B tokens)
 python main.py --config configs/baseline.yaml \
     --dataset-dir data/pretokenized_datasets/stack_10m
+
+# The Stack 100M (~8.7B tokens, full Python corpus)
+python main.py --config configs/baseline.yaml \
+    --dataset-dir data/pretokenized_datasets/stack_100m
 ```
 
 ### Cross-document runs (cross_doc_link, BFS traversal)
 
 BFS traversal places linked documents adjacently in the packed sequence, which is required for cross-doc attention to be meaningful. Set `model.link_detector` to match the dataset.
 
-**Wikipedia:**
+**Wikipedia / WikiSource** (`--model.link_detector markdown`):
 ```bash
 python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/simplewiki \
+    --dataset-dir data/pretokenized_datasets/enwikisource \
     --strategy bfs \
     --model.mask_type cross_doc_link \
     --model.link_detector markdown
 ```
 
-**The Stack:**
+**The Stack** (`--model.link_detector python`):
 ```bash
 python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/stack_10m \
+    --dataset-dir data/pretokenized_datasets/stack_100m \
     --strategy bfs \
     --model.mask_type cross_doc_link \
     --model.link_detector python
@@ -219,6 +249,30 @@ python main.py --config configs/baseline.yaml \
 For larger models and longer contexts use `configs/large_32k.yaml` (36L/1280D, 32k context,
 fitted for a single A100 80GB with `torch.compile`).
 
+### Multi-node SLURM training via `launch_slurm.py`
+
+Use `launch_slurm.py` instead of `main.py` for multi-node runs. It wraps submitit and handles
+distributed process setup automatically. Config overrides use **dotted-key notation** — the argparse
+shorthand flags (`--dataset-dir`, `--strategy`, etc.) are not defined in the launcher; pass
+everything as `--section.key value` so the YAML config is never silently overridden.
+
+```bash
+# 2 nodes × 8 GPUs — Stack 100M (the canonical large run)
+python launch_slurm.py \
+    --nodes 2 --gpus-per-node 8 --time 48:00:00 \
+    --config configs/stack_100m_32k.yaml \
+    --data.dataset_dir data/pretokenized_datasets/stack_100m
+
+# 1 node × 4 GPUs — quick iteration on EnWikiSource
+python launch_slurm.py \
+    --nodes 1 --gpus-per-node 4 --time 12:00:00 \
+    --config configs/large_32k.yaml \
+    --data.dataset_dir data/pretokenized_datasets/enwikisource \
+    --model.mask_type cross_doc_link --model.link_detector markdown
+```
+
+`--no-tail` suppresses log following after submission. Logs land in the run's `logs/` subdirectory.
+
 ---
 
 ## Generation
@@ -227,21 +281,32 @@ After training, generate text from a checkpoint using `generate.py`. The script 
 `hyperparameters.json` from the run directory to reconstruct the architecture, tokenizer,
 link detector, and layout policy — no manual config needed.
 
-### Single-document baseline (no corpus)
+### Stack 100M model (36L/1280D, cross-doc, 32k context)
 
+Single-document (no corpus lookup):
 ```bash
 python generate.py \
-    --checkpoint runs/YYYYMMDD_HHMMSS/checkpoints/best_model.pt \
-    --prompt "Python is a high-level programming language." \
+    --checkpoint runs/run_20260308_201435_097608/checkpoints/best_model.pt \
+    --prompt "def merge_sort(arr):" \
     --max-link-depth 0 \
-    --max-new-tokens 300
+    --max-new-tokens 400
 ```
 
-### Cross-document generation (with corpus)
+Cross-document (imports resolved against corpus):
+```bash
+python generate.py \
+    --checkpoint runs/run_20260308_201435_097608/checkpoints/best_model.pt \
+    --prompt "import numpy as np\n\ndef softmax(x):" \
+    --dataset data/pretokenized_datasets/stack_100m \
+    --max-link-depth 2 \
+    --max-new-tokens 400
+```
+
+### SimpleWiki baseline (12L/768D, doc_causal, 2k context)
 
 ```bash
 python generate.py \
-    --checkpoint runs/YYYYMMDD_HHMMSS/checkpoints/best_model.pt \
+    --checkpoint runs/20260224_212158/checkpoints/best_model.pt \
     --prompt "Python is a high-level programming language." \
     --dataset data/pretokenized_datasets/simplewiki \
     --max-link-depth 2 \
