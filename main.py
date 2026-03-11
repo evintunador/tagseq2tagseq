@@ -7,15 +7,21 @@ from pathlib import Path
 from typing import Dict, Any
 import json
 
+# Set before any CUDA allocation so the memory allocator picks it up.
+# Expandable segments dramatically reduce fragmentation when sequence lengths
+# vary across steps (which they do for packed graph batches).
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
 import torch
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 
 from tunalab.configuration import compose_config
-from tunalab.distributed import DistributedManager
+from tunalab.distributed import DistributedManager, setup_signal_handlers
 from tunalab.reproducibility import ReproducibilityManager
 from tunalab import tracking
 from tunalab.smart_train import smart_train
-from tunalab.optimizers.muon import SingleDeviceMuonWithAuxAdam
+from tunalab.optimizers.muon import MuonWithAuxAdam, SingleDeviceMuonWithAuxAdam
 from tunalab.llm_compilers.auto import get_default_llm_client
 
 # Local imports
@@ -31,7 +37,7 @@ from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
 from model.graph_traversal.python_import_detector import PythonImportDetector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
-from data.layout import BOSEOSLayoutPolicy, NullLayoutPolicy
+from data.layout import make_layout_policy
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
     BFSStrategy,
@@ -60,7 +66,11 @@ class LimitedDataLoader:
 
 def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityManager):
     """Main training entry point for tagseq2tagseq."""
-    
+
+    # Register SIGTERM/SIGINT handlers so SLURM job cancellation doesn't
+    # leave ranks blocked in a collective operation.
+    setup_signal_handlers()
+
     # -------------------------------------------------------------------------
     # 1. Setup Logging & Reproducibility
     # -------------------------------------------------------------------------
@@ -70,7 +80,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     dist.set_seed(cfg.get("seed", 42))
 
-    if rep.output_dir:
+    # Only rank 0 writes the hyperparameter dump; no point writing N copies.
+    if rep.output_dir and dist.is_main_process:
         json_path = os.path.join(rep.output_dir, "hyperparameters.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -78,8 +89,6 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # -------------------------------------------------------------------------
     # 2. Data Loading Setup
     # -------------------------------------------------------------------------
-    # The dataset directory is expected to be passed via config or CLI
-    # e.g. --data.dataset_dir /path/to/data
     dataset_dir_str = cfg.get('data', {}).get('dataset_dir')
     if not dataset_dir_str:
         logger.error("No dataset_dir specified in config.")
@@ -92,23 +101,18 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     logger.info("Initializing GraphIndex from %s", dataset_dir)
     graph_index = GraphIndex(dataset_dir)
-    
+
     # The backend handles memory-mapping of token shards
     backend = PretokShardedBackend(graph_index)
 
-    # Configure Layout Policy (BOS/EOS wrapping)
-    if cfg.get('data', {}).get('use_bos_eos', False):
-        # GPT-2 uses 50256 as <|endoftext|> for both BOS and EOS
-        tokenizer_name = graph_index.metadata.get('tokenizer', 'gpt2')
-        if tokenizer_name == 'gpt2':
-            bos_id = 50256  # GPT-2 <|endoftext|>
-            eos_id = 50256
-        else:
-            bos_id = cfg.get('data', {}).get('bos_token_id', 1)
-            eos_id = cfg.get('data', {}).get('eos_token_id', 2)
-        layout_policy = BOSEOSLayoutPolicy(bos_token_id=bos_id, eos_token_id=eos_id)
-    else:
-        layout_policy = NullLayoutPolicy()
+    # Configure Layout Policy
+    # Options: null | bos_eos | identifier_prefix | identifier_prefix_bos_eos
+    layout_policy_name = cfg.get('data', {}).get('layout_policy', 'null')
+    enc = tiktoken.get_encoding(graph_index.metadata.get('tokenizer', 'gpt2'))
+    layout_policy = make_layout_policy(
+        name=layout_policy_name,
+        encode_fn=enc.encode_ordinary,
+    )
 
     # Configure Traversal Strategy
     strategy_name = cfg.get('data', {}).get('strategy', 'random')
@@ -123,8 +127,12 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     else:
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
-    # Configure Pack Sampler
-    # This component is responsible for selecting documents to fill the context window
+    # Each rank gets a unique sampler seed so they traverse different parts of
+    # the graph simultaneously.  Using base_seed + rank ensures repeatability
+    # while guaranteeing per-rank diversity.
+    base_seed = cfg.get("seed", 42)
+    rank_seed = base_seed + dist.rank
+
     pack_sampler = PackBatchSampler(
         graph=graph_index,
         strategy_factory=strategy_factory,
@@ -134,13 +142,11 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         doc_level_trim_side="tail",
         pack_level_trim_side="head",
         max_candidates_per_component=1000,
-        seed=cfg.get("seed", 42),
+        seed=rank_seed,
         order_mode=cfg.get('data', {}).get('order_mode', 'prefer_targets_first'),
         layout_policy=layout_policy,
     )
 
-    # Create the Dataset
-    # This yields dictionaries containing 'tokens', 'doc_spans', etc.
     dataset = PackedSequenceDataset(
         graph=graph_index,
         backend=backend,
@@ -149,14 +155,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         as_2d=True,
     )
 
-    # Create DataLoader
-    # Since PackedSequenceDataset yields full batches (packed sequences), batch_size is None
-    # or handled upstream if we want to stack multiple packed sequences.
-    # For now, we assume 1 packed sequence per step.
     train_loader = DataLoader(
         dataset,
         batch_size=None,
-        num_workers=0,  # Can experiment with multiprocessing later
+        num_workers=0,
     )
     max_steps = cfg.get('train_loop', {}).get('max_steps')
     if max_steps is not None:
@@ -186,7 +188,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         doc_level_trim_side="tail",
         pack_level_trim_side="head",
         max_candidates_per_component=1000,
-        seed=cfg.get("seed", 42) + 1,
+        seed=rank_seed + 1,
         order_mode=cfg.get('data', {}).get('order_mode', 'prefer_targets_first'),
         layout_policy=layout_policy,
     )
@@ -207,11 +209,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # 3. Model & Optimizer Setup
     # -------------------------------------------------------------------------
     logger.info("Initializing Model...")
-    
-    # Get vocab size from tokenizer metadata
+
     tokenizer_name = graph_index.metadata.get('tokenizer', 'gpt2')
     vocab_size = 50257 if tokenizer_name == 'gpt2' else cfg['model'].get('vocab_size', 50257)
-    
+
     # Create block mask creator
     mask_type = cfg.get('model', {}).get('mask_type', 'doc_causal')
     if mask_type == 'cross_doc_link':
@@ -236,8 +237,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         )
     else:
         block_mask_creator = make_mask_creator_callable(mask_type)
-    
-    # Build model using from_config factory
+
     model = TS2TSTrainingModule.from_config(
         vocab_size=vocab_size,
         num_layers=cfg['model']['num_layers'],
@@ -252,10 +252,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         ignore_index=cfg['model'].get('ignore_index', -100),
         dtype=getattr(torch, cfg['model'].get('dtype', 'bfloat16')),
     ).to(dist.device)
-    
-    # Build optimizer param groups from the uncompiled model so that
-    # named_parameters() gives clean names and weight-tied tensors are only
-    # counted once (PyTorch deduplicates via an internal memo set).
+
+    # Build optimizer param groups BEFORE compile/DDP so that named_parameters()
+    # gives clean names and weight-tied tensors are only counted once.
     logger.info("Initializing Optimizer...")
     muon_params, adamw_params = [], []
     seen_ids: set = set()
@@ -269,7 +268,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         else:
             adamw_params.append(param)
 
-    optimizer = SingleDeviceMuonWithAuxAdam([
+    param_groups = [
         dict(
             params=muon_params,
             use_muon=True,
@@ -284,8 +283,20 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             betas=(cfg['optimizer'].get('beta1', 0.9), cfg['optimizer'].get('beta2', 0.95)),
             weight_decay=cfg['optimizer']['wd'],
         ),
-    ])
+    ]
 
+    # MuonWithAuxAdam handles distributed Muon parameter-sharding via all_gather.
+    # SingleDeviceMuon is used when there is no process group (single GPU / CPU).
+    if dist.is_distributed:
+        optimizer = MuonWithAuxAdam(param_groups)
+        logger.info("Using distributed MuonWithAuxAdam (world_size=%d)", dist.world_size)
+    else:
+        optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
+        logger.info("Using SingleDeviceMuonWithAuxAdam (single process)")
+
+    # Compile backbone BEFORE DDP wrapping.  torch.compile operates on the
+    # backbone nn.Module; DDP adds communication hooks on top without
+    # interfering with the compiled graph.
     if cfg['model']['compile']:
         logger.info("Compiling model backbone with torch.compile...")
         model.backbone = torch.compile(
@@ -294,11 +305,26 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             mode=cfg['model']['compile_mode'],
         )
 
+    # Wrap in DDP for multi-GPU / multi-node training.
+    # static_graph=True is safe because our forward graph is identical every
+    # step (same mask type, same model structure).
+    if dist.is_distributed:
+        logger.info(
+            "Wrapping model in DDP (rank=%d, local_rank=%d, world_size=%d)",
+            dist.rank, dist.local_rank, dist.world_size,
+        )
+        model = DDP(
+            model,
+            device_ids=[dist.local_rank],
+            static_graph=True,
+            find_unused_parameters=False,
+        )
+
     # -------------------------------------------------------------------------
     # 4. Training Loop
     # -------------------------------------------------------------------------
     logger.info("Starting Training...")
-    
+
     atomic_feature_kwargs = cfg.get('train_loop', {}).get('atomic_feature_kwargs', {})
     atomic_feature_kwargs.update({
         'enable_logging': True,
@@ -307,7 +333,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         'val_interval': cfg['train_loop'].get('val_interval', 50),
         'output_dir': rep.output_dir,
         'device': str(dist.device),
-        'use_tqdm': True,
+        'use_tqdm': dist.is_main_process,  # only rank 0 shows the progress bar
         'num_epochs': cfg['train_loop'].get('epochs', 1),
     })
 
@@ -318,9 +344,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         llm_client=get_default_llm_client(),
         **atomic_feature_kwargs
     )
-    
+
     logger.info("Training complete!")
-    
+
     # Cleanup
     backend.close()
 
@@ -330,10 +356,8 @@ if __name__ == "__main__":
         description="Train a TAGSeq2TAGSeq model on the TAGWiki dataset.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    
-    # Define CLI arguments that map to config keys
-    # These allow overriding config.yaml values from the command line
-    parser.add_argument("--dataset-dir", dest="data.dataset_dir", type=str, 
+
+    parser.add_argument("--dataset-dir", dest="data.dataset_dir", type=str,
                         help="Path to the pre-tokenized dataset directory.")
     parser.add_argument("--strategy", dest="data.strategy", type=str, default="random",
                         choices=["random", "random_walk", "bfs", "dfs"],
@@ -343,15 +367,16 @@ if __name__ == "__main__":
     parser.add_argument("--seed", dest="seed", type=int, default=42,
                         help="Random seed.")
 
-    # Load configuration
     config = compose_config(parser)
-    
-    # Setup run directory for logs and checkpoints
-    run_dir = os.path.join(os.path.dirname(__file__), "runs", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-    
-    # Initialize Managers
-    dist = DistributedManager()
-    rep = ReproducibilityManager(output_dir=run_dir, is_main_process=dist.is_main)
 
-    with dist, rep:
-        main(config, dist, rep)
+    # Run directory is created only by rank 0 (ReproducibilityManager handles this).
+    run_dir = os.path.join(
+        os.path.dirname(__file__), "runs",
+        datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+
+    dist_mgr = DistributedManager()
+    rep = ReproducibilityManager(output_dir=run_dir, is_main_process=dist_mgr.is_main)
+
+    with dist_mgr, rep:
+        main(config, dist_mgr, rep)
