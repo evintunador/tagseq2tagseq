@@ -215,5 +215,6 @@ logs/
 data/pretokenized_datasets/
 artifacts/
 .claude/
-data/wiki_articles/
+data/wiki_articles*/
 .torch_compile_cache/
+slurm_logs/
