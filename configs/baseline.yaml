@@ -30,9 +30,9 @@ optimizer:
 
 train_loop:
   epochs: 1
-  max_steps: null   # Hard stop after N steps regardless of epochs (null = no limit)
-  val_steps: 10     # Batches to run per validation pass
-  val_interval: 50  # Run validation every N training steps
+  max_optimizer_steps: null   # Hard stop after N optimizer steps (null = no limit); micro-batches = this × accum_steps
+  val_steps: 10               # Micro-batches to run per validation pass
+  val_interval: 50            # Run validation every N optimizer steps
   atomic_feature_kwargs: {}  # Additional training loop arguments
 
 seed: 42

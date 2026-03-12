@@ -1,0 +1,39 @@
+data:
+  strategy: 'random'
+  layout_policy: 'bos_eos'  # null | bos_eos | identifier_prefix | identifier_prefix_bos_eos
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+
+model:
+  compile: true
+  compile_mode: 'default'
+  mask_type: 'doc_causal'
+  model_dim: 1024
+  num_layers: 24
+  num_heads: 16
+  max_seq_len: 32768
+  dropout: 0.1
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  ignore_index: -100
+  dtype: 'bfloat16'
+
+optimizer:
+  type: 'muon'
+  wd: 0.1
+  momentum: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.003
+  adamw_lr: 0.00004
+
+train_loop:
+  epochs: 1
+  max_optimizer_steps: 18400  # ~1 pass: 3.56M nodes / (12.1 random docs/pack × 8 GPUs × 2 accum) = 18,400 steps/pass
+  val_steps: 30
+  val_interval: 300           # every N optimizer steps (~every 1.6% of training)
+  atomic_feature_kwargs:
+    accum_steps: 2            # 8 GPUs × 32k tokens × 2 = 524k tokens/optimizer step
+
+seed: 42

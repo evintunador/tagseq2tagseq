@@ -55,17 +55,15 @@ def _training_worker(main_argv: list, run_dir: str, script: str = 'main') -> Non
 
     SLURM_PROCID / SLURM_LOCALID / SLURM_NTASKS are already set by SLURM.
     DistributedManager reads those and initialises the process group.
-
-    Key design note on is_main_process:
-      ReproducibilityManager is constructed BEFORE DistributedManager.__enter__()
-      runs (both are in the same `with dist_mgr, rep:` statement).  We therefore
-      use SLURM_PROCID directly to determine the main rank, rather than
-      dist_mgr.is_main (which is only valid after __enter__).
     """
     # ---- env setup (before any torch import) ----
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
     os.environ.setdefault("TORCH_DIST_TIMEOUT_SECONDS", "1800")
     os.environ.setdefault("NCCL_TIMEOUT", "1800")
+    # Ensure InfiniBand is used and GPU Direct RDMA is enabled.
+    os.environ.setdefault("NCCL_IB_DISABLE", "0")
+    os.environ.setdefault("NCCL_IB_GDR_LEVEL", "5")
+    os.environ.setdefault("NCCL_NET_GDR_LEVEL", "5")
 
     # Per-rank compile cache avoids NFS lock contention on first-run compilation.
     job_id  = os.environ.get("SLURM_JOB_ID",  "local")
@@ -93,17 +91,19 @@ def _training_worker(main_argv: list, run_dir: str, script: str = 'main') -> Non
 
     config = compose_config(_ap.ArgumentParser(add_help=False))
 
-    # SLURM_PROCID is set by srun before our code runs.  Safe to read here.
-    is_main_rank = (int(os.environ.get("SLURM_PROCID", "0")) == 0)
-
     dist_mgr = DistributedManager()
-    rep      = ReproducibilityManager(
-        output_dir=run_dir,
-        is_main_process=is_main_rank,
-    )
 
-    with dist_mgr, rep:
-        train_main(config, dist_mgr, rep)
+    # ReproducibilityManager.__init__ calls barrier() internally before running
+    # the rank-0 emptiness check, so all ranks are synchronised automatically.
+    # We construct it inside the dist_mgr context so that the process group is
+    # live and dist_mgr.is_main_process is valid.
+    with dist_mgr:
+        rep = ReproducibilityManager(
+            output_dir=run_dir,
+            is_main_process=dist_mgr.is_main_process,
+        )
+        with rep:
+            train_main(config, dist_mgr, rep)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ def launch(
     config:        str   = "configs/baseline.yaml",
     partition:     str   = "compute",
     time_limit:    str   = "24:00:00",
-    mem_per_gpu:   int   = 64,
+    mem_per_gpu:   int   = 128,
     cpus_per_task: int   = 8,
     exclude:       str   = None,
     auto_tail:     bool  = True,
@@ -143,7 +143,7 @@ def launch(
 
     executor = submitit.AutoExecutor(
         folder=str(slurm_logs_dir),
-        slurm_max_num_timeout=30,
+        slurm_max_num_timeout=0,
     )
 
     parts       = time_limit.split(":")
