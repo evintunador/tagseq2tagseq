@@ -122,7 +122,13 @@ def process_dump(input_file, output_dir, limit=None, process_count=None):
             
             for result in progress_bar:
                 articles_processed += result
-    
+
+            logging.info(f"All {articles_processed:,} articles dispatched. Waiting for workers to finish...")
+            pool.close()
+            pool.join()
+            logging.info("All worker processes finished.")
+
+    logging.info("Dump file closed.")
     duration = default_timer() - start_time
     # Avoid division by zero if the process was very fast or processed nothing
     rate = (articles_processed / duration) if duration > 0 else 0

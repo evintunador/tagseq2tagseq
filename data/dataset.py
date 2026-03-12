@@ -207,6 +207,29 @@ class GraphIndex:
     def __contains__(self, normed_identifier: str) -> bool:
         return normed_identifier in self.nodes
 
+    def get_split(self, normed_identifier: str) -> Optional[str]:
+        """
+        Returns the split name (``"train"``, ``"val_community"``,
+        ``"val_random"``) for a node, or ``None`` if no split annotation
+        is present.
+        """
+        node = self.get_node(normed_identifier)
+        if node is None:
+            return None
+        return node.get("split")
+
+    def get_split_ids(self, split_name: str) -> List[int]:
+        """
+        Returns the integer ids of all nodes belonging to *split_name*.
+
+        Nodes without a ``"split"`` field are excluded.
+        """
+        return [
+            self._normed_to_id[nid]
+            for nid, node in self.nodes.items()
+            if node.get("split") == split_name
+        ]
+
     def get_all_normed_identifiers(self) -> List[str]:
         """Returns a list of all normed_identifiers in the graph."""
         return list(self.nodes.keys())

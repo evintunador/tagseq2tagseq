@@ -70,6 +70,17 @@ def tokenize_worker(
         logger.error(f"Could not process record '{record[0] if record else '?'}': {e}")
 
 
+def _load_split_lookup(splits_file: Path) -> dict:
+    """Build a normed_id -> split_name lookup from a splits.json file."""
+    with open(splits_file, "r", encoding="utf-8") as f:
+        splits_data = json.load(f)
+    lookup = {}
+    for split_name, split_info in splits_data["splits"].items():
+        for nid in split_info["ids"]:
+            lookup[nid] = split_name
+    return lookup
+
+
 def writer_process(
     queue: mp.Queue,
     output_dir: Path,
@@ -77,6 +88,7 @@ def writer_process(
     metadata: dict,
     shard_size_gb: float,
     total_files: int,
+    split_lookup: dict | None = None,
 ):
     """
     Consumes tokenized data from the queue and writes it to sharded binary files.
@@ -153,6 +165,8 @@ def writer_process(
     for normed_id, data in tqdm(graph_data.items(), desc="Merging graph data"):
         if normed_id in token_metadata:
             data.update(token_metadata[normed_id])
+            if split_lookup is not None:
+                data["split"] = split_lookup.get(normed_id)
             final_graph_data.append(data)
         else:
             logger.warning(f"normed_identifier '{normed_id}' from graph.jsonl not found in tokenized files. Excluding.")
@@ -267,6 +281,14 @@ def run_preprocessing(args, rep: ReproducibilityManager, source=None):
         return
     logger.info(f"Source has {len(source):,} documents to process.")
 
+    # --- Load Splits (optional) ---
+    split_lookup = None
+    splits_file = getattr(args, "splits_file", None)
+    if splits_file and Path(splits_file).exists():
+        logger.info(f"Loading split assignments from {splits_file}...")
+        split_lookup = _load_split_lookup(Path(splits_file))
+        logger.info(f"Loaded split assignments for {len(split_lookup):,} nodes.")
+
     # --- Multiprocessing Setup ---
     manager = mp.Manager()
     queue = manager.Queue()
@@ -288,6 +310,7 @@ def run_preprocessing(args, rep: ReproducibilityManager, source=None):
             dataset_metadata,
             args.shard_size_gb,
             len(source),
+            split_lookup,
         ),
     )
     writer.start()
@@ -353,6 +376,13 @@ def main():
         type=int,
         default=max(1, mp.cpu_count() - 1),
         help=f"Number of worker processes to use (default: {max(1, mp.cpu_count() - 1)})."
+    )
+    parser.add_argument(
+        "--splits-file",
+        type=Path,
+        default=None,
+        help="Path to splits.json produced by the graph splitter. When provided, "
+             "each node in tokenized_graph.jsonl is annotated with a 'split' field.",
     )
     parser.add_argument(
         "-q", "--quiet",
