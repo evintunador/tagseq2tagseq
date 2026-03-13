@@ -241,6 +241,7 @@ class TS2TSModel:
         prompt: str,
         corpus=None,
         config=None,
+        root_identifier: str = "",
     ) -> GenerationResult:
         """
         Generate text autoregressively, returning a structured GenerationResult.
@@ -274,6 +275,7 @@ class TS2TSModel:
             link_detector=self.link_detector,
             tokenizer_decode=self.tokenizer.decode,
             layout_policy=self.layout_policy,
+            root_identifier=root_identifier,
         )
     
     @register_handler("perplexity")

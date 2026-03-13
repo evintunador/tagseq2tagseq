@@ -32,7 +32,7 @@ import torch.nn.functional as F
 
 from data.collate import DocSpan
 from data.dataset import GraphIndex, PretokShardedBackend
-from data.layout import BOSEOSLayoutPolicy, IdentifierPrefixLayoutPolicy, NullLayoutPolicy
+from data.layout import BOSEOSLayoutPolicy, IdentifierPrefixBOSEOSLayoutPolicy, IdentifierPrefixLayoutPolicy, NullLayoutPolicy
 from model.generation_config import GenerationConfig
 from model.generation_result import GeneratedDocument, GenerationResult
 from model.graph_traversal.block_mask_creator import (
@@ -121,10 +121,14 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
         layout_policy = BOSEOSLayoutPolicy(bos_token_id=50256, eos_token_id=50256)
     elif layout_policy_name == "identifier_prefix":
         layout_policy = IdentifierPrefixLayoutPolicy(encode_fn=enc.encode_ordinary)
+    elif layout_policy_name == "identifier_prefix_bos_eos":
+        layout_policy = IdentifierPrefixBOSEOSLayoutPolicy(
+            encode_fn=enc.encode_ordinary, bos_token_id=50256, eos_token_id=50256
+        )
     else:
         raise ValueError(
             f"Unknown layout_policy {layout_policy_name!r}. "
-            "Expected 'null', 'bos_eos', or 'identifier_prefix'."
+            "Expected 'null', 'bos_eos', 'identifier_prefix', or 'identifier_prefix_bos_eos'."
         )
 
     # Reconstruct architecture (dropout=0 at inference)
@@ -464,6 +468,10 @@ def main():
                         help="Path to best_model.pt checkpoint.")
     parser.add_argument("--prompt", required=True,
                         help="Text prompt to generate from.")
+    parser.add_argument("--root-identifier", default="",
+                        help="Filename / identifier prefix for the root document "
+                             "(e.g. 'attention.py'). Used as the '# <id>' header "
+                             "that the identifier_prefix_bos_eos layout policy adds.")
     parser.add_argument("--dataset", default=None,
                         help="Path to pretokenized dataset dir (corpus for link resolution).")
     parser.add_argument("--max-new-tokens", type=int, default=300)
@@ -512,7 +520,8 @@ def main():
 
     # ── Generate ──────────────────────────────────────────────────────────────
     print("Generating ...", file=sys.stderr)
-    result = model.generate(args.prompt, corpus=corpus, config=config)
+    result = model.generate(args.prompt, corpus=corpus, config=config,
+                            root_identifier=args.root_identifier)
 
     # ── Metrics ───────────────────────────────────────────────────────────────
     prompt_token_len = len(enc.encode(args.prompt))

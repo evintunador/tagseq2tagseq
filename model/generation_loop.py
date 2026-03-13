@@ -21,6 +21,7 @@ def run_generation(
     link_detector,
     tokenizer_decode: Optional[Callable],
     layout_policy,
+    root_identifier: str = "",
 ) -> GenerationResult:
     """
     Run autoregressive generation and return a GenerationResult.
@@ -42,7 +43,7 @@ def run_generation(
         device=config.device,
     )
     root_entry = context.add_root(
-        raw_identifier="",
+        raw_identifier=root_identifier,
         prompt_tokens=prompt_tokens,
         layout_policy=layout_policy,
     )
