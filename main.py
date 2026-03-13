@@ -87,6 +87,40 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             json.dump(cfg, f, ensure_ascii=False, indent=2)
 
     # -------------------------------------------------------------------------
+    # 1b. Resume: read checkpoint metadata early so max_optimizer_steps can be
+    #     adjusted before the LimitedDataLoader is built.
+    # -------------------------------------------------------------------------
+    # compose_config preserves CLI hyphens when called via the bare SLURM launcher
+    # parser, so --resume-from becomes cfg['resume-from'] there, but dest="resume_from"
+    # produces cfg['resume_from'] when main.py is invoked directly.  Handle both.
+    resume_from   = cfg.get('resume_from') or cfg.get('resume-from')
+    resume_ckpt   = None   # loaded lazily below; freed after state is restored
+    resumed_steps = 0
+
+    if resume_from:
+        if not os.path.exists(resume_from):
+            raise FileNotFoundError(f"--resume-from checkpoint not found: {resume_from}")
+        logger.info("Loading resume checkpoint: %s", resume_from)
+        resume_ckpt   = torch.load(resume_from, map_location='cpu', weights_only=False)
+        resumed_steps = int(resume_ckpt.get('metadata', {}).get('step', 0))
+        resumed_val   = resume_ckpt.get('metadata', {}).get('val_loss', float('nan'))
+        logger.info("Checkpoint: step=%d  val_loss=%.4f", resumed_steps, resumed_val)
+
+        _max = cfg.get('train_loop', {}).get('max_optimizer_steps')
+        if _max is not None:
+            remaining = _max - resumed_steps
+            if remaining <= 0:
+                raise ValueError(
+                    f"Checkpoint step ({resumed_steps}) >= max_optimizer_steps ({_max}); "
+                    "nothing left to train."
+                )
+            cfg['train_loop']['max_optimizer_steps'] = remaining
+            logger.info(
+                "max_optimizer_steps adjusted: %d total − %d done = %d remaining",
+                _max, resumed_steps, remaining,
+            )
+
+    # -------------------------------------------------------------------------
     # 2. Data Loading Setup
     # -------------------------------------------------------------------------
     dataset_dir_str = cfg.get('data', {}).get('dataset_dir')
@@ -298,6 +332,51 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
         logger.info("Using SingleDeviceMuonWithAuxAdam (single process)")
 
+    # -------------------------------------------------------------------------
+    # 3b. Restore weights and AdamW state from checkpoint (if resuming).
+    #
+    # Muon momentum buffers are world_size-dependent: each rank only saves its
+    # own shard, so they cannot be remapped when world_size changes.  We restore
+    # the AdamW state (embedding + skip_weights) which IS portable, and let Muon
+    # restart with cold momentum (recovers within ~100 steps).
+    # -------------------------------------------------------------------------
+    if resume_ckpt is not None:
+        # --- model weights ---
+        model_sd = resume_ckpt['model']
+        # Strip 'module.' prefix produced by DDP-wrapped saves, if present.
+        model_sd = {
+            (k[len('module.'):] if k.startswith('module.') else k): v
+            for k, v in model_sd.items()
+        }
+        model.load_state_dict(model_sd, strict=True)
+        logger.info("Resume: model weights restored.")
+
+        # --- AdamW optimizer state ---
+        saved_opt = resume_ckpt.get('optimizer', {})
+        saved_state  = saved_opt.get('state', {})
+        saved_groups = saved_opt.get('param_groups', [])
+
+        adamw_indices = set()
+        for g in saved_groups:
+            if not g.get('use_muon', False):
+                adamw_indices.update(g['params'])
+
+        portable_state = {k: v for k, v in saved_state.items() if k in adamw_indices}
+        if portable_state:
+            cur_sd = optimizer.state_dict()
+            cur_sd['state'].update(portable_state)
+            optimizer.load_state_dict(cur_sd)
+            logger.info(
+                "Resume: AdamW state restored for %d param(s); "
+                "Muon momentum initialised cold (world_size changed: %d → %d).",
+                len(portable_state),
+                len(saved_groups[0].get('params', [])) + len(adamw_indices),  # old world total
+                dist.world_size,
+            )
+
+        del resume_ckpt   # free ~1.8 GB
+        resume_ckpt = None
+
     # Compile backbone BEFORE DDP wrapping.  torch.compile operates on the
     # backbone nn.Module; DDP adds communication hooks on top without
     # interfering with the compiled graph.
@@ -377,6 +456,11 @@ if __name__ == "__main__":
                         help="Maximum sequence length (token budget per pack).")
     parser.add_argument("--seed", dest="seed", type=int, default=42,
                         help="Random seed.")
+    parser.add_argument("--resume-from", dest="resume_from", type=str, default=None,
+                        help="Path to a best_model.pt checkpoint to resume training from. "
+                             "Restores model weights and AdamW state; Muon momentum is "
+                             "restarted cold (world_size-dependent, cannot be remapped). "
+                             "max_optimizer_steps is automatically reduced by the checkpoint step.")
 
     config = compose_config(parser)
 
