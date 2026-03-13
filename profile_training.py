@@ -91,12 +91,24 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     trace_dir        = Path(prof_cfg.get('trace_dir', 'artifacts/profiler_traces'))
     total_steps      = warmup_steps + no_sync_steps + profile_steps
 
+    # DDP/compile knobs — vary these to isolate the source of NCCL non-overlap.
+    ddp_static_graph   = bool(prof_cfg.get('static_graph',   True))
+    ddp_bucket_cap_mb  = int(prof_cfg.get('bucket_cap_mb',   256))
+    use_optimize_ddp   = bool(prof_cfg.get('optimize_ddp',   True))
+    nccl_debug         = str(prof_cfg.get('nccl_debug',      'OFF'))
+
+    if nccl_debug != 'OFF':
+        os.environ['NCCL_DEBUG'] = nccl_debug
+
     if dist.is_main_process:
         trace_dir.mkdir(parents=True, exist_ok=True)
         print(
             f"[profile_training] Starting: "
             f"warmup={warmup_steps}  no_sync={no_sync_steps}  profile={profile_steps}  "
-            f"world={dist.world_size}",
+            f"world={dist.world_size}  "
+            f"compile={cfg['model'].get('compile', True)}  "
+            f"static_graph={ddp_static_graph}  bucket_cap_mb={ddp_bucket_cap_mb}  "
+            f"optimize_ddp={use_optimize_ddp}  nccl_debug={nccl_debug}",
             flush=True,
         )
 
@@ -234,7 +246,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     if cfg['model'].get('compile', True):
         _log(dist.rank, "torch.compile starting")
-        torch._dynamo.config.optimize_ddp = True
+        torch._dynamo.config.optimize_ddp = use_optimize_ddp
         model.backbone = torch.compile(
             model.backbone,
             dynamic=True,  # CRITICAL: prevents per-shape recompile on multi-node (see MEMORY.md)
@@ -247,14 +259,43 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         model = DDP(
             model,
             device_ids=[dist.local_rank],
-            static_graph=True,
+            static_graph=ddp_static_graph,
             find_unused_parameters=False,
-            bucket_cap_mb=256,
+            bucket_cap_mb=ddp_bucket_cap_mb,
         )
         _log(dist.rank, "DDP wrap done")
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
+
+    # -------------------------------------------------------------------------
+    # 3b. NCCL micro-benchmark: measure raw all_reduce latency/bandwidth
+    #     before any model ops so we know the baseline collective speed.
+    # -------------------------------------------------------------------------
+    nccl_bench_steps = int(prof_cfg.get('nccl_bench_steps', 5))
+    if dist.is_distributed and nccl_bench_steps > 0:
+        # Warm up with one call, then time nccl_bench_steps calls.
+        _sizes_mb = [1, 16, 64, 256, 560]   # MB — covers parameter-sized blobs
+        buf = torch.zeros(560 * 1024 * 1024 // 4, dtype=torch.float32,
+                          device=dist.device)
+        for _s in _sizes_mb:
+            _n = _s * 1024 * 1024 // 4
+            _buf = buf[:_n]
+            # warm-up
+            tdist.all_reduce(_buf)
+            torch.cuda.synchronize()
+            # timed
+            _t0 = time.perf_counter()
+            for _ in range(nccl_bench_steps):
+                tdist.all_reduce(_buf)
+            torch.cuda.synchronize()
+            _elapsed = (time.perf_counter() - _t0) / nccl_bench_steps * 1000
+            if dist.is_main_process:
+                _bw = _s * 2 / (_elapsed / 1000)   # MB/s  (×2 for reduce+scatter)
+                print(f"[nccl_bench] {_s:>4}MB all_reduce: {_elapsed:>7.1f}ms  "
+                      f"({_bw/1024:.1f} GB/s effective)",
+                      flush=True)
+        del buf
 
     # -------------------------------------------------------------------------
     # 4. Monkey-patch block_mask_creator for CPU timing
@@ -439,6 +480,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     print(f"  profile_training: step timing summary", flush=True)
     print(f"  config: {L}L/{D}D  seq={seq_len}  world={world}", flush=True)
     print(f"  warmup={warmup_steps}  no_sync={no_sync_steps}  profile={profile_steps}", flush=True)
+    print(f"  compile={cfg['model'].get('compile', True)}  mask={cfg.get('model',{}).get('mask_type','?')}  "
+          f"static_graph={ddp_static_graph}  bucket_cap_mb={ddp_bucket_cap_mb}  "
+          f"optimize_ddp={use_optimize_ddp}", flush=True)
     print(sep, flush=True)
     print(
         f"{'Phase':<22} | {'This Rank (mean ± std)':<28} | {'All Ranks (min / med / max)'}",
