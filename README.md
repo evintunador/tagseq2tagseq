@@ -33,9 +33,15 @@ Raw dumps and JSONL source files:
 | Checkpoint | Architecture | Dataset | Context | Mask | Steps | Val loss |
 |-----------|-------------|---------|---------|------|-------|----------|
 | `runs/20260224_212158/checkpoints/best_model.pt` | 12L / 768D | SimpleWiki | 2k | `doc_causal` | 38,500 | 2.07 |
-| `runs/run_20260308_201435_097608/checkpoints/best_model.pt` | 36L / 1280D | Stack 100M | 32k | `cross_doc_link` | — | — |
+| `runs/20260308_012514/checkpoints/best_model.pt` | 36L / 1280D | SimpleWiki | 32k | `doc_causal` | 10,200 | 3.923 |
+| `runs/20260308_012516/checkpoints/best_model.pt` | 36L / 1280D | SimpleWiki | 32k | `cross_doc_link` (md) | 12,200 | 3.905 |
+| `runs/20260308_012518/checkpoints/best_model.pt` | 36L / 1280D | Stack 10M | 32k | `doc_causal` | 14,700 | 2.271 |
+| `runs/20260308_012521/checkpoints/best_model.pt` | 36L / 1280D | Stack 10M | 32k | `cross_doc_link` (py) | 14,900 | 2.291 |
+| `runs/run_20260311_184203_685319/checkpoints/best_model.pt` | 24L / 1024D | Stack 100M | 32k | `cross_doc_link` (py) | 3,000 | 1.430 |
 
-> The Stack 100M checkpoint is currently training (job 29501). Path will be final once complete.
+> The Stack 100M 24L/1024D checkpoint (`run_20260311_184203_685319`) is partially trained (~16% of
+> planned 18,400 steps, global step 3,000). Currently being continued in a LR-cooldown run
+> (`run_20260313_182606_023358`, job 30109) with muon_lr÷10, BFS, accum_steps=4.
 
 ---
 
@@ -281,23 +287,53 @@ After training, generate text from a checkpoint using `generate.py`. The script 
 `hyperparameters.json` from the run directory to reconstruct the architecture, tokenizer,
 link detector, and layout policy — no manual config needed.
 
-### Stack 100M model (36L/1280D, cross-doc, 32k context)
+### Stack 100M model (24L/1024D, cross-doc, 32k context)
 
-Single-document (no corpus lookup):
+This checkpoint was trained with `identifier_prefix_bos_eos` layout policy, so every document
+seen during training began with `<BOS># path/to/file.py\n\n`. Pass `--root-identifier` with a
+plausible filename or the model will see an empty `# \n\n` header and immediately generate EOS.
+
 ```bash
 python generate.py \
-    --checkpoint runs/run_20260308_201435_097608/checkpoints/best_model.pt \
+    --checkpoint runs/run_20260311_184203_685319/checkpoints/best_model.pt \
+    --dataset data/pretokenized_datasets/stack_100m \
+    --root-identifier "trainer.py" \
+    --prompt "import torch
+from torch.optim import Adam
+from model import ResNet
+
+def train_epoch(model, loader, optimizer, criterion, device):" \
+    --max-new-tokens 500 \
+    --max-link-depth 2 \
+    --repetition-penalty 1.1 \
+    --temperature 0.9
+```
+
+**Repetition penalty tuning for this checkpoint:** at ~3,000 steps the model is partially trained
+and prone to repetition loops. The default `--repetition-penalty 1.3` is too aggressive for code
+(it penalises legitimate re-use of variable names like `d_model` or `optimizer`), causing premature
+EOS. Use `1.05–1.15` for code generation. `1.0` disables the penalty entirely but risks infinite
+repetition loops.
+
+### Stack 10M models (36L/1280D, 32k context)
+
+```bash
+# doc_causal variant
+python generate.py \
+    --checkpoint runs/20260308_012518/checkpoints/best_model.pt \
+    --root-identifier "sort.py" \
     --prompt "def merge_sort(arr):" \
     --max-link-depth 0 \
     --max-new-tokens 400
-```
 
-Cross-document (imports resolved against corpus):
-```bash
+# cross_doc_link variant (imports resolved against corpus)
 python generate.py \
-    --checkpoint runs/run_20260308_201435_097608/checkpoints/best_model.pt \
-    --prompt "import numpy as np\n\ndef softmax(x):" \
-    --dataset data/pretokenized_datasets/stack_100m \
+    --checkpoint runs/20260308_012521/checkpoints/best_model.pt \
+    --dataset data/pretokenized_datasets/stack_10m \
+    --root-identifier "main.py" \
+    --prompt "import numpy as np
+
+def softmax(x):" \
     --max-link-depth 2 \
     --max-new-tokens 400
 ```
@@ -321,8 +357,9 @@ documents are inserted into the attention context before the active document. Se
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--root-identifier` | `""` | Filename / identifier for the root document header (e.g. `attention.py`). **Required** for checkpoints trained with `identifier_prefix_bos_eos` layout policy (all Stack 100M runs) — without it the model sees an empty `# \n\n` header and generates EOS immediately. |
 | `--max-link-depth` | `2` | `0` = single-doc baseline; `≥1` enables aux doc insertion |
-| `--repetition-penalty` | `1.3` | Values `>1` reduce probability of already-seen tokens; helps with mode collapse on undertrained models |
+| `--repetition-penalty` | `1.3` | Values `>1` reduce probability of already-seen tokens. Use `1.05–1.15` for code; `1.3` is appropriate for prose but too aggressive for code (penalises legitimate variable name reuse). |
 | `--temperature` | `0.8` | Sampling temperature |
 | `--top-k` | `50` | Top-k sampling |
 | `--max-display-tokens` | `200` | Truncate displayed text per doc; full links list still shown |

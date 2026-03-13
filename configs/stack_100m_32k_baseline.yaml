@@ -34,6 +34,14 @@ train_loop:
   val_steps: 30
   val_interval: 300           # every N optimizer steps (~every 1.6% of training)
   atomic_feature_kwargs:
-    accum_steps: 2            # 8 GPUs × 32k tokens × 2 = 524k tokens/optimizer step
+    # accum_steps: only the last micro-batch per optimizer step runs DDP sync
+    # (all-reduce); the rest are no_sync (pure compute, no NCCL barrier).
+    # Perf context: backward time varies 2–6s across ranks depending on mask
+    # density (dense cross_doc packs → slow FlexAttention backward → slow ranks
+    # stall fast ranks at the NCCL barrier). accum_steps=2 halves stall frequency.
+    # Token budget: N_GPUs × seq_len × accum_steps = effective tokens/optimizer step.
+    # 16 GPUs × 32k × 1 = 524k tok/step (current running job, accum_steps=1)
+    # 16 GPUs × 32k × 2 = 1M tok/step (this baseline, accum_steps=2)
+    accum_steps: 2
 
 seed: 42

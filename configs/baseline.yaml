@@ -33,6 +33,16 @@ train_loop:
   max_optimizer_steps: null   # Hard stop after N optimizer steps (null = no limit); micro-batches = this × accum_steps
   val_steps: 10               # Micro-batches to run per validation pass
   val_interval: 50            # Run validation every N optimizer steps
-  atomic_feature_kwargs: {}  # Additional training loop arguments
+  atomic_feature_kwargs:
+    # accum_steps: gradient accumulation steps before each optimizer update.
+    # Also controls how often DDP NCCL all-reduce fires: only the last micro-batch
+    # per optimizer step uses sync mode; the rest use no_sync (pure compute).
+    # Perf context (2-node, 32k, cross_doc_link): backward variance across ranks
+    # (some ranks get dense masks → slow FlexAttention backward) causes fast ranks
+    # to stall at the NCCL barrier waiting for slow ranks. accum_steps > 1 amortises
+    # that stall — e.g. accum_steps=4 means 3/4 micro-batches pay no NCCL cost at all.
+    # Rule of thumb: accum_steps = 1 is fine for single-node; use 2–4 for multi-node
+    # cross_doc_link runs at 32k to reduce stall overhead.
+    accum_steps: 1
 
 seed: 42
