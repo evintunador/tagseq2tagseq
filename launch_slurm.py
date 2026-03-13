@@ -91,6 +91,12 @@ def _training_worker(main_argv: list, run_dir: str, script: str = 'main') -> Non
 
     config = compose_config(_ap.ArgumentParser(add_help=False))
 
+    # Apply any debug env-vars from config BEFORE DistributedManager.__enter__()
+    # so they take effect before NCCL initialises the process group.
+    _nccl_debug = config.get('profile', {}).get('nccl_debug', 'OFF')
+    if _nccl_debug != 'OFF':
+        os.environ['NCCL_DEBUG'] = _nccl_debug
+
     dist_mgr = DistributedManager()
 
     # ReproducibilityManager.__init__ calls barrier() internally before running
@@ -120,6 +126,7 @@ def launch(
     mem_per_gpu:   int   = 128,
     cpus_per_task: int   = 8,
     exclude:       str   = None,
+    nodelist:      str   = None,
     auto_tail:     bool  = True,
     main_argv:     list  = None,
 ) -> str:
@@ -163,6 +170,8 @@ def launch(
     )
     if exclude:
         update_params["slurm_exclude"] = exclude
+    if nodelist:
+        update_params["slurm_nodelist"] = nodelist
 
     executor.update_parameters(**update_params)
 
@@ -230,6 +239,8 @@ def main():
                         help="CPU cores per task/GPU")
     parser.add_argument("--exclude",       type=str, default=None,
                         help="Comma-separated nodes to exclude")
+    parser.add_argument("--nodelist",      type=str, default=None,
+                        help="Comma-separated nodes to require (SLURM --nodelist)")
     parser.add_argument("--no-tail",       action="store_true",
                         help="Don't auto-tail logs")
 
@@ -245,6 +256,7 @@ def main():
         mem_per_gpu=args.mem_per_gpu,
         cpus_per_task=args.cpus_per_task,
         exclude=args.exclude,
+        nodelist=args.nodelist,
         auto_tail=not args.no_tail,
         main_argv=main_argv,
     )
