@@ -79,6 +79,7 @@ class TS2TSTrainingModule(nn.Module):
         weight_tying: bool = True,
         ignore_index: int = -100,
         dtype: torch.dtype = torch.bfloat16,
+        activation_checkpointing: bool = False,
     ) -> 'TS2TSTrainingModule':
         """
         Factory method to construct a training module from configuration parameters.
@@ -112,6 +113,7 @@ class TS2TSTrainingModule(nn.Module):
             dropout=dropout,
             drop_path_rate=drop_path_rate,
             fp8=fp8,
+            activation_checkpointing=activation_checkpointing,
         )
         
         # Construct embedding

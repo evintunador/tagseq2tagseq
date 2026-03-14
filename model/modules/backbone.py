@@ -2,6 +2,7 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint
 from torch import Tensor
 import torch.nn.functional as F
 
@@ -39,13 +40,14 @@ class TS2TSBackbone(nn.Module):
     """
     def __init__(
         self,
-        num_layers: int, 
-        model_dim: int, 
+        num_layers: int,
+        model_dim: int,
         num_heads: int,
-        max_seq_len: int, 
+        max_seq_len: int,
         dropout: float,
         drop_path_rate: float,
         fp8: bool = False,
+        activation_checkpointing: bool = False,
         **kwargs
     ):
         # if kwargs:
@@ -55,14 +57,15 @@ class TS2TSBackbone(nn.Module):
         self.max_seq_len = max_seq_len
         
         self.layers = nn.ModuleList([Layer(
-            n_embd=model_dim, 
-            n_head=num_heads, 
+            n_embd=model_dim,
+            n_head=num_heads,
             max_seq_len=max_seq_len,
             dropout=dropout,
             drop_path_rate=drop_path_rate,
             fp8=fp8,
         ) for _ in range(num_layers)])
         self.skip_weights = nn.Parameter(torch.ones(num_layers//2))
+        self.activation_checkpointing = activation_checkpointing
 
     def forward(self, x: Tensor, block_mask: Any) -> Tensor:
         """
@@ -93,8 +96,13 @@ class TS2TSBackbone(nn.Module):
                  if skip_connections:
                     x = x + self.skip_weights[i - n_skip] * skip_connections.pop()
             
-            x = layer(x, block_mask)
-            
+            if self.activation_checkpointing:
+                x = torch.utils.checkpoint.checkpoint(
+                    layer, x, block_mask, use_reentrant=False
+                )
+            else:
+                x = layer(x, block_mask)
+
             if i < n_skip:
                 skip_connections.append(x)
                 
