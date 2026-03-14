@@ -149,7 +149,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     )
 
     # Configure Traversal Strategy
-    strategy_name = cfg.get('data', {}).get('strategy', 'random')
+    strategy_name = cfg.get('data', {}).get('strategy', 'bfs')
     if strategy_name == "random":
         strategy_factory = lambda: RandomSelectionStrategy()
     elif strategy_name == "random_walk":
@@ -449,7 +449,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--dataset-dir", dest="data.dataset_dir", type=str,
                         help="Path to the pre-tokenized dataset directory.")
-    parser.add_argument("--strategy", dest="data.strategy", type=str, default="random",
+    parser.add_argument("--strategy", dest="data.strategy", type=str, default="bfs",
                         choices=["random", "random_walk", "bfs", "dfs"],
                         help="Graph traversal strategy.")
     parser.add_argument("--max-seq-len", dest="model.max_seq_len", type=int, default=2048,
