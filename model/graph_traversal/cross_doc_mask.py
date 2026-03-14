@@ -11,7 +11,8 @@ See also:
 """
 
 import logging
-from typing import Any, Dict, List, Tuple
+import math
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask
@@ -45,14 +46,42 @@ class CrossDocLinkMaskCreator:
         ... )
     """
 
-    def __init__(self, link_detector: LinkDetector, max_grants: int = 64):
+    def __init__(
+        self,
+        link_detector: LinkDetector,
+        max_grants: int = 64,
+        max_grants_start: Optional[int] = None,
+        max_grants_warmup_steps: int = 0,
+    ):
         self.link_detector = link_detector
         self.max_grants = max_grants
+        # Schedule: cosine ascent from max_grants_start → max_grants over
+        # max_grants_warmup_steps forward passes.  Disabled when start is None
+        # or warmup_steps is 0 (max_grants is used from step 0).
+        self._max_grants_start = max_grants_start if max_grants_start is not None else max_grants
+        self._max_grants_warmup_steps = max_grants_warmup_steps
+        self._step = 0
+        # _n_chunks is always sized for the *final* max_grants so the triton
+        # kernel shape is stable throughout training.  Early in warmup the
+        # extra chunks are all-zero and contribute no grants.
         self._n_chunks = max(1, (max_grants + 63) // 64)
         logger.info(
             f"Initialized CrossDocLinkMaskCreator with detector: "
             f"{type(link_detector).__name__}, max_grants={max_grants} "
-            f"({self._n_chunks} int64 chunk(s))"
+            f"({self._n_chunks} int64 chunk(s)), "
+            f"warmup: {self._max_grants_start}→{max_grants} over "
+            f"{max_grants_warmup_steps} steps"
+        )
+
+    def _current_max_grants(self) -> int:
+        """Cosine ascent schedule: ramps from max_grants_start to max_grants."""
+        if self._max_grants_warmup_steps <= 0 or self._step >= self._max_grants_warmup_steps:
+            return self.max_grants
+        frac = self._step / self._max_grants_warmup_steps
+        cosine_factor = (1.0 - math.cos(math.pi * frac)) / 2.0
+        return round(
+            self._max_grants_start
+            + (self.max_grants - self._max_grants_start) * cosine_factor
         )
 
     def _match_links_to_docs(
@@ -184,6 +213,7 @@ class CrossDocLinkMaskCreator:
         doc_spans: List[Any],
         link_to_target: Dict[int, List[int]],
         device: torch.device,
+        max_grants_cap: Optional[int] = None,
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
         """
         Build lists of int64 bitmask tensors encoding cross-doc grants.
@@ -206,6 +236,7 @@ class CrossDocLinkMaskCreator:
         At seq_len=32768: 512 KB (n_chunks=1) to 2 MB (n_chunks=4),
         vs the original O(seq_len²) dense bool mask (1 GB).
         """
+        cap = max_grants_cap if max_grants_cap is not None else self.max_grants
         q_bitmasks = [torch.zeros(seq_len, dtype=torch.int64, device=device)
                       for _ in range(self._n_chunks)]
         kv_bitmasks = [torch.zeros(seq_len, dtype=torch.int64, device=device)
@@ -217,10 +248,10 @@ class CrossDocLinkMaskCreator:
             if truncated:
                 break
             for target_doc_id in target_doc_ids:
-                if grant_idx >= self.max_grants:
+                if grant_idx >= cap:
                     logger.warning(
-                        f"Batch has >{self.max_grants} grants; ignoring remainder. "
-                        f"Consider increasing max_grants (currently {self.max_grants})."
+                        f"Batch has >{cap} grants; ignoring remainder. "
+                        f"(max_grants={self.max_grants}, cap={cap})"
                     )
                     truncated = True
                     break
@@ -298,13 +329,20 @@ class CrossDocLinkMaskCreator:
             if start < end:
                 document_ids[start:end] = span.doc_id
 
-        # Lists of n_chunks int64 bitmask tensors: O(n_chunks × seq_len).
-        # At seq_len=32768: 512 KB (1 chunk) to 2 MB (4 chunks) vs 1 GB for
-        # the O(seq_len²) dense bool mask.
-        # mask_mod ORs across chunks (all pointwise, no sequence-dimension
-        # reductions), satisfying FlexAttention's mask_mod constraint.
+        # Cosine warmup schedule: ramp max_grants from start → final over
+        # max_grants_warmup_steps forward passes.  _n_chunks is always sized
+        # for the final value so the triton kernel shape is stable.
+        current_max_grants = self._current_max_grants()
+        self._step += 1
+        if current_max_grants < self.max_grants:
+            logger.debug(
+                f"max_grants schedule: step={self._step - 1}, "
+                f"current_max_grants={current_max_grants}/{self.max_grants}"
+            )
+
         q_bms, kv_bms = self._build_grant_bitmasks(
-            seq_len, doc_spans, link_to_target, device
+            seq_len, doc_spans, link_to_target, device,
+            max_grants_cap=current_max_grants,
         )
 
         def cross_doc_link_mod(b, h, q_idx, kv_idx):
