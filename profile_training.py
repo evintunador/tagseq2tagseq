@@ -184,10 +184,13 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             detector = PythonImportDetector(decode_fn=enc.decode)
         else:
             raise ValueError(f"Unknown link_detector: {link_detector_name!r}")
+        _mcfg = cfg.get('model', {})
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=detector,
-                max_grants=cfg.get('model', {}).get('max_grants', 64),
+                max_grants=_mcfg.get('max_grants', 64),
+                max_grants_start=_mcfg.get('max_grants_start'),
+                max_grants_warmup_steps=int(_mcfg.get('max_grants_warmup_steps', 0)),
             )
         )
     else:
@@ -210,6 +213,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         weight_tying=cfg['model'].get('weight_tying', True),
         ignore_index=cfg['model'].get('ignore_index', -100),
         dtype=getattr(torch, cfg['model'].get('dtype', 'bfloat16')),
+        activation_checkpointing=cfg['model'].get('activation_checkpointing', False),
     ).to(dist.device)
     _log(dist.rank, "model built")
 

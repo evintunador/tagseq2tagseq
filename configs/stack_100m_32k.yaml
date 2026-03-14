@@ -10,6 +10,9 @@ model:
   mask_type: 'cross_doc_link'
   link_detector: 'python'
   max_grants: 256
+  # max_grants_start: 64              # cosine warmup start (enable to ramp up from this value)
+  # max_grants_warmup_steps: 5000     # steps to ramp max_grants_start → max_grants
+  activation_checkpointing: false
   model_dim: 1024
   num_layers: 24
   num_heads: 16

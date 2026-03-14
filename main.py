@@ -267,10 +267,13 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 f"Unknown model.link_detector '{link_detector_name}'. "
                 "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
             )
+        model_cfg = cfg.get('model', {})
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=detector,
-                max_grants=cfg.get('model', {}).get('max_grants', 64),
+                max_grants=model_cfg.get('max_grants', 64),
+                max_grants_start=model_cfg.get('max_grants_start'),
+                max_grants_warmup_steps=int(model_cfg.get('max_grants_warmup_steps', 0)),
             )
         )
     else:
@@ -289,6 +292,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         weight_tying=cfg['model'].get('weight_tying', True),
         ignore_index=cfg['model'].get('ignore_index', -100),
         dtype=getattr(torch, cfg['model'].get('dtype', 'bfloat16')),
+        activation_checkpointing=cfg['model'].get('activation_checkpointing', False),
     ).to(dist.device)
 
     # Build optimizer param groups BEFORE compile/DDP so that named_parameters()
