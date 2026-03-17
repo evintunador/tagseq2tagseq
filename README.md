@@ -1,371 +1,158 @@
-# TAGSeq2TAGSeq
+# Text Attributed Graph Sequence to Text Attributed Graph Sequence (TAGSeq2TAGSeq)
 
-Trains language models on graph-structured text data. Documents are nodes in a graph; edges are hyperlinks (Wikipedia) or import dependencies (Python code). The data pipeline traverses this graph to build packed token sequences, and a custom FlexAttention mask enforces document-level causal isolation and optional cross-document link awareness.
+A framework for training language models on **graph-structured text** — where documents are nodes and hyperlinks or import dependencies are edges. Rather than treating corpora as flat token streams, this project makes the link structure a first-class part of both training and inference.
+
+See [INSTRUCTIONS.md](INSTRUCTIONS.md) for full pipeline, training, and generation commands.
+
+---
+
+## The Core Idea
+
+Most text corpora have implicit graph structure that standard language model training ignores. A Wikipedia article on *Fluid dynamics* links to *Hydraulics*, *Archimedes' screw*, and *Lever*. A Python file `mcts.py` imports `chess/board.py`, `chess/move.py`, and `model/tensorflow/model.py`. These links are not noise — they signal that the linked content is semantically relevant to the current document.
+
+TAGSeq2TAGSeq exploits this structure in two ways:
+
+1. **Graph traversal packs related documents together.** Instead of sampling random token windows, a graph traversal (BFS or DFS) walks the link graph and fills each training sequence with documents that are topologically close to one another.
+
+2. **A custom attention mask decides what each token can see.** At minimum, documents are causally isolated from one another — tokens in one article cannot attend to tokens in an unrelated article packed into the same sequence. Optionally, when document A explicitly links to document B and both are in the batch, tokens in A can attend back across the document boundary into B.
+
+---
+
+## Attention Masks
+
+The attention pattern is the heart of the method. Two examples are shown below, both on the same 16k-token batch.
+
+### `doc_causal` — document-isolated causal attention
+
+Each document attends only to itself. The mask is a block-diagonal of lower triangles: no information crosses document boundaries. This is the baseline — equivalent to training on independently sampled documents, but with the efficiency benefit of packing many short documents into one long sequence.
+
+![doc_causal mask on SimpleWiki](docs/images/mask_doc_causal.png)
+
+*Each diagonal block is one Wikipedia article. Blue dashed lines mark document boundaries. Documents are completely isolated from one another.*
+
+---
+
+### `cross_doc_link` — link-aware cross-document attention
+
+When document A contains a link to document B (and B is present in the batch), all tokens in A are granted read-access to all tokens in B. The causal structure within each document is preserved; the cross-document grants are asymmetric (A can read B, but B cannot read A unless it also links back).
+
+![cross_doc_link mask on The Stack](docs/images/mask_cross_doc_link.png)
+
+*Python files from the same repository. `src/mcts/mcts.py` and `src/self_play.py` import earlier files in the batch — their rows extend leftward as large black blocks. Documents that share no imports remain isolated.*
+
+This teaches the model a grounded form of cross-document reasoning: when you encounter an import or a hyperlink, the full content of the referenced document is available in your attention context.
+
+---
+
+## Graph Traversal
+
+How documents are ordered within a sequence matters for `cross_doc_link`: a document can only attend to documents that appear *before* it in the sequence. The traversal strategy controls this ordering.
+
+- **BFS** (breadth-first): explores the neighbourhood of a seed document level by level. Documents close in graph distance are packed together and predecessors tend to appear before successors. This is the preferred strategy for `cross_doc_link` training.
+- **DFS** (depth-first): follows one path deep into the graph before backtracking. Produces longer chains of topically related documents.
+- **Random walk**: a Markov walk with restart probability, producing soft locality without strict BFS ordering.
+- **Random**: uniform random selection — equivalent to standard document sampling, used as a control baseline.
+
+Within each strategy, a token budget and per-document token cap control sequence length and ensure no single document dominates the pack.
 
 ---
 
 ## Datasets
 
-Four pretokenized datasets are ready to use on `/fss`:
+The framework currently supports four pretokenized datasets and has several more in progress, spanning three distinct link-structure modalities.
 
-| Dataset | Graph edges | Nodes | Tokens | Shards | Pretokenized location |
-|---------|-------------|-------|--------|--------|-----------------------|
-| **SimpleWiki** | Markdown hyperlinks | 275k | ~108M | 1 | `data/pretokenized_datasets/simplewiki/` |
-| **EnWikiSource** | Markdown hyperlinks | 662k | ~612M | 1 | `data/pretokenized_datasets/enwikisource/` |
-| **The Stack (10M)** | Python imports | 2.38M | ~7B | 6 | `data/pretokenized_datasets/stack_10m/` |
-| **The Stack (100M)** | Python imports | 3.56M | ~8.7B | 9 | `data/pretokenized_datasets/stack_100m/` |
+### Ready
 
-SimpleWiki and EnWikiSource use `--model.link_detector markdown`; both Stack datasets use `--model.link_detector python`.
+| Dataset | Edge type | Nodes | Tokens |
+|---------|-----------|-------|--------|
+| **SimpleWiki** | Markdown hyperlinks | 275k | ~108M |
+| **EnWikiSource** | Markdown hyperlinks | 662k | ~612M |
+| **The Stack (10M)** | Python `import` statements | 2.38M | ~7B |
+| **The Stack (100M)** | Python `import` statements | 3.56M | ~8.7B |
 
-Raw dumps and JSONL source files:
+### Planned
 
-| Dataset | Raw source |
-|---------|-----------|
-| SimpleWiki | `/fss/evin_t/wiki_dumps/simplewiki-20251027-cirrussearch-content.json.gz` |
-| EnWikiSource | `/fss/evin_t/wiki_dumps/enwikisource-20251027-cirrussearch-content.json.gz` |
-| The Stack (10M) | `data/github_graph_extractor/sample_10M.jsonl` + `graph_10M.jsonl` |
-| The Stack (100M) | `data/github_graph_extractor/sample_100M.jsonl` + `graph_100M.jsonl` |
+**Combined Wikipedia** — multiple language or thematic wiki dumps merged into a single graph. Cross-dump links and redirect edges give the graph richer connectivity than any single dump alone.
 
----
+**arXiv (LaTeX source)** — papers as nodes; edges from `\cite{}` bibliography references and `\input{}`/`\include{}` file inclusions. Gives the model exposure to structured scientific writing where citations are semantically meaningful dependencies, not just footnotes.
 
-## Available Checkpoints
+**Obsidian vault** — a personal note-taking graph where `[[wikilink]]` syntax connects notes. Edges reflect the author's own associative structure rather than an editorial or codebase convention, making this a qualitatively different kind of graph: sparse, idiosyncratic, and highly personal.
 
-| Checkpoint | Architecture | Dataset | Context | Mask | Steps | Val loss |
-|-----------|-------------|---------|---------|------|-------|----------|
-| `runs/20260224_212158/checkpoints/best_model.pt` | 12L / 768D | SimpleWiki | 2k | `doc_causal` | 38,500 | 2.07 |
-| `runs/20260308_012514/checkpoints/best_model.pt` | 36L / 1280D | SimpleWiki | 32k | `doc_causal` | 10,200 | 3.923 |
-| `runs/20260308_012516/checkpoints/best_model.pt` | 36L / 1280D | SimpleWiki | 32k | `cross_doc_link` (md) | 12,200 | 3.905 |
-| `runs/20260308_012518/checkpoints/best_model.pt` | 36L / 1280D | Stack 10M | 32k | `doc_causal` | 14,700 | 2.271 |
-| `runs/20260308_012521/checkpoints/best_model.pt` | 36L / 1280D | Stack 10M | 32k | `cross_doc_link` (py) | 14,900 | 2.291 |
-| `runs/run_20260311_184203_685319/checkpoints/best_model.pt` | 24L / 1024D | Stack 100M | 32k | `cross_doc_link` (py) | 3,000 | 1.430 |
+**Multi-dataset composition** — a dataset abstraction that mixes multiple corpora (e.g. Wikipedia + arXiv + code) in a single training run, with per-dataset link detectors dispatched based on document provenance. This requires handling heterogeneous edge types within the same batch.
 
-> The Stack 100M 24L/1024D checkpoint (`run_20260311_184203_685319`) is partially trained (~16% of
-> planned 18,400 steps, global step 3,000). Currently being continued in a LR-cooldown run
-> (`run_20260313_182606_023358`, job 30109) with muon_lr÷10, BFS, accum_steps=4.
+### Link detectors
+
+Each modality is served by a pluggable `LinkDetector` that runs online — during training to identify which token positions correspond to links, and during generation to detect links in newly generated text:
+
+| Detector | Used for |
+|----------|---------|
+| `MarkdownLinkDetector` | Wikipedia, Obsidian (`[[...]]` and `[text](url)` syntax) |
+| `PythonImportDetector` | The Stack (`import` / `from ... import`) |
+| *(planned)* `LatexCiteDetector` | arXiv (`\cite{...}`, `\input{...}`) |
 
 ---
 
-## Full Pipeline
+## Model Architecture
 
-### Wikipedia (SimpleWiki)
+The model is a standard decoder-only transformer with rotary position embeddings, trained with bfloat16 mixed precision and the Muon optimizer (for 2D weight matrices) combined with AdamW (for embeddings and norms). Weight tying connects the embedding and unembedding matrices.
 
-**1. Extract dump → markdown articles**
+The only architectural novelty is the **FlexAttention block mask**: instead of materialising a dense `T×T` attention matrix (expensive at 32k context), PyTorch's FlexAttention API compiles the mask logic into a sparse block representation, making long-context training tractable.
 
-The raw dump is at `/fss/evin_t/wiki_dumps/simplewiki-20251027-cirrussearch-content.json.gz`.
-
-```bash
-python -m data.wiki_graph_extractor.dump_extractor \
-    /fss/evin_t/wiki_dumps/simplewiki-20251027-cirrussearch-content.json.gz \
-    -o data/wiki_articles \
-    -p 60
-```
-
-Produces ~275,000 `.md` files in `data/wiki_articles/` organised into per-letter subdirectories.
-
-**2. Build link graph**
-
-```bash
-python -m data.wiki_graph_extractor.build_graph \
-    data/wiki_articles \
-    -o data/wiki_articles/graph.jsonl \
-    -p 60
-```
-
-Produces `data/wiki_articles/graph.jsonl` (~275k nodes, ~2.3M edges) plus `graph_stats.json` and `graph_degree_dist.png`.
-
-**3. Pretokenize**
-
-```bash
-python -m data.pretokenize \
-    data/wiki_articles \
-    data/wiki_articles/graph.jsonl \
-    -o data/pretokenized_datasets/simplewiki \
-    -p 60
-```
-
-Produces `shard_000000.bin` (~108M tokens), `tokenized_graph.jsonl`, and `metadata.json` in `data/pretokenized_datasets/simplewiki/`.
-
----
-
-### The Stack (10M Python files)
-
-**1. Download 10M samples**
-
-Requires a HuggingFace token with read access to `bigcode/the-stack-dedup`.
-
-```bash
-HF_TOKEN=<your_token> python data/github_graph_extractor/download_sample.py \
-    --limit 10000000 \
-    -o data/github_graph_extractor/sample_10M.jsonl
-```
-
-Streams ~56 GB of Python source files.
-
-**2. Build import dependency graph**
-
-Must be run from inside `data/github_graph_extractor/` (uses relative imports):
-
-```bash
-cd data/github_graph_extractor
-python build_graph_streaming.py \
-    sample_10M.jsonl \
-    -o graph_10M.jsonl \
-    -p 8 \
-    --bucket-workers 8
-cd -
-```
-
-Produces `graph_10M.jsonl` (~2.4M nodes) plus statistics and a degree-distribution plot.
-
-**3. Pretokenize**
-
-```bash
-python -m data.pretokenize_stack \
-    data/github_graph_extractor/sample_10M.jsonl \
-    data/github_graph_extractor/graph_10M.jsonl \
-    -o data/pretokenized_datasets/stack_10m \
-    -p 60
-```
-
-Produces 6 binary shards, `tokenized_graph.jsonl`, and `metadata.json` in `data/pretokenized_datasets/stack_10m/`.
-
----
-
-## Visualisation
-
-### Inspect packed batches (text)
-
-```bash
-python demo_traversal.py <dataset_dir> --strategy dfs --token-budget 2048
-```
-
-Prints a packed-batch summary: doc spans, graph connectivity within the batch, and decoded text snippets.
-
-The `--layout-policy` flag controls per-document token decoration:
-
-| Value | Behaviour |
-|-------|-----------|
-| `null` (default) | No decoration — raw body tokens only |
-| `bos-eos` | Wrap each document body with BOS/EOS tokens |
-| `identifier-prefix` | Prepend `# {raw_identifier}\n\n` before each body |
-
-```bash
-# Default (no decoration)
-python demo_traversal.py data/pretokenized_datasets/simplewiki --strategy dfs
-
-# With identifier prefix (e.g. "# Water\n\n..." before each article)
-python demo_traversal.py data/pretokenized_datasets/simplewiki \
-    --strategy dfs --layout-policy identifier-prefix
-
-# The Stack with identifier prefix (e.g. "# repo:src/file.py\n\n...")
-python demo_traversal.py data/pretokenized_datasets/stack_10m \
-    --strategy dfs --layout-policy identifier-prefix
-```
-
-### Attention mask images
-
-`model/graph_traversal/block_mask_creator.py` renders the FlexAttention mask for a real batch and saves a PNG to `artifacts/`. Run as a module from the project root:
-
-```bash
-# doc_causal mask — Wikipedia
-python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/simplewiki \
-    --mask-type doc_causal --strategy bfs --seed 42
-
-# cross-document link mask — Wikipedia (markdown link detector)
-python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/simplewiki \
-    --mask-type cross_doc_link --link-detector markdown --strategy bfs --seed 42
-
-# doc_causal mask — The Stack
-python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/stack_10m \
-    --mask-type doc_causal --strategy bfs --seed 42
-
-# cross-document link mask — The Stack (Python import detector)
-python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/stack_10m \
-    --mask-type cross_doc_link --link-detector python --strategy bfs --seed 42
-```
-
-Available mask types: `doc_causal`, `causal`, `full`, `doc_bidirectional`, `cross_doc_link`.
-Available strategies: `dfs`, `bfs`, `random_walk`, `random`.
-`--link-detector` is only used with `cross_doc_link`: `markdown` for Wikipedia, `python` for TheStack.
-
----
-
-## Training
-
-Run artifacts are saved to timestamped directories under `runs/`.
-
-### Baseline runs (doc_causal, random traversal)
-
-The baseline uses document-causal masking (each document attends only to itself) with random graph traversal. `data.strategy` defaults to `random` in `baseline.yaml` so no override is needed.
-
-```bash
-# SimpleWiki (~108M tokens, fast iteration)
-python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/simplewiki
-
-# EnWikiSource (~612M tokens, longer literary texts)
-python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/enwikisource
-
-# The Stack 10M (~7B tokens)
-python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/stack_10m
-
-# The Stack 100M (~8.7B tokens, full Python corpus)
-python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/stack_100m
-```
-
-### Cross-document runs (cross_doc_link, BFS traversal)
-
-BFS traversal places linked documents adjacently in the packed sequence, which is required for cross-doc attention to be meaningful. Set `model.link_detector` to match the dataset.
-
-**Wikipedia / WikiSource** (`--model.link_detector markdown`):
-```bash
-python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/enwikisource \
-    --strategy bfs \
-    --model.mask_type cross_doc_link \
-    --model.link_detector markdown
-```
-
-**The Stack** (`--model.link_detector python`):
-```bash
-python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/stack_100m \
-    --strategy bfs \
-    --model.mask_type cross_doc_link \
-    --model.link_detector python
-```
-
-### Key config options (`configs/baseline.yaml`)
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `model.model_dim` | 768 | Hidden dimension |
-| `model.num_layers` | 12 | Transformer layers |
-| `model.max_seq_len` | 2048 | Token budget per batch |
-| `model.mask_type` | `doc_causal` | Attention mask strategy |
-| `model.link_detector` | *(unset)* | Required when `mask_type` is `cross_doc_link`: `markdown` or `python` |
-| `data.strategy` | `random` | Graph traversal strategy |
-| `optimizer.muon_lr` | 0.02 | LR for 2D backbone weights (Muon) |
-| `optimizer.adamw_lr` | 0.0003 | LR for embeddings/norms (AdamW) |
-| `train_loop.val_interval` | 50 | Steps between validation passes |
-
-For larger models and longer contexts use `configs/large_32k.yaml` (36L/1280D, 32k context,
-fitted for a single A100 80GB with `torch.compile`).
-
-### Multi-node SLURM training via `launch_slurm.py`
-
-Use `launch_slurm.py` instead of `main.py` for multi-node runs. It wraps submitit and handles
-distributed process setup automatically. Config overrides use **dotted-key notation** — the argparse
-shorthand flags (`--dataset-dir`, `--strategy`, etc.) are not defined in the launcher; pass
-everything as `--section.key value` so the YAML config is never silently overridden.
-
-```bash
-# 2 nodes × 8 GPUs — Stack 100M (the canonical large run)
-python launch_slurm.py \
-    --nodes 2 --gpus-per-node 8 --time 48:00:00 \
-    --config configs/stack_100m_32k.yaml \
-    --data.dataset_dir data/pretokenized_datasets/stack_100m
-
-# 1 node × 4 GPUs — quick iteration on EnWikiSource
-python launch_slurm.py \
-    --nodes 1 --gpus-per-node 4 --time 12:00:00 \
-    --config configs/large_32k.yaml \
-    --data.dataset_dir data/pretokenized_datasets/enwikisource \
-    --model.mask_type cross_doc_link --model.link_detector markdown
-```
-
-`--no-tail` suppresses log following after submission. Logs land in the run's `logs/` subdirectory.
+Supported configurations range from 12L/768D (GPT-2 scale, 2k context) to 36L/1280D (medium scale, 32k context). Multi-node training is handled via DDP with SLURM/submitit.
 
 ---
 
 ## Generation
 
-After training, generate text from a checkpoint using `generate.py`. The script auto-reads
-`hyperparameters.json` from the run directory to reconstruct the architecture, tokenizer,
-link detector, and layout policy — no manual config needed.
+At inference time, `generate.py` loads a checkpoint and generates text autoregressively. When `--max-link-depth` is greater than zero, the model runs a link-detection pass after each token is generated. Links that resolve to documents in the corpus are fetched and prepended to the attention context before generation continues — a retrieval mechanism that mirrors exactly what the model was trained to expect.
 
-### Stack 100M model (24L/1024D, cross-doc, 32k context)
+For links that do not resolve to corpus documents, `--allow-generation-fallback` triggers generation of the auxiliary document from scratch, enabling open-ended multi-document synthesis.
 
-This checkpoint was trained with `identifier_prefix_bos_eos` layout policy, so every document
-seen during training began with `<BOS># path/to/file.py\n\n`. Pass `--root-identifier` with a
-plausible filename or the model will see an empty `# \n\n` header and immediately generate EOS.
+---
 
-```bash
-python generate.py \
-    --checkpoint runs/run_20260311_184203_685319/checkpoints/best_model.pt \
-    --dataset data/pretokenized_datasets/stack_100m \
-    --root-identifier "trainer.py" \
-    --prompt "import torch
-from torch.optim import Adam
-from model import ResNet
+## Repository Layout
 
-def train_epoch(model, loader, optimizer, criterion, device):" \
-    --max-new-tokens 500 \
-    --max-link-depth 2 \
-    --repetition-penalty 1.1 \
-    --temperature 0.9
+```
+main.py                          Training entry point (single-node or DDP)
+launch_slurm.py                  Multi-node SLURM launcher (submitit)
+generate.py                      Generation CLI
+configs/                         YAML training configurations
+data/
+  dataset.py                     GraphIndex, PretokShardedBackend
+  packed_dataset.py              PackedSequenceDataset (IterableDataset)
+  traversal.py                   BFS, DFS, RandomWalk, Random strategies
+  pack_sampler.py                Token-budget-aware batch construction
+  pretokenize.py / pretokenize_stack.py   Raw data → binary shards
+  wiki_graph_extractor/          Wikipedia dump → articles + graph
+  github_graph_extractor/        The Stack → Python files + import graph
+model/
+  model.py                       TS2TSModel (inference wrapper)
+  modules/training_module.py     TS2TSTrainingModule (nn.Module, loss out)
+  graph_traversal/
+    block_mask_creator.py        FlexAttention mask registry + visualiser
+    cross_doc_mask.py            CrossDocLinkMaskCreator
+    markdown_link_detector.py    Detects [[WikiLinks]] in token streams
+    python_import_detector.py    Detects `import` statements in token streams
+  generation_loop.py             run_generation, link-detection loop
+  document_context.py            DocumentContext (inference context window)
+docs/images/                     Committed mask visualisations
 ```
 
-**Repetition penalty tuning for this checkpoint:** at ~3,000 steps the model is partially trained
-and prone to repetition loops. The default `--repetition-penalty 1.3` is too aggressive for code
-(it penalises legitimate re-use of variable names like `d_model` or `optimizer`), causing premature
-EOS. Use `1.05–1.15` for code generation. `1.0` disables the penalty entirely but risks infinite
-repetition loops.
+Full pipeline instructions (data extraction, pretokenization, training, generation) are in [INSTRUCTIONS.md](INSTRUCTIONS.md).
 
-### Stack 10M models (36L/1280D, 32k context)
-
-```bash
-# doc_causal variant
-python generate.py \
-    --checkpoint runs/20260308_012518/checkpoints/best_model.pt \
-    --root-identifier "sort.py" \
-    --prompt "def merge_sort(arr):" \
-    --max-link-depth 0 \
-    --max-new-tokens 400
-
-# cross_doc_link variant (imports resolved against corpus)
-python generate.py \
-    --checkpoint runs/20260308_012521/checkpoints/best_model.pt \
-    --dataset data/pretokenized_datasets/stack_10m \
-    --root-identifier "main.py" \
-    --prompt "import numpy as np
-
-def softmax(x):" \
-    --max-link-depth 2 \
-    --max-new-tokens 400
-```
-
-### SimpleWiki baseline (12L/768D, doc_causal, 2k context)
-
-```bash
-python generate.py \
-    --checkpoint runs/20260224_212158/checkpoints/best_model.pt \
-    --prompt "Python is a high-level programming language." \
-    --dataset data/pretokenized_datasets/simplewiki \
-    --max-link-depth 2 \
-    --max-new-tokens 300
-```
-
-With `--dataset` provided, links detected in generated text are looked up in the corpus. Matched
-documents are inserted into the attention context before the active document. Set
-`--allow-generation-fallback` to also generate aux docs for links not found in the corpus.
-
-### Key options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--root-identifier` | `""` | Filename / identifier for the root document header (e.g. `attention.py`). **Required** for checkpoints trained with `identifier_prefix_bos_eos` layout policy (all Stack 100M runs) — without it the model sees an empty `# \n\n` header and generates EOS immediately. |
-| `--max-link-depth` | `2` | `0` = single-doc baseline; `≥1` enables aux doc insertion |
-| `--repetition-penalty` | `1.3` | Values `>1` reduce probability of already-seen tokens. Use `1.05–1.15` for code; `1.3` is appropriate for prose but too aggressive for code (penalises legitimate variable name reuse). |
-| `--temperature` | `0.8` | Sampling temperature |
-| `--top-k` | `50` | Top-k sampling |
-| `--max-display-tokens` | `200` | Truncate displayed text per doc; full links list still shown |
-| `--allow-generation-fallback` | off (with `--dataset`) | Generate aux docs for unresolved links |
-| `--no-color` | off | Disable ANSI colour for piping/logs |
-
-FlexAttention is compiled on first use (`dynamic=True` for variable-length inference contexts).
-Compiled kernels are cached in `.torch_compile_cache/` and reused on subsequent runs.
-Override the cache location with `TORCHINDUCTOR_CACHE_DIR`.
+## TODOs
+in no particular priority order
+- [ ] make ArXiv LaTeX dataset
+- [ ] pull out actual validation splits
+  - [ ] one sparse & random doc
+  - [ ] one from dense sub-clusters
+- [ ] integrate in easy LLM benchmarks (likely specific sub-tasks from larger benchmarks like MMLU; whatever i think these models can handle & preferably stuff that'd benefit from cross-document understanding)
+- [ ] write custom cross-doc-link FA2 kernel since FlexAttention's backward pass is so absurdly slow
+- [ ] build batch mask density pre-computation system to ensure ranks spend less time waiting for whichever rank has the densest mask
+- [ ] finish inference generation logic
+- [ ] preprocess code data to make imports lazy & thus save on computation
+- [ ] make a more complicated python-linter-based mask that allows only the relevant scope of the code in a given doc to attend to what it's importing rather than
+- [ ] update to the latest methods from the `kellerjordan/modded-nanogpt/` repo
+- [ ] check for feasability of integrating `karpathy/nanochat/` RL & chat pipeline and how we might edit that pipeline to take advantage of this model's new features
+- [ ] actually train reasonable sized models for each ablation: (random, random-walk, dfs, bfs) x (doc-causal, cross-doc-link)
+- [ ] softmax flattening out is likely our largest issue (alongside the huge runtime increase); can we find some other form of attention that helps fix this (i think i vaguely remember one called differential or diff attention)
