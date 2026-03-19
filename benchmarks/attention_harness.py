@@ -529,6 +529,68 @@ def _impl_cdb_bim_v1(q, k, v, mask_inputs, scale):
     )
 
 
+def _impl_cdb_bim_v2(q, k, v, mask_inputs, scale):
+    """cdb_bim_v2: diagonal-first backward (H2 fix). Forward identical to v1."""
+    from kernels.cross_doc_bitmask_bim_v2 import triton_attn_cross_doc_bitmask_bim_v2
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None, \
+        "BlockInteractionMask not built — use make_synthetic_batch with n_links>0"
+    return triton_attn_cross_doc_bitmask_bim_v2(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
+def _impl_cdb_bim_v3(q, k, v, mask_inputs, scale):
+    """cdb_bim_v3: full/partial block split (H1) + diagonal-first bwd (H2)."""
+    from kernels.cross_doc_bitmask_bim_v3 import triton_attn_cross_doc_bitmask_bim_v3
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None, \
+        "BlockInteractionMask not built — use make_synthetic_batch with n_links>0"
+    return triton_attn_cross_doc_bitmask_bim_v3(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
+def _impl_cdb_bim_v4(q, k, v, mask_inputs, scale):
+    """cdb_bim_v4: split dK/dV and dQ backward kernels (H5) + H1 + H2."""
+    from kernels.cross_doc_bitmask_bim_v4 import triton_attn_cross_doc_bitmask_bim_v4
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None, \
+        "BlockInteractionMask not built — use make_synthetic_batch with n_links>0"
+    return triton_attn_cross_doc_bitmask_bim_v4(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
+def _rebuild_bim(mask_inputs, block_size: int):
+    """Rebuild BlockInteractionMask at a different block_size (for block-size experiments)."""
+    from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+    creator = CrossDocLinkMaskCreator.__new__(CrossDocLinkMaskCreator)
+    creator.triton_block_size = block_size
+    creator._n_chunks = mask_inputs.q_bitmasks.shape[0]
+    return creator._build_block_interaction_mask(
+        mask_inputs.seq_len,
+        mask_inputs.document_ids,
+        list(mask_inputs.q_bitmasks),
+        list(mask_inputs.kv_bitmasks),
+        mask_inputs.document_ids.device,
+    )
+
+
+def _impl_cdb_bim_v4_bs128(q, k, v, mask_inputs, scale):
+    """cdb_bim_v4 with BIM_BLOCK_SIZE=128 (flex's native tile size)."""
+    from kernels.cross_doc_bitmask_bim_v4 import triton_attn_cross_doc_bitmask_bim_v4
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _rebuild_bim(mask_inputs, 128)
+    return triton_attn_cross_doc_bitmask_bim_v4(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Naive PyTorch baselines (O(T²), exact numerics, no flash tricks)
 # ---------------------------------------------------------------------------
@@ -652,7 +714,11 @@ REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
         ("flex",           _impl_flex_cross_doc),
         ("cdb_v1",         _impl_cdb_v1),       # baseline: OR-reduction skip
         ("cdb_bim_v1",     _impl_cdb_bim_v1),   # BIM fwd + bwd
-        # add cdb_bim_v2, v3, ... here as new versions land
+        ("cdb_bim_v2",     _impl_cdb_bim_v2),   # BIM fwd + diagonal-first bwd (H2)
+        ("cdb_bim_v3",     _impl_cdb_bim_v3),   # full/partial split (H1) + H2
+        ("cdb_bim_v4",       _impl_cdb_bim_v4),       # split dKV/dQ bwd (H5) + H1 + H2
+        ("cdb_bim_v4_bs128", _impl_cdb_bim_v4_bs128), # same but BIM_BLOCK_SIZE=128
+        # add cdb_bim_v5, ... here as new versions land
     ],
 }
 
@@ -1089,6 +1155,15 @@ def _get_autotune_kernels() -> Dict[str, Any]:
     from kernels.cross_doc_bitmask_bim_v1 import (
         _attn_fwd_cdb_bim_v1, _attn_backward_cdb_bim_v1,
     )
+    from kernels.cross_doc_bitmask_bim_v2 import (
+        _attn_backward_cdb_bim_v2,
+    )
+    from kernels.cross_doc_bitmask_bim_v3 import (
+        _attn_fwd_cdb_bim_v3, _attn_backward_cdb_bim_v3,
+    )
+    from kernels.cross_doc_bitmask_bim_v4 import (
+        _attn_backward_KV_cdb_bim_v4, _attn_backward_Q_cdb_bim_v4,
+    )
     kernels = {
         "causal_fwd":        _attn_fwd,
         "causal_pre":        _attn_backward_preprocess,
@@ -1104,7 +1179,16 @@ def _get_autotune_kernels() -> Dict[str, Any]:
         "cdb_v1_bwd":        _attn_backward_cdb,
         "cdb_bim_v1_fwd":    _attn_fwd_cdb_bim_v1,
         "cdb_bim_v1_bwd":    _attn_backward_cdb_bim_v1,
-        # add cdb_bim_v2_fwd, cdb_bim_v2_bwd, ... here as new versions land
+        # v2 shares the v1 forward kernel; only the backward is new
+        "cdb_bim_v2_bwd":    _attn_backward_cdb_bim_v2,
+        # v3 has its own forward and backward
+        "cdb_bim_v3_fwd":    _attn_fwd_cdb_bim_v3,
+        "cdb_bim_v3_bwd":    _attn_backward_cdb_bim_v3,
+        # v4 shares v3 forward; backward is two separate kernels
+        "cdb_bim_v4_KV_bwd": _attn_backward_KV_cdb_bim_v4,
+        "cdb_bim_v4_Q_bwd":  _attn_backward_Q_cdb_bim_v4,
+        # bs128 shares same kernels; autotune handles different BIM_BLOCK_SIZE via key
+        # add cdb_bim_v5_fwd, ... here as new versions land
     }
     return kernels
 
