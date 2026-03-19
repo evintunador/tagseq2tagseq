@@ -218,3 +218,4 @@ artifacts/
 data/wiki_articles*/
 .torch_compile_cache/
 slurm_logs/
+benchmarks/.autotune_cache.json
