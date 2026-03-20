@@ -18,7 +18,7 @@ dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["data", "data.*", "model", "model.*"]
+include = ["data", "data.*", "model", "model.*", "tunalab", "tunalab.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

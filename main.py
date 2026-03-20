@@ -37,6 +37,7 @@ from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
 from model.graph_traversal.python_import_detector import PythonImportDetector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
+from data.bucketed_pack_dataset import BucketedPackDataset, BucketState
 from data.layout import make_layout_policy
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
@@ -181,13 +182,59 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         layout_policy=layout_policy,
     )
 
-    dataset = PackedSequenceDataset(
-        graph=graph_index,
-        backend=backend,
-        pack_sampler=pack_sampler,
-        layout_policy=layout_policy,
-        as_2d=True,
-    )
+    epoch_dirs = cfg.get('data', {}).get('epoch_dirs')
+    # CLI passes epoch_dirs as a string ("[dir1,dir2]" or "dir1,dir2"); parse to list.
+    if isinstance(epoch_dirs, str):
+        epoch_dirs = [p.strip() for p in epoch_dirs.strip('[]').split(',') if p.strip()]
+    if epoch_dirs:
+        # Density-aware path: BucketedPackDataset from pre-computed epoch dirs.
+        # Each accum step draws from the same density bucket on all ranks,
+        # eliminating FlexAttention backward variance across DDP ranks.
+        bucket_state_dict = None
+        if resume_ckpt is not None:
+            bucket_state_dict = resume_ckpt.get('metadata', {}).get('bucket_state')
+        if bucket_state_dict is None and resume_from:
+            # Also check for bucket_state in a legacy/separate checkpoint load
+            try:
+                _tmp = torch.load(resume_from, map_location='cpu', weights_only=False)
+                bucket_state_dict = _tmp.get('metadata', {}).get('bucket_state')
+                del _tmp
+            except Exception:
+                pass
+        start_state = BucketState(**bucket_state_dict) if bucket_state_dict else None
+        if start_state:
+            logger.info(
+                "Resuming BucketedPackDataset from epoch=%d, accum_step=%d",
+                start_state.epoch_idx, start_state.global_accum_step,
+            )
+        # Warn if max_grants warmup is active (bucketing is approximate during warmup)
+        _mgstart = cfg.get('model', {}).get('max_grants_start')
+        _mg = cfg.get('model', {}).get('max_grants', 64)
+        _mgwarm = int(cfg.get('model', {}).get('max_grants_warmup_steps', 0))
+        if _mgstart is not None and _mgstart < _mg:
+            logger.warning(
+                "max_grants warmup active: kv_block_count bucketing reflects final "
+                "max_grants (%d); density balance is approximate during warmup "
+                "(%d→%d over %d steps).",
+                _mg, _mgstart, _mg, _mgwarm,
+            )
+        dataset = BucketedPackDataset(
+            epoch_dirs=epoch_dirs,
+            graph=graph_index,
+            backend=backend,
+            layout=layout_policy,
+            rank=dist.rank,
+            world_size=dist.world_size,
+            start_state=start_state,
+        )
+    else:
+        dataset = PackedSequenceDataset(
+            graph=graph_index,
+            backend=backend,
+            pack_sampler=pack_sampler,
+            layout_policy=layout_policy,
+            as_2d=True,
+        )
 
     train_loader = DataLoader(
         dataset,
@@ -430,6 +477,11 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         'use_tqdm': dist.is_main_process,  # only rank 0 shows the progress bar
         'num_epochs': cfg['train_loop'].get('epochs', 1),
     })
+    # When using BucketedPackDataset, inject bucket_state_fn so the
+    # bucket_state_checkpoint atomic feature saves dataset position alongside
+    # every best-val-loss checkpoint for exact resume capability.
+    if epoch_dirs:
+        atomic_feature_kwargs['bucket_state_fn'] = dataset.get_state
 
     result = smart_train(
         model=model,
@@ -453,13 +505,14 @@ if __name__ == "__main__":
 
     parser.add_argument("--dataset-dir", dest="data.dataset_dir", type=str,
                         help="Path to the pre-tokenized dataset directory.")
-    parser.add_argument("--strategy", dest="data.strategy", type=str, default="bfs",
+    parser.add_argument("--strategy", dest="data.strategy", type=str, default=None,
                         choices=["random", "random_walk", "bfs", "dfs"],
-                        help="Graph traversal strategy.")
-    parser.add_argument("--max-seq-len", dest="model.max_seq_len", type=int, default=2048,
-                        help="Maximum sequence length (token budget per pack).")
-    parser.add_argument("--seed", dest="seed", type=int, default=42,
-                        help="Random seed.")
+                        help="Graph traversal strategy. If not set, uses the config file value.")
+    parser.add_argument("--max-seq-len", dest="model.max_seq_len", type=int, default=None,
+                        help="Maximum sequence length (token budget per pack). "
+                             "If not set, uses the value from the config file.")
+    parser.add_argument("--seed", dest="seed", type=int, default=None,
+                        help="Random seed. If not set, uses the config file value.")
     parser.add_argument("--resume-from", dest="resume_from", type=str, default=None,
                         help="Path to a best_model.pt checkpoint to resume training from. "
                              "Restores model weights and AdamW state; Muon momentum is "
