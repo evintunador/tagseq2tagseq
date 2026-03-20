@@ -632,3 +632,78 @@ def test_get_all_documents_root_first_then_active_then_evicted():
     assert docs[0].is_root is True
     assert docs[1].raw_identifier == "B"   # active aux
     assert docs[2].raw_identifier == "A"   # evicted last
+
+
+# ---------------------------------------------------------------------------
+# find_evicted / restore_evicted
+# ---------------------------------------------------------------------------
+
+def test_find_evicted_returns_matching_entry():
+    ctx = make_context()
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    ctx.add_corpus_doc("A", [10], None, "", 1, root)
+    ctx.evict_oldest_aux()
+    found = ctx.find_evicted("A")
+    assert found is not None
+    assert found.raw_identifier == "A"
+
+
+def test_find_evicted_returns_none_when_not_evicted():
+    ctx = make_context()
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    ctx.add_corpus_doc("A", [10], None, "", 1, root)
+    ctx.evict_oldest_aux()
+    assert ctx.find_evicted("B") is None
+
+
+def test_find_evicted_returns_none_when_doc_still_active():
+    ctx = make_context()
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    ctx.add_corpus_doc("A", [10], None, "", 1, root)
+    # A is active, not evicted
+    assert ctx.find_evicted("A") is None
+
+
+def test_restore_evicted_removes_from_evicted_list():
+    ctx = make_context()
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    ctx.add_corpus_doc("A", [10], None, "", 1, root)
+    ctx.evict_oldest_aux()
+    entry = ctx.find_evicted("A")
+    ctx.restore_evicted(entry, before_entry=root)
+    assert len(ctx._evicted) == 0
+
+
+def test_restore_evicted_inserts_before_target():
+    ctx = make_context(max_context_length=100, max_auxiliary_documents=6)
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    ctx.add_corpus_doc("A", [10], None, "", 1, root)
+    ctx.add_corpus_doc("B", [20], None, "", 1, root)
+    ctx.evict_oldest_aux()  # evicts A; _docs = [B, root]
+    entry = ctx.find_evicted("A")
+    ctx.restore_evicted(entry, before_entry=root)
+    # A should appear before root; B was already before root so order is [B, A, root]
+    identifiers = [e.raw_identifier for e in ctx._docs]
+    assert identifiers == ["B", "A", ""]
+
+
+def test_restore_evicted_increments_num_aux_docs():
+    ctx = make_context(max_context_length=100, max_auxiliary_documents=6)
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    ctx.add_corpus_doc("A", [10], None, "", 1, root)
+    ctx.evict_oldest_aux()
+    assert ctx.num_aux_docs == 0
+    entry = ctx.find_evicted("A")
+    ctx.restore_evicted(entry, before_entry=root)
+    assert ctx.num_aux_docs == 1
+
+
+def test_restore_evicted_tokens_appear_in_build_sequence():
+    ctx = make_context(max_context_length=100, max_auxiliary_documents=6)
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2])
+    ctx.add_corpus_doc("A", [10, 11], None, "", 1, root)
+    ctx.evict_oldest_aux()
+    entry = ctx.find_evicted("A")
+    ctx.restore_evicted(entry, before_entry=root)
+    tokens, doc_spans = ctx.build_sequence()
+    assert tokens[0].tolist() == [10, 11, 1, 2]

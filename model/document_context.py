@@ -212,21 +212,17 @@ class DocumentContext:
         return any(e.raw_identifier == raw_identifier for e in self._docs)
 
     def find_evicted(self, raw_identifier: str) -> Optional[_DocEntry]:
-        """
-        Return the evicted entry matching raw_identifier, or None.
-
-        Re-eviction (scanning self._evicted and restoring docs) is not yet
-        implemented; this always returns None.
-        """
+        """Return the evicted entry matching raw_identifier, or None."""
+        for entry in self._evicted:
+            if entry.raw_identifier == raw_identifier:
+                return entry
         return None
 
     def restore_evicted(self, entry: _DocEntry, before_entry: _DocEntry) -> None:
-        """
-        Re-insert a previously evicted entry before before_entry in _docs.
-
-        Not yet implemented.
-        """
-        raise NotImplementedError("restore_evicted is not yet implemented")
+        """Re-insert a previously evicted entry before before_entry in _docs."""
+        self._evicted.remove(entry)
+        idx = self._docs.index(before_entry)
+        self._docs.insert(idx, entry)
 
     def add_corpus_doc(
         self,

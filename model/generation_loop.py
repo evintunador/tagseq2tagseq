@@ -48,6 +48,11 @@ def run_generation(
         layout_policy=layout_policy,
     )
 
+    if config.process_prompt_links and link_detector is not None:
+        _process_existing_doc_links(
+            root_entry, context, model, link_detector, corpus, config, layout_policy, depth=0,
+        )
+
     _generate_doc(root_entry, context, model, link_detector, corpus, config, layout_policy, depth=0)
 
     docs = context.get_all_documents()
@@ -162,10 +167,11 @@ def _handle_link(
     # Re-eviction: find_evicted returns None until restore_evicted is implemented.
     evicted = context.find_evicted(target)
     if evicted is not None:
+        exact_tokens = len(evicted.prefix_tokens) + len(evicted.tokens) + len(evicted.suffix_tokens)
         if config.eviction_policy == "drop_oldest":
-            if not context.make_room(len(evicted.tokens) + len(evicted.suffix_tokens)):
+            if not context.make_room(exact_tokens):
                 return
-        elif not context.can_add_document(len(evicted.tokens) + len(evicted.suffix_tokens)):
+        elif not context.can_add_document(exact_tokens):
             return
         context.restore_evicted(evicted, before_entry=active_entry)
         if depth + 1 <= config.max_link_depth:
