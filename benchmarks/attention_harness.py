@@ -580,6 +580,62 @@ def _rebuild_bim(mask_inputs, block_size: int):
     )
 
 
+def _impl_cdb_bim_v9(q, k, v, mask_inputs, scale):
+    """cdb_bim_v9: split pipelined backward (varlen-style same-doc + BIM cross-doc)."""
+    from kernels.cross_doc_bitmask_bim_v9 import triton_attn_cross_doc_bitmask_bim_v9
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None
+    return triton_attn_cross_doc_bitmask_bim_v9(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim,
+        mask_inputs.cu_seqlens, scale,
+    )
+
+
+def _impl_cdb_bim_v8(q, k, v, mask_inputs, scale):
+    """cdb_bim_v8: varlen-style pipelined same-doc + BIM cross-doc."""
+    from kernels.cross_doc_bitmask_bim_v8 import triton_attn_cross_doc_bitmask_bim_v8
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None
+    return triton_attn_cross_doc_bitmask_bim_v8(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
+def _impl_cdb_bim_v7(q, k, v, mask_inputs, scale):
+    """cdb_bim_v7: precomputed coarse 128-token backward tiles."""
+    from kernels.cross_doc_bitmask_bim_v7 import triton_attn_cross_doc_bitmask_bim_v7
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None
+    return triton_attn_cross_doc_bitmask_bim_v7(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
+def _impl_cdb_bim_v6(q, k, v, mask_inputs, scale):
+    """cdb_bim_v6: double-tile backward (2 BIM blocks/CTA → 128-token tiles)."""
+    from kernels.cross_doc_bitmask_bim_v6 import triton_attn_cross_doc_bitmask_bim_v6
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None
+    return triton_attn_cross_doc_bitmask_bim_v6(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
+def _impl_cdb_bim_v5(q, k, v, mask_inputs, scale):
+    """cdb_bim_v5: free-tile backward (BLOCK_SIZE_MACRO up to 128, no BIM in bwd)."""
+    from kernels.cross_doc_bitmask_bim_v5 import triton_attn_cross_doc_bitmask_bim_v5
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None
+    return triton_attn_cross_doc_bitmask_bim_v5(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
 def _impl_cdb_bim_v4_bs128(q, k, v, mask_inputs, scale):
     """cdb_bim_v4 with BIM_BLOCK_SIZE=128 (flex's native tile size)."""
     from kernels.cross_doc_bitmask_bim_v4 import triton_attn_cross_doc_bitmask_bim_v4
@@ -717,7 +773,12 @@ REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
         ("cdb_bim_v2",     _impl_cdb_bim_v2),   # BIM fwd + diagonal-first bwd (H2)
         ("cdb_bim_v3",     _impl_cdb_bim_v3),   # full/partial split (H1) + H2
         ("cdb_bim_v4",       _impl_cdb_bim_v4),       # split dKV/dQ bwd (H5) + H1 + H2
-        ("cdb_bim_v4_bs128", _impl_cdb_bim_v4_bs128), # same but BIM_BLOCK_SIZE=128
+        ("cdb_bim_v9",       _impl_cdb_bim_v9),       # split + pipelined same-doc
+        ("cdb_bim_v8",       _impl_cdb_bim_v8),       # combined + varlen same-doc
+        ("cdb_bim_v7",       _impl_cdb_bim_v7),       # coarse 128-token backward tiles
+        ("cdb_bim_v6",       _impl_cdb_bim_v6),       # double-tile bwd (kept for comparison)
+        ("cdb_bim_v5",       _impl_cdb_bim_v5),       # free-tile bwd (kept for comparison)
+        ("cdb_bim_v4_bs128", _impl_cdb_bim_v4_bs128), # bs128 experiment
         # add cdb_bim_v5, ... here as new versions land
     ],
 }
@@ -1164,6 +1225,17 @@ def _get_autotune_kernels() -> Dict[str, Any]:
     from kernels.cross_doc_bitmask_bim_v4 import (
         _attn_backward_KV_cdb_bim_v4, _attn_backward_Q_cdb_bim_v4,
     )
+    from kernels.cross_doc_bitmask_bim_v5 import (
+        _attn_backward_KV_v5, _attn_backward_Q_v5,
+    )
+    from kernels.cross_doc_bitmask_bim_v6 import (
+        _attn_backward_KV_v6, _attn_backward_Q_v6,
+    )
+    from kernels.cross_doc_bitmask_bim_v7 import (
+        _attn_backward_KV_v7, _attn_backward_Q_v7,
+    )
+    from kernels.cross_doc_bitmask_bim_v8 import _attn_backward_cdb_bim_v8
+    from kernels.cross_doc_bitmask_bim_v9 import _attn_backward_KV_v9, _attn_backward_Q_v9
     kernels = {
         "causal_fwd":        _attn_fwd,
         "causal_pre":        _attn_backward_preprocess,
@@ -1187,6 +1259,15 @@ def _get_autotune_kernels() -> Dict[str, Any]:
         # v4 shares v3 forward; backward is two separate kernels
         "cdb_bim_v4_KV_bwd": _attn_backward_KV_cdb_bim_v4,
         "cdb_bim_v4_Q_bwd":  _attn_backward_Q_cdb_bim_v4,
+        "cdb_bim_v9_KV_bwd": _attn_backward_KV_v9,
+        "cdb_bim_v9_Q_bwd":  _attn_backward_Q_v9,
+        "cdb_bim_v8_bwd":    _attn_backward_cdb_bim_v8,
+        "cdb_bim_v7_KV_bwd": _attn_backward_KV_v7,
+        "cdb_bim_v7_Q_bwd":  _attn_backward_Q_v7,
+        "cdb_bim_v6_KV_bwd": _attn_backward_KV_v6,
+        "cdb_bim_v6_Q_bwd":  _attn_backward_Q_v6,
+        "cdb_bim_v5_KV_bwd": _attn_backward_KV_v5,
+        "cdb_bim_v5_Q_bwd":  _attn_backward_Q_v5,
         # bs128 shares same kernels; autotune handles different BIM_BLOCK_SIZE via key
         # add cdb_bim_v5_fwd, ... here as new versions land
     }
