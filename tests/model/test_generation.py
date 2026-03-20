@@ -733,3 +733,78 @@ def test_run_generation_text_decoded_for_all_docs():
     )
     for doc in result.get_all_documents():
         assert doc.text is not None
+
+
+# --- prompt link pre-processing (Stage 3.2) ---
+
+def make_anywhere_link_detector(link_token, target):
+    """Fires when link_token appears anywhere in the token sequence."""
+    from collections import namedtuple
+    LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
+
+    class FakeDetector:
+        def detect_links(self, tokens):
+            for i, t in enumerate(tokens):
+                if t.item() == link_token:
+                    return [LinkInfo(link_end_pos=i + 1, target_str=target)]
+            return []
+
+    return FakeDetector()
+
+
+def test_run_generation_prompt_links_fetched_from_corpus():
+    """With process_prompt_links=True, a link in the prompt causes a corpus fetch
+    before generation begins."""
+    LINK_TOKEN = 55
+    corpus = make_corpus({"Python": [10, 20]})
+    detector = make_anywhere_link_detector(LINK_TOKEN, "Python")
+    model = make_mock_model(next_tokens=[EOS])
+
+    result = run_generation(
+        model=model,
+        prompt_tokens=[1, LINK_TOKEN, 2],
+        corpus=corpus,
+        config=base_config(max_link_depth=1, process_prompt_links=True),
+        link_detector=detector,
+        tokenizer_decode=None,
+        layout_policy=None,
+    )
+    assert result.get_document_count() == 2
+    aux = result.auxiliary_documents[0]
+    assert aux.raw_identifier == "Python"
+    assert aux.source == "corpus"
+
+
+def test_run_generation_prompt_links_skipped_when_disabled():
+    """With process_prompt_links=False, links in the prompt are ignored."""
+    LINK_TOKEN = 55
+    corpus = make_corpus({"Python": [10, 20]})
+    detector = make_anywhere_link_detector(LINK_TOKEN, "Python")
+    model = make_mock_model(next_tokens=[EOS])
+
+    result = run_generation(
+        model=model,
+        prompt_tokens=[1, LINK_TOKEN, 2],
+        corpus=corpus,
+        config=base_config(max_link_depth=1, process_prompt_links=False),
+        link_detector=detector,
+        tokenizer_decode=None,
+        layout_policy=None,
+    )
+    assert result.get_document_count() == 1
+
+
+def test_run_generation_prompt_links_no_op_when_no_detector():
+    """With link_detector=None, process_prompt_links has no effect."""
+    model = make_mock_model(next_tokens=[EOS])
+
+    result = run_generation(
+        model=model,
+        prompt_tokens=[1, 2, 3],
+        corpus=None,
+        config=base_config(process_prompt_links=True),
+        link_detector=None,
+        tokenizer_decode=None,
+        layout_policy=None,
+    )
+    assert result.get_document_count() == 1

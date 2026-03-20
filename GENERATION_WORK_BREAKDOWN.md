@@ -87,13 +87,15 @@ end-to-end with `generate.py` against trained checkpoints.
 ## Stage 3 — Full Feature Set
 *Depends on Stage 2.*
 
-### 3.1 — Re-eviction (restore previously evicted docs)
-Add `find_evicted` / `restore_evicted` to `DocumentContext`. Update `_handle_link()` to check the evicted list before attempting corpus fetch or generation. A restored doc re-enters the attention window; its links are scanned at depth+1 as if freshly inserted.
+### 3.1 — Re-eviction (restore previously evicted docs) ✅ COMPLETE
+`find_evicted` scans `_evicted` list by `raw_identifier`; `restore_evicted` pops from `_evicted` and re-inserts before `before_entry` in `_docs`. `_handle_link` already had the call sites — they were stubs that now work. Also fixed a token-count bug in the evicted-doc room estimate (was omitting `prefix_tokens`). Topological order relative to root is preserved; aux-aux ordering is not tracked (out of scope).
 
 **Touches**: `model/document_context.py`, `model/generation_loop.py`
 
-### 3.2 — Prompt link pre-processing
-Before generation starts, scan the initial prompt tokens for any already-present links (`process_prompt_links` flag in `GenerationConfig`). Handle each the same way as a link detected mid-generation — corpus fetch or queue for generation at depth 0.
+### 3.2 — Prompt link pre-processing ✅ COMPLETE
+After `add_root` and before `_generate_doc`, `run_generation` calls `_process_existing_doc_links` on the root entry at depth=0 when `config.process_prompt_links=True` and a link detector is present. Reuses the exact same machinery as recursive corpus-doc link scanning.
+
+**Note**: Python import detector emits relative paths (e.g. `Phaedra/Notebook.py`) but multi-repo corpus identifiers are repo-qualified (`000alen/Phaedra:Phaedra/Notebook.py`). Corpus hits will never fire for Python imports against a full multi-repo dataset. Fix: either build a single-repo corpus, or make the import detector emit repo-qualified identifiers when context is available.
 
 **Touches**: `model/generation_loop.py`
 
