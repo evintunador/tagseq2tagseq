@@ -92,6 +92,60 @@ Each modality is served by a pluggable `LinkDetector` that runs online — durin
 
 ---
 
+## Density-Aware Batch Scheduling
+
+Cross-document attention masks are inherently **sparse** — how sparse depends on how many inter-file import links are active in a given pack. In a 32k-token sequence with 6 large files that heavily import each other, most attention blocks are live. In a pack with 31 small isolated files, almost all blocks are empty. This 6× variation in FlexAttention backward cost is the main source of DDP rank imbalance: the fast rank finishes its backward and then idles at the NCCL allreduce waiting for the slow rank to catch up.
+
+### The problem in numbers
+
+The `kv_block_count` metric counts non-empty 128-token block pairs in the full attention mask. Across 180k packs from The Stack (32k context, BFS, 8 buckets):
+
+![Density distribution histogram and per-bucket spread](docs/images/density_aware_overview.png)
+
+*Left: kv_block_count is right-skewed — most packs are sparse, but the dense tail drives worst-case step times. Right: each bucket has tight within-bucket variance; the ratio between sparsest (b0) and densest (b7) buckets is 6.3×.*
+
+The mask for a representative pack from each extreme bucket makes the difference visceral:
+
+![Block-level attention masks for bucket 0 (sparse) vs bucket 7 (dense)](docs/images/density_aware_masks.png)
+
+*Each cell is one 128-token block; blue = non-empty. Bucket 0 (31 short docs, 9 links): isolated diagonal triangles, 90% sparse. Bucket 7 (6 large docs, 11 links): large filled rectangles from cross-doc grants, only 9% sparse. Red lines mark document boundaries.*
+
+### The solution
+
+**Offline epoch pre-computation** with **density-bucketed training**:
+
+1. Before training, run `precompute_epochs.py` once per epoch. It generates all packs for the epoch using the same BFS traversal and link detection as live training, then computes `kv_block_count` analytically (~1 ms/pack, CPU only, parallelised across workers). Packs are sorted into equal-count quantile buckets.
+
+2. During training, `BucketedPackDataset` draws each accum step's `world_size` packs from the **same** density bucket, guaranteeing all ranks see the same backward cost. The bucket sequence shuffles across buckets so each optimizer step spans a different density level, maintaining gradient diversity.
+
+This eliminates within-step rank imbalance entirely. Different optimizer steps vary in speed (the scheduler visits all buckets), but all ranks are always equally loaded.
+
+### Measured impact (2 nodes × 2 GPUs, The Stack 10M, 32k tokens)
+
+![Per-step wall-clock timing: live (random) vs precomputed (density-bucketed)](docs/images/density_aware_timing.png)
+
+*Top: live training — unpredictable step times (2–11s) with no structure. Bottom: precomputed training — steps colour-coded by density bucket; dark blue (sparse) is fast, yellow (dense) is slow, but the pattern is fully deterministic.*
+
+The per-bucket breakdown makes the contrast concrete:
+
+![Step-time breakdown: live histogram vs precomputed per-bucket mean±std](docs/images/density_aware_timing_by_bucket.png)
+
+*Left: live training has a broad, near-uniform step-time distribution (IQR=3.3s, CoV=36%) — no bucket structure because packs are assigned randomly. Right: precomputed training has tiny within-bucket variance (CoV 2–13%, mean 4%) because both ranks always draw from the same bucket; the overall CoV (51%) is entirely between buckets — predictable and density-driven.*
+
+| | Mean step time | Max step time |
+|---|---|---|
+| Live (online link detection, random density) | 6.39 s | 10.7 s |
+| Precomputed (density-bucketed, no link detection) | 4.42 s | 9.4 s |
+| **Speedup** | **1.45×** | **1.14×** |
+
+The 1.45× mean speedup comes from two combined effects:
+- **Eliminating online link detection** (`PythonImportDetector` at 32k tokens adds ~1.3 s/step on average; precomputed packs store link positions offline).
+- **Rank-stall reduction** from density matching (most visible on multi-node InfiniBand; effectively zero on single-node NVLink).
+
+See [INSTRUCTIONS.md](INSTRUCTIONS.md#density-aware-batch-scheduling) for full usage.
+
+---
+
 ## Model Architecture
 
 The model is a standard decoder-only transformer with rotary position embeddings, trained with bfloat16 mixed precision and the Muon optimizer (for 2D weight matrices) combined with AdamW (for embeddings and norms). Weight tying connects the embedding and unembedding matrices.
@@ -116,10 +170,15 @@ For links that do not resolve to corpus documents, `--allow-generation-fallback`
 main.py                          Training entry point (single-node or DDP)
 launch_slurm.py                  Multi-node SLURM launcher (submitit)
 generate.py                      Generation CLI
+precompute_epochs.py             Offline epoch pre-computation for density-aware batching
+visualize_epoch.py               Density / mask / timing visualisations for a pre-computed epoch
 configs/                         YAML training configurations
+schedules/                       Pre-computed epoch directories (packs.parquet + metadata.json)
 data/
   dataset.py                     GraphIndex, PretokShardedBackend
-  packed_dataset.py              PackedSequenceDataset (IterableDataset)
+  packed_dataset.py              PackedSequenceDataset (IterableDataset, live online path)
+  bucketed_pack_dataset.py       BucketedPackDataset (IterableDataset, pre-computed path)
+  epoch_precompute.py            EpochPrecomputer, PackRecord, worker logic
   traversal.py                   BFS, DFS, RandomWalk, Random strategies
   pack_sampler.py                Token-budget-aware batch construction
   pretokenize.py / pretokenize_stack.py   Raw data → binary shards
@@ -130,12 +189,14 @@ model/
   modules/training_module.py     TS2TSTrainingModule (nn.Module, loss out)
   graph_traversal/
     block_mask_creator.py        FlexAttention mask registry + visualiser
-    cross_doc_mask.py            CrossDocLinkMaskCreator
+    cross_doc_mask.py            CrossDocLinkMaskCreator (flex + triton backends)
     markdown_link_detector.py    Detects [[WikiLinks]] in token streams
     python_import_detector.py    Detects `import` statements in token streams
   generation_loop.py             run_generation, link-detection loop
   document_context.py            DocumentContext (inference context window)
-docs/images/                     Committed mask visualisations
+kernels/                         Custom Triton attention kernels
+tunalab/train_loops/             Experiment-local atomic training features
+docs/images/                     Committed mask and density visualisations
 ```
 
 Full pipeline instructions (data extraction, pretokenization, training, generation) are in [INSTRUCTIONS.md](INSTRUCTIONS.md).
@@ -148,11 +209,13 @@ in no particular priority order
   - [ ] one from dense sub-clusters
 - [ ] integrate in easy LLM benchmarks (likely specific sub-tasks from larger benchmarks like MMLU; whatever i think these models can handle & preferably stuff that'd benefit from cross-document understanding)
 - [ ] write custom cross-doc-link FA2 kernel since FlexAttention's backward pass is so absurdly slow
-- [ ] build batch mask density pre-computation system to ensure ranks spend less time waiting for whichever rank has the densest mask
+- [x] build batch mask density pre-computation system to ensure ranks spend less time waiting for whichever rank has the densest mask
 - [ ] finish inference generation logic
 - [ ] preprocess code data to make imports lazy & thus save on computation
 - [ ] make a more complicated python-linter-based mask that allows only the relevant scope of the code in a given doc to attend to what it's importing rather than
 - [ ] update to the latest methods from the `kellerjordan/modded-nanogpt/` repo
 - [ ] check for feasability of integrating `karpathy/nanochat/` RL & chat pipeline and how we might edit that pipeline to take advantage of this model's new features
 - [ ] actually train reasonable sized models for each ablation: (random, random-walk, dfs, bfs) x (doc-causal, cross-doc-link)
-- [ ] softmax flattening out is likely our largest issue (alongside the huge runtime increase); can we find some other form of attention that helps fix this (i think i vaguely remember one called differential or diff attention)
+- [ ] softmax flattening: a real concern for `cross_doc_link` specifically at long sequences — `doc_causal` is unaffected since attention is scoped per-document regardless of total sequence length. with `cross_doc_link`, a well-connected node can end up attending to hundreds of thousands of tokens (own doc + all linked docs), which is where entropy degrades. **don't implement anything until empirically confirmed at whatever sequence length we're actually targeting.** possible mitigations to evaluate when needed:
+  - **NSA (Native Sparse Attention)** — combines compression attention (coarse global context) → LSE-based top-K block selection → selection attention on chosen blocks + sliding window. would compose on top of `cross_doc_link` rather than replace it: graph edges give document-level routing, NSA gives block-level content-based selection within the permitted region. the composition is clean. NSA *does* address flattening: compression reduces the attended token count, selection attention operates on K×blocksize tokens (sharp weights). a simple Triton implementation on A100 gets the algorithmic gain but misses Blackwell's warp specialization/TMA async prefetch — realistic ~2-3x speedup vs the paper's 9x. cuDNN NSA API requires SM100+ (Blackwell), unavailable on A100s. refs: [cuDNN NSA API](https://docs.nvidia.com/deeplearning/cudnn/frontend/v1.19.1/fe-oss-apis/nsa.html), [NSA paper (arxiv 2502.11089)](https://arxiv.org/abs/2502.11089)
+  - **Differential Attention** — subtracts two softmax attention maps to cancel out noise/uniform background; directly targets entropy inflation. worth looking into as a potentially simpler alternative to NSA.

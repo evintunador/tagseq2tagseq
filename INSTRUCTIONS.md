@@ -190,6 +190,129 @@ Available strategies: `dfs`, `bfs`, `random_walk`, `random`.
 
 ---
 
+## Density-Aware Batch Scheduling
+
+Pre-computing epochs offline eliminates online link detection overhead (~1.3 s/step at 32k) and ensures all DDP ranks receive packs of the same attention-mask density at each step, eliminating rank-stall waste on multi-node InfiniBand runs.
+
+**Only supported for TheStack datasets** (identifier format `owner/repo:path`). Wikipedia / WikiSource must use the standard live `PackedSequenceDataset` path.
+
+---
+
+### Step 1 — Pre-compute epochs
+
+Run once before training. Each epoch takes ~20 min on 1 GPU for Stack 10M (8 workers); Stack 100M will take longer in proportion to corpus size.
+
+```bash
+# Stack 10M — pre-compute 3 epochs (seed offset per epoch)
+CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
+    --dataset-dir  data/pretokenized_datasets/stack_10m \
+    --output-dir   schedules/stack10m_bfs \
+    --n-epochs     3 \
+    --strategy     bfs \
+    --local-seq-len 32768 \
+    --n-buckets    8 \
+    --n-workers    8 \
+    --seed         42 \
+    --link-detector python \
+    --layout-policy identifier_prefix_bos_eos
+
+# Stack 100M — larger corpus, more workers
+CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
+    --dataset-dir  data/pretokenized_datasets/stack_100m \
+    --output-dir   schedules/stack100m_bfs \
+    --n-epochs     5 \
+    --strategy     bfs \
+    --local-seq-len 32768 \
+    --n-buckets    32 \
+    --n-workers    16 \
+    --seed         42 \
+    --link-detector python \
+    --layout-policy identifier_prefix_bos_eos
+```
+
+Each `epoch_{i}/` directory receives:
+- `packs.parquet` — packed, snappy-compressed, sorted by bucket then pack_id
+- `metadata.json` — n_buckets, n_packs, token_budget, strategy, seed, kv_method, …
+
+The script is **resume-safe**: it skips any epoch whose `packs.parquet` already exists.
+
+**Key flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--n-buckets` | 32 | Density quantile buckets. Use 8 for quick experiments, 32 for production. |
+| `--n-workers` | 8 | Subprocess workers (one repo shard each). Each worker opens its own GraphIndex. |
+| `--local-seq-len` | 32768 | Token budget per pack — must match `model.max_seq_len`. |
+| `--layout-policy` | `null` | Must match the layout used during training (e.g. `identifier_prefix_bos_eos`). |
+| `--gpu-kv-pass` | off | Use GPU BlockMask instead of CPU analytical method for kv_block_count (36 ms/pack vs 1 ms/pack; only useful for verifying C==B on a real dataset). |
+
+---
+
+### Step 2 — Train with pre-computed epochs
+
+Pass `--data.epoch_dirs` pointing at the pre-computed epoch directories. The training script automatically activates `BucketedPackDataset` and injects `bucket_state_fn` so dataset position is saved in every checkpoint.
+
+```bash
+# Single-node (local torchrun, 2 GPUs)
+CUDA_VISIBLE_DEVICES=4,5 torchrun --nproc_per_node=2 main.py \
+    --config configs/stack_100m_32k.yaml \
+    --data.dataset_dir data/pretokenized_datasets/stack_10m \
+    --data.epoch_dirs schedules/stack10m_bfs/epoch_0
+
+# Multi-node SLURM (2 nodes × 4 GPUs = 8 ranks)
+python launch_slurm.py \
+    --nodes 2 --gpus-per-node 4 --time 24:00:00 \
+    --config configs/stack_100m_32k.yaml \
+    --data.dataset_dir data/pretokenized_datasets/stack_100m \
+    --data.epoch_dirs schedules/stack100m_bfs/epoch_0,schedules/stack100m_bfs/epoch_1,schedules/stack100m_bfs/epoch_2
+
+# Resume from checkpoint (BucketState is embedded in the checkpoint metadata)
+python launch_slurm.py \
+    --nodes 2 --gpus-per-node 4 --time 24:00:00 \
+    --config configs/stack_100m_32k.yaml \
+    --data.dataset_dir data/pretokenized_datasets/stack_100m \
+    --data.epoch_dirs schedules/stack100m_bfs/epoch_0,schedules/stack100m_bfs/epoch_1 \
+    --resume-from runs/<run_dir>/checkpoints/best_model.pt
+```
+
+Notes:
+- `world_size` and `grad_accum` can change on resume — the `bucket_consumed` cursors remain valid regardless.
+- If all `epoch_dirs` are exhausted, training raises `RuntimeError` asking you to precompute more epochs.
+- The `max_grants_warmup` warning is expected if `max_grants_start < max_grants` in the config: bucketing was done at the final `max_grants`, so density balance is approximate during warmup.
+
+---
+
+### Step 3 — Visualise results
+
+`visualize_epoch.py` generates three figures from a pre-computed epoch directory.
+
+```bash
+# Density overview + masks (no timing data needed)
+python visualize_epoch.py \
+    --epoch-dir   schedules/stack10m_bfs/epoch_0 \
+    --dataset-dir data/pretokenized_datasets/stack_10m \
+    --output-dir  artifacts/stack10m_report
+
+# Full report with training timing comparison
+python visualize_epoch.py \
+    --epoch-dir         schedules/stack10m_bfs/epoch_0 \
+    --dataset-dir       data/pretokenized_datasets/stack_10m \
+    --live-run          runs/<live_run_dir> \
+    --precomputed-run   runs/<precomputed_run_dir> \
+    --output-dir        artifacts/stack10m_report
+```
+
+**Outputs:**
+
+| File | Contents |
+|------|---------|
+| `density_overview.png` | kv_block_count histogram (stacked by bucket) + per-bucket violin. Shows the density spread and confirms bucket boundaries are well-separated. |
+| `masks.png` | Block-level attention mask (256×256 grid of 128-token blocks) for the median pack from the sparsest and densest bucket. Each cell = one block pair; blue = non-empty; red lines = document boundaries. |
+| `step_timing.png` | Per-step wall-clock time. Live steps are uniform steel-blue; pre-computed steps are colour-coded by which density bucket was drawn — sparse buckets (dark) are fast, dense buckets (yellow) are slow. |
+| `step_timing_by_bucket.png` | Breakdown panel. Live: histogram of all step times with percentile markers (shows the broad random distribution). Precomputed: per-bucket mean ± 1 std with within-bucket CoV annotated (should be ≪ overall CoV — confirms ranks are well-matched within each step). |
+
+---
+
 ## Training
 
 Run artifacts are saved to timestamped directories under `runs/`.
