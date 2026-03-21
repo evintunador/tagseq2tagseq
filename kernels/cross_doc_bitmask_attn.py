@@ -564,9 +564,14 @@ def _attn_backward_cdb(
     dLdK = tl.zeros([BLOCK_SIZE_COL_1, Dh], dtype=tl.float32)
     dLdV = tl.zeros([BLOCK_SIZE_COL_1, Dh], dtype=tl.float32)
 
-    # Doc boundary for this K/V block — used by the KV sub-kernel to gate
-    # same-doc vs cross-doc Q blocks.
-    kv_doc_id = tl.load(doc_ids_ptr + start_COL).to(tl.int32)
+    # Use the LAST position in the KV block to determine doc_kv_end.  When doc
+    # lengths are non-uniform, a MACRO block can straddle a boundary: start_COL
+    # is in an earlier document but the block's tail is in the next document.
+    # Using start_COL alone would mark Q rows in the later doc as "cross-doc" and
+    # trigger the OR-reduction check; since the KV union bits for that later doc
+    # may be zero, those Q blocks would be skipped, producing missing gradients.
+    last_kv_pos = tl.minimum(start_COL + BLOCK_SIZE_COL_1 - 1, N - 1)
+    kv_doc_id = tl.load(doc_ids_ptr + last_kv_pos).to(tl.int32)
     doc_kv_end = tl.load(cu_seqlens_ptr + kv_doc_id + 1).to(tl.int32)
 
     dLdK, dLdV = _attn_backward_KV_cdb(

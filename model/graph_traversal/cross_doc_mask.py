@@ -12,7 +12,7 @@ See also:
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
@@ -62,6 +62,25 @@ class BlockInteractionMask:
     kv_q_counts:  torch.Tensor   # [n_blocks]   int32
     kv_q_ptrs:    torch.Tensor   # [n_blocks+1] int32
     kv_q_indices: torch.Tensor   # [nnz_bwd]    int32
+
+    # v3 extension: full/partial block split counts (None → v3 kernels unavailable).
+    # q_kv row order: [full same-doc off-diag..., cross-doc..., diagonal(last)]
+    # kv_q row order: [diagonal(first), full same-doc off-diag..., cross-doc...]
+    q_kv_n_full: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
+    kv_q_n_full: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
+
+    # v7 extension: coarse backward CSR at 2×block_size resolution (None → v7 unavailable).
+    # Each coarse block covers 2 fine BIM blocks.  Same row ordering as v3.
+    # bwd_kv_q_*: for each coarse KV block, coarse Q blocks (for dK/dV kernel)
+    # bwd_q_kv_*: for each coarse Q block, coarse KV blocks (for dQ kernel)
+    bwd_kv_q_counts:  Optional[torch.Tensor] = field(default=None)  # [n_coarse] int32
+    bwd_kv_q_ptrs:    Optional[torch.Tensor] = field(default=None)  # [n_coarse+1] int32
+    bwd_kv_q_indices: Optional[torch.Tensor] = field(default=None)  # [nnz_bwd_c] int32
+    bwd_kv_q_n_full:  Optional[torch.Tensor] = field(default=None)  # [n_coarse] int32
+    bwd_q_kv_counts:  Optional[torch.Tensor] = field(default=None)  # [n_coarse] int32
+    bwd_q_kv_ptrs:    Optional[torch.Tensor] = field(default=None)  # [n_coarse+1] int32
+    bwd_q_kv_indices: Optional[torch.Tensor] = field(default=None)  # [nnz_fwd_c] int32
+    bwd_q_kv_n_full:  Optional[torch.Tensor] = field(default=None)  # [n_coarse] int32
 
     @property
     def n_blocks(self) -> int:
@@ -525,9 +544,25 @@ class CrossDocLinkMaskCreator:
         # 5. Final interaction matrix and CSR construction via np.where
         interact = causal & (same_doc | grant)  # [n_blocks, n_blocks] bool
 
+        # 6. Full-block mask: both blocks are single-doc, same doc, off-diagonal.
+        #    For such pairs, all element positions attend (causal is trivially True
+        #    since kv_b < q_b, and same_doc_elem is True for all positions).
+        #    v3 kernels skip per-element masking for these blocks entirely.
+        blk_is_pure = (blk_min_doc == blk_max_doc)  # [n_blocks]
+        block_same_doc_clean = (
+            blk_is_pure[:, None] & blk_is_pure[None, :]
+            & (blk_min_doc[:, None] == blk_min_doc[None, :])
+        )
+        diagonal_mask = np.eye(n_blocks, dtype=bool)
+        interact_full = interact & block_same_doc_clean & ~diagonal_mask
+
         # q_kv: for each Q-block, sorted list of KV-blocks (forward + bwd STAGE 2)
         q_idxs, kv_idxs = np.where(interact)   # row-major → already sorted by q_b
         kv_idxs_T, q_idxs_T = np.where(interact.T)  # kv→q (backward STAGE 1)
+
+        # Per-pair full classification (indexed parallel to q_idxs/kv_idxs)
+        is_full_fwd = interact_full[q_idxs,   kv_idxs]    # [nnz_fwd] bool
+        is_full_bwd = interact_full[q_idxs_T, kv_idxs_T]  # [nnz_bwd] bool
 
         def _pack_csr(
             row_idxs: np.ndarray,
@@ -543,8 +578,137 @@ class CrossDocLinkMaskCreator:
                 torch.from_numpy(indices).to(device),
             )
 
-        q_kv_counts, q_kv_ptrs, q_kv_indices   = _pack_csr(q_idxs,   kv_idxs)
-        kv_q_counts, kv_q_ptrs, kv_q_indices   = _pack_csr(kv_idxs_T, q_idxs_T)
+        def _pack_csr_v3_fwd(
+            row_idxs: np.ndarray,
+            col_idxs: np.ndarray,
+            is_full:  np.ndarray,
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            """q_kv order per row: [full same-doc..., cross-doc..., diagonal(last)]."""
+            counts = np.bincount(row_idxs, minlength=n_blocks).astype(np.int32)
+            ptrs   = np.zeros(n_blocks + 1, dtype=np.int32)
+            ptrs[1:] = np.cumsum(counts)
+            new_col = np.empty_like(col_idxs)
+            n_full  = np.zeros(n_blocks, dtype=np.int32)
+            for rb in range(n_blocks):
+                s, e = ptrs[rb], ptrs[rb + 1]
+                if e == s:
+                    continue
+                cols  = col_idxs[s:e]
+                ifs   = is_full[s:e]
+                idiag = (cols == rb)
+                full_c  = np.sort(cols[ ifs & ~idiag])
+                cross_c = np.sort(cols[~ifs & ~idiag])
+                diag_c  = cols[idiag]
+                new_col[s:e] = np.concatenate([full_c, cross_c, diag_c])
+                n_full[rb]   = len(full_c)
+            return (
+                torch.from_numpy(counts).to(device),
+                torch.from_numpy(ptrs).to(device),
+                torch.from_numpy(new_col).to(device),
+                torch.from_numpy(n_full).to(device),
+            )
+
+        def _pack_csr_v3_bwd(
+            row_idxs: np.ndarray,
+            col_idxs: np.ndarray,
+            is_full:  np.ndarray,
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            """kv_q order per row: [diagonal(first), full same-doc..., cross-doc...]."""
+            counts = np.bincount(row_idxs, minlength=n_blocks).astype(np.int32)
+            ptrs   = np.zeros(n_blocks + 1, dtype=np.int32)
+            ptrs[1:] = np.cumsum(counts)
+            new_col = np.empty_like(col_idxs)
+            n_full  = np.zeros(n_blocks, dtype=np.int32)
+            for rb in range(n_blocks):
+                s, e = ptrs[rb], ptrs[rb + 1]
+                if e == s:
+                    continue
+                cols  = col_idxs[s:e]
+                ifs   = is_full[s:e]
+                idiag = (cols == rb)
+                diag_c  = cols[idiag]
+                full_c  = np.sort(cols[ ifs & ~idiag])
+                cross_c = np.sort(cols[~ifs & ~idiag])
+                new_col[s:e] = np.concatenate([diag_c, full_c, cross_c])
+                n_full[rb]   = len(full_c)
+            return (
+                torch.from_numpy(counts).to(device),
+                torch.from_numpy(ptrs).to(device),
+                torch.from_numpy(new_col).to(device),
+                torch.from_numpy(n_full).to(device),
+            )
+
+        q_kv_counts, q_kv_ptrs, q_kv_indices, q_kv_n_full = _pack_csr_v3_fwd(
+            q_idxs, kv_idxs, is_full_fwd,
+        )
+        kv_q_counts, kv_q_ptrs, kv_q_indices, kv_q_n_full = _pack_csr_v3_bwd(
+            kv_idxs_T, q_idxs_T, is_full_bwd,
+        )
+
+        # 7. Coarse backward CSR at 2×block_size resolution (for v7 double-tile backward).
+        n_coarse = (n_blocks + 1) // 2
+        n_pad    = n_coarse * 2
+        # Pad fine matrices to even size
+        interact_pad    = np.zeros((n_pad, n_pad), dtype=bool)
+        interact_full_pad = np.zeros((n_pad, n_pad), dtype=bool)
+        interact_pad[:n_blocks, :n_blocks]     = interact
+        interact_full_pad[:n_blocks, :n_blocks] = interact_full
+        # Coarse interact: True iff any of the 2×2 fine pairs interacts
+        coarse_interact = interact_pad.reshape(n_coarse, 2, n_coarse, 2).any(axis=(1, 3))
+        # Coarse full: True iff every fine pair that IS in interact is also full
+        coarse_full_cond = (~interact_pad) | interact_full_pad
+        coarse_full = coarse_full_cond.reshape(n_coarse, 2, n_coarse, 2).all(axis=(1, 3))
+        coarse_full &= coarse_interact
+        # Coarse causal (diagonal included only for non-diagonal block pairs via off-diag check)
+        coarse_full &= (np.arange(n_coarse)[:, None] > np.arange(n_coarse)[None, :])
+
+        coarse_q_idxs, coarse_kv_idxs = np.where(coarse_interact)
+        coarse_kv_idxs_T, coarse_q_idxs_T = np.where(coarse_interact.T)
+        is_full_coarse_fwd = coarse_full[coarse_q_idxs, coarse_kv_idxs]
+        is_full_coarse_bwd = coarse_full[coarse_q_idxs_T, coarse_kv_idxs_T]
+
+        def _pack_csr_coarse_fwd(row_i, col_i, is_full_i):
+            counts = np.bincount(row_i, minlength=n_coarse).astype(np.int32)
+            ptrs   = np.zeros(n_coarse + 1, dtype=np.int32)
+            ptrs[1:] = np.cumsum(counts)
+            new_col = np.empty_like(col_i)
+            n_full  = np.zeros(n_coarse, dtype=np.int32)
+            for rb in range(n_coarse):
+                s, e = ptrs[rb], ptrs[rb + 1]
+                if e == s:
+                    continue
+                cols = col_i[s:e]; ifs = is_full_i[s:e]; idiag = (cols == rb)
+                full_c  = np.sort(cols[ ifs & ~idiag])
+                cross_c = np.sort(cols[~ifs & ~idiag])
+                diag_c  = cols[idiag]
+                new_col[s:e] = np.concatenate([full_c, cross_c, diag_c])
+                n_full[rb]   = len(full_c)
+            return (torch.from_numpy(counts).to(device), torch.from_numpy(ptrs).to(device),
+                    torch.from_numpy(new_col).to(device), torch.from_numpy(n_full).to(device))
+
+        def _pack_csr_coarse_bwd(row_i, col_i, is_full_i):
+            counts = np.bincount(row_i, minlength=n_coarse).astype(np.int32)
+            ptrs   = np.zeros(n_coarse + 1, dtype=np.int32)
+            ptrs[1:] = np.cumsum(counts)
+            new_col = np.empty_like(col_i)
+            n_full  = np.zeros(n_coarse, dtype=np.int32)
+            for rb in range(n_coarse):
+                s, e = ptrs[rb], ptrs[rb + 1]
+                if e == s:
+                    continue
+                cols = col_i[s:e]; ifs = is_full_i[s:e]; idiag = (cols == rb)
+                diag_c  = cols[idiag]
+                full_c  = np.sort(cols[ ifs & ~idiag])
+                cross_c = np.sort(cols[~ifs & ~idiag])
+                new_col[s:e] = np.concatenate([diag_c, full_c, cross_c])
+                n_full[rb]   = len(full_c)
+            return (torch.from_numpy(counts).to(device), torch.from_numpy(ptrs).to(device),
+                    torch.from_numpy(new_col).to(device), torch.from_numpy(n_full).to(device))
+
+        bwd_q_kv_counts, bwd_q_kv_ptrs, bwd_q_kv_indices, bwd_q_kv_n_full = \
+            _pack_csr_coarse_fwd(coarse_q_idxs, coarse_kv_idxs, is_full_coarse_fwd)
+        bwd_kv_q_counts, bwd_kv_q_ptrs, bwd_kv_q_indices, bwd_kv_q_n_full = \
+            _pack_csr_coarse_bwd(coarse_kv_idxs_T, coarse_q_idxs_T, is_full_coarse_bwd)
 
         bim = BlockInteractionMask(
             seq_len=seq_len,
@@ -555,6 +719,16 @@ class CrossDocLinkMaskCreator:
             kv_q_counts=kv_q_counts,
             kv_q_ptrs=kv_q_ptrs,
             kv_q_indices=kv_q_indices,
+            q_kv_n_full=q_kv_n_full,
+            kv_q_n_full=kv_q_n_full,
+            bwd_kv_q_counts=bwd_kv_q_counts,
+            bwd_kv_q_ptrs=bwd_kv_q_ptrs,
+            bwd_kv_q_indices=bwd_kv_q_indices,
+            bwd_kv_q_n_full=bwd_kv_q_n_full,
+            bwd_q_kv_counts=bwd_q_kv_counts,
+            bwd_q_kv_ptrs=bwd_q_kv_ptrs,
+            bwd_q_kv_indices=bwd_q_kv_indices,
+            bwd_q_kv_n_full=bwd_q_kv_n_full,
         )
         logger.info(
             f"Built BlockInteractionMask: {n_blocks} blocks, "

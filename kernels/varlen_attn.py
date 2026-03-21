@@ -416,7 +416,15 @@ def _attn_backward_varlen(
     start_ROW += BLOCK_SIZE_COL_1
     # Sparsity: only iterate Q blocks within the same document as this K/V block.
     # K/V positions outside this doc have same_doc=False → P_T=0 → zero gradient.
-    kv_doc_id = tl.load(doc_ids_ptr + start_COL).to(tl.int32)
+    #
+    # Use the LAST position in the KV block to determine doc_kv_end.  When doc
+    # lengths are non-uniform, a MACRO block can straddle a boundary: start_COL
+    # is in an earlier document but the block's tail is in the next document.
+    # Using start_COL alone gives the earlier doc's end and skips the Q rows that
+    # attend to the later doc's KV tokens.  Using the last KV position gives the
+    # correct upper bound covering all docs touched by this block.
+    last_kv_pos = tl.minimum(start_COL + BLOCK_SIZE_COL_1 - 1, N - 1)
+    kv_doc_id = tl.load(doc_ids_ptr + last_kv_pos).to(tl.int32)
     doc_kv_end = tl.load(cu_seqlens_ptr + kv_doc_id + 1).to(tl.int32)
     doc_kv_end_aligned = tl.cdiv(doc_kv_end, BLOCK_SIZE_ROW_1) * BLOCK_SIZE_ROW_1
     num_steps = tl.maximum((doc_kv_end_aligned - start_ROW) // BLOCK_SIZE_ROW_1, 0)
