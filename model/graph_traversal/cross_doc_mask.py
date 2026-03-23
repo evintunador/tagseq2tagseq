@@ -69,6 +69,17 @@ class BlockInteractionMask:
     q_kv_n_full: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
     kv_q_n_full: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
 
+    # v13 extension: pure-cross block counts.
+    # Within the cross-doc range, "pure-cross" pairs have both blocks entirely in
+    # distinct single documents (blk_is_pure=True, different doc IDs). These pairs
+    # satisfy same_doc=False for all position pairs, so only bitmask masking is
+    # needed — no doc_id loads or same_doc computation required.
+    # Row order (fwd):  [full..., pure_cross..., boundary..., diagonal(last)]
+    # Row order (bwd):  [diagonal(first), full..., pure_cross..., boundary...]
+    # None → v13 kernels unavailable (BIM built before this extension).
+    q_kv_n_pure_cross: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
+    kv_q_n_pure_cross: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
+
     # v7 extension: coarse backward CSR at 2×block_size resolution (None → v7 unavailable).
     # Each coarse block covers 2 fine BIM blocks.  Same row ordering as v3.
     # bwd_kv_q_*: for each coarse KV block, coarse Q blocks (for dK/dV kernel)
@@ -578,72 +589,100 @@ class CrossDocLinkMaskCreator:
                 torch.from_numpy(indices).to(device),
             )
 
+        # v13: classify non-full, non-diagonal interacting pairs as "pure cross"
+        # (both blocks single-doc, different docs) vs "boundary" (one or both
+        # straddles a doc boundary). Pure-cross pairs need only bitmask masking.
+        is_pure_cross_fwd = (
+            ~is_full_fwd
+            & (q_idxs != kv_idxs)
+            & blk_is_pure[q_idxs]
+            & blk_is_pure[kv_idxs]
+            & (blk_min_doc[q_idxs] != blk_min_doc[kv_idxs])
+        )
+        is_pure_cross_bwd = (
+            ~is_full_bwd
+            & (kv_idxs_T != q_idxs_T)
+            & blk_is_pure[kv_idxs_T]
+            & blk_is_pure[q_idxs_T]
+            & (blk_min_doc[kv_idxs_T] != blk_min_doc[q_idxs_T])
+        )
+
         def _pack_csr_v3_fwd(
-            row_idxs: np.ndarray,
-            col_idxs: np.ndarray,
-            is_full:  np.ndarray,
-        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-            """q_kv order per row: [full same-doc..., cross-doc..., diagonal(last)]."""
+            row_idxs:     np.ndarray,
+            col_idxs:     np.ndarray,
+            is_full:      np.ndarray,
+            is_pure_cross: np.ndarray,
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            """q_kv order: [full..., pure_cross..., boundary..., diagonal(last)]."""
             counts = np.bincount(row_idxs, minlength=n_blocks).astype(np.int32)
             ptrs   = np.zeros(n_blocks + 1, dtype=np.int32)
             ptrs[1:] = np.cumsum(counts)
-            new_col = np.empty_like(col_idxs)
-            n_full  = np.zeros(n_blocks, dtype=np.int32)
+            new_col      = np.empty_like(col_idxs)
+            n_full       = np.zeros(n_blocks, dtype=np.int32)
+            n_pure_cross = np.zeros(n_blocks, dtype=np.int32)
             for rb in range(n_blocks):
                 s, e = ptrs[rb], ptrs[rb + 1]
                 if e == s:
                     continue
                 cols  = col_idxs[s:e]
                 ifs   = is_full[s:e]
+                ipc   = is_pure_cross[s:e]
                 idiag = (cols == rb)
                 full_c  = np.sort(cols[ ifs & ~idiag])
-                cross_c = np.sort(cols[~ifs & ~idiag])
+                pc_c    = np.sort(cols[ ipc & ~idiag])
+                bnd_c   = np.sort(cols[~ifs & ~ipc & ~idiag])
                 diag_c  = cols[idiag]
-                new_col[s:e] = np.concatenate([full_c, cross_c, diag_c])
-                n_full[rb]   = len(full_c)
+                new_col[s:e]   = np.concatenate([full_c, pc_c, bnd_c, diag_c])
+                n_full[rb]       = len(full_c)
+                n_pure_cross[rb] = len(pc_c)
             return (
                 torch.from_numpy(counts).to(device),
                 torch.from_numpy(ptrs).to(device),
                 torch.from_numpy(new_col).to(device),
                 torch.from_numpy(n_full).to(device),
+                torch.from_numpy(n_pure_cross).to(device),
             )
 
         def _pack_csr_v3_bwd(
-            row_idxs: np.ndarray,
-            col_idxs: np.ndarray,
-            is_full:  np.ndarray,
-        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-            """kv_q order per row: [diagonal(first), full same-doc..., cross-doc...]."""
+            row_idxs:     np.ndarray,
+            col_idxs:     np.ndarray,
+            is_full:      np.ndarray,
+            is_pure_cross: np.ndarray,
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            """kv_q order: [diagonal(first), full..., pure_cross..., boundary...]."""
             counts = np.bincount(row_idxs, minlength=n_blocks).astype(np.int32)
             ptrs   = np.zeros(n_blocks + 1, dtype=np.int32)
             ptrs[1:] = np.cumsum(counts)
-            new_col = np.empty_like(col_idxs)
-            n_full  = np.zeros(n_blocks, dtype=np.int32)
+            new_col      = np.empty_like(col_idxs)
+            n_full       = np.zeros(n_blocks, dtype=np.int32)
+            n_pure_cross = np.zeros(n_blocks, dtype=np.int32)
             for rb in range(n_blocks):
                 s, e = ptrs[rb], ptrs[rb + 1]
                 if e == s:
                     continue
                 cols  = col_idxs[s:e]
                 ifs   = is_full[s:e]
+                ipc   = is_pure_cross[s:e]
                 idiag = (cols == rb)
                 diag_c  = cols[idiag]
                 full_c  = np.sort(cols[ ifs & ~idiag])
-                cross_c = np.sort(cols[~ifs & ~idiag])
-                new_col[s:e] = np.concatenate([diag_c, full_c, cross_c])
-                n_full[rb]   = len(full_c)
+                pc_c    = np.sort(cols[ ipc & ~idiag])
+                bnd_c   = np.sort(cols[~ifs & ~ipc & ~idiag])
+                new_col[s:e]   = np.concatenate([diag_c, full_c, pc_c, bnd_c])
+                n_full[rb]       = len(full_c)
+                n_pure_cross[rb] = len(pc_c)
             return (
                 torch.from_numpy(counts).to(device),
                 torch.from_numpy(ptrs).to(device),
                 torch.from_numpy(new_col).to(device),
                 torch.from_numpy(n_full).to(device),
+                torch.from_numpy(n_pure_cross).to(device),
             )
 
-        q_kv_counts, q_kv_ptrs, q_kv_indices, q_kv_n_full = _pack_csr_v3_fwd(
-            q_idxs, kv_idxs, is_full_fwd,
-        )
-        kv_q_counts, kv_q_ptrs, kv_q_indices, kv_q_n_full = _pack_csr_v3_bwd(
-            kv_idxs_T, q_idxs_T, is_full_bwd,
-        )
+        q_kv_counts, q_kv_ptrs, q_kv_indices, q_kv_n_full, q_kv_n_pure_cross = \
+            _pack_csr_v3_fwd(q_idxs, kv_idxs, is_full_fwd, is_pure_cross_fwd)
+        kv_q_counts, kv_q_ptrs, kv_q_indices, kv_q_n_full, kv_q_n_pure_cross = \
+            _pack_csr_v3_bwd(kv_idxs_T, q_idxs_T, is_full_bwd, is_pure_cross_bwd)
 
         # 7. Coarse backward CSR at 2×block_size resolution (for v7 double-tile backward).
         n_coarse = (n_blocks + 1) // 2
@@ -721,6 +760,8 @@ class CrossDocLinkMaskCreator:
             kv_q_indices=kv_q_indices,
             q_kv_n_full=q_kv_n_full,
             kv_q_n_full=kv_q_n_full,
+            q_kv_n_pure_cross=q_kv_n_pure_cross,
+            kv_q_n_pure_cross=kv_q_n_pure_cross,
             bwd_kv_q_counts=bwd_kv_q_counts,
             bwd_kv_q_ptrs=bwd_kv_q_ptrs,
             bwd_kv_q_indices=bwd_kv_q_indices,

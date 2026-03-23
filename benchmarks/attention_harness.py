@@ -672,6 +672,67 @@ def _impl_cdb_bim_v9(q, k, v, mask_inputs, scale):
     )
 
 
+def _impl_cdb_bim_v10(q, k, v, mask_inputs, scale):
+    """cdb_bim_v10: native-dtype matmuls (bf16 TC) — no fp32 cast on load."""
+    from kernels.cross_doc_bitmask_bim_v10 import triton_attn_cross_doc_bitmask_bim_v10
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None
+    return triton_attn_cross_doc_bitmask_bim_v10(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
+def _impl_cdb_bim_v11(q, k, v, mask_inputs, scale):
+    """cdb_bim_v11: v10 + no permute/contiguous copies (pass THD strides directly)."""
+    from kernels.cross_doc_bitmask_bim_v11 import triton_attn_cross_doc_bitmask_bim_v11
+    assert mask_inputs.q_bitmasks is not None
+    assert mask_inputs.bim is not None
+    return triton_attn_cross_doc_bitmask_bim_v11(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
+    )
+
+
+_bim128_cache: Dict[int, Any] = {}
+
+def _get_bim128(mask_inputs):
+    """Build (and cache) a BIM at block_size=128 for the given mask_inputs."""
+    from kernels.cross_doc_bitmask_bim_v12 import _build_bim_128
+    key = id(mask_inputs)
+    if key not in _bim128_cache:
+        _bim128_cache[key] = _build_bim_128(
+            mask_inputs.seq_len, mask_inputs.document_ids,
+            mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks,
+            mask_inputs.document_ids.device, mask_inputs.q_bitmasks.shape[0],
+        )
+    return _bim128_cache[key]
+
+
+def _impl_cdb_bim_v12(q, k, v, mask_inputs, scale):
+    """cdb_bim_v12: v11 + BIM_BLOCK_SIZE=128 (larger matmul tiles)."""
+    from kernels.cross_doc_bitmask_bim_v12 import (
+        triton_attn_cross_doc_bitmask_bim_v12, _build_bim_128,
+    )
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _get_bim128(mask_inputs)
+    return triton_attn_cross_doc_bitmask_bim_v12(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
+    )
+
+
+def _impl_cdb_bim_v13(q, k, v, mask_inputs, scale):
+    """cdb_bim_v13: v12 + pure-cross dispatch (bitmask-only inner kernel)."""
+    from kernels.cross_doc_bitmask_bim_v13 import triton_attn_cross_doc_bitmask_bim_v13
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _get_bim128(mask_inputs)
+    return triton_attn_cross_doc_bitmask_bim_v13(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Naive PyTorch baselines (O(T²), exact numerics, no flash tricks)
 # ---------------------------------------------------------------------------
@@ -813,6 +874,10 @@ REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
         ("cdb_bim_v7",       _impl_cdb_bim_v7),       # coarse 128-token bwd tiles
         ("cdb_bim_v8",       _impl_cdb_bim_v8),       # varlen-style pipelined same-doc
         ("cdb_bim_v9",       _impl_cdb_bim_v9),       # split pipelined same-doc + BIM cross-doc
+        ("cdb_bim_v10",      _impl_cdb_bim_v10),      # native-dtype matmuls (bf16 TC)
+        ("cdb_bim_v11",      _impl_cdb_bim_v11),      # v10 + no permute copies
+        ("cdb_bim_v12",      _impl_cdb_bim_v12),      # v11 + BIM_BLOCK_SIZE=128
+        ("cdb_bim_v13",      _impl_cdb_bim_v13),      # v12 + pure-cross dispatch
     ],
 }
 
@@ -1429,6 +1494,10 @@ def _get_autotune_kernels() -> Dict[str, Any]:
     )
     from kernels.cross_doc_bitmask_bim_v8 import _attn_backward_cdb_bim_v8
     from kernels.cross_doc_bitmask_bim_v9 import _attn_backward_KV_v9, _attn_backward_Q_v9
+    from kernels.cross_doc_bitmask_bim_v10 import (
+        _attn_fwd_cdb_bim_v10,
+        _attn_backward_KV_cdb_bim_v10, _attn_backward_Q_cdb_bim_v10,
+    )
     kernels = {
         "causal_fwd":        _attn_fwd,
         "causal_pre":        _attn_backward_preprocess,
@@ -1453,6 +1522,9 @@ def _get_autotune_kernels() -> Dict[str, Any]:
         "cdb_bim_v4_Q_bwd":  _attn_backward_Q_cdb_bim_v4,
         "cdb_bim_v9_KV_bwd": _attn_backward_KV_v9,
         "cdb_bim_v9_Q_bwd":  _attn_backward_Q_v9,
+        "cdb_bim_v10_fwd":   _attn_fwd_cdb_bim_v10,
+        "cdb_bim_v10_KV_bwd": _attn_backward_KV_cdb_bim_v10,
+        "cdb_bim_v10_Q_bwd":  _attn_backward_Q_cdb_bim_v10,
         "cdb_bim_v8_bwd":    _attn_backward_cdb_bim_v8,
         "cdb_bim_v7_KV_bwd": _attn_backward_KV_v7,
         "cdb_bim_v7_Q_bwd":  _attn_backward_Q_v7,
