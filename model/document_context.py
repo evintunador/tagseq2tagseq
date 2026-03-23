@@ -67,6 +67,7 @@ class DocumentContext:
         self._root: Optional[_DocEntry] = None
         self._evicted: List[_DocEntry] = []
         self._next_doc_id: int = 0
+        self._eviction_count: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -179,12 +180,18 @@ class DocumentContext:
             and self.num_aux_docs < self.max_auxiliary_documents
         )
 
+    @property
+    def eviction_count(self) -> int:
+        """Total number of eviction events since this context was created."""
+        return self._eviction_count
+
     def evict_oldest_aux(self) -> _DocEntry:
         """Remove and return the leftmost non-root entry; append to evicted list."""
         for i, entry in enumerate(self._docs):
             if not entry.is_root:
                 self._docs.pop(i)
                 self._evicted.append(entry)
+                self._eviction_count += 1
                 return entry
         raise RuntimeError("No auxiliary documents to evict")
 

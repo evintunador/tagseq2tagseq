@@ -155,7 +155,7 @@ def test_run_generation_stops_on_max_tokens_per_document():
         model=model,
         prompt_tokens=[1, 2],  # 2 prompt tokens
         corpus=None,
-        config=base_config(max_new_tokens=100, max_tokens_per_document=3),
+        config=base_config(max_new_tokens=3, max_tokens_per_document=3),
         link_detector=None,
         tokenizer_decode=None,
         layout_policy=None,
@@ -518,7 +518,7 @@ def test_handle_link_fetches_from_corpus():
     root = ctx.add_root("", [1], None)
     _handle_link(
         LinkInfo(link_end_pos=1, target_str="Python"),
-        root, ctx, None, None, corpus, base_config(max_link_depth=0), None, depth=0,
+        root, ctx, None, None, corpus, base_config(max_link_depth=1), None, depth=0,
     )
     assert ctx.num_aux_docs == 1
     aux = ctx._docs[0]
@@ -537,7 +537,7 @@ def test_handle_link_corpus_doc_inserted_before_active():
     root = ctx.add_root("", [1], None)
     _handle_link(
         LinkInfo(link_end_pos=1, target_str="Python"),
-        root, ctx, None, None, corpus, base_config(max_link_depth=0), None, depth=0,
+        root, ctx, None, None, corpus, base_config(max_link_depth=1), None, depth=0,
     )
     assert ctx._docs[0].raw_identifier == "Python"
     assert ctx._docs[1].is_root is True
@@ -598,7 +598,7 @@ def test_handle_link_stop_new_skips_when_full():
     # max_context_length just large enough for root (1 token) but not aux (2 tokens)
     ctx = make_context_obj(max_context_length=2, eviction_policy="stop_new")
     root = ctx.add_root("", [1], None)
-    cfg = base_config(eviction_policy="stop_new", max_context_length=2)
+    cfg = base_config(eviction_policy="stop_new", max_context_length=2, max_tokens_per_document=2, max_new_tokens=2)
     _handle_link(
         LinkInfo(link_end_pos=1, target_str="Python"),
         root, ctx, None, None, corpus, cfg, None, depth=0,
@@ -617,7 +617,7 @@ def test_handle_link_drop_oldest_evicts_to_make_room():
     ctx = make_context_obj(max_context_length=6, eviction_policy="drop_oldest")
     root = ctx.add_root("", [1], None)
     ctx.add_corpus_doc("A", [10, 11, 12, 13], None, "", 1, root)  # 4 tokens → total 5
-    cfg = base_config(eviction_policy="drop_oldest", max_context_length=6, max_link_depth=0)
+    cfg = base_config(eviction_policy="drop_oldest", max_context_length=6, max_link_depth=1, max_tokens_per_document=6, max_new_tokens=6)
     _handle_link(
         LinkInfo(link_end_pos=1, target_str="B"),
         root, ctx, None, None, corpus, cfg, None, depth=0,

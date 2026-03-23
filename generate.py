@@ -448,7 +448,7 @@ def render_result(
     n_corpus = len(result.get_corpus_documents())
     n_aux    = len(aux_docs)
     cfg_dict = result.generation_config
-    fwd      = cfg_dict.get("max_new_tokens", "?")   # proxy; trace not yet wired
+    trace    = result.trace
 
     lines.append(_c("═" * width, BOLD, use_color))
     lines.append(_c(" SUMMARY", BOLD, use_color))
@@ -456,6 +456,15 @@ def render_result(
     lines.append(f"   prompt:   \"{prompt}\"")
     lines.append(f"   docs:     {doc_breakdown}")
     lines.append(f"   depth:    {cfg_dict.get('max_link_depth', '?')}")
+    if trace is not None:
+        lines.append(
+            f"   trace:    {trace.total_forward_passes} fwd passes, "
+            f"{trace.total_tokens_generated} tokens, "
+            f"{trace.links_detected} links detected ({trace.links_resolved} resolved), "
+            f"{trace.corpus_fetches} corpus fetches, "
+            f"{trace.docs_generated} docs generated, "
+            f"{trace.docs_evicted} evicted"
+        )
     lines.append(_c("═" * width, BOLD, use_color))
 
     return "\n".join(lines)
@@ -512,6 +521,11 @@ def main():
 
     # ── Generation config ─────────────────────────────────────────────────────
     allow_gen_fallback = args.allow_generation_fallback or (corpus is None)
+    # max_tokens_per_document must be >= max_new_tokens (GenerationConfig validates this).
+    # Give a small 256-token headroom above max_new_tokens for layout prefix/suffix,
+    # but cap at half the model's context window.
+    max_tokens_per_document = min(args.max_new_tokens + 256, hp["model"]["max_seq_len"] // 2)
+    max_tokens_per_document = max(max_tokens_per_document, args.max_new_tokens)
     config = GenerationConfig(
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
@@ -520,7 +534,7 @@ def main():
         max_link_depth=args.max_link_depth,
         allow_generation_fallback=allow_gen_fallback,
         max_context_length=hp["model"]["max_seq_len"],
-        max_tokens_per_document=min(args.max_new_tokens + 256, hp["model"]["max_seq_len"] // 2),
+        max_tokens_per_document=max_tokens_per_document,
         device=args.device,
     )
 

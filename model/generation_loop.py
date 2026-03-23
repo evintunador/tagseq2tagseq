@@ -1,6 +1,7 @@
 """
 TS2TS autoregressive generation loop.
 """
+import logging
 from typing import Callable, List, Optional
 
 import torch
@@ -8,9 +9,11 @@ import torch
 from data.layout import DocLayoutInfo
 from model.document_context import DocumentContext, _DocEntry
 from model.generation_config import GenerationConfig
-from model.generation_result import GenerationResult
+from model.generation_result import GeneratedDocument, GenerationResult, GenerationTrace
 from model.identifier_utils import create_normed_identifier
 from model.sampling import sample_token
+
+logger = logging.getLogger(__name__)
 
 
 def run_generation(
@@ -48,12 +51,16 @@ def run_generation(
         layout_policy=layout_policy,
     )
 
+    trace = GenerationTrace() if config.record_trace else None
+
     if config.process_prompt_links and link_detector is not None:
         _process_existing_doc_links(
-            root_entry, context, model, link_detector, corpus, config, layout_policy, depth=0,
+            root_entry, context, model, link_detector, corpus, config, layout_policy,
+            depth=0, trace=trace,
         )
 
-    _generate_doc(root_entry, context, model, link_detector, corpus, config, layout_policy, depth=0)
+    _generate_doc(root_entry, context, model, link_detector, corpus, config, layout_policy,
+                  depth=0, trace=trace)
 
     docs = context.get_all_documents()
     if tokenizer_decode is not None:
@@ -61,10 +68,23 @@ def run_generation(
             if doc.tokens is not None:
                 doc.text = tokenizer_decode(doc.tokens.tolist())
 
+    if trace is not None:
+        trace.docs_evicted = context.eviction_count
+        logger.info(
+            "Generation complete: %d forward passes, %d tokens generated, "
+            "%d docs generated, %d corpus fetches, %d links detected (%d resolved), "
+            "%d docs evicted, max depth %d",
+            trace.total_forward_passes, trace.total_tokens_generated,
+            trace.docs_generated, trace.corpus_fetches,
+            trace.links_detected, trace.links_resolved,
+            trace.docs_evicted, trace.max_depth_reached,
+        )
+
     return GenerationResult(
         root_document=docs[0],
         auxiliary_documents=docs[1:],
         generation_config=config.to_dict(),
+        trace=trace,
     )
 
 
@@ -77,6 +97,7 @@ def _generate_doc(
     config: GenerationConfig,
     layout_policy,
     depth: int = 0,
+    trace: Optional[GenerationTrace] = None,
 ) -> None:
     """
     Generate tokens autoregressively for entry until a stopping condition is met.
@@ -95,6 +116,8 @@ def _generate_doc(
     while not entry.done:
         tokens_tensor, doc_spans = context.build_sequence()
         logits = model.forward_inference(tokens_tensor, doc_spans)  # [1, T, V]
+        if trace is not None:
+            trace.total_forward_passes += 1
 
         # Apply repetition penalty over tokens already in this document.
         # Positive logits are divided by the penalty; negative ones are multiplied,
@@ -110,6 +133,8 @@ def _generate_doc(
         next_token = sample_token(next_logits, config.temperature, config.top_k, config.top_p)
         context.append_token(entry, next_token)
         tokens_generated += 1
+        if trace is not None:
+            trace.total_tokens_generated += 1
 
         # Link detection: scan last max_recent_link_tokens of the active doc.
         # link_end_pos is relative to the `recent` window, so firing when
@@ -121,9 +146,15 @@ def _generate_doc(
             links = link_detector.detect_links(recent)
             for link in links:
                 if link.link_end_pos == len(recent):
+                    if trace is not None:
+                        trace.links_detected += 1
+                    logger.debug(
+                        "Link detected: '%s' at depth %d in doc '%s'",
+                        link.target_str, depth, entry.raw_identifier,
+                    )
                     _handle_link(
                         link, entry, context, model, link_detector,
-                        corpus, config, layout_policy, depth,
+                        corpus, config, layout_policy, depth, trace=trace,
                     )
                     break  # at most one new doc triggered per token step
 
@@ -131,7 +162,9 @@ def _generate_doc(
             context.mark_done(entry, layout_policy)
         elif tokens_generated >= config.max_new_tokens:
             context.mark_done(entry, layout_policy)
-        elif len(entry.tokens) >= config.max_tokens_per_document:
+        elif len(entry.prefix_tokens) + len(entry.tokens) >= config.max_tokens_per_document:
+            # max_tokens_per_document: caps total document length (prefix + body).
+            # Sets truncated=True — this is a hard structural limit.
             entry.truncated = True
             context.mark_done(entry, layout_policy)
 
@@ -146,25 +179,33 @@ def _handle_link(
     config: GenerationConfig,
     layout_policy,
     depth: int,
+    trace: Optional[GenerationTrace] = None,
 ) -> None:
     """
     Resolve a detected link by fetching or generating the target document.
 
     Decision tree (in order):
         1. Empty target → skip.
-        2. Already in active window → skip (cross-doc mask handles attention).
-        3. Previously evicted → restore (not yet implemented; see find_evicted).
-        4. In corpus → fetch and insert before active_entry.
-        5. allow_generation_fallback and depth < max_link_depth → recursively generate.
+        2. depth >= max_link_depth → skip (enforces depth limit for all doc types).
+        3. Already in active window → skip (cross-doc mask handles attention).
+        4. Previously evicted → restore (potentially evicting another first).
+        5. In corpus → fetch and insert before active_entry.
+        6. allow_generation_fallback → recursively generate.
     """
     target = link.target_str
     if not target:
         return
 
+    # Enforce max_link_depth for all doc types (corpus, generated, re-evicted).
+    # depth=0 means the active doc is the root; new docs would be at depth+1.
+    # With max_link_depth=0 this fires immediately, disabling all aux doc insertion.
+    if depth >= config.max_link_depth:
+        return
+
     if context.has_identifier(target):
         return
 
-    # Re-eviction: find_evicted returns None until restore_evicted is implemented.
+    # Re-eviction: restore a previously evicted doc if possible.
     evicted = context.find_evicted(target)
     if evicted is not None:
         exact_tokens = len(evicted.prefix_tokens) + len(evicted.tokens) + len(evicted.suffix_tokens)
@@ -174,10 +215,17 @@ def _handle_link(
         elif not context.can_add_document(exact_tokens):
             return
         context.restore_evicted(evicted, before_entry=active_entry)
+        if trace is not None:
+            trace.links_resolved += 1
+            trace.max_depth_reached = max(trace.max_depth_reached, evicted.depth)
+        logger.debug(
+            "Re-eviction: restored '%s' (depth %d) before '%s'",
+            target, evicted.depth, active_entry.raw_identifier,
+        )
         if depth + 1 <= config.max_link_depth:
             _process_existing_doc_links(
                 evicted, context, model, link_detector,
-                corpus, config, layout_policy, depth + 1,
+                corpus, config, layout_policy, depth + 1, trace=trace,
             )
         return
 
@@ -213,17 +261,23 @@ def _handle_link(
             depth=depth + 1,
             before_entry=active_entry,
         )
+        if trace is not None:
+            trace.links_resolved += 1
+            trace.corpus_fetches += 1
+            trace.max_depth_reached = max(trace.max_depth_reached, depth + 1)
+        logger.debug(
+            "Corpus fetch: '%s' (%d tokens) at depth %d",
+            target, len(corpus_tokens), depth + 1,
+        )
         if depth + 1 <= config.max_link_depth:
             _process_existing_doc_links(
                 new_entry, context, model, link_detector,
-                corpus, config, layout_policy, depth + 1,
+                corpus, config, layout_policy, depth + 1, trace=trace,
             )
         return
 
     # Recursive generation fallback.
     if not config.allow_generation_fallback:
-        return
-    if depth >= config.max_link_depth:
         return
 
     # Room estimate uses max_tokens_per_document as a conservative upper bound.
@@ -242,9 +296,14 @@ def _handle_link(
         depth=depth + 1,
         before_entry=active_entry,
     )
+    if trace is not None:
+        trace.links_resolved += 1
+        trace.docs_generated += 1
+        trace.max_depth_reached = max(trace.max_depth_reached, depth + 1)
+    logger.debug("Generating aux doc: '%s' at depth %d", target, depth + 1)
     _generate_doc(
         new_entry, context, model, link_detector,
-        corpus, config, layout_policy, depth + 1,
+        corpus, config, layout_policy, depth + 1, trace=trace,
     )
 
 
@@ -257,6 +316,7 @@ def _process_existing_doc_links(
     config: GenerationConfig,
     layout_policy,
     depth: int,
+    trace: Optional[GenerationTrace] = None,
 ) -> None:
     """
     Scan a completed document for links and handle each one.
@@ -272,5 +332,5 @@ def _process_existing_doc_links(
     for link in all_links:
         _handle_link(
             link, entry, context, model, link_detector,
-            corpus, config, layout_policy, depth,
+            corpus, config, layout_policy, depth, trace=trace,
         )

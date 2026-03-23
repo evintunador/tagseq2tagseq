@@ -85,3 +85,17 @@ class GenerationConfig:
         
         if self.eviction_policy not in ["drop_oldest", "stop_new"]:
             raise ValueError(f"eviction_policy must be 'drop_oldest' or 'stop_new', got {self.eviction_policy}")
+
+        if self.max_tokens_per_document > self.max_context_length:
+            raise ValueError(
+                f"max_tokens_per_document ({self.max_tokens_per_document}) exceeds "
+                f"max_context_length ({self.max_context_length}); a single document "
+                "could never fit in the context window"
+            )
+
+        if self.max_new_tokens > self.max_tokens_per_document:
+            raise ValueError(
+                f"max_new_tokens ({self.max_new_tokens}) exceeds "
+                f"max_tokens_per_document ({self.max_tokens_per_document}); "
+                "max_tokens_per_document would always fire first, making max_new_tokens ineffective"
+            )
