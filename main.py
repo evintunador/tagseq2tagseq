@@ -64,6 +64,100 @@ class LimitedDataLoader:
         return itertools.islice(iter(self.loader), self.max_batches)
 
 
+def _run_generation_demo(training_module, tokenizer, link_detector, layout_policy, mask_type):
+    """
+    Quick generation sanity check at the end of training.
+
+    Runs two short generation calls with hardcoded Python prompts containing
+    import statements so the cross-doc link machinery is exercised. Results are
+    printed to the training log via logger.info.
+    """
+    from model.generation_config import GenerationConfig
+    from model.model import TS2TSModel
+
+    logger.info("=" * 60)
+    logger.info("End-of-training generation demo")
+    logger.info("=" * 60)
+
+    try:
+        inference_model = training_module.to_inference_model(
+            tokenizer=tokenizer,
+            link_detector=link_detector,
+            layout_policy=layout_policy,
+        )
+        # Move inference model to the same device as training module.
+        device = next(training_module.parameters()).device
+        inference_model.to(device)
+    except Exception as e:
+        logger.warning("Generation demo skipped — could not build inference model: %s", e)
+        return
+
+    # Select prompts that match the actual link detector syntax so links fire.
+    from model.graph_traversal.python_import_detector import PythonImportDetector
+    from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+    if isinstance(link_detector, PythonImportDetector):
+        prompts = [
+            '"""Sorting utilities."""\nimport heapq\nfrom utils import validate_input\n\ndef quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n',
+            '"""Data processing pipeline."""\nimport numpy as np\nfrom transforms import normalize\n\ndef process(data):\n',
+        ]
+    elif isinstance(link_detector, MarkdownLinkDetector):
+        prompts = [
+            'The [quicksort](Quicksort) algorithm is a divide-and-conquer sorting method. It was developed by [Tony Hoare](Tony_Hoare) in 1959.',
+            '[Python](Python_(programming_language)) is a high-level programming language known for its readability. See also [Java](Java_(programming_language)).',
+        ]
+    else:
+        # Fallback: no link detection (doc_causal or unknown detector).
+        prompts = [
+            'def quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n',
+            'class DataLoader:\n    def __init__(self, dataset):\n',
+        ]
+
+    config = GenerationConfig(
+        max_new_tokens=200,
+        max_tokens_per_document=200,
+        max_context_length=2048,
+        max_link_depth=1,
+        allow_generation_fallback=True,
+        max_auxiliary_documents=4,
+        temperature=1.0,
+        repetition_penalty=1.3,
+        device=str(device),
+    )
+
+    for i, prompt in enumerate(prompts, 1):
+        logger.info("--- Demo %d/%d ---", i, len(prompts))
+        logger.info("Prompt: %r", prompt[:80])
+        try:
+            result = inference_model.generate(prompt, config=config)
+            root = result.root_document
+            logger.info(
+                "Root (%d tokens): %s",
+                len(root.tokens) if root.tokens is not None else 0,
+                (root.text or "")[:400],
+            )
+            for doc in result.auxiliary_documents:
+                logger.info(
+                    "  Aux '%s' depth=%d source=%s (%d tokens): %s",
+                    doc.raw_identifier, doc.depth, doc.source,
+                    len(doc.tokens) if doc.tokens is not None else 0,
+                    (doc.text or "")[:200],
+                )
+            if result.trace is not None:
+                logger.info(
+                    "  Trace: %d fwd passes, %d links detected, %d resolved, "
+                    "%d corpus fetches, %d docs generated",
+                    result.trace.total_forward_passes,
+                    result.trace.links_detected,
+                    result.trace.links_resolved,
+                    result.trace.corpus_fetches,
+                    result.trace.docs_generated,
+                )
+        except Exception as e:
+            logger.warning("Demo %d failed: %s", i, e)
+
+    logger.info("=" * 60)
+
+
 def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityManager):
     """Main training entry point for tagseq2tagseq."""
 
@@ -250,6 +344,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     # Create block mask creator
     mask_type = cfg.get('model', {}).get('mask_type', 'doc_causal')
+    detector = None  # populated below for cross_doc_link; stays None otherwise
     if mask_type == 'cross_doc_link':
         link_detector_name = cfg.get('model', {}).get('link_detector')
         if not link_detector_name:
@@ -440,6 +535,18 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     )
 
     logger.info("Training complete!")
+
+    # -------------------------------------------------------------------------
+    # 5. End-of-training generation demo (main process only)
+    # -------------------------------------------------------------------------
+    if dist.is_main_process:
+        _run_generation_demo(
+            training_module=model.module if dist.is_distributed else model,
+            tokenizer=enc,
+            link_detector=detector,
+            layout_policy=layout_policy,
+            mask_type=mask_type,
+        )
 
     # Cleanup
     backend.close()

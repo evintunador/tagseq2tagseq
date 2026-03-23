@@ -13,6 +13,24 @@ from .identifier_utils import create_normed_identifier
 
 
 @dataclass
+class GenerationTrace:
+    """Global counters collected over a single generation run."""
+
+    total_forward_passes: int = 0
+    # Tokens produced by source="generated" docs (root + all aux generated docs)
+    total_tokens_generated: int = 0
+    # Links that fired the position check (link_end_pos == len(recent window))
+    links_detected: int = 0
+    # Links that actually resulted in a doc action (insert / restore)
+    links_resolved: int = 0
+    corpus_fetches: int = 0
+    # Aux docs recursively generated (excludes root)
+    docs_generated: int = 0
+    docs_evicted: int = 0
+    max_depth_reached: int = 0
+
+
+@dataclass
 class GeneratedDocument:
     """Represents a single document in the generation result."""
 
@@ -46,6 +64,7 @@ class GenerationResult:
 
     # Metadata
     generation_config: dict  # Parameters used for generation
+    trace: Optional[GenerationTrace] = None
 
     def get_all_documents(self) -> List[GeneratedDocument]:
         """
