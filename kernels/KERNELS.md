@@ -35,6 +35,19 @@ At T=32768, doc_len=512 (absolute):
 Forward is 2× faster than flex; backward is 12% faster.
 Speedup increases with T — at T=4k the gain is smaller but still present.
 
+### Performance across head dimensions (T=32768, doc_len=512, H=16)
+
+| Dh | flex fwd | flex bwd | v12 fwd | v12 bwd | **v12 total ratio** |
+|----|---------|---------|--------|--------|---------------------|
+| 32  | 1.98ms | 3.95ms  | 0.91ms | 2.50ms | **0.57×** |
+| 64  | 2.38ms | 6.30ms  | 1.14ms | 5.54ms | **0.77×** |
+| 128 | 2.24ms | 177.3ms | 2.06ms | 16.85ms | **0.11×** |
+
+At Dh=128, flex backward collapses to 177ms (numerically correct, verified).
+v12 backward is 10.5× faster (16.85ms). Total speedup: ~9×.
+FlexAttention appears to have no optimized backward path for Dh=128 with custom
+block masks at T=32k. v12 is the only viable option for Dh=128 workloads.
+
 ---
 
 ## Kernel Inventory
