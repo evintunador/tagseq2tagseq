@@ -1332,7 +1332,14 @@ def bench_real_fixtures(
             print(f"  [fixture {meta.label}] load error: {e}")
             continue
 
+        _cross_doc_types = {MaskType.CROSS_DOC_NAIVE, MaskType.CROSS_DOC_BITMASK}
         for mask_type in mask_types:
+            # Skip cross-doc mask types when the fixture has no links — the mask
+            # degenerates to doc_causal and flex_cross_doc_block_mask is None,
+            # which would error when used as the benchmark reference.
+            if mask_type in _cross_doc_types and not mask_inputs.flex_cross_doc_block_mask:
+                print(f"  [{mask_type.value}] skipped — fixture has no cross-doc links (degenerates to doc_causal)")
+                continue
             all_impls = REGISTRY.get(mask_type, [])
             bench_impls = [(n, f) for n, f in all_impls if n not in BENCH_SKIP]
             if not bench_impls:
