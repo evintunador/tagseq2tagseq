@@ -740,6 +740,39 @@ def _impl_cdb_bim_v13(q, k, v, mask_inputs, scale):
     )
 
 
+def _impl_cdb_bim_v14(q, k, v, mask_inputs, scale):
+    """cdb_bim_v14: v12 + expanded backward autotune (num_warps=16, num_stages={2,6})."""
+    from kernels.cross_doc_bitmask_bim_v14 import triton_attn_cross_doc_bitmask_bim_v14
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _get_bim128(mask_inputs)
+    return triton_attn_cross_doc_bitmask_bim_v14(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
+    )
+
+
+def _impl_cdb_bim_v15(q, k, v, mask_inputs, scale):
+    """cdb_bim_v15: v12 + persistent-CTA backward (work-stealing dKV + dQ)."""
+    from kernels.cross_doc_bitmask_bim_v15 import triton_attn_cross_doc_bitmask_bim_v15
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _get_bim128(mask_inputs)
+    return triton_attn_cross_doc_bitmask_bim_v15(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
+    )
+
+
+def _impl_cdb_bim_v16(q, k, v, mask_inputs, scale):
+    """cdb_bim_v16: v12 + .cg cache hints on bitmask loads."""
+    from kernels.cross_doc_bitmask_bim_v16 import triton_attn_cross_doc_bitmask_bim_v16
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _get_bim128(mask_inputs)
+    return triton_attn_cross_doc_bitmask_bim_v16(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Naive PyTorch baselines (O(T²), exact numerics, no flash tricks)
 # ---------------------------------------------------------------------------
@@ -932,6 +965,9 @@ REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
         ("cdb_bim_v11",      _impl_cdb_bim_v11),      # v10 + no permute copies
         ("cdb_bim_v12",      _impl_cdb_bim_v12),      # v11 + BIM_BLOCK_SIZE=128
         ("cdb_bim_v13",      _impl_cdb_bim_v13),      # v12 + pure-cross dispatch
+        ("cdb_bim_v14",      _impl_cdb_bim_v14),      # v12 + expanded bwd autotune
+        ("cdb_bim_v15",      _impl_cdb_bim_v15),      # v12 + persistent-CTA backward
+        ("cdb_bim_v16",      _impl_cdb_bim_v16),      # v12 + .cg cache hints on bitmask loads
     ],
 }
 
@@ -1036,6 +1072,7 @@ def check_correctness(
     bwd_atol: float = 2e-1,
     check_backward: bool = True,
     data_label: str = "synthetic",
+    impls_filter: Optional[List[str]] = None,
 ) -> CorrectnessReport:
     """Compare each applicable implementation against ground-truth chunked naive.
 
@@ -1064,7 +1101,10 @@ def check_correctness(
         return report
 
     skip_large = CORRECTNESS_SKIP_LARGE_T if mask_inputs.seq_len > _CHUNKED_THRESHOLD else frozenset()
+    _impls_set = set(impls_filter) if impls_filter else None
     for name, impl_fn in REGISTRY.get(mask_type, []):
+        if _impls_set is not None and name not in _impls_set:
+            continue
         if name in skip_large:
             continue
         q_i = _clone_requires_grad(q)
@@ -1181,6 +1221,7 @@ def run_benchmarks(
     iters: int,
     dataset_dir: Optional[str] = None,
     data_source: str = "synthetic",
+    impls_filter: Optional[List[str]] = None,
 ) -> List[BenchRow]:
     rows: List[BenchRow] = []
     scale = head_dim ** -0.5
@@ -1207,10 +1248,13 @@ def run_benchmarks(
                 n_links=n_links,
             )
 
+            _impls_set = set(impls_filter) if impls_filter else None
             for mask_type in mask_types:
                 all_impls = REGISTRY.get(mask_type, [])
                 # Exclude O(T²) naive impls from bench — they OOM at large T
-                bench_impls = [(n, f) for n, f in all_impls if n not in BENCH_SKIP]
+                bench_impls = [(n, f) for n, f in all_impls
+                               if n not in BENCH_SKIP
+                               and (_impls_set is None or n in _impls_set)]
                 if not bench_impls:
                     continue
 
@@ -1302,6 +1346,7 @@ def bench_real_fixtures(
     dtype: torch.dtype,
     warmup: int,
     iters: int,
+    impls_filter: Optional[List[str]] = None,
 ) -> List[BenchRow]:
     """Benchmark all applicable impls on each pre-sampled real pack fixture.
 
@@ -1340,8 +1385,11 @@ def bench_real_fixtures(
             if mask_type in _cross_doc_types and not mask_inputs.flex_cross_doc_block_mask:
                 print(f"  [{mask_type.value}] skipped — fixture has no cross-doc links (degenerates to doc_causal)")
                 continue
+            _impls_set_r = set(impls_filter) if impls_filter else None
             all_impls = REGISTRY.get(mask_type, [])
-            bench_impls = [(n, f) for n, f in all_impls if n not in BENCH_SKIP]
+            bench_impls = [(n, f) for n, f in all_impls
+                           if n not in BENCH_SKIP
+                           and (_impls_set_r is None or n in _impls_set_r)]
             if not bench_impls:
                 continue
 
@@ -1432,6 +1480,8 @@ def _add_common_args(p: argparse.ArgumentParser):
                    default=[m.value for m in MaskType],
                    choices=[m.value for m in MaskType],
                    help="Mask types to test/bench (default: all)")
+    p.add_argument("--impls", nargs="+", default=None,
+                   help="Impl names to include (default: all). E.g. --impls flex cdb_bim_v12 cdb_bim_v14")
     p.add_argument("--dataset-dir", type=str, default=None,
                    help="Path to pretokenized dataset (enables real-data fixtures for cross_doc)")
     p.add_argument("--num-heads", type=int, default=16)
@@ -1482,6 +1532,7 @@ def cmd_correctness(args):
     mask_types = [MaskType(m) for m in args.mask_types]
     seq_len = args.seq_len
     doc_len = args.doc_len
+    impls_filter = args.impls  # None = all
 
     any_fail = False
 
@@ -1505,6 +1556,7 @@ def cmd_correctness(args):
             fwd_atol=args.fwd_atol, bwd_atol=args.bwd_atol,
             check_backward=not args.no_backward,
             data_label=syn_label,
+            impls_filter=impls_filter,
         )
         report.print()
         for r in report.results:
@@ -1533,6 +1585,7 @@ def cmd_correctness(args):
                     fwd_atol=args.fwd_atol, bwd_atol=args.bwd_atol,
                     check_backward=not args.no_backward,
                     data_label=meta.data_label(),
+                    impls_filter=impls_filter,
                 )
                 report.print()
                 for r in report.results:
@@ -1602,6 +1655,16 @@ def _get_autotune_kernels() -> Dict[str, Any]:
         _attn_fwd_cdb_bim_v10,
         _attn_backward_KV_cdb_bim_v10, _attn_backward_Q_cdb_bim_v10,
     )
+    from kernels.cross_doc_bitmask_bim_v14 import (
+        _attn_backward_KV_cdb_bim_v14, _attn_backward_Q_cdb_bim_v14,
+    )
+    from kernels.cross_doc_bitmask_bim_v15 import (
+        _attn_backward_KV_cdb_bim_v15, _attn_backward_Q_cdb_bim_v15,
+    )
+    from kernels.cross_doc_bitmask_bim_v16 import (
+        _attn_fwd_cdb_bim_v16,
+        _attn_backward_KV_cdb_bim_v16, _attn_backward_Q_cdb_bim_v16,
+    )
     kernels = {
         "causal_fwd":        _attn_fwd,
         "causal_pre":        _attn_backward_preprocess,
@@ -1637,6 +1700,13 @@ def _get_autotune_kernels() -> Dict[str, Any]:
         "cdb_bim_v5_KV_bwd": _attn_backward_KV_v5,
         "cdb_bim_v5_Q_bwd":  _attn_backward_Q_v5,
         # bs128 shares same kernels; autotune handles BIM_BLOCK_SIZE=128 via key
+        "cdb_bim_v14_KV_bwd": _attn_backward_KV_cdb_bim_v14,
+        "cdb_bim_v14_Q_bwd":  _attn_backward_Q_cdb_bim_v14,
+        "cdb_bim_v15_KV_bwd": _attn_backward_KV_cdb_bim_v15,
+        "cdb_bim_v15_Q_bwd":  _attn_backward_Q_cdb_bim_v15,
+        "cdb_bim_v16_fwd":    _attn_fwd_cdb_bim_v16,
+        "cdb_bim_v16_KV_bwd": _attn_backward_KV_cdb_bim_v16,
+        "cdb_bim_v16_Q_bwd":  _attn_backward_Q_cdb_bim_v16,
     }
     return kernels
 
@@ -1722,6 +1792,7 @@ def warm_all_kernels(
     num_heads: int,
     head_dim: int,
     dtype: torch.dtype,
+    impls_filter: Optional[List[str]] = None,
 ) -> None:
     """Pre-trigger Triton autotuning for every (seq_len, doc_len, mask_type) combination.
 
@@ -1757,9 +1828,11 @@ def warm_all_kernels(
             q, k, v, mask_inputs = make_synthetic_batch(
                 seq_len, doc_len, num_heads, head_dim, dtype, DEVICE, n_links=n_links,
             )
+            _impls_set_w = set(impls_filter) if impls_filter else None
             for mask_type in mask_types:
                 bench_impls = [(n, f) for n, f in REGISTRY.get(mask_type, [])
-                               if n not in BENCH_SKIP]
+                               if n not in BENCH_SKIP
+                               and (_impls_set_w is None or n in _impls_set_w)]
                 for _name, impl_fn in bench_impls:
                     qi = _clone_requires_grad(q)
                     ki = _clone_requires_grad(k)
@@ -1777,6 +1850,7 @@ def cmd_bench(args):
     dtype = getattr(torch, args.dtype)
     mask_types = [MaskType(m) for m in args.mask_types]
     cache_path = getattr(args, "autotune_cache", "") or ""
+    impls_filter = args.impls  # None = all
 
     print(f"\nGPU: {torch.cuda.get_device_name(0)}")
     print(f"PyTorch: {torch.__version__}\n")
@@ -1802,6 +1876,7 @@ def cmd_bench(args):
         num_heads=args.num_heads,
         head_dim=args.head_dim,
         dtype=dtype,
+        impls_filter=impls_filter,
     )
 
     # Save winning configs so the next run can skip the search.
@@ -1823,6 +1898,7 @@ def cmd_bench(args):
             iters=args.iters,
             dataset_dir=args.dataset_dir,
             data_source=data_source,
+            impls_filter=impls_filter,
         )
     if data_source in ("real", "all"):
         bench_real_fixtures(
@@ -1832,6 +1908,7 @@ def cmd_bench(args):
             dtype=dtype,
             warmup=args.warmup,
             iters=args.iters,
+            impls_filter=impls_filter,
         )
 
 

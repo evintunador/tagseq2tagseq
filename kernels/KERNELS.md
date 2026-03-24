@@ -149,25 +149,59 @@ kv_q row  (for each KV-block, sorted Q-block indices):
 
 ---
 
+## Tried and Failed (v14–v16)
+
+These were implemented, tested correct, benchmarked, and scrapped because they did
+not improve on v12 at T=32k:
+
+### v14 — Expanded autotune (num_warps=16, num_stages ∈ {2,6})
+**REGRESSION** at T=32k: bwd 5.57ms → 7.32ms (+31%).
+Root cause: with 60 configs instead of 24, the noisy single-run autotune
+selected `BLOCK_SIZE_MICRO=128` for Q_bwd (making `num_micro=128/128=1`,
+a degenerate inner loop with no pipelining). The narrow {4,8}×{3,4,5}×{16,32,64,128}
+search in v10 found the correct configs; expanding to {4,8,16}×{2,3,4,5,6}×{...}
+caused a false selection. v10's narrow autotune is already optimal.
+
+Also discovered: `BLOCK_SIZE_MICRO` must be the **last** positional param before
+any autotuned constexprs, because the autotuner passes it as a kwarg. New params
+added after it in the signature will collide. See v15/v16 for the correct placement.
+
+### v15 — Persistent-CTA backward (atomic work-stealing, dKV + dQ)
+**REGRESSION** at T=32k: bwd 5.58ms → 6.15ms (+10%). Neutral or slight improvement
+at T≤8k.
+Root cause: persistent CTAs hurt K/V cache utilization. In the original (n_blocks, H)
+grid, each CTA loads K[k] and V[k] once (16KB each) and processes it to completion.
+With 13 persistent CTAs per head, each CTA claims ~20 KV blocks and loads K+V
+20 times in sequence — 20×32KB = 640KB per CTA, vs 32KB in the non-persistent
+version. The L2 (40 MB) cannot hold all K/V blocks for all 13 active CTAs
+simultaneously, causing DRAM thrashing that outweighs the load-balancing gain.
+
+Implementation notes:
+- Bug: `break` inside `for _ in range(runtime_n)` in Triton compiles as a function-
+  level early return (stores never fire, all gradients remain uninitialized). Fixed by
+  using `if pid < n_blocks:` to guard the body instead.
+- New runtime params (`n_blocks`, `max_steps`, `work_counter_ptr`) must appear
+  **before** `BLOCK_SIZE_MICRO: tl.constexpr` in the kernel signature, otherwise
+  the autotuner's kwarg for BLOCK_SIZE_MICRO collides with positional arg n_blocks.
+
+### v16 — .cg cache hints on bitmask loads
+**NO IMPROVEMENT** at T=32k: 0.77× identical.
+Root cause: at T=32k, bitmasks (2×256KB = 512KB total) fit comfortably in A100's
+40 MB L2 with the default `.ca` policy. The bitmask data is already L2-resident
+across heads without explicit hints. The backward is memory-bandwidth-bound on Q/K/V
+and dLdO tensors (64 MB each), not on bitmasks.
+
+---
+
 ## Remaining Optimization Ideas
 
 These have not been tried. Ordered roughly by expected impact:
 
-### High priority
+### High priority (original 1–2 now tried; see above)
 
-1. **Expanded autotune search space for v12 backward**
-   Current backward autotune tries `num_warps ∈ {4,8}`, `num_stages ∈ {3,4,5}`,
-   `BLOCK_SIZE_MICRO ∈ {16,32,64,128}`. With BIM_BS=128 and bf16 register reduction,
-   try adding `num_warps=16` and `num_stages ∈ {2,6}`. The register file is less
-   stressed, so more warps might improve latency hiding without hurting occupancy.
+1. ~~**Expanded autotune**~~ — tried as v14; REGRESSION.
 
-2. **Persistent CTAs for the backward dKV kernel**
-   At T=32k, n_blocks=256 × H=16 = 4096 CTAs per backward kernel. On A100 with
-   108 SMs, that's ~38 CTA waves. KV-blocks early in the sequence have far fewer
-   Q-entries in their CSR (heavily triangular), creating load imbalance across
-   waves. A persistent kernel with work-stealing (process multiple KV-blocks per
-   SM lifetime) would keep all 108 SMs busy throughout and eliminate last-wave
-   inefficiency. Estimated gain: 5–15% on backward.
+2. ~~**Persistent CTAs**~~ — tried as v15; REGRESSION at T=32k.
 
 3. **BIM_BLOCK_SIZE=128 with Dh=128** (MHA architectures with larger head dim)
    At Dh=128, BLOCK_SIZE_KV can go up to 128, enabling 128×128×128 = 2M flop
