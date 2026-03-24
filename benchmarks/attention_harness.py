@@ -302,9 +302,9 @@ class FixtureMeta:
 
 
 REAL_PACK_FIXTURES: List[FixtureMeta] = [
-    FixtureMeta(label="sparse", n_grants=0,  max_grants=64, kv_block_count=45, seq_len=1024, n_docs=1),
-    FixtureMeta(label="medium", n_grants=1,  max_grants=64, kv_block_count=40, seq_len=1024, n_docs=2),
-    FixtureMeta(label="dense",  n_grants=14, max_grants=4,  kv_block_count=38, seq_len=1024, n_docs=4),
+    FixtureMeta(label="sparse", n_grants=0,   max_grants=64,  kv_block_count=31653, seq_len=32768, n_docs=2),
+    FixtureMeta(label="medium", n_grants=25,  max_grants=64,  kv_block_count=8157,  seq_len=32768, n_docs=17),
+    FixtureMeta(label="dense",  n_grants=609, max_grants=128, kv_block_count=10680, seq_len=32768, n_docs=191),
 ]
 
 
@@ -418,6 +418,9 @@ def _to_thd(x: torch.Tensor) -> torch.Tensor:
     return x.squeeze(0).permute(1, 0, 2)
 
 
+_CHUNKED_THRESHOLD = 4096  # use chunked naive above this T to avoid OOM
+
+
 def compute_reference(
     mask_type: MaskType,
     q: torch.Tensor,
@@ -433,11 +436,15 @@ def compute_reference(
     applicable to every mask type without per-case special-casing.  Any deviation
     a flash-based implementation shows from this IS its numerical error budget.
 
+    At T > _CHUNKED_THRESHOLD uses a chunked variant with identical per-element
+    arithmetic but avoids materialising the full T×T score matrix.
+
     Returns (T, H, Dh) output.
     """
     T = q.shape[0]
     bool_mask = _build_bool_mask(mask_type, T, mask_inputs, q.device)
-    return _to_thd(_naive_forward(_to_bhnd(q), _to_bhnd(k), _to_bhnd(v), bool_mask, scale))
+    fwd = _chunked_naive_forward if T > _CHUNKED_THRESHOLD else _naive_forward
+    return _to_thd(fwd(_to_bhnd(q), _to_bhnd(k), _to_bhnd(v), bool_mask, scale))
 
 
 # ---------------------------------------------------------------------------
@@ -783,6 +790,31 @@ def _naive_forward(
     return scores.softmax(dim=-1) @ v4
 
 
+def _chunked_naive_forward(
+    q4: torch.Tensor,
+    k4: torch.Tensor,
+    v4: torch.Tensor,
+    bool_mask: torch.Tensor,
+    scale: float,
+    chunk_size: int = 512,
+) -> torch.Tensor:
+    """Chunked naive reference — same arithmetic as _naive_forward, avoids OOM at large T.
+
+    Processes Q in non-overlapping chunks so peak scores tensor is
+    [1, H, chunk_size, T] instead of [1, H, T, T].
+    q4/k4/v4: (1, H, T, Dh);  bool_mask: (T, T) True=attend.
+    Returns (1, H, T, Dh).
+    """
+    B, H, T, Dh = q4.shape
+    out = torch.zeros_like(q4)
+    for qs in range(0, T, chunk_size):
+        qe = min(qs + chunk_size, T)
+        scores = (q4[:, :, qs:qe, :] @ k4.transpose(-2, -1)) * scale  # (1, H, chunk, T)
+        scores = scores.masked_fill(~bool_mask[qs:qe, :][None, None], float("-inf"))
+        out[:, :, qs:qe, :] = scores.softmax(dim=-1) @ v4
+    return out
+
+
 # Compiled variant — same arithmetic, but torch.compile may fuse/reorder ops.
 # Dynamic=True so different (T, H, Dh) shapes don't cause recompiles.
 _compiled_naive_forward = torch.compile(_naive_forward, dynamic=True)
@@ -811,6 +843,9 @@ def _make_naive_impl(mask_type: MaskType, compiled: bool = False) -> Callable:
 
 # Impl names to omit from runtime/memory benchmarks (O(T²), will OOM at 32k).
 BENCH_SKIP: frozenset = frozenset({"naive_pytorch", "naive_compiled"})
+
+# Same impls are also skipped from correctness checks when T > _CHUNKED_THRESHOLD.
+CORRECTNESS_SKIP_LARGE_T: frozenset = frozenset({"naive_pytorch", "naive_compiled"})
 
 # Impl names whose backward is not checked for correctness.
 # vslf = torch.ops.aten._flash_attention_forward — PyTorch internal op used as a
@@ -984,7 +1019,10 @@ def check_correctness(
         print(f"  ERROR: ground truth failed: {e}")
         return report
 
+    skip_large = CORRECTNESS_SKIP_LARGE_T if mask_inputs.seq_len > _CHUNKED_THRESHOLD else frozenset()
     for name, impl_fn in REGISTRY.get(mask_type, []):
+        if name in skip_large:
+            continue
         q_i = _clone_requires_grad(q)
         k_i = _clone_requires_grad(k)
         v_i = _clone_requires_grad(v)
@@ -1341,13 +1379,14 @@ def _add_common_args(p: argparse.ArgumentParser):
 
 
 def _add_correctness_args(p: argparse.ArgumentParser):
-    p.add_argument("--atol", type=float, default=1e-1,
+    p.add_argument("--atol", type=float, default=2e-1,
                    help="Absolute tolerance for correctness checks "
-                        "(default 1e-1 covers bf16 rounding up to 2^-4; "
+                        "(default 2e-1 covers bf16 rounding at T=32k; "
+                        "at T<=1024 errors are typically <6e-2; "
                         "use 1e-2 for fp32)")
     p.add_argument("--no-backward", action="store_true",
                    help="Skip backward correctness check")
-    p.add_argument("--seq-len", type=int, default=512,
+    p.add_argument("--seq-len", type=int, default=32768,
                    help="Sequence length for correctness test")
     p.add_argument("--doc-len", type=int, default=128,
                    help="Document length for correctness test")
