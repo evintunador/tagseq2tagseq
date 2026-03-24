@@ -847,6 +847,25 @@ BENCH_SKIP: frozenset = frozenset({"naive_pytorch", "naive_compiled"})
 # Same impls are also skipped from correctness checks when T > _CHUNKED_THRESHOLD.
 CORRECTNESS_SKIP_LARGE_T: frozenset = frozenset({"naive_pytorch", "naive_compiled"})
 
+# ---------------------------------------------------------------------------
+# Tolerance philosophy
+# ---------------------------------------------------------------------------
+# Current approach: fixed fwd_atol / bwd_atol, calibrated to what PyTorch's
+# own sdpa/flex show vs the chunked naive reference at T=32k.  At that scale
+# both hit ~9e-2 bwd error, so bwd_atol=2e-1 gives a safe margin.
+#
+# Future improvement — witness-based dynamic tolerance:
+#   Rather than a hard constant, gate on  impl_err <= C * max(witness_errs),
+#   where "witnesses" are trusted PyTorch implementations (sdpa, flex) whose
+#   errors are computed on the same fixture in the same check_correctness call.
+#   C=1.5 would mean "our kernel is allowed to be at most 50% noisier than the
+#   noisiest PyTorch impl on this fixture."  This self-calibrates across T,
+#   dtype, and doc-length distribution without ever needing to update a constant.
+#   The only scenario it misses is a systematic bias where ALL witnesses and the
+#   impl under test are wrong in the same direction relative to true math — but
+#   the chunked naive reference (not flash-based) guards against that already.
+# ---------------------------------------------------------------------------
+
 # Impl names whose backward is not checked for correctness.
 # vslf = torch.ops.aten._flash_attention_forward — PyTorch internal op used as a
 # timing baseline.  Its autograd backward is unreliable on real-data packs
@@ -946,11 +965,14 @@ def time_fn(fn: Callable, warmup: int, iters: int) -> Tuple[float, float]:
 class ImplResult:
     name: str
     fwd_max_err: float
+    fwd_p99_err: float
     fwd_mean_err: float
     fwd_pass: bool
     bwd_q_max_err: float
     bwd_k_max_err: float
     bwd_v_max_err: float
+    bwd_mean_err: float   # max of dQ/dK/dV mean abs errors
+    bwd_p99_err: float    # max of dQ/dK/dV 99th-percentile abs errors
     bwd_pass: bool
     error: Optional[str] = None
 
@@ -963,28 +985,45 @@ class CorrectnessReport:
     results: List[ImplResult] = field(default_factory=list)
 
     def print(self):
-        _sep = "=" * 80
+        _sep = "=" * 110
         print(f"\n{_sep}")
         print(f"  Correctness: {self.mask_type.value}  seq_len={self.seq_len}  data={self.data_label}")
         print(_sep)
-        hdr = f"  {'impl':30s}  {'fwd_max_err':>12}  {'fwd_pass':>9}  {'bwd_max_err':>12}  {'bwd_pass':>9}"
+        hdr = (f"  {'impl':30s}"
+               f"  {'fwd_max':>10}  {'fwd_p99':>10}  {'fwd_mean':>10}  {'fwd':>6}"
+               f"  {'bwd_max':>10}  {'bwd_p99':>10}  {'bwd_mean':>10}  {'bwd':>6}")
         print(hdr)
-        print(f"  {'-'*30}  {'-'*12}  {'-'*9}  {'-'*12}  {'-'*9}")
+        print(f"  {'-'*30}"
+              f"  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*6}"
+              f"  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*6}")
         for r in self.results:
             if r.error:
-                print(f"  {r.name:30s}  {'ERROR':>12}  {'':>9}  {'':>12}  {'':>9}  [{r.error}]")
+                print(f"  {r.name:30s}  {'ERROR':>10}  {'':>10}  {'':>10}  {'':>6}"
+                      f"  {'':>10}  {'':>10}  {'':>10}  {'':>6}  [{r.error}]")
                 continue
             bwd_max = max(r.bwd_q_max_err, r.bwd_k_max_err, r.bwd_v_max_err)
             fwd_sym = "PASS" if r.fwd_pass else "FAIL"
             bwd_skipped = r.name in SKIP_BWD_CHECK
             bwd_sym = "skip" if bwd_skipped else ("PASS" if r.bwd_pass else "FAIL")
-            suffix = "  [bwd skipped: PyTorch internal op]" if bwd_skipped else ""
-            print(f"  {r.name:30s}  {r.fwd_max_err:>12.2e}  {fwd_sym:>9}  {bwd_max:>12.2e}  {bwd_sym:>9}{suffix}")
+            suffix = "  [bwd skipped]" if bwd_skipped else ""
+            print(f"  {r.name:30s}"
+                  f"  {r.fwd_max_err:>10.2e}  {r.fwd_p99_err:>10.2e}  {r.fwd_mean_err:>10.2e}  {fwd_sym:>6}"
+                  f"  {bwd_max:>10.2e}  {r.bwd_p99_err:>10.2e}  {r.bwd_mean_err:>10.2e}  {bwd_sym:>6}"
+                  f"{suffix}")
         print(_sep)
 
 
 def _clone_requires_grad(t: torch.Tensor) -> torch.Tensor:
     return t.detach().clone().requires_grad_(True)
+
+
+def _p99(t: torch.Tensor, max_elems: int = 4_000_000) -> float:
+    """99th-percentile of abs-error tensor. Subsamples if needed (torch.quantile limit)."""
+    flat = t.reshape(-1).float()
+    if flat.numel() > max_elems:
+        idx = torch.randperm(flat.numel(), device=flat.device)[:max_elems]
+        flat = flat[idx]
+    return torch.quantile(flat, 0.99).item()
 
 
 def check_correctness(
@@ -993,12 +1032,17 @@ def check_correctness(
     k: torch.Tensor,
     v: torch.Tensor,
     mask_inputs: MaskInputs,
-    atol: float = 1e-2,
-    rtol: float = 0.0,
+    fwd_atol: float = 5e-2,
+    bwd_atol: float = 2e-1,
     check_backward: bool = True,
     data_label: str = "synthetic",
 ) -> CorrectnessReport:
-    """Compare each applicable implementation against ground-truth SDPA."""
+    """Compare each applicable implementation against ground-truth chunked naive.
+
+    Pass/fail is gated on max error (fwd_atol / bwd_atol).
+    p99 and mean are reported as diagnostics to distinguish isolated spikes
+    (mask boundary bugs) from distributed numerical noise (bf16 rounding).
+    """
     scale = q.shape[-1] ** -0.5
     report = CorrectnessReport(mask_type=mask_type, seq_len=mask_inputs.seq_len,
                                data_label=data_label)
@@ -1030,35 +1074,45 @@ def check_correctness(
             out_i = impl_fn(q_i, k_i, v_i, mask_inputs, scale)
         except Exception as e:
             report.results.append(ImplResult(
-                name=name, fwd_max_err=0, fwd_mean_err=0, fwd_pass=False,
-                bwd_q_max_err=0, bwd_k_max_err=0, bwd_v_max_err=0, bwd_pass=False,
+                name=name,
+                fwd_max_err=0, fwd_p99_err=0, fwd_mean_err=0, fwd_pass=False,
+                bwd_q_max_err=0, bwd_k_max_err=0, bwd_v_max_err=0,
+                bwd_mean_err=0, bwd_p99_err=0, bwd_pass=False,
                 error=str(e)[:80],
             ))
             continue
 
         fwd_diff = (out_i.float() - ref_out.detach().float()).abs()
-        fwd_max = fwd_diff.max().item()
+        fwd_max  = fwd_diff.max().item()
+        fwd_p99  = _p99(fwd_diff)
         fwd_mean = fwd_diff.mean().item()
-        fwd_pass = bool(fwd_max <= atol)
+        fwd_pass = bool(fwd_max <= fwd_atol)
 
         bwd_q_max = bwd_k_max = bwd_v_max = 0.0
+        bwd_mean = bwd_p99 = 0.0
         bwd_pass = True
         if check_backward and name not in SKIP_BWD_CHECK:
             try:
                 out_i.backward(torch.ones_like(out_i))
-                bwd_q_max = (q_i.grad.float() - ref_dq.float()).abs().max().item()
-                bwd_k_max = (k_i.grad.float() - ref_dk.float()).abs().max().item()
-                bwd_v_max = (v_i.grad.float() - ref_dv.float()).abs().max().item()
-                bwd_pass = all(x <= atol for x in [bwd_q_max, bwd_k_max, bwd_v_max])
+                dq_diff = (q_i.grad.float() - ref_dq.float()).abs()
+                dk_diff = (k_i.grad.float() - ref_dk.float()).abs()
+                dv_diff = (v_i.grad.float() - ref_dv.float()).abs()
+                bwd_q_max = dq_diff.max().item()
+                bwd_k_max = dk_diff.max().item()
+                bwd_v_max = dv_diff.max().item()
+                bwd_mean  = max(dq_diff.mean().item(), dk_diff.mean().item(), dv_diff.mean().item())
+                bwd_p99   = max(_p99(dq_diff), _p99(dk_diff), _p99(dv_diff))
+                bwd_pass  = all(x <= bwd_atol for x in [bwd_q_max, bwd_k_max, bwd_v_max])
             except Exception as e:
                 bwd_pass = False
                 bwd_q_max = bwd_k_max = bwd_v_max = float("nan")
+                bwd_mean = bwd_p99 = float("nan")
 
         report.results.append(ImplResult(
             name=name,
-            fwd_max_err=fwd_max, fwd_mean_err=fwd_mean, fwd_pass=fwd_pass,
+            fwd_max_err=fwd_max, fwd_p99_err=fwd_p99, fwd_mean_err=fwd_mean, fwd_pass=fwd_pass,
             bwd_q_max_err=bwd_q_max, bwd_k_max_err=bwd_k_max, bwd_v_max_err=bwd_v_max,
-            bwd_pass=bwd_pass,
+            bwd_mean_err=bwd_mean, bwd_p99_err=bwd_p99, bwd_pass=bwd_pass,
         ))
 
     return report
@@ -1379,11 +1433,15 @@ def _add_common_args(p: argparse.ArgumentParser):
 
 
 def _add_correctness_args(p: argparse.ArgumentParser):
-    p.add_argument("--atol", type=float, default=2e-1,
-                   help="Absolute tolerance for correctness checks "
-                        "(default 2e-1 covers bf16 rounding at T=32k; "
-                        "at T<=1024 errors are typically <6e-2; "
-                        "use 1e-2 for fp32)")
+    p.add_argument("--fwd-atol", type=float, default=5e-2,
+                   help="Max abs error threshold for forward pass "
+                        "(default 5e-2; fwd errors are stable across T, "
+                        "typically ~1.6e-2 in bf16)")
+    p.add_argument("--bwd-atol", type=float, default=2e-1,
+                   help="Max abs error threshold for backward pass "
+                        "(default 2e-1, calibrated to PyTorch's own sdpa/flex "
+                        "error floor at T=32k on real data; at T<=1024 bwd errors "
+                        "are typically <6e-2)")
     p.add_argument("--no-backward", action="store_true",
                    help="Skip backward correctness check")
     p.add_argument("--seq-len", type=int, default=32768,
@@ -1437,7 +1495,7 @@ def cmd_correctness(args):
     for mask_type in mask_types:
         report = check_correctness(
             mask_type, q, k, v, mask_inputs,
-            atol=args.atol,
+            fwd_atol=args.fwd_atol, bwd_atol=args.bwd_atol,
             check_backward=not args.no_backward,
             data_label=syn_label,
         )
@@ -1465,7 +1523,7 @@ def cmd_correctness(args):
             for mask_type in mask_types:
                 report = check_correctness(
                     mask_type, q_r, k_r, v_r, mask_r,
-                    atol=args.atol,
+                    fwd_atol=args.fwd_atol, bwd_atol=args.bwd_atol,
                     check_backward=not args.no_backward,
                     data_label=meta.data_label(),
                 )
