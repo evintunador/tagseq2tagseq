@@ -222,6 +222,18 @@ class PretokCorpus:
 # Metrics
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _root_prefix_length(layout_policy, doc: GeneratedDocument) -> int:
+    """Return the number of layout prefix tokens for the root document."""
+    if layout_policy is None:
+        return 0
+    from data.layout import DocLayoutInfo
+    info = DocLayoutInfo(
+        raw_identifier=doc.raw_identifier,
+        normed_identifier=doc.normed_identifier,
+    )
+    return layout_policy.prefix_length(info)
+
+
 def compute_metrics(
     model,
     result: GenerationResult,
@@ -288,9 +300,12 @@ def compute_metrics(
             continue
 
         start, end = spans[i]
-        # For root: skip prompt tokens; for others: use all tokens
+        # For root: skip prefix + prompt tokens; for others: use all tokens.
+        # doc.tokens is prefix + body + suffix.  prompt_token_len counts only
+        # the prompt body tokens, so we must also skip the layout prefix.
         if doc.is_root:
-            body_start = start + prompt_token_len
+            prefix_len = _root_prefix_length(model.layout_policy, doc)
+            body_start = start + prefix_len + prompt_token_len
         else:
             body_start = start
 
