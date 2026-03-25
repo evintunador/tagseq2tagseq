@@ -531,6 +531,12 @@ def _impl_triton_varlen(q, k, v, mask_inputs, scale):
     return triton_attn_varlen(q, k, v, mask_inputs.cu_seqlens, mask_inputs.max_seqlen, scale)
 
 
+def _impl_varlen_bim_v1(q, k, v, mask_inputs, scale):
+    """varlen_bim_v1: BIM dispatch + v10 opts, doc-causal only (no bitmask)."""
+    from kernels.varlen_bim_v1 import triton_attn_doc_causal_bim_v1
+    return triton_attn_doc_causal_bim_v1(q, k, v, mask_inputs.cu_seqlens, mask_inputs.max_seqlen, scale)
+
+
 def _impl_triton_cross_doc_naive(q, k, v, mask_inputs, scale):
     from kernels.cross_doc_naive_attn import triton_attn_cross_doc_naive
     assert mask_inputs.dense_mask is not None
@@ -939,6 +945,7 @@ REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
         ("vslf",               _impl_vslf),
         ("flex",               _impl_flex_doc_causal),
         ("triton_varlen",      _impl_triton_varlen),
+        ("varlen_bim_v1",      _impl_varlen_bim_v1),
     ],
     MaskType.CROSS_DOC_NAIVE: [
         ("naive_pytorch",          _make_naive_impl(MaskType.CROSS_DOC_NAIVE, compiled=False)),
