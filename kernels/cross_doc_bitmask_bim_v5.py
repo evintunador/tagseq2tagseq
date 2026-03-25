@@ -27,7 +27,12 @@ import torch
 import triton
 import triton.language as tl
 
-from .cross_doc_bitmask_attn import _attn_backward_preprocess_cdb, _bit_or_combine
+from .cross_doc_bitmask_attn import (
+    _attn_backward_preprocess_cdb,
+    _attn_backward_KV_cdb,
+    _attn_backward_Q_cdb,
+    _bit_or_combine,
+)
 from .cross_doc_bitmask_bim_v3 import _attn_fwd_cdb_bim_v3
 
 if TYPE_CHECKING:
@@ -227,105 +232,49 @@ def _attn_backward_KV_v5(
     dLdK = tl.zeros([BLOCK_SIZE_COL, Dh], dtype=tl.float32)
     dLdV = tl.zeros([BLOCK_SIZE_COL, Dh], dtype=tl.float32)
 
-    kv_doc_id    = tl.load(doc_ids_ptr + start_COL).to(tl.int32)
+    # Use last position in the KV block to get doc_kv_end — a block can straddle
+    # a doc boundary with non-uniform doc lengths, so start_COL may be in an
+    # earlier doc than the block's tail.
+    last_kv_pos  = tl.minimum(start_COL + BLOCK_SIZE_COL - 1, N - 1)
+    kv_doc_id    = tl.load(doc_ids_ptr + last_kv_pos).to(tl.int32)
     doc_kv_start = tl.load(cu_seqlens_ptr + kv_doc_id).to(tl.int32)
     doc_kv_end   = tl.load(cu_seqlens_ptr + kv_doc_id + 1).to(tl.int32)
 
-    # Precompute KV bitmask union over the whole BLOCK_SIZE_COL chunk (once per CTA).
-    kv_union_0 = tl.reduce(
-        tl.load(kv_bitmasks_ptr + 0 * T + offsets_COL, mask=offsets_COL < N, other=0),
-        0, _bit_or_combine,
-    )
-    if n_chunks >= 2:
-        kv_union_1 = tl.reduce(
-            tl.load(kv_bitmasks_ptr + 1 * T + offsets_COL, mask=offsets_COL < N, other=0),
-            0, _bit_or_combine,
-        )
-    if n_chunks >= 3:
-        kv_union_2 = tl.reduce(
-            tl.load(kv_bitmasks_ptr + 2 * T + offsets_COL, mask=offsets_COL < N, other=0),
-            0, _bit_or_combine,
-        )
-    if n_chunks >= 4:
-        kv_union_3 = tl.reduce(
-            tl.load(kv_bitmasks_ptr + 3 * T + offsets_COL, mask=offsets_COL < N, other=0),
-            0, _bit_or_combine,
-        )
-
-    # ── 1. Diagonal BLOCK_SIZE_COL macro-tile (MASK=True, same-doc) ─────
-    dLdK, dLdV = _bwd_kv_inner_v5(
+    # ── 1. Diagonal BLOCK_SIZE_COL macro-tile (MASK=True) ─────────────────
+    # Use _attn_backward_KV_cdb for full masking (same_doc | in_grant) so
+    # cross-doc grants within a straddling diagonal block are handled correctly.
+    dLdK, dLdV = _attn_backward_KV_cdb(
         K, V, dLdK, dLdV,
         Q_ptr, dLdO_ptr, LSE_ptr, Delta_ptr,
-        doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr,
-        T, n_chunks, stride_N, stride_Dh, N, Dh,
+        doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr, T,
+        doc_kv_end, n_chunks,
+        stride_N, stride_Dh, H, N, Dh,
         BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
         start_COL, start_COL, num_micro,
-        ln2, MASK=True, CROSS_DOC=False,
+        scale, ln2, rln2, MASK=True, USE_BIM=False,
     )
 
-    # ── 2. Same-doc off-diagonal Q blocks after diagonal ─────────────────
+    # ── 2+3. All non-diagonal Q blocks (same-doc + cross-doc) ─────────────
+    # Replaces the previous "same-doc contiguous range + cross-doc scan" split,
+    # which had correctness issues with non-aligned doc boundaries:
+    #   - Step 2 applied same_doc-only masking, missing cross-doc grants in range
+    #   - Step 3's cdiv-aligned threshold left a gap of missed Q rows
+    # _attn_backward_KV_cdb handles both cases correctly in one sequential pass:
+    #   - Q before doc_kv_end: same-doc fast path (no bitmask check needed)
+    #   - Q at or after doc_kv_end: OR-reduction bitmask check for cross-doc grants
     start_after_diag = start_COL + BLOCK_SIZE_COL
-    doc_kv_end_aligned = tl.cdiv(doc_kv_end, BLOCK_SIZE_ROW) * BLOCK_SIZE_ROW
-    num_same = tl.maximum((doc_kv_end_aligned - start_after_diag) // BLOCK_SIZE_ROW, 0)
-    dLdK, dLdV = _bwd_kv_inner_v5(
+    N_adj = tl.cdiv(N, BLOCK_SIZE_ROW) * BLOCK_SIZE_ROW
+    num_all = tl.maximum((N_adj - start_after_diag) // BLOCK_SIZE_ROW, 0)
+    dLdK, dLdV = _attn_backward_KV_cdb(
         K, V, dLdK, dLdV,
         Q_ptr, dLdO_ptr, LSE_ptr, Delta_ptr,
-        doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr,
-        T, n_chunks, stride_N, stride_Dh, N, Dh,
+        doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr, T,
+        doc_kv_end, n_chunks,
+        stride_N, stride_Dh, H, N, Dh,
         BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
-        start_after_diag, start_COL, num_same,
-        ln2, MASK=False, CROSS_DOC=False,
+        start_after_diag, start_COL, num_all,
+        scale, ln2, rln2, MASK=False, USE_BIM=False,
     )
-
-    # ── 3. Cross-doc Q tiles (scan at BLOCK_SIZE_COL granularity) ───────
-    # Cross-doc grants point FROM a later document TO this KV block.
-    # Only Q macro-tiles entirely AFTER this KV doc can carry such grants.
-    # Tiles before or within the KV doc are handled in steps 1 & 2.
-    N_macro_aligned = ((N + BLOCK_SIZE_COL - 1) // BLOCK_SIZE_COL) * BLOCK_SIZE_COL
-    doc_kv_end_macro = tl.cdiv(doc_kv_end, BLOCK_SIZE_COL) * BLOCK_SIZE_COL
-    cur_q_macro = 0
-    for _step in range(N_macro_aligned // BLOCK_SIZE_COL):
-        is_after_kv_doc = cur_q_macro >= doc_kv_end_macro
-        if is_after_kv_doc:
-            q_macro_offsets = cur_q_macro + tl.arange(0, BLOCK_SIZE_COL)
-            q_union_0 = tl.reduce(
-                tl.load(q_bitmasks_ptr + 0 * T + q_macro_offsets,
-                        mask=q_macro_offsets < N, other=0),
-                0, _bit_or_combine,
-            )
-            can_interact = (kv_union_0 & q_union_0) != 0
-            if n_chunks >= 2:
-                q_union_1 = tl.reduce(
-                    tl.load(q_bitmasks_ptr + 1 * T + q_macro_offsets,
-                            mask=q_macro_offsets < N, other=0),
-                    0, _bit_or_combine,
-                )
-                can_interact = can_interact | ((kv_union_1 & q_union_1) != 0)
-            if n_chunks >= 3:
-                q_union_2 = tl.reduce(
-                    tl.load(q_bitmasks_ptr + 2 * T + q_macro_offsets,
-                            mask=q_macro_offsets < N, other=0),
-                    0, _bit_or_combine,
-                )
-                can_interact = can_interact | ((kv_union_2 & q_union_2) != 0)
-            if n_chunks >= 4:
-                q_union_3 = tl.reduce(
-                    tl.load(q_bitmasks_ptr + 3 * T + q_macro_offsets,
-                            mask=q_macro_offsets < N, other=0),
-                    0, _bit_or_combine,
-                )
-                can_interact = can_interact | ((kv_union_3 & q_union_3) != 0)
-            if can_interact:
-                dLdK, dLdV = _bwd_kv_inner_v5(
-                    K, V, dLdK, dLdV,
-                    Q_ptr, dLdO_ptr, LSE_ptr, Delta_ptr,
-                    doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr,
-                    T, n_chunks, stride_N, stride_Dh, N, Dh,
-                    BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
-                    cur_q_macro, start_COL, num_micro,
-                    ln2, MASK=False, CROSS_DOC=True,
-                )
-        cur_q_macro += BLOCK_SIZE_COL
 
     dLdK *= scale * rln2
     tl.store(dLdK_ptr + KV_offsets, dLdK.to(dLdK_ptr.dtype.element_ty), mask=KV_mask)
@@ -394,100 +343,38 @@ def _attn_backward_Q_v5(
     q_doc_id    = tl.load(doc_ids_ptr + start_ROW).to(tl.int32)
     doc_q_start = tl.load(cu_seqlens_ptr + q_doc_id).to(tl.int32)
 
-    # Precompute Q bitmask union
-    q_union_0 = tl.reduce(
-        tl.load(q_bitmasks_ptr + 0 * T + offsets_ROW, mask=mask_ROW, other=0),
-        0, _bit_or_combine,
-    )
-    if n_chunks >= 2:
-        q_union_1 = tl.reduce(
-            tl.load(q_bitmasks_ptr + 1 * T + offsets_ROW, mask=mask_ROW, other=0),
-            0, _bit_or_combine,
-        )
-    if n_chunks >= 3:
-        q_union_2 = tl.reduce(
-            tl.load(q_bitmasks_ptr + 2 * T + offsets_ROW, mask=mask_ROW, other=0),
-            0, _bit_or_combine,
-        )
-    if n_chunks >= 4:
-        q_union_3 = tl.reduce(
-            tl.load(q_bitmasks_ptr + 3 * T + offsets_ROW, mask=mask_ROW, other=0),
-            0, _bit_or_combine,
-        )
-
-    # ── 1. Same-doc KV blocks before diagonal ────────────────────────────
-    doc_q_start_aligned = (doc_q_start // BLOCK_SIZE_COL) * BLOCK_SIZE_COL
-    num_pre = (start_ROW - doc_q_start_aligned) // BLOCK_SIZE_COL
-    dLdQ = _bwd_q_inner_v5(
+    # ── 1+2+3. Diagonal + all non-diagonal KV blocks ─────────────────────
+    # Replace the previous "same-doc range + diagonal + cross-doc scan" split
+    # with _attn_backward_Q_cdb, which handles all cases correctly in one pass:
+    #   - KV at/after doc_q_start: in_same_doc=True → always process (per-element
+    #     same_doc | in_grant masking handles correctness for straddling blocks)
+    #   - KV before doc_q_start: OR-reduction check for cross-doc grants
+    # This avoids the threshold alignment issues and missed cross-doc grants
+    # that affected the previous custom same-doc/cross-doc dispatch.
+    #
+    # Diagonal (MASK=True, full masking)
+    dLdQ = _attn_backward_Q_cdb(
         dLdQ, Q, dLdO, LSE,
         K_ptr, V_ptr, Delta_ptr,
-        doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr,
-        T, n_chunks, stride_N, stride_Dh, N, Dh,
-        BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
-        start_ROW, doc_q_start_aligned, num_pre,
-        ln2, MASK=False, CROSS_DOC=False,
-    )
-
-    # ── 2. Diagonal (MASK=True, same-doc) ────────────────────────────────
-    dLdQ = _bwd_q_inner_v5(
-        dLdQ, Q, dLdO, LSE,
-        K_ptr, V_ptr, Delta_ptr,
-        doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr,
-        T, n_chunks, stride_N, stride_Dh, N, Dh,
+        doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr, T,
+        doc_q_start, n_chunks,
+        stride_N, stride_Dh, H, N, Dh,
         BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
         start_ROW, start_ROW, num_micro,
-        ln2, MASK=True, CROSS_DOC=False,
+        scale, ln2, rln2, MASK=True, USE_BIM=False,
     )
-
-    # ── 3. Cross-doc KV tiles (scan at BLOCK_SIZE_ROW granularity) ───────
-    # Cross-doc grants point FROM this Q block TO an earlier document.
-    # Only KV macro-tiles entirely BEFORE this Q doc carry such grant targets.
-    # Tiles from doc_q_start onward are same-doc (step 1) or diagonal (step 2).
-    N_macro_aligned = ((N + BLOCK_SIZE_ROW - 1) // BLOCK_SIZE_ROW) * BLOCK_SIZE_ROW
-    doc_q_start_macro = (doc_q_start // BLOCK_SIZE_ROW) * BLOCK_SIZE_ROW
-    cur_kv_macro = 0
-    for _step in range(N_macro_aligned // BLOCK_SIZE_ROW):
-        is_before_q_doc = cur_kv_macro < doc_q_start_macro
-        if is_before_q_doc:
-            kv_macro_offsets = cur_kv_macro + tl.arange(0, BLOCK_SIZE_ROW)
-            kv_union_0 = tl.reduce(
-                tl.load(kv_bitmasks_ptr + 0 * T + kv_macro_offsets,
-                        mask=kv_macro_offsets < N, other=0),
-                0, _bit_or_combine,
-            )
-            can_interact = (q_union_0 & kv_union_0) != 0
-            if n_chunks >= 2:
-                kv_union_1 = tl.reduce(
-                    tl.load(kv_bitmasks_ptr + 1 * T + kv_macro_offsets,
-                            mask=kv_macro_offsets < N, other=0),
-                    0, _bit_or_combine,
-                )
-                can_interact = can_interact | ((q_union_1 & kv_union_1) != 0)
-            if n_chunks >= 3:
-                kv_union_2 = tl.reduce(
-                    tl.load(kv_bitmasks_ptr + 2 * T + kv_macro_offsets,
-                            mask=kv_macro_offsets < N, other=0),
-                    0, _bit_or_combine,
-                )
-                can_interact = can_interact | ((q_union_2 & kv_union_2) != 0)
-            if n_chunks >= 4:
-                kv_union_3 = tl.reduce(
-                    tl.load(kv_bitmasks_ptr + 3 * T + kv_macro_offsets,
-                            mask=kv_macro_offsets < N, other=0),
-                    0, _bit_or_combine,
-                )
-                can_interact = can_interact | ((q_union_3 & kv_union_3) != 0)
-            if can_interact:
-                dLdQ = _bwd_q_inner_v5(
-                    dLdQ, Q, dLdO, LSE,
-                    K_ptr, V_ptr, Delta_ptr,
-                    doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr,
-                    T, n_chunks, stride_N, stride_Dh, N, Dh,
-                    BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
-                    start_ROW, cur_kv_macro, num_micro,
-                    ln2, MASK=False, CROSS_DOC=True,
-                )
-        cur_kv_macro += BLOCK_SIZE_ROW
+    # All KV blocks before diagonal (MASK=False, full masking)
+    num_pre_all = start_ROW // BLOCK_SIZE_COL
+    dLdQ = _attn_backward_Q_cdb(
+        dLdQ, Q, dLdO, LSE,
+        K_ptr, V_ptr, Delta_ptr,
+        doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr, T,
+        doc_q_start, n_chunks,
+        stride_N, stride_Dh, H, N, Dh,
+        BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
+        start_ROW, 0, num_pre_all,
+        scale, ln2, rln2, MASK=False, USE_BIM=False,
+    )
 
     dLdQ *= scale * rln2
     tl.store(dLdQ_ptr + QO_offsets, dLdQ.to(dLdQ_ptr.dtype.element_ty), mask=mask_ROW[:, None])

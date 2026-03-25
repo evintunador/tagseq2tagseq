@@ -48,6 +48,7 @@ class TS2TSBackbone(nn.Module):
         drop_path_rate: float,
         fp8: bool = False,
         activation_checkpointing: bool = False,
+        attention_backend: str = "flex",
         **kwargs
     ):
         # if kwargs:
@@ -55,7 +56,7 @@ class TS2TSBackbone(nn.Module):
         super().__init__()
         self.model_dim = model_dim
         self.max_seq_len = max_seq_len
-        
+
         self.layers = nn.ModuleList([Layer(
             n_embd=model_dim,
             n_head=num_heads,
@@ -63,6 +64,7 @@ class TS2TSBackbone(nn.Module):
             dropout=dropout,
             drop_path_rate=drop_path_rate,
             fp8=fp8,
+            attention_backend=attention_backend,
         ) for _ in range(num_layers)])
         self.skip_weights = nn.Parameter(torch.ones(num_layers//2))
         self.activation_checkpointing = activation_checkpointing

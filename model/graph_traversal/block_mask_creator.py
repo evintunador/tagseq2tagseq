@@ -78,7 +78,7 @@ from data.traversal import (
     RandomSelectionStrategy,
     CompositeTraversalStrategy
 )
-from .cross_doc_mask import CrossDocLinkMaskCreator
+from .cross_doc_mask import CrossDocLinkMaskCreator, DocCausalTritonMaskInputs
 
 # =============================================================================
 # 1. Mask Logic
@@ -139,6 +139,25 @@ def create_doc_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **k
     )
 
     return block_mask
+
+
+def create_doc_causal_triton_mask(
+    tokens: torch.Tensor, doc_spans: List[Any], **kwargs
+) -> DocCausalTritonMaskInputs:
+    """Doc-causal mask for varlen_bim_v1 Triton kernel.
+
+    Returns a DocCausalTritonMaskInputs instead of a FlexAttention BlockMask.
+    Use with attention_backend="varlen_bim_v1".
+    """
+    device = tokens.device
+    seq_len = tokens.shape[-1]
+    document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
+    for span in doc_spans:
+        start = max(0, span.start)
+        end = min(seq_len, span.end)
+        if start < end:
+            document_ids[start:end] = span.doc_id
+    return DocCausalTritonMaskInputs(document_ids=document_ids)
 
 
 def create_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **kwargs) -> BlockMask:

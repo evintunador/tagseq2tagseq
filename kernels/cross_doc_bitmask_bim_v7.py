@@ -135,17 +135,18 @@ def _attn_backward_KV_v7(
             ln2,
         )
 
-    # Cross-doc coarse Q blocks (entries [1+n_full_kv, num_q_macros)): bitmask masking
+    # Off-diagonal non-full coarse Q blocks: full masking (same_doc | in_grant).
     for i in range(1 + n_full_kv, num_q_macros):
         q_b = tl.load(kv_q_indices_ptr + kv_q_start + i)
-        dLdK, dLdV = _attn_backward_KV_cross_v3(
+        dLdK, dLdV = _attn_backward_KV_cdb(
             K, V, dLdK, dLdV,
             Q_ptr, dLdO_ptr, LSE_ptr, Delta_ptr,
-            q_bitmasks_ptr, kv_bitmasks_ptr, T, n_chunks,
-            stride_N, stride_Dh, N, Dh,
+            doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr, T,
+            0, n_chunks,
+            stride_N, stride_Dh, H, N, Dh,
             BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
             q_b * COARSE_BS, start_COL, num_micro,
-            ln2,
+            scale, ln2, rln2, MASK=False, USE_BIM=True,
         )
 
     dLdK *= scale * rln2
@@ -230,17 +231,18 @@ def _attn_backward_Q_v7(
             ln2,
         )
 
-    # Cross-doc coarse KV blocks (entries [n_full_q, num_kv_macros-1)): bitmask masking
+    # Off-diagonal non-full coarse KV blocks: full masking (same_doc | in_grant).
     for i in range(n_full_q, num_kv_macros - 1):
         kv_b = tl.load(q_kv_indices_ptr + q_kv_start + i)
-        dLdQ = _attn_backward_Q_cross_v3(
+        dLdQ = _attn_backward_Q_cdb(
             dLdQ, Q, dLdO, LSE,
             K_ptr, V_ptr, Delta_ptr,
-            q_bitmasks_ptr, kv_bitmasks_ptr, T, n_chunks,
-            stride_N, stride_Dh, N, Dh,
+            doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr, T,
+            0, n_chunks,
+            stride_N, stride_Dh, H, N, Dh,
             BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
             start_ROW, kv_b * COARSE_BS, num_micro,
-            ln2,
+            scale, ln2, rln2, MASK=False, USE_BIM=True,
         )
 
     # Diagonal coarse KV block (last entry): full masking

@@ -438,7 +438,14 @@ def _attn_backward_cdn(
     dLdK = tl.zeros([BLOCK_SIZE_COL_1, Dh], dtype=tl.float32)
     dLdV = tl.zeros([BLOCK_SIZE_COL_1, Dh], dtype=tl.float32)
 
-    kv_doc_id = tl.load(doc_ids_ptr + start_COL).to(tl.int32)
+    # Use the LAST position in the KV block to determine doc_kv_end.  When doc
+    # lengths are non-uniform, a MACRO block can straddle a boundary: start_COL
+    # is in an earlier document but the block's tail is in the next document.
+    # Using start_COL alone would mark Q rows in the later doc as "cross-doc" and
+    # trigger the dense-mask check; since dense_mask is False for same-doc pairs,
+    # those Q blocks would be skipped entirely, producing missing gradient contributions.
+    last_kv_pos = tl.minimum(start_COL + BLOCK_SIZE_COL_1 - 1, N - 1)
+    kv_doc_id = tl.load(doc_ids_ptr + last_kv_pos).to(tl.int32)
     doc_kv_end = tl.load(cu_seqlens_ptr + kv_doc_id + 1).to(tl.int32)
 
     dLdK, dLdV = _attn_backward_KV_cdn(

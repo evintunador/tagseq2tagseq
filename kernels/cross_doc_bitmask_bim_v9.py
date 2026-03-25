@@ -105,7 +105,9 @@ def _attn_backward_KV_v9(
     dLdK = tl.zeros([BLOCK_SIZE_COL, Dh], dtype=tl.float32)
     dLdV = tl.zeros([BLOCK_SIZE_COL, Dh], dtype=tl.float32)
 
-    kv_doc_id    = tl.load(doc_ids_ptr + start_COL).to(tl.int32)
+    # Use last position in the KV block to get doc_kv_end — straddling fix.
+    last_kv_pos  = tl.minimum(start_COL + BLOCK_SIZE_COL - 1, N - 1)
+    kv_doc_id    = tl.load(doc_ids_ptr + last_kv_pos).to(tl.int32)
     doc_kv_end   = tl.load(cu_seqlens_ptr + kv_doc_id + 1).to(tl.int32)
 
     kv_q_start   = tl.load(kv_q_ptrs_ptr   + pid)
@@ -125,32 +127,18 @@ def _attn_backward_KV_v9(
         scale, ln2, rln2, MASK=True, USE_BIM=True,
     )
 
-    # Same-doc off-diagonal: ONE pipelined contiguous call (MASK=False + same_doc).
-    # Covers [start_COL + BIM_BLOCK_SIZE, doc_kv_end) — same range as the full-block CSR
-    # entries, but in a single call that Triton can pipeline with num_stages.
-    start_same    = start_COL + BLOCK_SIZE_COL
-    doc_end_aligned = tl.cdiv(doc_kv_end, BLOCK_SIZE_ROW) * BLOCK_SIZE_ROW
-    num_same = tl.maximum((doc_end_aligned - start_same) // BLOCK_SIZE_ROW, 0)
-    dLdK, dLdV = _attn_backward_KV_varlen(
-        K, V, dLdK, dLdV,
-        Q_ptr, dLdO_ptr, LSE_ptr, Delta_ptr, doc_ids_ptr,
-        stride_N, stride_Dh, H, N, Dh,
-        BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
-        start_same, start_COL, num_same,
-        scale, ln2, rln2, MASK=False,
-    )
-
-    # Cross-doc Q blocks: BIM CSR (few entries, not pipelined but short)
-    for i in range(1 + n_full_kv, num_q_macros):
+    # All non-diagonal Q blocks: BIM-based dispatch with full masking.
+    for i in range(1, num_q_macros):
         q_b = tl.load(kv_q_indices_ptr + kv_q_start + i)
-        dLdK, dLdV = _attn_backward_KV_cross_v3(
+        dLdK, dLdV = _attn_backward_KV_cdb(
             K, V, dLdK, dLdV,
             Q_ptr, dLdO_ptr, LSE_ptr, Delta_ptr,
-            q_bitmasks_ptr, kv_bitmasks_ptr, T, n_chunks,
-            stride_N, stride_Dh, N, Dh,
+            doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr, T,
+            0, n_chunks,
+            stride_N, stride_Dh, H, N, Dh,
             BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
             q_b * BIM_BLOCK_SIZE, start_COL, num_micro,
-            ln2,
+            scale, ln2, rln2, MASK=False, USE_BIM=True,
         )
 
     dLdK *= scale * rln2
@@ -225,18 +213,6 @@ def _attn_backward_Q_v9(
     num_kv_macros = tl.load(q_kv_counts_ptr  + pid)
     n_full_q      = tl.load(q_kv_n_full_ptr  + pid)
 
-    # Same-doc KV blocks before diagonal: ONE pipelined contiguous call.
-    doc_q_start_aligned = (doc_q_start // BLOCK_SIZE_COL) * BLOCK_SIZE_COL
-    num_same_pre = tl.maximum((start_ROW - doc_q_start_aligned) // BLOCK_SIZE_COL, 0)
-    dLdQ = _attn_backward_Q_varlen(
-        dLdQ, Q, dLdO, LSE,
-        K_ptr, V_ptr, Delta_ptr, doc_ids_ptr,
-        stride_N, stride_Dh, H, N, Dh,
-        BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
-        start_ROW, doc_q_start_aligned, num_same_pre,
-        scale, ln2, rln2, MASK=False,
-    )
-
     # Diagonal (MASK=True) — last entry in q_kv
     kv_b_diag = tl.load(q_kv_indices_ptr + q_kv_start + num_kv_macros - 1)
     dLdQ = _attn_backward_Q_cdb(
@@ -250,17 +226,18 @@ def _attn_backward_Q_v9(
         scale, ln2, rln2, MASK=True, USE_BIM=True,
     )
 
-    # Cross-doc KV blocks: BIM CSR
-    for i in range(n_full_q, num_kv_macros - 1):
+    # All non-diagonal KV blocks: BIM-based dispatch with full masking.
+    for i in range(0, num_kv_macros - 1):
         kv_b = tl.load(q_kv_indices_ptr + q_kv_start + i)
-        dLdQ = _attn_backward_Q_cross_v3(
+        dLdQ = _attn_backward_Q_cdb(
             dLdQ, Q, dLdO, LSE,
             K_ptr, V_ptr, Delta_ptr,
-            q_bitmasks_ptr, kv_bitmasks_ptr, T, n_chunks,
-            stride_N, stride_Dh, N, Dh,
+            doc_ids_ptr, q_bitmasks_ptr, kv_bitmasks_ptr, T,
+            0, n_chunks,
+            stride_N, stride_Dh, H, N, Dh,
             BLOCK_SIZE_ROW, BLOCK_SIZE_COL,
             start_ROW, kv_b * BIM_BLOCK_SIZE, num_micro,
-            ln2,
+            scale, ln2, rln2, MASK=False, USE_BIM=True,
         )
 
     dLdQ *= scale * rln2
