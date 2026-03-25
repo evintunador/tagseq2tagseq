@@ -29,6 +29,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 @dataclass
+class DocCausalTritonMaskInputs:
+    """Bundle passed to triton_attn_doc_causal_bim_v1_from_doc_ids.
+
+    Built by the doc_causal triton mask creator and reused across every layer.
+
+    Attributes:
+        document_ids: [T] int32 — doc index per position (-1 for layout gaps)
+    """
+    document_ids: torch.Tensor
+
+
+@dataclass
 class TritonMaskInputs:
     """Bundle of tensors passed to triton_attn_cross_doc_bitmask_bim_v12.
 

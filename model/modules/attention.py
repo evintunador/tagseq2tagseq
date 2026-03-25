@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
-from model.graph_traversal.cross_doc_mask import TritonMaskInputs
+from model.graph_traversal.cross_doc_mask import TritonMaskInputs, DocCausalTritonMaskInputs
 
 
 # Disable dynamo tracing for the Triton kernel call — the autograd Function
@@ -58,6 +58,44 @@ class BIMv12Attention(FlexSelfAttention):
             block_mask.q_bitmasks,
             block_mask.kv_bitmasks,
             block_mask.bim,
+            self.scale,
+        )  # (T, H, Dh)
+
+        y = y.unsqueeze(0).reshape(B, T, self.num_heads * self.head_dim)
+        return self.Wout(y)
+
+
+def _varlen_bim_v1_attn(q, k, v, doc_ids, scale):
+    from kernels.varlen_bim_v1 import triton_attn_doc_causal_bim_v1_from_doc_ids
+    return triton_attn_doc_causal_bim_v1_from_doc_ids(q, k, v, doc_ids, scale)
+
+_varlen_bim_v1_attn_disabled = torch._dynamo.disable(_varlen_bim_v1_attn)
+
+
+class VarlenBIMv1Attention(FlexSelfAttention):
+    """Doc-causal attention using varlen_bim_v1 Triton kernel.
+
+    Identical parameters and weight structure to FlexSelfAttention.
+    Expects block_mask to be a DocCausalTritonMaskInputs (from the
+    doc_causal triton mask creator, attention_backend="varlen_bim_v1").
+    """
+
+    def forward(self, x: Tensor, block_mask: DocCausalTritonMaskInputs) -> Tensor:
+        B, T = x.size(0), x.size(1)
+        assert B == 1, "VarlenBIMv1Attention requires batch size = 1 (packed sequences)"
+
+        q, k, v = (
+            F.linear(x, self.Wqkv.flatten(end_dim=1).type_as(x))
+            .view(B, T, 3 * self.num_heads, self.head_dim)
+            .chunk(3, dim=-2)
+        )
+        q, k = self.norm(q), self.norm(k)
+        q, k = self.rotary(q), self.rotary(k)
+
+        # q/k/v: (1, T, H, Dh) → (T, H, Dh)
+        y = _varlen_bim_v1_attn_disabled(
+            q.squeeze(0), k.squeeze(0), v.squeeze(0),
+            block_mask.document_ids,
             self.scale,
         )  # (T, H, Dh)
 

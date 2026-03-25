@@ -53,34 +53,46 @@ def build_doc_causal_bim(
     device: torch.device,
     block_size: int = 128,
 ):
-    """Build a BlockInteractionMask for pure doc-causal attention.
+    """Build a BlockInteractionMask for pure doc-causal attention from cu_seqlens.
 
-    Equivalent to CrossDocLinkMaskCreator with zero grants, but faster to
-    build since there's no bitmask logic.
-
-    Returns a BlockInteractionMask at the given block_size.
+    cu_seqlens: [0, len0, len0+len1, ...] — cumulative doc lengths (docs contiguous from 0).
+    Returns (BlockInteractionMask, doc_ids).
     """
     from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 
     n_docs = len(cu_seqlens) - 1
-    # Build doc_ids (CPU, then to device at the end)
-    doc_ids_np = np.zeros(seq_len, dtype=np.int32)
+    doc_ids_np = np.full(seq_len, -1, dtype=np.int32)
     for d in range(n_docs):
         s = int(cu_seqlens[d])
         e = int(cu_seqlens[d + 1])
         doc_ids_np[s:e] = d
     doc_ids = torch.from_numpy(doc_ids_np).to(device)
+    return build_doc_causal_bim_from_doc_ids(doc_ids, seq_len, device, block_size)
 
-    # Zero bitmasks (no cross-doc grants)
+
+def build_doc_causal_bim_from_doc_ids(
+    doc_ids: torch.Tensor,
+    seq_len: int,
+    device: torch.device,
+    block_size: int = 128,
+):
+    """Build a BlockInteractionMask from a pre-built doc_ids tensor.
+
+    doc_ids: (T,) int32 — doc index per position (-1 for padding/layout gaps).
+    Returns BlockInteractionMask.  doc_ids is also returned for convenience.
+    """
+    from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+
     q_bms  = [torch.zeros(seq_len, dtype=torch.int64, device=device)]
     kv_bms = [torch.zeros(seq_len, dtype=torch.int64, device=device)]
 
     creator = CrossDocLinkMaskCreator.__new__(CrossDocLinkMaskCreator)
     creator.triton_block_size = block_size
     creator._n_chunks = 1
-    return CrossDocLinkMaskCreator._build_block_interaction_mask(
+    bim = CrossDocLinkMaskCreator._build_block_interaction_mask(
         creator, seq_len, doc_ids, q_bms, kv_bms, device
-    ), doc_ids
+    )
+    return bim, doc_ids
 
 
 # ===========================================================================
@@ -586,7 +598,7 @@ def _attn_backward_Q_doc_causal_v1(
 # Autograd function
 # ===========================================================================
 
-# Cache (cu_seqlens id → (bim, doc_ids)) to avoid rebuilding every forward pass.
+# Caches keyed on (tensor_id, seq_len) to avoid rebuilding every forward pass.
 _bim_cache: dict = {}
 
 def _get_bim_and_doc_ids(cu_seqlens: torch.Tensor, seq_len: int, device: torch.device):
@@ -595,6 +607,15 @@ def _get_bim_and_doc_ids(cu_seqlens: torch.Tensor, seq_len: int, device: torch.d
         bim, doc_ids = build_doc_causal_bim(cu_seqlens, seq_len, device, block_size=128)
         _bim_cache[key] = (bim, doc_ids)
     return _bim_cache[key]
+
+_bim_doc_ids_cache: dict = {}
+
+def _get_bim_from_doc_ids(doc_ids: torch.Tensor, seq_len: int, device: torch.device):
+    key = (id(doc_ids), seq_len)
+    if key not in _bim_doc_ids_cache:
+        bim, _ = build_doc_causal_bim_from_doc_ids(doc_ids, seq_len, device, block_size=128)
+        _bim_doc_ids_cache[key] = bim
+    return _bim_doc_ids_cache[key]
 
 
 class _VarlenBIMv1(torch.autograd.Function):
@@ -697,11 +718,33 @@ def triton_attn_doc_causal_bim_v1(
     """Doc-causal attention: BIM dispatch + v10 opts (bf16 TC, no copies).
 
     q/k/v: (T, H, Dh)   bf16 or fp16
-    cu_seqlens: (n_docs+1,) int32
+    cu_seqlens: (n_docs+1,) int32  — cumulative lengths from 0
     Returns: (T, H, Dh)
     """
     if scale is None:
         scale = q.shape[-1] ** -0.5
     T = q.shape[0]
     bim, doc_ids = _get_bim_and_doc_ids(cu_seqlens, T, q.device)
+    return _VarlenBIMv1.apply(q, k, v, doc_ids, bim, scale)
+
+
+def triton_attn_doc_causal_bim_v1_from_doc_ids(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    doc_ids: torch.Tensor,
+    scale: float | None = None,
+) -> torch.Tensor:
+    """Doc-causal attention from a pre-built doc_ids tensor.
+
+    q/k/v: (T, H, Dh)   bf16 or fp16
+    doc_ids: (T,) int32  — doc index per position (-1 for layout/padding gaps)
+    Returns: (T, H, Dh)
+
+    Use this when doc spans are non-contiguous (training with layout tokens).
+    """
+    if scale is None:
+        scale = q.shape[-1] ** -0.5
+    T = q.shape[0]
+    bim = _get_bim_from_doc_ids(doc_ids, T, q.device)
     return _VarlenBIMv1.apply(q, k, v, doc_ids, bim, scale)

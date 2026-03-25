@@ -279,8 +279,14 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             )
         )
     else:
-        attention_backend = 'flex'
-        block_mask_creator = make_mask_creator_callable(mask_type)
+        model_cfg = cfg.get('model', {})
+        attention_backend = model_cfg.get('attention_backend', 'flex')
+        if attention_backend == 'varlen_bim_v1':
+            from model.graph_traversal.block_mask_creator import create_doc_causal_triton_mask
+            block_mask_creator = make_mask_creator_callable_from(create_doc_causal_triton_mask)
+        else:
+            attention_backend = 'flex'
+            block_mask_creator = make_mask_creator_callable(mask_type)
 
     model = TS2TSTrainingModule.from_config(
         vocab_size=vocab_size,
