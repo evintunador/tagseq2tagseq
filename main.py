@@ -268,15 +268,18 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
             )
         model_cfg = cfg.get('model', {})
+        attention_backend = model_cfg.get('attention_backend', 'flex')
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=detector,
                 max_grants=model_cfg.get('max_grants', 64),
                 max_grants_start=model_cfg.get('max_grants_start'),
                 max_grants_warmup_steps=int(model_cfg.get('max_grants_warmup_steps', 0)),
+                backend=attention_backend if attention_backend == 'triton_v12' else 'flex',
             )
         )
     else:
+        attention_backend = 'flex'
         block_mask_creator = make_mask_creator_callable(mask_type)
 
     model = TS2TSTrainingModule.from_config(
@@ -293,6 +296,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         ignore_index=cfg['model'].get('ignore_index', -100),
         dtype=getattr(torch, cfg['model'].get('dtype', 'bfloat16')),
         activation_checkpointing=cfg['model'].get('activation_checkpointing', False),
+        attention_backend=attention_backend,
     ).to(dist.device)
 
     # Build optimizer param groups BEFORE compile/DDP so that named_parameters()

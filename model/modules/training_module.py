@@ -80,13 +80,14 @@ class TS2TSTrainingModule(nn.Module):
         ignore_index: int = -100,
         dtype: torch.dtype = torch.bfloat16,
         activation_checkpointing: bool = False,
+        attention_backend: str = "flex",
     ) -> 'TS2TSTrainingModule':
         """
         Factory method to construct a training module from configuration parameters.
-        
+
         This is the recommended way to create a training module for standard training.
         It handles constructing all components with proper initialization and weight tying.
-        
+
         Args:
             vocab_size: Size of the vocabulary
             num_layers: Number of transformer layers
@@ -100,7 +101,8 @@ class TS2TSTrainingModule(nn.Module):
             weight_tying: Whether to tie embedding and output head weights
             ignore_index: Index to ignore in loss computation
             dtype: Data type for loss computation
-        
+            attention_backend: "flex" (default) or "triton_v12"
+
         Returns:
             Configured TS2TSTrainingModule ready for training
         """
@@ -114,6 +116,7 @@ class TS2TSTrainingModule(nn.Module):
             drop_path_rate=drop_path_rate,
             fp8=fp8,
             activation_checkpointing=activation_checkpointing,
+            attention_backend=attention_backend,
         )
         
         # Construct embedding

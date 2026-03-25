@@ -1,0 +1,65 @@
+"""
+BIMv12Attention — drop-in replacement for FlexSelfAttention using the v12
+Triton kernel (cross-doc BIM, BIM_BLOCK_SIZE=128, bf16 TC, no permute copies).
+
+Accepts a TritonMaskInputs bundle instead of a FlexAttention BlockMask.
+Inherits QKV projection, RoPE, QK norm, and output projection from
+FlexSelfAttention unchanged.
+"""
+
+import torch
+import torch.nn.functional as F
+from torch import Tensor
+
+from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
+from model.graph_traversal.cross_doc_mask import TritonMaskInputs
+
+
+# Disable dynamo tracing for the Triton kernel call — the autograd Function
+# has non-tensor arguments (bim, scale) that cause graph-break issues.
+# The surrounding code (QKV proj, RoPE, norm, output proj) is still compiled.
+def _triton_attn_v12(q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim, scale):
+    from kernels.cross_doc_bitmask_bim_v12 import triton_attn_cross_doc_bitmask_bim_v12
+    return triton_attn_cross_doc_bitmask_bim_v12(
+        q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim, scale
+    )
+
+_triton_attn_v12_disabled = torch._dynamo.disable(_triton_attn_v12)
+
+
+class BIMv12Attention(FlexSelfAttention):
+    """Cross-doc attention using the v12 Triton kernel.
+
+    Identical parameters and weight structure to FlexSelfAttention.
+    Expects block_mask to be a TritonMaskInputs (from CrossDocLinkMaskCreator
+    with backend="triton_v12").
+    """
+
+    def forward(self, x: Tensor, block_mask: TritonMaskInputs) -> Tensor:
+        B, T = x.size(0), x.size(1)
+        assert B == 1, "BIMv12Attention requires batch size = 1 (packed sequences)"
+
+        q, k, v = (
+            F.linear(x, self.Wqkv.flatten(end_dim=1).type_as(x))
+            .view(B, T, 3 * self.num_heads, self.head_dim)
+            .chunk(3, dim=-2)
+        )
+        q, k = self.norm(q), self.norm(k)
+        q, k = self.rotary(q), self.rotary(k)
+
+        # q/k/v: (1, T, H, Dh) → (T, H, Dh) for the Triton kernel
+        q_thd = q.squeeze(0)
+        k_thd = k.squeeze(0)
+        v_thd = v.squeeze(0)
+
+        y = _triton_attn_v12_disabled(
+            q_thd, k_thd, v_thd,
+            block_mask.document_ids,
+            block_mask.q_bitmasks,
+            block_mask.kv_bitmasks,
+            block_mask.bim,
+            self.scale,
+        )  # (T, H, Dh)
+
+        y = y.unsqueeze(0).reshape(B, T, self.num_heads * self.head_dim)
+        return self.Wout(y)
