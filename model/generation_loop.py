@@ -16,6 +16,19 @@ from model.sampling import sample_token
 logger = logging.getLogger(__name__)
 
 
+def _layout_suffix_starts_with(layout_policy, entry: _DocEntry, token_id: int) -> bool:
+    """True if the layout policy's suffix for this entry starts with token_id."""
+    if layout_policy is None:
+        return False
+    info = DocLayoutInfo(
+        raw_identifier=entry.raw_identifier,
+        normed_identifier=entry.normed_identifier,
+        body_tokens=list(entry.tokens),
+    )
+    suffix = layout_policy.suffix_tokens(info)
+    return len(suffix) > 0 and suffix[0] == token_id
+
+
 def run_generation(
     model,
     prompt_tokens: List[int],
@@ -119,10 +132,21 @@ def _generate_doc(
         if trace is not None:
             trace.total_forward_passes += 1
 
+        # Find the logit position corresponding to this entry's last token.
+        # The entry may not be the last document in the packed sequence (e.g.
+        # an aux doc inserted before root), so we look up its span end rather
+        # than blindly using position -1.
+        entry_end = None
+        for span in doc_spans:
+            if span.doc_id == entry.doc_id:
+                entry_end = span.end
+                break
+        logit_pos = (entry_end - 1) if entry_end is not None else -1
+
         # Apply repetition penalty over tokens already in this document.
         # Positive logits are divided by the penalty; negative ones are multiplied,
         # so both directions push down the probability of repeated tokens.
-        next_logits = logits[0, -1, :].clone()
+        next_logits = logits[0, logit_pos, :].clone()
         if config.repetition_penalty != 1.0 and entry.tokens:
             for tid in set(entry.tokens):
                 if next_logits[tid] > 0:
@@ -131,6 +155,25 @@ def _generate_doc(
                     next_logits[tid] *= config.repetition_penalty
 
         next_token = sample_token(next_logits, config.temperature, config.top_k, config.top_p)
+
+        # EOS handling: in training, the model predicts the layout suffix
+        # token (e.g. EOS) as the next token after the last body token.
+        # The suffix is NOT part of the body.  If we appended EOS to the
+        # body AND mark_done added it again as suffix, the document would
+        # contain a double EOS that never appeared during training.
+        #
+        # When the layout policy provides a suffix whose first token is
+        # the EOS we just sampled, treat the generated EOS as the suffix
+        # trigger — don't append it to the body.
+        if next_token == config.eos_token_id and _layout_suffix_starts_with(
+            layout_policy, entry, config.eos_token_id
+        ):
+            context.mark_done(entry, layout_policy)
+            tokens_generated += 1
+            if trace is not None:
+                trace.total_tokens_generated += 1
+            break
+
         context.append_token(entry, next_token)
         tokens_generated += 1
         if trace is not None:

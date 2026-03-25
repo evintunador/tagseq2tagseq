@@ -825,8 +825,10 @@ class ScriptedModel:
             "Python": [200, 201, EOS],            # aux doc "Python"
         })
 
-    The model tracks which entry is currently active by looking at the
-    raw_identifier of the last (rightmost non-done) document in doc_spans.
+    The model uses doc_spans to identify which document is not yet done
+    (the one currently being generated) and places the scripted token at
+    that document's last position in the logits tensor. This mirrors how
+    _generate_doc samples from the entry's span end position.
     """
 
     def __init__(self, scripts: dict, default_eos=EOS):
@@ -837,13 +839,28 @@ class ScriptedModel:
 
     def forward_inference(self, tokens, doc_spans=None, **kwargs):
         self.call_count += 1
-        # Find which doc is the active (rightmost, assumed to be the one
-        # being generated — matches generation_loop convention where root
-        # or the currently-generating doc is always last in context).
+        # Find the actively-generating doc: the one whose span is still
+        # growing (not done).  In practice this is the doc whose script
+        # cursor hasn't exhausted yet.  We identify it by looking at all
+        # doc_spans and finding the one with a matching script.
         active_id = ""
+        active_end = tokens.shape[1]  # default: last position
         if doc_spans:
-            # The active doc is the rightmost in the packed sequence
-            active_id = doc_spans[-1].raw_identifier
+            # Try each span to find the one being generated.
+            # Heuristic: the active doc is the one whose raw_identifier
+            # has an active script cursor (not exhausted).
+            for span in doc_spans:
+                rid = span.raw_identifier
+                if rid in self._scripts:
+                    cursor = self._cursors.get(rid, 0)
+                    if cursor < len(self._scripts[rid]):
+                        active_id = rid
+                        active_end = span.end
+                        break
+            # Fallback: if no script matched, try the last span (root)
+            if active_id == "" and "" in self._scripts:
+                active_id = ""
+                active_end = doc_spans[-1].end
 
         script = self._scripts.get(active_id)
         if script is None:
@@ -854,7 +871,8 @@ class ScriptedModel:
             self._cursors[active_id] = idx + 1
 
         logits = torch.full((1, tokens.shape[1], VOCAB_SIZE), -1e9)
-        logits[0, -1, token] = 1e9
+        # Place high logit at the active doc's last position
+        logits[0, active_end - 1, token] = 1e9
         return logits
 
 
@@ -1154,19 +1172,15 @@ def test_scenario_generate_link_generate_aux():
     Scenario: Root emits link to "NewTopic" (not in corpus), generation
     fallback kicks in, aux doc is recursively generated, root continues.
 
-    NOTE: The generation loop always samples from logits[0, -1, :], which
-    is the last position in the packed sequence. During aux doc generation
-    the aux doc is inserted *before* root, so position -1 is still root's
-    last token. This means the aux doc's tokens are sampled from root's
-    logit distribution — a known limitation of the current implementation.
-    We use make_mock_model (call-order based) to test the structural flow
-    without depending on position-correct sampling.
+    ScriptedModel places tokens at the correct logit position per-document,
+    verifying that _generate_doc samples from each entry's span end.
     """
     LINK_TOKEN = 42
     detector = MultiLinkDetector({LINK_TOKEN: "NewTopic"})
-    # Call order: root gets LINK_TOKEN → link fires → aux generation starts →
-    # aux gets tokens 200, 201, EOS → root resumes → root gets 100, EOS
-    model = make_mock_model(next_tokens=[LINK_TOKEN, 200, 201, EOS, 100, EOS])
+    model = ScriptedModel({
+        "":         [LINK_TOKEN, 100, EOS],
+        "NewTopic": [200, 201, EOS],
+    })
 
     result = run_generation(
         model=model,
@@ -1180,9 +1194,16 @@ def test_scenario_generate_link_generate_aux():
     )
 
     assert result.get_document_count() == 2
+    root = result.root_document
     aux = result.auxiliary_documents[0]
+
+    # Root: prompt(1) + LINK_TOKEN + 100 + EOS
+    assert root.tokens.tolist() == [1, LINK_TOKEN, 100, EOS]
+    # Aux: generated independently with its own script
     assert aux.raw_identifier == "NewTopic"
     assert aux.source == "generated"
+    assert 200 in aux.tokens.tolist()
+    assert 201 in aux.tokens.tolist()
 
     assert result.trace.docs_generated == 1
     assert result.trace.links_detected == 1
@@ -1386,3 +1407,101 @@ def test_scenario_large_corpus_doc_exceeding_context_gracefully_skipped():
     )
     # Should not crash, and "Big" should not be in context
     assert ctx.num_aux_docs == 0
+
+
+# ---------------------------------------------------------------------------
+# Double-EOS prevention with layout policies
+# ---------------------------------------------------------------------------
+
+def test_eos_not_doubled_when_layout_suffix_starts_with_eos():
+    """
+    When a layout policy provides a suffix starting with EOS, the generated
+    EOS should NOT be appended to the body — mark_done adds it as the suffix.
+    Without this fix the doc would contain body + [EOS] + suffix([EOS, ...])
+    which never appears during training.
+    """
+    from data.layout import DocLayoutInfo
+
+    class FakeEOSSuffixPolicy:
+        """Layout policy whose suffix starts with the EOS token."""
+        def prefix_tokens(self, info):
+            return []
+        def suffix_tokens(self, info):
+            return [EOS]  # EOS as suffix
+        def prefix_length(self, info):
+            return 0
+        def suffix_length(self, info):
+            return 1
+
+    policy = FakeEOSSuffixPolicy()
+    model = make_mock_model(next_tokens=[100, 101, EOS])
+
+    result = run_generation(
+        model=model,
+        prompt_tokens=[1],
+        corpus=None,
+        config=base_config(),
+        link_detector=None,
+        tokenizer_decode=None,
+        layout_policy=policy,
+    )
+
+    root = result.root_document
+    token_list = root.tokens.tolist()
+    # Body should be [1, 100, 101] + suffix [EOS] = [1, 100, 101, EOS]
+    # NOT [1, 100, 101, EOS, EOS] (double EOS)
+    assert token_list == [1, 100, 101, EOS]
+    assert token_list.count(EOS) == 1
+
+
+def test_eos_appended_normally_when_no_layout_suffix():
+    """Without a layout policy, EOS is appended to body as usual."""
+    model = make_mock_model(next_tokens=[100, EOS])
+    result = run_generation(
+        model=model,
+        prompt_tokens=[1],
+        corpus=None,
+        config=base_config(),
+        link_detector=None,
+        tokenizer_decode=None,
+        layout_policy=None,
+    )
+    root = result.root_document
+    assert root.tokens.tolist() == [1, 100, EOS]
+
+
+# ---------------------------------------------------------------------------
+# Logit position correctness for aux doc generation
+# ---------------------------------------------------------------------------
+
+def test_aux_doc_sampled_from_correct_logit_position():
+    """
+    Verify that recursively generated aux docs get tokens from their own
+    logit position, not from root's position.
+
+    ScriptedModel puts the target token at each doc's span end position.
+    If _generate_doc sampled from position -1 (root's last token), the
+    aux doc would get root's scripted token instead of its own.
+    """
+    LINK_TOKEN = 42
+    detector = MultiLinkDetector({LINK_TOKEN: "Aux"})
+    model = ScriptedModel({
+        "":    [LINK_TOKEN, EOS],
+        "Aux": [200, 201, 202, EOS],
+    })
+
+    result = run_generation(
+        model=model,
+        prompt_tokens=[1],
+        corpus=None,
+        config=base_config(max_link_depth=1, allow_generation_fallback=True),
+        link_detector=detector,
+        tokenizer_decode=None,
+        layout_policy=None,
+    )
+
+    aux = result.auxiliary_documents[0]
+    # Aux doc should have its own scripted tokens, not root's
+    assert 200 in aux.tokens.tolist()
+    assert 201 in aux.tokens.tolist()
+    assert 202 in aux.tokens.tolist()
