@@ -197,7 +197,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         block_mask_creator = make_mask_creator_callable(mask_type)
 
     tokenizer_name = graph_index.metadata.get('tokenizer', 'gpt2')
-    vocab_size = 50257 if tokenizer_name == 'gpt2' else cfg['model'].get('vocab_size', 50257)
+    vocab_size = 50304 if tokenizer_name == 'gpt2' else cfg['model'].get('vocab_size', 50304)
 
     _log(dist.rank, "building model")
     model = TS2TSTrainingModule.from_config(

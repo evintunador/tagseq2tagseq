@@ -131,9 +131,15 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
             "Expected 'null', 'bos_eos', 'identifier_prefix', or 'identifier_prefix_bos_eos'."
         )
 
-    # Reconstruct architecture (dropout=0 at inference)
+    # Reconstruct architecture (dropout=0 at inference).
+    # Infer vocab_size from the checkpoint embedding weight so that both
+    # old (50257) and new (50304) checkpoints load correctly.
+    ckpt       = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state_dict = ckpt["model"]
+    vocab_size = state_dict["embedding.weight"].shape[0]
+
     training_module = TS2TSTrainingModule.from_config(
-        vocab_size=50257,
+        vocab_size=vocab_size,
         num_layers=model_cfg["num_layers"],
         model_dim=model_cfg["model_dim"],
         num_heads=model_cfg["num_heads"],
@@ -147,9 +153,7 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
         dtype=torch.bfloat16,
     )
 
-    # Load weights
-    ckpt       = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state_dict = ckpt["model"]
+    # Load weights (ckpt/state_dict already loaded above)
     training_module.load_state_dict(state_dict)
 
     # Convert to inference model

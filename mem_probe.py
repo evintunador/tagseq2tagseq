@@ -61,7 +61,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         bmc = make_mask_creator_callable(mask_type)
 
     model = TS2TSTrainingModule.from_config(
-        vocab_size=50257,
+        vocab_size=50304,
         num_layers=cfg["model"]["num_layers"],
         model_dim=cfg["model"]["model_dim"],
         num_heads=cfg["model"]["num_heads"],

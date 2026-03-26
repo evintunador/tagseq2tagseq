@@ -479,7 +479,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     logger.info("Initializing Model...")
 
     tokenizer_name = graph_index.metadata.get('tokenizer', 'gpt2')
-    vocab_size = 50257 if tokenizer_name == 'gpt2' else cfg['model'].get('vocab_size', 50257)
+    vocab_size = 50304 if tokenizer_name == 'gpt2' else cfg['model'].get('vocab_size', 50304)
 
     # Create block mask creator
     mask_type = cfg.get('model', {}).get('mask_type', 'doc_causal')
