@@ -7,7 +7,8 @@ data:
 model:
   compile: true
   compile_mode: 'default'
-  mask_type: 'doc_causal'         # override per run: doc_causal | cross_doc_link
+  attention_backend: 'triton'  # kernel auto-selected per mask_type; set to 'flex' to compare
+  mask_type: 'doc_causal'             # override per run: doc_causal | cross_doc_link
   # link_detector: 'markdown'     # set to 'markdown' or 'python' when mask_type=cross_doc_link
   # max_grants: 256               # cross_doc_link only; 256 covers observed max for all datasets
   model_dim: 1280
