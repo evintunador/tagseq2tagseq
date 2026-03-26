@@ -1,3 +1,6 @@
+import math
+
+import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Any
@@ -44,7 +47,19 @@ class Layer(nn.Module):
             activation="silu", dropout=dropout, fp8=fp8,
         )
 
+        # Per-sublayer learnable residual scaling (from modded-nanogpt).
+        # resid_lambdas[0/1]: scale applied to the residual stream before adding
+        #   the sublayer output. Initialized to sqrt(1.1) so that, at init,
+        #   each sublayer slightly amplifies the residual stream.
+        # post_lambdas[0/1]: scale applied to the sublayer output itself.
+        #   Initialized to 1.0 to match the original residual connection at init.
+        # Index 0 = attention sublayer, index 1 = MLP sublayer.
+        self.resid_lambdas = nn.Parameter(torch.full((2,), math.sqrt(1.1)))
+        self.post_lambdas = nn.Parameter(torch.ones(2))
+
     def forward(self, x: Tensor, block_mask: Any):
-        x = x + self.drop_path(self.attn(self.ln_1(x), block_mask=block_mask))
-        x = x + self.drop_path(self.mlp(self.ln_2(x)))
+        rl = self.resid_lambdas
+        pl = self.post_lambdas
+        x = rl[0] * x + pl[0] * self.drop_path(self.attn(self.ln_1(x), block_mask=block_mask))
+        x = rl[1] * x + pl[1] * self.drop_path(self.mlp(self.ln_2(x)))
         return x
