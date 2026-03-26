@@ -64,7 +64,7 @@ Each item gets its own commit. Check off as done.
 
 ## Tier 4 — Real but complex, consider for a dedicated run
 
-- [ ] **10. Fused ReLU² MLP (replace SwiGLU)**
+- [x] **10. Fused ReLU² MLP (replace SwiGLU)**
   ~1–2% over GELU, but only worthwhile paired with a custom Triton kernel
   fusing the squaring into the matmul. Without the kernel, SwiGLU wins.
   Port/adapt `FusedLinearReLUSquareFunction` from modded-nanogpt.
