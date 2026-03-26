@@ -15,7 +15,7 @@ model:
   num_layers: 36
   num_heads: 20
   max_seq_len: 32768
-  dropout: 0.1
+  dropout: 0.0
   drop_path_rate: 0.0
   fp8: false
   weight_tying: true
