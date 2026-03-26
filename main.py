@@ -79,6 +79,7 @@ class LRCooldownScheduler:
         start_step: int = 0,
         cooldown_frac: float = 0.4,
         min_lr_ratio: float = 0.1,
+        muon_momentum_warmup_steps: int = 0,
     ):
         self.optimizer = optimizer
         self.total_steps = total_steps
@@ -90,6 +91,15 @@ class LRCooldownScheduler:
         # constructing this (so a resumed checkpoint's saved LR doesn't pollute
         # the base).
         self._base_lrs = [float(pg['lr']) for pg in optimizer.param_groups]
+        # Momentum warmup: ramp from momentum_min to the configured max over
+        # muon_momentum_warmup_steps steps.  Only applies to param groups with
+        # use_muon=True.  0 disables the warmup.
+        self.muon_momentum_warmup_steps = muon_momentum_warmup_steps
+        self._momentum_max = next(
+            (float(pg['momentum']) for pg in optimizer.param_groups if pg.get('use_muon')),
+            0.95,
+        )
+        self._momentum_min = 0.85
 
     def _lr_mul(self) -> float:
         step = self._step_count
@@ -98,10 +108,24 @@ class LRCooldownScheduler:
         progress = (step - self.cooldown_start) / max(1, self.total_steps - self.cooldown_start)
         return 1.0 - (1.0 - self.min_lr_ratio) * min(progress, 1.0)
 
+    def _muon_momentum(self) -> float:
+        if self.muon_momentum_warmup_steps <= 0:
+            return self._momentum_max
+        step = self._step_count
+        if step >= self.muon_momentum_warmup_steps:
+            return self._momentum_max
+        frac = step / self.muon_momentum_warmup_steps
+        return self._momentum_min + (self._momentum_max - self._momentum_min) * frac
+
     def step(self, *args, **kwargs):
         mul = self._lr_mul()
         for pg, base_lr in zip(self.optimizer.param_groups, self._base_lrs):
             pg['lr'] = base_lr * mul
+        if self.muon_momentum_warmup_steps > 0:
+            momentum = self._muon_momentum()
+            for pg in self.optimizer.param_groups:
+                if pg.get('use_muon'):
+                    pg['momentum'] = momentum
         self.optimizer.step(*args, **kwargs)
         self._step_count += 1
 
@@ -606,7 +630,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # 3c. LR cooldown schedule (linear decay in the final portion of training).
     # -------------------------------------------------------------------------
     cooldown_frac = cfg.get('train_loop', {}).get('cooldown_frac', 0.0)
+    min_lr_ratio = cfg.get('train_loop', {}).get('min_lr_ratio', 0.1)
+    muon_momentum_warmup_steps = int(cfg.get('optimizer', {}).get('muon_momentum_warmup_steps', 0))
     max_steps_for_cooldown = cfg.get('train_loop', {}).get('max_optimizer_steps')
+
     if cooldown_frac > 0.0 and max_steps_for_cooldown is None:
         logger.warning(
             "cooldown_frac=%.2f requested but train_loop.max_optimizer_steps is not set; "
@@ -615,10 +642,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         )
         cooldown_frac = 0.0
 
-    if cooldown_frac > 0.0:
-        min_lr_ratio = cfg.get('train_loop', {}).get('min_lr_ratio', 0.1)
-        # total_steps is the ORIGINAL schedule length (before resume adjustment).
-        total_steps_original = max_steps_for_cooldown + resumed_steps
+    if cooldown_frac > 0.0 or muon_momentum_warmup_steps > 0:
+        total_steps_original = (max_steps_for_cooldown + resumed_steps) if max_steps_for_cooldown is not None else 0
         # Reset param_group LRs to the config values so a resume checkpoint's
         # (potentially already-cooled) LR doesn't corrupt the base.
         config_lrs = [cfg['optimizer']['muon_lr'], cfg['optimizer']['adamw_lr']]
@@ -630,12 +655,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             start_step=resumed_steps,
             cooldown_frac=cooldown_frac,
             min_lr_ratio=min_lr_ratio,
+            muon_momentum_warmup_steps=muon_momentum_warmup_steps,
         )
         logger.info(
-            "LR cooldown enabled: cooldown_frac=%.2f, min_lr_ratio=%.2f, "
-            "total_steps=%d, cooldown_starts_at_step=%d (resumed_steps=%d).",
+            "Training scheduler: cooldown_frac=%.2f, min_lr_ratio=%.2f, "
+            "total_steps=%d, cooldown_starts_at_step=%d; "
+            "muon_momentum_warmup_steps=%d (resumed_steps=%d).",
             cooldown_frac, min_lr_ratio,
-            total_steps_original, optimizer.cooldown_start, resumed_steps,
+            total_steps_original, optimizer.cooldown_start,
+            muon_momentum_warmup_steps, resumed_steps,
         )
 
     # Compile backbone BEFORE DDP wrapping.  torch.compile operates on the

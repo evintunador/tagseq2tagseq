@@ -28,6 +28,7 @@ optimizer:
   beta2: 0.95
   muon_lr: 0.003
   adamw_lr: 0.00004
+  muon_momentum_warmup_steps: 300  # ramp momentum 0.85→0.95 over first N steps
 
 train_loop:
   epochs: 1
