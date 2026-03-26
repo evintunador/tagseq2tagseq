@@ -562,6 +562,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     adamw_beta2   = cfg['optimizer'].get('beta2', 0.95)
     embed_beta1   = cfg['optimizer'].get('adamw_embed_beta1', 0.5)
     other_beta1   = cfg['optimizer'].get('beta1', 0.9)
+    muon_wd       = cfg['optimizer'].get('muon_wd', cfg['optimizer'].get('wd', 0.1))
+    adamw_wd      = cfg['optimizer'].get('adamw_wd', cfg['optimizer'].get('wd', 0.1))
 
     param_groups = [
         dict(
@@ -569,21 +571,21 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             use_muon=True,
             lr=cfg['optimizer']['muon_lr'],
             momentum=cfg['optimizer'].get('momentum', 0.95),
-            weight_decay=cfg['optimizer']['wd'],
+            weight_decay=muon_wd,
         ),
         dict(
             params=embed_adamw_params,
             use_muon=False,
             lr=cfg['optimizer']['adamw_lr'],
             betas=(embed_beta1, adamw_beta2),
-            weight_decay=cfg['optimizer']['wd'],
+            weight_decay=adamw_wd,
         ),
         dict(
             params=other_adamw_params,
             use_muon=False,
             lr=cfg['optimizer']['adamw_lr'],
             betas=(other_beta1, adamw_beta2),
-            weight_decay=cfg['optimizer']['wd'],
+            weight_decay=adamw_wd,
         ),
     ]
 

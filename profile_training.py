@@ -237,14 +237,14 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             use_muon=True,
             lr=cfg['optimizer']['muon_lr'],
             momentum=cfg['optimizer'].get('momentum', 0.95),
-            weight_decay=cfg['optimizer']['wd'],
+            weight_decay=cfg['optimizer'].get('muon_wd', cfg['optimizer'].get('wd', 0.1)),
         ),
         dict(
             params=adamw_params,
             use_muon=False,
             lr=cfg['optimizer']['adamw_lr'],
             betas=(cfg['optimizer'].get('beta1', 0.9), cfg['optimizer'].get('beta2', 0.95)),
-            weight_decay=cfg['optimizer']['wd'],
+            weight_decay=cfg['optimizer'].get('adamw_wd', cfg['optimizer'].get('wd', 0.1)),
         ),
     ])
 
