@@ -49,7 +49,7 @@ Each item gets its own commit. Check off as done.
   Currently using Liger `FusedLinearCELoss` with no cap — need to add a
   pre-cap op or swap to a kernel that supports softcap.
 
-- [ ] **8. Head dim 128 instead of 64**
+- [x] **8. Head dim 128 instead of 64**
   12H/64D → 6H/128D (baseline 768), 20H/64D → 10H/128D (large 1280),
   16H/64D → 8H/128D (stack_100m 1024). Better tensor core utilization.
   Verify Triton kernels are head-dim-agnostic (likely fine, BIM_BS=128).
