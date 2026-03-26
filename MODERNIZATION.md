@@ -34,7 +34,7 @@ Each item gets its own commit. Check off as done.
   near-zero estimates. β1=0.5 discounts them aggressively. Requires either
   per-group beta1 support in `MuonWithAuxAdam` or splitting the AdamW group.
 
-- [ ] **6. Higher Muon weight decay (0.1 → 1.2) + lower AdamW WD (0.1 → 0.005)**
+- [x] **6. Higher Muon weight decay (0.1 → 1.2) + lower AdamW WD (0.1 → 0.005)**
   Muon operates post-orthogonalization in spectral space — WD of 1.2 is
   appropriate there. AdamW params (embeddings, norms) should be lightly decayed
   (0.005). Requires splitting the single `wd` config into two fields.
