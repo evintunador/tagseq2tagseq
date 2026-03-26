@@ -11,7 +11,7 @@ model:
   mask_type: 'doc_causal'  # Options: doc_causal, causal, full, doc_bidirectional, cross_doc_link
   model_dim: 768  # Embedding dimension (GPT-2 small uses 768)
   num_layers: 12  # Number of transformer layers
-  num_heads: 12  # Number of attention heads
+  num_heads: 6   # Number of attention heads (6H × 128D = 768 head_dim=128)
   max_seq_len: 2048  # Maximum sequence length / context window
   dropout: 0.0
   drop_path_rate: 0.0

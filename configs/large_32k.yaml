@@ -13,7 +13,7 @@ model:
   # max_grants: 256               # cross_doc_link only; 256 covers observed max for all datasets
   model_dim: 1280
   num_layers: 36
-  num_heads: 20
+  num_heads: 10  # 10H × 128D = 1280 head_dim=128
   max_seq_len: 32768
   dropout: 0.0
   drop_path_rate: 0.0
