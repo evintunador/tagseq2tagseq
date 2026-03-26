@@ -29,7 +29,7 @@ Each item gets its own commit. Check off as done.
   boundaries. New runs only (old checkpoints stay at 50257). Config + model
   change only.
 
-- [ ] **5. Adam β1=0.5 for embeddings/lm_head**
+- [x] **5. Adam β1=0.5 for embeddings/lm_head**
   Embedding rows get sparse gradients; the default β1=0.9 accumulates stale
   near-zero estimates. β1=0.5 discounts them aggressively. Requires either
   per-group beta1 support in `MuonWithAuxAdam` or splitting the AdamW group.
