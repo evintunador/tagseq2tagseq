@@ -7,6 +7,7 @@ data:
 model:
   compile: true
   compile_mode: 'default'
+  attention_backend: 'triton'
   mask_type: 'doc_causal'
   model_dim: 1024
   num_layers: 24

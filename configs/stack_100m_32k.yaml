@@ -7,6 +7,7 @@ data:
 model:
   compile: true
   compile_mode: 'default'
+  attention_backend: 'triton'
   mask_type: 'cross_doc_link'
   link_detector: 'python'
   max_grants: 256

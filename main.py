@@ -297,6 +297,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     # Create block mask creator
     mask_type = cfg.get('model', {}).get('mask_type', 'doc_causal')
+    model_cfg = cfg.get('model', {})
+    use_triton = model_cfg.get('attention_backend', 'triton') != 'flex'
+
     if mask_type == 'cross_doc_link':
         link_detector_name = cfg.get('model', {}).get('link_detector')
         if not link_detector_name:
@@ -314,21 +317,19 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 f"Unknown model.link_detector '{link_detector_name}'. "
                 "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
             )
-        model_cfg = cfg.get('model', {})
-        attention_backend = model_cfg.get('attention_backend', 'flex')
+        attention_backend = 'triton_v12' if use_triton else 'flex'
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=detector,
                 max_grants=model_cfg.get('max_grants', 64),
                 max_grants_start=model_cfg.get('max_grants_start'),
                 max_grants_warmup_steps=int(model_cfg.get('max_grants_warmup_steps', 0)),
-                backend=attention_backend if attention_backend == 'triton_v12' else 'flex',
+                backend=attention_backend,
             )
         )
     else:
-        model_cfg = cfg.get('model', {})
-        attention_backend = model_cfg.get('attention_backend', 'flex')
-        if attention_backend == 'varlen_bim_v1':
+        if use_triton and mask_type == 'doc_causal':
+            attention_backend = 'varlen_bim_v1'
             from model.graph_traversal.block_mask_creator import create_doc_causal_triton_mask
             block_mask_creator = make_mask_creator_callable_from(create_doc_causal_triton_mask)
         else:
