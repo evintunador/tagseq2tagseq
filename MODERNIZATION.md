@@ -16,7 +16,7 @@ Each item gets its own commit. Check off as done.
   to 0.15× base rate. Add `cooldown_frac` and `min_lr_ratio` to the train_loop
   config section. Apply via a step-count multiplier in `main.py`'s optimizer step.
 
-- [ ] **3. Muon momentum warmup (0.85 → 0.95 over first 300 steps)**
+- [x] **3. Muon momentum warmup (0.85 → 0.95 over first 300 steps)**
   Prevents large early updates from uninitialized model. Linear ramp from 0.85
   to 0.95. A few lines in `main.py` alongside the cooldown logic.
 
