@@ -34,6 +34,8 @@ optimizer:
 train_loop:
   epochs: 1
   max_optimizer_steps: 16000
+  cooldown_frac: 0.4    # decay LR over the final 40% of training
+  min_lr_ratio: 0.1     # LR at end = base_lr * min_lr_ratio
   val_steps: 20
   val_interval: 100
   atomic_feature_kwargs: {}

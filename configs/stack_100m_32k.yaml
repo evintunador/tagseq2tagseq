@@ -37,6 +37,8 @@ optimizer:
 train_loop:
   epochs: 1
   max_optimizer_steps: 18400  # ~1 pass: 3.56M nodes / (12.1 random docs/pack × 8 GPUs × 2 accum) = 18,400 steps/pass
+  cooldown_frac: 0.4    # decay LR over the final 40% of training
+  min_lr_ratio: 0.1     # LR at end = base_lr * min_lr_ratio
   val_steps: 30
   val_interval: 300           # every N optimizer steps (~every 1.6% of training)
   atomic_feature_kwargs:

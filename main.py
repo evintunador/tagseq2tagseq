@@ -51,6 +51,74 @@ from data.traversal import (
 logger = logging.getLogger(__name__)
 
 
+class LRCooldownScheduler:
+    """Wraps an optimizer to apply linear LR cooldown in the final portion of training.
+
+    LR is held at 1× for the first (1 - cooldown_frac) of total_steps, then
+    decays linearly to min_lr_ratio× over the remaining steps.
+
+    Designed to be transparent to smart_train: exposes the same interface as a
+    normal optimizer (step, zero_grad, param_groups, state_dict, load_state_dict).
+
+    Args:
+        optimizer: The base optimizer to wrap.
+        total_steps: Total number of optimizer steps for the full training run
+            (not adjusted for resume — use the *original* schedule total).
+        start_step: Step number at which this training run begins.  0 for a fresh
+            run; ``resumed_steps`` when resuming from a checkpoint.
+        cooldown_frac: Fraction of total_steps over which to decay the LR.
+            E.g. 0.4 starts cooldown at step int(total_steps * 0.6).
+        min_lr_ratio: Final LR as a fraction of the base LR.  0.1 means the LR
+            decays to 10% of the configured value.
+    """
+
+    def __init__(
+        self,
+        optimizer,
+        total_steps: int,
+        start_step: int = 0,
+        cooldown_frac: float = 0.4,
+        min_lr_ratio: float = 0.1,
+    ):
+        self.optimizer = optimizer
+        self.total_steps = total_steps
+        self.cooldown_start = int(total_steps * (1.0 - cooldown_frac))
+        self.min_lr_ratio = min_lr_ratio
+        self._step_count = start_step
+        # Capture base LRs from optimizer param_groups at construction time.
+        # Callers should reset param_groups['lr'] to config values before
+        # constructing this (so a resumed checkpoint's saved LR doesn't pollute
+        # the base).
+        self._base_lrs = [float(pg['lr']) for pg in optimizer.param_groups]
+
+    def _lr_mul(self) -> float:
+        step = self._step_count
+        if step < self.cooldown_start or self.cooldown_start >= self.total_steps:
+            return 1.0
+        progress = (step - self.cooldown_start) / max(1, self.total_steps - self.cooldown_start)
+        return 1.0 - (1.0 - self.min_lr_ratio) * min(progress, 1.0)
+
+    def step(self, *args, **kwargs):
+        mul = self._lr_mul()
+        for pg, base_lr in zip(self.optimizer.param_groups, self._base_lrs):
+            pg['lr'] = base_lr * mul
+        self.optimizer.step(*args, **kwargs)
+        self._step_count += 1
+
+    def zero_grad(self, *args, **kwargs):
+        self.optimizer.zero_grad(*args, **kwargs)
+
+    def state_dict(self):
+        return self.optimizer.state_dict()
+
+    def load_state_dict(self, state_dict):
+        self.optimizer.load_state_dict(state_dict)
+
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
+
 class LimitedDataLoader:
     """Wraps a DataLoader to yield at most ``max_batches`` items per iteration.
 
@@ -533,6 +601,42 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
         del resume_ckpt   # free ~1.8 GB
         resume_ckpt = None
+
+    # -------------------------------------------------------------------------
+    # 3c. LR cooldown schedule (linear decay in the final portion of training).
+    # -------------------------------------------------------------------------
+    cooldown_frac = cfg.get('train_loop', {}).get('cooldown_frac', 0.0)
+    max_steps_for_cooldown = cfg.get('train_loop', {}).get('max_optimizer_steps')
+    if cooldown_frac > 0.0 and max_steps_for_cooldown is None:
+        logger.warning(
+            "cooldown_frac=%.2f requested but train_loop.max_optimizer_steps is not set; "
+            "skipping LR cooldown (cannot determine schedule length).",
+            cooldown_frac,
+        )
+        cooldown_frac = 0.0
+
+    if cooldown_frac > 0.0:
+        min_lr_ratio = cfg.get('train_loop', {}).get('min_lr_ratio', 0.1)
+        # total_steps is the ORIGINAL schedule length (before resume adjustment).
+        total_steps_original = max_steps_for_cooldown + resumed_steps
+        # Reset param_group LRs to the config values so a resume checkpoint's
+        # (potentially already-cooled) LR doesn't corrupt the base.
+        config_lrs = [cfg['optimizer']['muon_lr'], cfg['optimizer']['adamw_lr']]
+        for pg, lr in zip(optimizer.param_groups, config_lrs):
+            pg['lr'] = lr
+        optimizer = LRCooldownScheduler(
+            optimizer,
+            total_steps=total_steps_original,
+            start_step=resumed_steps,
+            cooldown_frac=cooldown_frac,
+            min_lr_ratio=min_lr_ratio,
+        )
+        logger.info(
+            "LR cooldown enabled: cooldown_frac=%.2f, min_lr_ratio=%.2f, "
+            "total_steps=%d, cooldown_starts_at_step=%d (resumed_steps=%d).",
+            cooldown_frac, min_lr_ratio,
+            total_steps_original, optimizer.cooldown_start, resumed_steps,
+        )
 
     # Compile backbone BEFORE DDP wrapping.  torch.compile operates on the
     # backbone nn.Module; DDP adds communication hooks on top without
