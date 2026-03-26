@@ -26,10 +26,9 @@ Examples:
     python launch_slurm.py --nodes 2 --gpus-per-node 4 --time 12:00:00 \\
         --dataset-dir data/pretokenized_datasets/simplewiki
 
-    # 8 nodes x 8 GPUs (64 total), no compile
+    # 8 nodes x 8 GPUs (64 total)
     python launch_slurm.py --nodes 8 --gpus-per-node 8 \\
-        --dataset-dir data/pretokenized_datasets/simplewiki \\
-        --model.compile false
+        --dataset-dir data/pretokenized_datasets/simplewiki
 """
 
 import argparse
