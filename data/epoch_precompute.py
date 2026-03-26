@@ -27,7 +27,7 @@ from data.collate import build_packed_batch
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.layout import make_layout_policy
 from data.pack_sampler import DocPlacement, PackBatchSampler
-from data.traversal import BFSStrategy, DFSStrategy
+from data.traversal import BFSStrategy, DFSStrategy, RandomWalkStrategy, RandomSelectionStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -181,9 +181,21 @@ class _DFSFactory:
         return DFSStrategy(edge_mode="outgoing")
 
 
+class _RandomWalkFactory:
+    def __call__(self) -> RandomWalkStrategy:
+        return RandomWalkStrategy()
+
+
+class _RandomFactory:
+    def __call__(self) -> RandomSelectionStrategy:
+        return RandomSelectionStrategy()
+
+
 _STRATEGY_FACTORIES = {
     "bfs": _BFSFactory,
     "dfs": _DFSFactory,
+    "random_walk": _RandomWalkFactory,
+    "random": _RandomFactory,
 }
 
 

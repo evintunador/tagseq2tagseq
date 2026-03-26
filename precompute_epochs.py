@@ -42,7 +42,7 @@ def main() -> None:
     parser.add_argument("--n-epochs",       type=int, default=1,
                         help="Number of epochs to pre-compute.")
     parser.add_argument("--strategy",       type=str, default="bfs",
-                        choices=["bfs", "dfs"],
+                        choices=["bfs", "dfs", "random_walk", "random"],
                         help="Graph traversal strategy.")
     parser.add_argument("--local-seq-len",  type=int, default=32768,
                         help="Token budget per pack (== model.max_seq_len).")
