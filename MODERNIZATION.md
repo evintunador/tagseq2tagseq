@@ -11,7 +11,7 @@ Each item gets its own commit. Check off as done.
   All configs: `dropout: 0.1 → 0.0`. Dropout universally hurts modern pretraining —
   it regularizes the wrong thing once you have enough data and weight decay.
 
-- [ ] **2. LR cooldown schedule**
+- [x] **2. LR cooldown schedule**
   Decay both Muon LR and AdamW LR linearly in the final 40–60% of training down
   to 0.15× base rate. Add `cooldown_frac` and `min_lr_ratio` to the train_loop
   config section. Apply via a step-count multiplier in `main.py`'s optimizer step.
