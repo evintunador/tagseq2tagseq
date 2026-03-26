@@ -543,17 +543,25 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # Build optimizer param groups BEFORE compile/DDP so that named_parameters()
     # gives clean names and weight-tied tensors are only counted once.
     logger.info("Initializing Optimizer...")
-    muon_params, adamw_params = [], []
+    muon_params, embed_adamw_params, other_adamw_params = [], [], []
     seen_ids: set = set()
     for name, param in model.named_parameters():
         if id(param) in seen_ids:
             continue
         seen_ids.add(id(param))
-        # Backbone 2-D weights use Muon; embedding, norms, biases use AdamW.
         if 'backbone' in name and param.ndim >= 2:
+            # Backbone 2-D weights → Muon (spectral-norm optimizer)
             muon_params.append(param)
+        elif 'embedding' in name or 'loss_fn' in name:
+            # Embedding / lm_head get lower β1: sparse gradients make the
+            # running mean stale for rows not touched this step.
+            embed_adamw_params.append(param)
         else:
-            adamw_params.append(param)
+            other_adamw_params.append(param)
+
+    adamw_beta2   = cfg['optimizer'].get('beta2', 0.95)
+    embed_beta1   = cfg['optimizer'].get('adamw_embed_beta1', 0.5)
+    other_beta1   = cfg['optimizer'].get('beta1', 0.9)
 
     param_groups = [
         dict(
@@ -564,10 +572,17 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             weight_decay=cfg['optimizer']['wd'],
         ),
         dict(
-            params=adamw_params,
+            params=embed_adamw_params,
             use_muon=False,
             lr=cfg['optimizer']['adamw_lr'],
-            betas=(cfg['optimizer'].get('beta1', 0.9), cfg['optimizer'].get('beta2', 0.95)),
+            betas=(embed_beta1, adamw_beta2),
+            weight_decay=cfg['optimizer']['wd'],
+        ),
+        dict(
+            params=other_adamw_params,
+            use_muon=False,
+            lr=cfg['optimizer']['adamw_lr'],
+            betas=(other_beta1, adamw_beta2),
             weight_decay=cfg['optimizer']['wd'],
         ),
     ]
@@ -646,9 +661,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         total_steps_original = (max_steps_for_cooldown + resumed_steps) if max_steps_for_cooldown is not None else 0
         # Reset param_group LRs to the config values so a resume checkpoint's
         # (potentially already-cooled) LR doesn't corrupt the base.
-        config_lrs = [cfg['optimizer']['muon_lr'], cfg['optimizer']['adamw_lr']]
-        for pg, lr in zip(optimizer.param_groups, config_lrs):
-            pg['lr'] = lr
+        for pg in optimizer.param_groups:
+            pg['lr'] = cfg['optimizer']['muon_lr'] if pg.get('use_muon') else cfg['optimizer']['adamw_lr']
         optimizer = LRCooldownScheduler(
             optimizer,
             total_steps=total_steps_original,
