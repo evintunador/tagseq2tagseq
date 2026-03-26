@@ -19,6 +19,7 @@ model:
   weight_tying: true  # Tie embedding and output weights
   ignore_index: -100
   dtype: 'bfloat16'
+  logit_softcap: 30.0  # tanh softcap: softcap * tanh(logits / softcap)
 
 optimizer:
   type: 'muon'

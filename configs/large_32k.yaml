@@ -21,6 +21,7 @@ model:
   weight_tying: true
   ignore_index: -100
   dtype: 'bfloat16'
+  logit_softcap: 30.0  # tanh softcap: softcap * tanh(logits / softcap)
 
 optimizer:
   type: 'muon'

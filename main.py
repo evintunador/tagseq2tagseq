@@ -538,6 +538,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         dtype=getattr(torch, cfg['model'].get('dtype', 'bfloat16')),
         activation_checkpointing=cfg['model'].get('activation_checkpointing', False),
         attention_backend=attention_backend,
+        logit_softcap=cfg['model'].get('logit_softcap'),
     ).to(dist.device)
 
     # Build optimizer param groups BEFORE compile/DDP so that named_parameters()

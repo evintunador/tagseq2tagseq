@@ -81,6 +81,7 @@ class TS2TSTrainingModule(nn.Module):
         dtype: torch.dtype = torch.bfloat16,
         activation_checkpointing: bool = False,
         attention_backend: str = "flex",
+        logit_softcap: float = None,
     ) -> 'TS2TSTrainingModule':
         """
         Factory method to construct a training module from configuration parameters.
@@ -132,7 +133,8 @@ class TS2TSTrainingModule(nn.Module):
             V=vocab_size,
             dtype=dtype,
             ignore_index=ignore_index,
-            weight=loss_weight
+            weight=loss_weight,
+            softcap=logit_softcap,
         )
         
         return cls(
