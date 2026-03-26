@@ -43,7 +43,7 @@ Each item gets its own commit. Check off as done.
 
 ## Tier 3 — Moderate code changes
 
-- [ ] **7. Logit softcapping**
+- [x] **7. Logit softcapping**
   `logits → 23 * sigmoid((logits + 5) / 7.5)` before cross-entropy (from
   Gemma 2). Stabilizes the loss landscape by bounding logit magnitude.
   Currently using Liger `FusedLinearCELoss` with no cap — need to add a
