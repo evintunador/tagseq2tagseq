@@ -24,7 +24,7 @@ Each item gets its own commit. Check off as done.
 
 ## Tier 2 — Easy, meaningful payoff
 
-- [ ] **4. Vocab size alignment: 50257 → 50304**
+- [x] **4. Vocab size alignment: 50257 → 50304**
   `50304 = 393 × 128`. Aligns every vocab-dimension GEMM to tensor core tile
   boundaries. New runs only (old checkpoints stay at 50257). Config + model
   change only.
