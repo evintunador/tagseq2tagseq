@@ -55,7 +55,7 @@ Each item gets its own commit. Check off as done.
   Verify Triton kernels are head-dim-agnostic (likely fine, BIM_BS=128).
   Breaks checkpoint layout — new runs only.
 
-- [ ] **9. Per-layer learnable residual scaling**
+- [x] **9. Per-layer learnable residual scaling**
   `resid_lambdas` initialized to `sqrt(1.1)` per sublayer (attention + MLP),
   replacing fixed skip_weights=1.0. Compounds to ~1.1× amplification per
   layer. Modify `backbone.py` and `layer.py`.
