@@ -6,9 +6,9 @@ from torch import Tensor
 from typing import Any
 
 from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
-from tunalab.modules.channel_mixing.glu import GLU
 from tunalab.modules.regularization.drop_path import DropPath
 from tunalab.modules.norms.rms_norm import RMSNorm
+from kernels.fused_relu_sq_mlp import FusedReLUSquaredMLP
 
 
 class Layer(nn.Module):
@@ -16,7 +16,6 @@ class Layer(nn.Module):
         self,
         n_embd: int,
         n_head: int,
-        dropout: float,
         max_seq_len: int,
         fp8: bool,
         drop_path_rate: float,
@@ -42,10 +41,7 @@ class Layer(nn.Module):
             )
 
         self.ln_2 = RMSNorm(n_embd)
-        self.mlp = GLU(
-            in_dim=n_embd, out_dim=n_embd, hidden_dim=int(8/3*n_embd),
-            activation="silu", dropout=dropout, fp8=fp8,
-        )
+        self.mlp = FusedReLUSquaredMLP(model_dim=n_embd)
 
         # Per-sublayer learnable residual scaling (from modded-nanogpt).
         # resid_lambdas[0/1]: scale applied to the residual stream before adding

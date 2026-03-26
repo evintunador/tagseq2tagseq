@@ -18,7 +18,6 @@ model:
   num_layers: 24
   num_heads: 8   # 8H × 128D = 1024 head_dim=128
   max_seq_len: 32768
-  dropout: 0.0
   drop_path_rate: 0.0
   fp8: false
   weight_tying: true

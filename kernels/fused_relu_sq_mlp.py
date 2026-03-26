@@ -290,4 +290,9 @@ class FusedReLUSquaredMLP(nn.Module):
         nn.init.zeros_(self.W2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return FusedReLUSquaredFunction.apply(x, self.W1, self.W2)
+        if x.dtype == torch.bfloat16:
+            return FusedReLUSquaredFunction.apply(x, self.W1, self.W2)
+        # Fallback for non-bf16 dtypes (e.g., float32/float16 in tests).
+        # W2 stored as (H, C); forward: post @ W2 (same as F.linear(post, W2.T)).
+        h = torch.nn.functional.relu(torch.nn.functional.linear(x, self.W1)) ** 2
+        return h @ self.W2

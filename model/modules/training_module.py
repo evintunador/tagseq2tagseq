@@ -72,7 +72,6 @@ class TS2TSTrainingModule(nn.Module):
         model_dim: int,
         num_heads: int,
         max_seq_len: int,
-        dropout: float,
         drop_path_rate: float,
         block_mask_creator: Callable,
         fp8: bool = False,
@@ -95,7 +94,6 @@ class TS2TSTrainingModule(nn.Module):
             model_dim: Hidden dimension size (d_model)
             num_heads: Number of attention heads per layer
             max_seq_len: Maximum sequence length
-            dropout: Dropout probability for channel mixing
             drop_path_rate: Stochastic depth probability
             block_mask_creator: Callable that creates attention masks from batch
             fp8: Whether to use FP8 precision for linear layers
@@ -113,7 +111,6 @@ class TS2TSTrainingModule(nn.Module):
             model_dim=model_dim,
             num_heads=num_heads,
             max_seq_len=max_seq_len,
-            dropout=dropout,
             drop_path_rate=drop_path_rate,
             fp8=fp8,
             activation_checkpointing=activation_checkpointing,

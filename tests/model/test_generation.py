@@ -285,7 +285,7 @@ def test_model_generate_requires_tokenizer():
     import torch.nn as nn
 
     backbone = TS2TSBackbone(num_layers=1, model_dim=64, num_heads=2,
-                              max_seq_len=128, dropout=0.0, drop_path_rate=0.0)
+                             max_seq_len=128, drop_path_rate=0.0)
     emb = nn.Embedding(VOCAB_SIZE, 64)
     norm = RMSNorm(64)
 
@@ -328,7 +328,6 @@ def small_inference_model(device):
         model_dim=64,
         num_heads=2,
         max_seq_len=128,
-        dropout=0.0,
         drop_path_rate=0.0,
         block_mask_creator=simple_causal_mask_creator,
         weight_tying=True,
@@ -374,7 +373,6 @@ def test_generate_with_tokenizer_terminates(device):
         model_dim=64,
         num_heads=2,
         max_seq_len=128,
-        dropout=0.0,
         drop_path_rate=0.0,
         block_mask_creator=simple_causal_mask_creator,
         weight_tying=True,
@@ -410,7 +408,6 @@ def test_generate_result_has_text(device):
         model_dim=64,
         num_heads=2,
         max_seq_len=128,
-        dropout=0.0,
         drop_path_rate=0.0,
         block_mask_creator=simple_causal_mask_creator,
         weight_tying=True,

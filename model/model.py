@@ -68,7 +68,6 @@ class TS2TSModel:
         model_dim: int,
         num_heads: int,
         max_seq_len: int,
-        dropout: float,
         drop_path_rate: float,
         block_mask_creator: Callable,
         fp8: bool = False,
@@ -84,7 +83,6 @@ class TS2TSModel:
             model_dim=model_dim,
             num_heads=num_heads,
             max_seq_len=max_seq_len,
-            dropout=dropout,
             drop_path_rate=drop_path_rate,
             fp8=fp8,
         )

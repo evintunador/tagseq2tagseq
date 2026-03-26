@@ -33,7 +33,6 @@ class TS2TSBackbone(nn.Module):
         model_dim: Hidden dimension size (d_model)
         num_heads: Number of attention heads per layer
         max_seq_len: Maximum sequence length supported
-        dropout: Dropout probability for channel mixing
         drop_path_rate: Stochastic depth probability for regularization
         fp8: Whether to use FP8 precision for linear projections
         **kwargs: Additional arguments (ignored with optional warning)
@@ -44,7 +43,6 @@ class TS2TSBackbone(nn.Module):
         model_dim: int,
         num_heads: int,
         max_seq_len: int,
-        dropout: float,
         drop_path_rate: float,
         fp8: bool = False,
         activation_checkpointing: bool = False,
@@ -61,7 +59,6 @@ class TS2TSBackbone(nn.Module):
             n_embd=model_dim,
             n_head=num_heads,
             max_seq_len=max_seq_len,
-            dropout=dropout,
             drop_path_rate=drop_path_rate,
             fp8=fp8,
             attention_backend=attention_backend,
