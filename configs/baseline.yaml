@@ -7,7 +7,8 @@ data:
 model:
   compile: true
   compile_mode: 'default'
-  attention_backend: 'triton'
+  attention_backend: 'triton'           # training kernel: triton=varlen_bim_v1/triton_v12 | flex
+  inference_attention_backend: 'flex'  # inference kernel: flex+compile ~40× faster for single-doc eval
   mask_type: 'doc_causal'  # Options: doc_causal, causal, full, doc_bidirectional, cross_doc_link
   model_dim: 768  # Embedding dimension (GPT-2 small uses 768)
   num_layers: 12  # Number of transformer layers
@@ -47,3 +48,12 @@ train_loop:
     accum_steps: 1
 
 seed: 42
+
+# ─── Post-training benchmark evaluation ──────────────────────────────────────
+# Set run_on_completion: true to auto-run benchmarks after training finishes.
+# Uses best_model.pt checkpoint and the same dataset_dir as training.
+# eval:
+#   run_on_completion: false
+#   benchmarks: [held_out_perplexity]
+#   max_docs: 500
+#   split: val_community

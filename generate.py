@@ -63,13 +63,40 @@ def _c(text: str, code: str, use_color: bool) -> str:
 # Checkpoint loading
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
+def _make_flex_block_mask_creator(mask_type: str, link_detector, model_cfg: dict):
+    """Build a FlexSelfAttention-compatible block mask creator for the given mask_type."""
+    if mask_type == "cross_doc_link":
+        return make_mask_creator_callable_from(
+            CrossDocLinkMaskCreator(
+                link_detector=link_detector,
+                max_grants=model_cfg.get('max_grants', 64),
+                backend='flex',
+            )
+        )
+    return make_mask_creator_callable(mask_type)
+
+
+def load_inference_model(
+    checkpoint_path: str | Path,
+    device: str = "cuda",
+    inference_attention_backend: str = "flex",
+):
     """
     Load a trained checkpoint and return (inference_model, hyperparams_dict).
 
     Reads hyperparameters.json from the run directory adjacent to the
-    checkpoint, reconstructs the architecture, loads weights, and returns
-    a TS2TSModel ready for generate().
+    checkpoint, reconstructs the architecture using the training attention
+    backend, then converts to inference mode using inference_attention_backend.
+
+    Args:
+        checkpoint_path: Path to best_model.pt.
+        device: Target device.
+        inference_attention_backend: Attention backend for the returned inference
+            model. Defaults to 'flex' — FlexSelfAttention + torch.compile is
+            ~40× faster than varlen_bim_v1 for single-doc forward passes (37ms
+            vs 1.6s) because it compiles a single dynamic kernel rather than
+            JIT-compiling per unique sequence length. Use 'triton' to keep the
+            training backend (e.g. for batched multi-doc eval pipelines).
     """
     checkpoint_path = Path(checkpoint_path)
     run_dir = checkpoint_path.parent.parent   # .../runs/YYYYMMDD/checkpoints/best.pt
@@ -91,6 +118,9 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
     link_detector_name = model_cfg.get("link_detector")
     link_detector      = None
 
+    # Build training-backend block mask creator (used to reconstruct model weights)
+    use_triton = model_cfg.get("attention_backend", "triton") != "flex"
+
     if mask_type == "cross_doc_link":
         if link_detector_name == "markdown":
             link_detector = MarkdownLinkDetector(decode_fn=enc.decode)
@@ -101,13 +131,20 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
                 f"Unknown link_detector {link_detector_name!r}. "
                 "Expected 'markdown' or 'python'."
             )
+        training_attention_backend = "triton_v12" if use_triton else "flex"
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=link_detector,
                 max_grants=model_cfg.get('max_grants', 64),
+                backend=training_attention_backend,
             )
         )
+    elif mask_type == "doc_causal" and use_triton:
+        training_attention_backend = "varlen_bim_v1"
+        from model.graph_traversal.block_mask_creator import create_doc_causal_triton_mask
+        block_mask_creator = make_mask_creator_callable_from(create_doc_causal_triton_mask)
     else:
+        training_attention_backend = "flex"
         block_mask_creator = make_mask_creator_callable(mask_type)
 
     # Layout policy — explicit key wins; fall back to use_bos_eos for old checkpoints
@@ -131,7 +168,7 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
             "Expected 'null', 'bos_eos', 'identifier_prefix', or 'identifier_prefix_bos_eos'."
         )
 
-    # Reconstruct architecture (dropout=0 at inference)
+    # Reconstruct architecture with training backend (dropout=0 at inference)
     training_module = TS2TSTrainingModule.from_config(
         vocab_size=50257,
         num_layers=model_cfg["num_layers"],
@@ -145,6 +182,7 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
         weight_tying=model_cfg.get("weight_tying", True),
         ignore_index=model_cfg.get("ignore_index", -100),
         dtype=torch.bfloat16,
+        attention_backend=training_attention_backend,
     )
 
     # Load weights
@@ -152,17 +190,30 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
     state_dict = ckpt["model"]
     training_module.load_state_dict(state_dict)
 
-    # Convert to inference model
+    # Convert to inference model, optionally switching attention backend.
+    # When inference_attention_backend != training_attention_backend, to_inference_model
+    # reassigns __class__ on each attention layer (zero-copy; subclasses share all params).
+    use_inference_backend = (
+        inference_attention_backend
+        if inference_attention_backend != training_attention_backend
+        else None
+    )
+    flex_bmc = (
+        _make_flex_block_mask_creator(mask_type, link_detector, model_cfg)
+        if use_inference_backend == 'flex'
+        else None
+    )
     inference_model = training_module.to_inference_model(
         tokenizer=enc,
         link_detector=link_detector,
         layout_policy=layout_policy,
+        inference_attention_backend=use_inference_backend,
+        inference_block_mask_creator=flex_bmc,
     )
     inference_model.to(torch.device(device), torch.bfloat16)
 
-    # Patch flex_attention with a compiled version instead of compiling the full
-    # backbone. This is much faster to compile while still fusing the attention kernel.
-    # dynamic=True is required for inference because T grows by one each generation step.
+    # Patch flex_attention with a compiled version for generation and eval.
+    # dynamic=True compiles a single kernel that handles all sequence lengths.
     if torch.cuda.is_available():
         import tunalab.modules.sequence_mixing.flex_self_attention as _fa_mod
         from torch.nn.attention.flex_attention import flex_attention as _raw_fa

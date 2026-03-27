@@ -145,7 +145,14 @@ class TS2TSTrainingModule(nn.Module):
             ignore_index=ignore_index,
         )
     
-    def to_inference_model(self, tokenizer, link_detector=None, layout_policy=None):
+    def to_inference_model(
+        self,
+        tokenizer,
+        link_detector=None,
+        layout_policy=None,
+        inference_attention_backend: Optional[str] = None,
+        inference_block_mask_creator=None,
+    ):
         """
         Convert this training module to an inference-ready TS2TSModel.
 
@@ -158,18 +165,48 @@ class TS2TSTrainingModule(nn.Module):
                 data pre-tokenization.
             link_detector: LinkDetector for cross-doc link detection (Stage 2+).
             layout_policy: DocLayoutPolicy for document prefix/suffix tokens (Stage 2+).
+            inference_attention_backend: If provided, swaps the backbone's attention
+                modules to use this backend instead of the training backend. Useful
+                for switching from varlen_bim_v1/triton_v12 (optimised for packed
+                multi-doc training) to 'flex' (optimised for single-doc
+                inference/eval with torch.compile). The swap is done in-place on
+                the uncompiled backbone and is zero-copy — VarlenBIMv1Attention and
+                BIMv12Attention both subclass FlexSelfAttention with no new instance
+                state, so reassigning __class__ is safe.
+            inference_block_mask_creator: Block mask creator appropriate for
+                inference_attention_backend. Required when inference_attention_backend
+                differs from the training backend; ignored otherwise.
 
         Returns:
             TS2TSModel instance ready for inference/evaluation.
         """
         from model.model import TS2TSModel
 
+        backbone = self.backbone
+        block_mask_creator = self.block_mask_creator
+
+        if inference_attention_backend is not None:
+            # Unwrap torch.compile wrapper to get the raw nn.Module backbone.
+            raw_backbone = getattr(backbone, '_orig_mod', backbone)
+
+            if inference_attention_backend == 'flex':
+                from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
+                for layer in raw_backbone.layers:
+                    if not isinstance(layer.attn, FlexSelfAttention) or \
+                            type(layer.attn) is not FlexSelfAttention:
+                        layer.attn.__class__ = FlexSelfAttention
+
+            if inference_block_mask_creator is not None:
+                block_mask_creator = inference_block_mask_creator
+
+            backbone = raw_backbone
+
         return TS2TSModel(
-            backbone=self.backbone,
+            backbone=backbone,
             embedding_weight=self.embedding.weight,
             lm_head_weight=self.loss_fn.weight,
             norm=self.norm,
-            block_mask_creator=self.block_mask_creator,
+            block_mask_creator=block_mask_creator,
             vocab_size=self.vocab_size,
             ignore_index=self.ignore_index,
             tokenizer=tokenizer,
