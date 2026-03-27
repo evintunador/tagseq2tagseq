@@ -156,6 +156,10 @@ class LimitedDataLoader:
     def __iter__(self):
         return itertools.islice(iter(self.loader), self.max_batches)
 
+    @property
+    def dataset(self):
+        return self.loader.dataset
+
 
 def _run_generation_demo(training_module, tokenizer, link_detector, layout_policy, mask_type):
     """
@@ -523,13 +527,24 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             attention_backend = 'flex'
             block_mask_creator = make_mask_creator_callable(mask_type)
 
+    mtp_extra_weights = cfg['model'].get('mtp_extra_weights') or []
+    # compose_config may deliver CLI list overrides as a raw string (e.g. "[0.3,0.1]").
+    if isinstance(mtp_extra_weights, str):
+        import ast
+        mtp_extra_weights = ast.literal_eval(mtp_extra_weights)
+    mtp_decay_steps = int(cfg['model'].get('mtp_decay_steps', 0))
+    accum_steps_val = int(
+        cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1)
+    )
+    # Convert optimizer-step units (user-facing) to micro-step units (model-internal).
+    mtp_decay_micro_steps = mtp_decay_steps * accum_steps_val
+
     model = TS2TSTrainingModule.from_config(
         vocab_size=vocab_size,
         num_layers=cfg['model']['num_layers'],
         model_dim=cfg['model']['model_dim'],
         num_heads=cfg['model']['num_heads'],
         max_seq_len=cfg['model']['max_seq_len'],
-        dropout=cfg['model'].get('dropout', 0.0),
         drop_path_rate=cfg['model'].get('drop_path_rate', 0.0),
         block_mask_creator=block_mask_creator,
         fp8=cfg['model'].get('fp8', False),
@@ -539,6 +554,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         activation_checkpointing=cfg['model'].get('activation_checkpointing', False),
         attention_backend=attention_backend,
         logit_softcap=cfg['model'].get('logit_softcap'),
+        mtp_extra_weights=mtp_extra_weights,
+        mtp_decay_micro_steps=mtp_decay_micro_steps,
     ).to(dist.device)
 
     # Build optimizer param groups BEFORE compile/DDP so that named_parameters()
