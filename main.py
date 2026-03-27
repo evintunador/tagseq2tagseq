@@ -491,6 +491,14 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     model_cfg = cfg.get('model', {})
     use_triton = model_cfg.get('attention_backend', 'triton') != 'flex'
 
+    if use_triton and not model_cfg.get('compile', True):
+        raise AssertionError(
+            "Custom Triton attention kernels (attention_backend='triton') require "
+            "torch.compile (model.compile: true). Their backward passes are not "
+            "supported in eager mode. Use --model.attention_backend flex if you "
+            "need to run without compile (e.g. for quick smoke tests)."
+        )
+
     if mask_type == 'cross_doc_link':
         link_detector_name = cfg.get('model', {}).get('link_detector')
         if not link_detector_name:
