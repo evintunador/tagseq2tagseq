@@ -64,14 +64,23 @@ class LimitedDataLoader:
     def __iter__(self):
         return itertools.islice(iter(self.loader), self.max_batches)
 
+    @property
+    def dataset(self):
+        return self.loader.dataset
 
-def _run_generation_demo(training_module, tokenizer, link_detector, layout_policy, mask_type):
+
+def _run_generation_demo(training_module, tokenizer, link_detector, layout_policy, mask_type,
+                         inference_model=None):
     """
     Quick generation sanity check at the end of training.
 
     Runs two short generation calls with hardcoded Python prompts containing
     import statements so the cross-doc link machinery is exercised. Results are
     printed to the training log via logger.info.
+
+    Args:
+        inference_model: Optional pre-built TS2TSModel (e.g. the flex-backend model
+            from _build_flex_inference_model). If None, builds from training_module.
     """
     from model.generation_config import GenerationConfig
     from model.model import TS2TSModel
@@ -80,18 +89,19 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
     logger.info("End-of-training generation demo")
     logger.info("=" * 60)
 
-    try:
-        inference_model = training_module.to_inference_model(
-            tokenizer=tokenizer,
-            link_detector=link_detector,
-            layout_policy=layout_policy,
-        )
-        # Move inference model to the same device as training module.
-        device = next(training_module.parameters()).device
-        inference_model.to(device)
-    except Exception as e:
-        logger.warning("Generation demo skipped — could not build inference model: %s", e)
-        return
+    if inference_model is None:
+        try:
+            inference_model = training_module.to_inference_model(
+                tokenizer=tokenizer,
+                link_detector=link_detector,
+                layout_policy=layout_policy,
+            )
+            inference_model.to(next(training_module.parameters()).device)
+        except Exception as e:
+            logger.warning("Generation demo skipped — could not build inference model: %s", e)
+            return
+
+    device = next(training_module.parameters()).device
 
     # Select prompts that match the actual link detector syntax so links fire.
     from model.graph_traversal.python_import_detector import PythonImportDetector
@@ -157,6 +167,64 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
             logger.warning("Demo %d failed: %s", i, e)
 
     logger.info("=" * 60)
+
+
+def _build_inference_model(training_module_unwrapped, cfg, enc, detector, layout_policy, device):
+    """Build a post-training inference model using the configured inference backend.
+
+    Reads model.inference_attention_backend from cfg (default: 'flex').  Calls
+    to_inference_model with that backend, which does a zero-copy __class__ swap
+    on each attention layer so the uncompiled backbone uses FlexSelfAttention
+    (or whichever backend is requested) without duplicating weights.
+
+    Used for the generation demo and benchmark eval at the end of training so
+    inference uses the optimal single-doc path regardless of training backend.
+
+    Returns None on failure (caller should fall back gracefully).
+    """
+    try:
+        model_cfg = cfg.get('model', {})
+        inference_backend = model_cfg.get('inference_attention_backend', 'flex')
+        mask_type = model_cfg.get('mask_type', 'doc_causal')
+
+        from model.graph_traversal.block_mask_creator import (
+            make_mask_creator_callable, make_mask_creator_callable_from,
+        )
+
+        if inference_backend == 'flex':
+            if mask_type == 'cross_doc_link':
+                from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+                flex_bmc = make_mask_creator_callable_from(
+                    CrossDocLinkMaskCreator(
+                        link_detector=detector,
+                        max_grants=model_cfg.get('max_grants', 64),
+                        backend='flex',
+                    )
+                )
+            else:
+                flex_bmc = make_mask_creator_callable(mask_type)
+        else:
+            flex_bmc = None  # keep training block_mask_creator
+
+        inference_model = training_module_unwrapped.to_inference_model(
+            tokenizer=enc,
+            link_detector=detector,
+            layout_policy=layout_policy,
+            inference_attention_backend=inference_backend,
+            inference_block_mask_creator=flex_bmc,
+        )
+        inference_model.to(torch.device(device), torch.bfloat16)
+
+        if inference_backend == 'flex' and torch.cuda.is_available():
+            import tunalab.modules.sequence_mixing.flex_self_attention as _fa_mod
+            from torch.nn.attention.flex_attention import flex_attention as _raw_fa
+            _fa_mod.flex_attention = torch.compile(_raw_fa, dynamic=True, mode='default')
+
+        return inference_model
+
+    except Exception as e:
+        logger.warning("Could not build inference model for post-training steps: %s", e)
+        return None
 
 
 def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityManager):
@@ -600,16 +668,54 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     logger.info("Training complete!")
 
     # -------------------------------------------------------------------------
-    # 5. End-of-training generation demo (main process only)
+    # 5. End-of-training generation demo + post-training eval (main process)
+    #
+    # Both use a fresh inference model with attention_backend='flex' + torch.compile
+    # so they run fast regardless of the training attention backend.
     # -------------------------------------------------------------------------
     if dist.is_main_process:
+        training_module_unwrapped = model.module if dist.is_distributed else model
+        _flex_inference_model = _build_inference_model(
+            training_module_unwrapped=training_module_unwrapped,
+            cfg=cfg, enc=enc, detector=detector,
+            layout_policy=layout_policy, device=str(dist.device),
+        )
+
         _run_generation_demo(
-            training_module=model.module if dist.is_distributed else model,
+            training_module=training_module_unwrapped,
             tokenizer=enc,
             link_detector=detector,
             layout_policy=layout_policy,
             mask_type=mask_type,
+            inference_model=_flex_inference_model,
         )
+
+    # -------------------------------------------------------------------------
+    # 6. Post-training benchmark evaluation (main process only)
+    # -------------------------------------------------------------------------
+    if dist.is_main_process:
+        eval_cfg = cfg.get("eval", {})
+        if eval_cfg.get("run_on_completion", False):
+            dataset_dir_str = cfg.get("data", {}).get("dataset_dir", "")
+            if _flex_inference_model is not None and dataset_dir_str:
+                from eval_checkpoints import run_benchmarks_on_model
+                logger.info("Running post-training benchmark evaluation...")
+                _flex_inference_model.eval()
+                eval_results = run_benchmarks_on_model(
+                    model=_flex_inference_model,
+                    dataset_dir=dataset_dir_str,
+                    eval_cfg=eval_cfg,
+                    device=str(dist.device),
+                )
+                eval_path = os.path.join(rep.output_dir, "eval_results.json")
+                with open(eval_path, "w", encoding="utf-8") as f:
+                    json.dump(eval_results, f, ensure_ascii=False, indent=2)
+                logger.info("Eval results written to %s", eval_path)
+            else:
+                logger.warning(
+                    "Post-training eval skipped: flex inference model unavailable "
+                    "or dataset_dir not set in config."
+                )
 
     # Cleanup
     backend.close()
