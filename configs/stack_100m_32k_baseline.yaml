@@ -16,6 +16,7 @@ model:
   drop_path_rate: 0.0
   fp8: false
   weight_tying: true
+  untie_at_frac: 0.667  # release embedding/lm_head weight tie at 2/3 of training
   ignore_index: -100
   dtype: 'bfloat16'
   logit_softcap: 30.0  # tanh softcap: softcap * tanh(logits / softcap)

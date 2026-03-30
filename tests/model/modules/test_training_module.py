@@ -85,6 +85,46 @@ def test_training_module_weight_tying(weight_tying, device, dtype):
     assert isinstance(out, torch.Tensor) and out.ndim == 0
 
 
+def test_training_module_untie_at_frac(device, dtype):
+    """Deferred untying: module starts with true weight tying (shared storage).
+    At split_step the scheduler creates an independent lm_head param; the module
+    should continue to work correctly with the replaced weight."""
+    if device != 'cuda':
+        pytest.skip("FlexAttention requires CUDA")
+
+    model_dim = 256
+    vocab_size = 1024
+
+    module = TS2TSTrainingModule.from_config(
+        block_mask_creator=simple_block_mask_creator,
+        vocab_size=vocab_size,
+        num_layers=2,
+        model_dim=model_dim,
+        num_heads=4,
+        max_seq_len=128,
+        drop_path_rate=0.0,
+        fp8=False,
+        weight_tying=True,
+        dtype=torch.bfloat16,
+    ).to(device, torch.bfloat16)
+
+    # Tied phase: must share storage
+    assert module.loss_fn.weight is module.embedding.weight
+
+    # Simulate the split: create an independent lm_head param (as split_fn does)
+    new_lm_head = torch.nn.Parameter(module.embedding.weight.data.clone())
+    module.loss_fn.weight = new_lm_head
+
+    # After split: independent objects with same initial values
+    assert module.loss_fn.weight is not module.embedding.weight
+    assert torch.equal(module.loss_fn.weight.data, module.embedding.weight.data)
+
+    # Forward pass still works after the split
+    batch = {'tokens': torch.randint(0, vocab_size, (1, 129), device=device)}
+    out = module(batch)
+    assert isinstance(out, torch.Tensor) and out.ndim == 0
+
+
 def test_training_module_backward_pass(device, dtype):
     if device != 'cuda':
         pytest.skip("FlexAttention requires CUDA")

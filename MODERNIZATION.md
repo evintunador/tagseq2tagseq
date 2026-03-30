@@ -69,12 +69,12 @@ Each item gets its own commit. Check off as done.
   fusing the squaring into the matmul. Without the kernel, SwiGLU wins.
   Port/adapt `FusedLinearReLUSquareFunction` from modded-nanogpt.
 
-- [ ] **11. Multi-token prediction (MTP)**
+- [x] **11. Multi-token prediction (MTP)**
   Predict 2–3 tokens ahead with tapering weights in early training, decaying
   to single-token prediction. Good convergence efficiency. Requires training
   loop changes and a new loss accumulation path.
 
-- [ ] **12. Embed/LM head weight untying at 2/3 of training**
+- [x] **12. Embed/LM head weight untying at 2/3 of training**
   Start tied (already do this), then split at `step = 2/3 * max_steps`. The
   two matrices can specialize post-warmup. Medium effort; requires passing
   step to model and adding a split operation.

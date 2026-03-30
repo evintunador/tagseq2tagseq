@@ -57,6 +57,13 @@ class LRCooldownScheduler:
     LR is held at 1× for the first (1 - cooldown_frac) of total_steps, then
     decays linearly to min_lr_ratio× over the remaining steps.
 
+    Optionally handles deferred embedding/lm_head weight untying (item 12 of the
+    modernization plan).  During the tied phase the embedding grad is folded into
+    the lm_head grad so Adam sees the combined signal on a single parameter.  At
+    split_step the two matrices are given independent parameters with Adam state
+    transferred from the lm_head, and subsequent lm_head grad all-reduces are
+    performed manually (DDP only registered a hook on the original shared param).
+
     Designed to be transparent to smart_train: exposes the same interface as a
     normal optimizer (step, zero_grad, param_groups, state_dict, load_state_dict).
 
@@ -70,6 +77,14 @@ class LRCooldownScheduler:
             E.g. 0.4 starts cooldown at step int(total_steps * 0.6).
         min_lr_ratio: Final LR as a fraction of the base LR.  0.1 means the LR
             decays to 10% of the configured value.
+        pre_step_fn: If provided, called before each optimizer.step().  Used for
+            manual gradient all-reduce of the newly-independent lm_head param
+            after the split.
+        split_step: Absolute step at which to perform the embedding/lm_head split.
+            0 disables splitting.
+        split_fn: Callable(optimizer) invoked once at split_step (after the last
+            tied optimizer step) to create the independent lm_head parameter and
+            transfer Adam state.
     """
 
     def __init__(
@@ -80,6 +95,9 @@ class LRCooldownScheduler:
         cooldown_frac: float = 0.4,
         min_lr_ratio: float = 0.1,
         muon_momentum_warmup_steps: int = 0,
+        pre_step_fn=None,
+        split_step: int = 0,
+        split_fn=None,
     ):
         self.optimizer = optimizer
         self.total_steps = total_steps
@@ -100,6 +118,10 @@ class LRCooldownScheduler:
             0.95,
         )
         self._momentum_min = 0.85
+        self._pre_step_fn = pre_step_fn
+        self.split_step = split_step
+        self._split_fn = split_fn
+        self._split_done = (split_step == 0)
 
     def _lr_mul(self) -> float:
         step = self._step_count
@@ -118,6 +140,10 @@ class LRCooldownScheduler:
         return self._momentum_min + (self._momentum_max - self._momentum_min) * frac
 
     def step(self, *args, **kwargs):
+        # Pre-step hook: manual gradient all-reduce for newly-independent lm_head
+        # param after the split (DDP didn't register a hook for it).
+        if self._pre_step_fn is not None:
+            self._pre_step_fn()
         mul = self._lr_mul()
         for pg, base_lr in zip(self.optimizer.param_groups, self._base_lrs):
             pg['lr'] = base_lr * mul
@@ -128,6 +154,10 @@ class LRCooldownScheduler:
                     pg['momentum'] = momentum
         self.optimizer.step(*args, **kwargs)
         self._step_count += 1
+        # Perform embedding/lm_head split after the last tied optimizer step.
+        if not self._split_done and self._split_fn is not None and self._step_count >= self.split_step:
+            self._split_fn(self.optimizer)
+            self._split_done = True
 
     def zero_grad(self, *args, **kwargs):
         self.optimizer.zero_grad(*args, **kwargs)
@@ -547,6 +577,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # Convert optimizer-step units (user-facing) to micro-step units (model-internal).
     mtp_decay_micro_steps = mtp_decay_steps * accum_steps_val
 
+    untie_at_frac = cfg['model'].get('untie_at_frac')
+
     model = TS2TSTrainingModule.from_config(
         vocab_size=vocab_size,
         num_layers=cfg['model']['num_layers'],
@@ -670,7 +702,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         resume_ckpt = None
 
     # -------------------------------------------------------------------------
-    # 3c. LR cooldown schedule (linear decay in the final portion of training).
+    # 3c. LR cooldown / weight-untying schedule config (parsed before compile;
+    #     LRCooldownScheduler is constructed after DDP so that embed_sync_fn
+    #     can reference model.module when DDP is active).
     # -------------------------------------------------------------------------
     cooldown_frac = cfg.get('train_loop', {}).get('cooldown_frac', 0.0)
     min_lr_ratio = cfg.get('train_loop', {}).get('min_lr_ratio', 0.1)
@@ -685,28 +719,13 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         )
         cooldown_frac = 0.0
 
-    if cooldown_frac > 0.0 or muon_momentum_warmup_steps > 0:
-        total_steps_original = (max_steps_for_cooldown + resumed_steps) if max_steps_for_cooldown is not None else 0
-        # Reset param_group LRs to the config values so a resume checkpoint's
-        # (potentially already-cooled) LR doesn't corrupt the base.
-        for pg in optimizer.param_groups:
-            pg['lr'] = cfg['optimizer']['muon_lr'] if pg.get('use_muon') else cfg['optimizer']['adamw_lr']
-        optimizer = LRCooldownScheduler(
-            optimizer,
-            total_steps=total_steps_original,
-            start_step=resumed_steps,
-            cooldown_frac=cooldown_frac,
-            min_lr_ratio=min_lr_ratio,
-            muon_momentum_warmup_steps=muon_momentum_warmup_steps,
+    if untie_at_frac is not None and max_steps_for_cooldown is None:
+        logger.warning(
+            "model.untie_at_frac=%.3f requested but train_loop.max_optimizer_steps is not set; "
+            "skipping deferred weight untying (cannot determine split_step).",
+            untie_at_frac,
         )
-        logger.info(
-            "Training scheduler: cooldown_frac=%.2f, min_lr_ratio=%.2f, "
-            "total_steps=%d, cooldown_starts_at_step=%d; "
-            "muon_momentum_warmup_steps=%d (resumed_steps=%d).",
-            cooldown_frac, min_lr_ratio,
-            total_steps_original, optimizer.cooldown_start,
-            muon_momentum_warmup_steps, resumed_steps,
-        )
+        untie_at_frac = None
 
     # Compile backbone BEFORE DDP wrapping.  torch.compile operates on the
     # backbone nn.Module; DDP adds communication hooks on top without
@@ -739,6 +758,103 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             static_graph=True,
             find_unused_parameters=False,
             bucket_cap_mb=256,
+        )
+
+    # Construct LRCooldownScheduler now that model is in its final form (after
+    # DDP wrapping), so split closures can reference model.module correctly.
+    needs_scheduler = (
+        cooldown_frac > 0.0
+        or muon_momentum_warmup_steps > 0
+        or untie_at_frac is not None
+    )
+    if needs_scheduler:
+        total_steps_original = (max_steps_for_cooldown + resumed_steps) if max_steps_for_cooldown is not None else 0
+        # Reset param_group LRs to the config values so a resume checkpoint's
+        # (potentially already-cooled) LR doesn't corrupt the base.
+        for pg in optimizer.param_groups:
+            pg['lr'] = cfg['optimizer']['muon_lr'] if pg.get('use_muon') else cfg['optimizer']['adamw_lr']
+
+        pre_step_fn = None
+        split_step = 0
+        split_fn = None
+        if untie_at_frac is not None:
+            split_step = round(total_steps_original * untie_at_frac)
+            _tm = model.module if hasattr(model, 'module') else model
+            _embed_adamw_beta = (
+                cfg['optimizer'].get('adamw_embed_beta1', 0.5),
+                cfg['optimizer'].get('beta2', 0.95),
+            )
+
+            def split_fn(opt):
+                # Create an independent lm_head weight, initialized from the current
+                # (shared) embedding weight.
+                new_lm_head = torch.nn.Parameter(_tm.embedding.weight.data.clone())
+                _tm.loss_fn.weight = new_lm_head
+
+                # Add to the embed AdamW param group (same betas / wd as embedding).
+                # Find the group by checking which contains the current embedding.weight.
+                embed_weight = _tm.embedding.weight
+                for pg in opt.param_groups:
+                    if not pg.get('use_muon', False) and embed_weight in pg['params']:
+                        pg['params'].append(new_lm_head)
+                        break
+                else:
+                    # Fallback: add a new group matching the embed betas
+                    opt.param_groups.append(dict(
+                        params=[new_lm_head],
+                        use_muon=False,
+                        lr=cfg['optimizer']['adamw_lr'],
+                        betas=_embed_adamw_beta,
+                        weight_decay=cfg['optimizer'].get('adamw_wd', cfg['optimizer'].get('wd', 0.1)),
+                    ))
+
+                # Transfer Adam state from the embedding to the new lm_head so the
+                # optimizer doesn't start cold (copies exp_avg and exp_avg_sq).
+                embed_state = opt.state.get(embed_weight)
+                if embed_state:
+                    opt.state[new_lm_head] = {
+                        k: v.clone() if isinstance(v, torch.Tensor) else v
+                        for k, v in embed_state.items()
+                    }
+
+                logger.info(
+                    "Weight untying: lm_head split from embedding at step %d "
+                    "(Adam state transferred: %s).",
+                    split_step,
+                    "yes" if embed_state else "no (cold start)",
+                )
+
+            if dist.is_distributed:
+                def pre_step_fn():
+                    # After the split, lm_head is a new param DDP doesn't know about.
+                    # Manually all-reduce its gradient before the optimizer step.
+                    w = _tm.loss_fn.weight
+                    if w.grad is not None:
+                        torch.distributed.all_reduce(w.grad)
+                        w.grad.div_(dist.world_size)
+
+        optimizer = LRCooldownScheduler(
+            optimizer,
+            total_steps=total_steps_original,
+            start_step=resumed_steps,
+            cooldown_frac=cooldown_frac,
+            min_lr_ratio=min_lr_ratio,
+            muon_momentum_warmup_steps=muon_momentum_warmup_steps,
+            pre_step_fn=pre_step_fn,
+            split_step=split_step,
+            split_fn=split_fn,
+        )
+        logger.info(
+            "Training scheduler: cooldown_frac=%.2f, min_lr_ratio=%.2f, "
+            "total_steps=%d, cooldown_starts_at_step=%d; "
+            "muon_momentum_warmup_steps=%d; "
+            "untie_at_frac=%s (split_step=%d); "
+            "(resumed_steps=%d).",
+            cooldown_frac, min_lr_ratio,
+            total_steps_original, optimizer.cooldown_start,
+            muon_momentum_warmup_steps,
+            f"{untie_at_frac:.3f}" if untie_at_frac is not None else "None", split_step,
+            resumed_steps,
         )
 
     # -------------------------------------------------------------------------
