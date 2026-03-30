@@ -26,8 +26,14 @@ class GenerationConfig:
     max_auxiliary_documents: int = 6
     max_link_depth: int = 1
     
-    # Corpus integration
-    allow_generation_fallback: bool = True  # Generate aux doc if not found in corpus
+    # Corpus integration / link retrieval
+    # Modes:
+    #   corpus_then_generate — try corpus first, fall back to generation (default)
+    #   corpus_only          — corpus lookup only; skip if not found (no generation)
+    #   generate_only        — always generate aux doc; never look up corpus
+    #   link_but_skip        — detect link (trace bookkeeping), don't insert any doc
+    #   full_skip            — return immediately from _handle_link; no link processing
+    link_retrieval_mode: str = "corpus_then_generate"
     
     # Eviction policy
     eviction_policy: Literal["drop_oldest", "stop_new"] = "drop_oldest"
@@ -98,4 +104,14 @@ class GenerationConfig:
                 f"max_new_tokens ({self.max_new_tokens}) exceeds "
                 f"max_tokens_per_document ({self.max_tokens_per_document}); "
                 "max_tokens_per_document would always fire first, making max_new_tokens ineffective"
+            )
+
+        _valid_modes = {
+            "corpus_only", "generate_only", "corpus_then_generate",
+            "link_but_skip", "full_skip",
+        }
+        if self.link_retrieval_mode not in _valid_modes:
+            raise ValueError(
+                f"link_retrieval_mode must be one of {sorted(_valid_modes)}, "
+                f"got {self.link_retrieval_mode!r}"
             )

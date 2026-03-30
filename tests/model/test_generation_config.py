@@ -22,7 +22,7 @@ class TestGenerationConfigDefaults:
         assert config.max_context_length == 4096
         assert config.max_auxiliary_documents == 6
         assert config.max_link_depth == 1
-        assert config.allow_generation_fallback is True
+        assert config.link_retrieval_mode == "corpus_then_generate"
         assert config.eviction_policy == "drop_oldest"
         assert config.process_prompt_links is True
         assert config.eos_token_id == 50256
@@ -39,7 +39,7 @@ class TestGenerationConfigDefaults:
             max_context_length=4096,
             max_auxiliary_documents=10,
             max_link_depth=2,
-            allow_generation_fallback=False,
+            link_retrieval_mode="corpus_only",
             eviction_policy="stop_new",
             process_prompt_links=False,
             eos_token_id=0,
@@ -54,7 +54,7 @@ class TestGenerationConfigDefaults:
         assert config.max_context_length == 4096
         assert config.max_auxiliary_documents == 10
         assert config.max_link_depth == 2
-        assert config.allow_generation_fallback is False
+        assert config.link_retrieval_mode == "corpus_only"
         assert config.eviction_policy == "stop_new"
         assert config.process_prompt_links is False
         assert config.eos_token_id == 0
@@ -181,7 +181,7 @@ class TestGenerationConfigMethods:
             "max_new_tokens", "temperature", "top_k", "top_p",
             "max_tokens_per_document", "max_context_length",
             "max_auxiliary_documents", "max_link_depth",
-            "allow_generation_fallback", "eviction_policy",
+            "link_retrieval_mode", "eviction_policy",
             "process_prompt_links", "eos_token_id", "device"
         ]
         

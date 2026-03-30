@@ -8,7 +8,7 @@ Usage:
         [--dataset data/pretokenized_datasets/simplewiki] \\
         [--max-new-tokens 300] \\
         [--max-link-depth 2] \\
-        [--allow-generation-fallback] \\
+        [--link-retrieval-mode {corpus_only,generate_only,corpus_then_generate,link_but_skip,full_skip}] \\
         [--temperature 0.8] \\
         [--top-k 50] \\
         [--max-display-tokens 200] \\
@@ -557,9 +557,14 @@ def main():
                         help="Path to pretokenized dataset dir (corpus for link resolution).")
     parser.add_argument("--max-new-tokens", type=int, default=300)
     parser.add_argument("--max-link-depth", type=int, default=2)
-    parser.add_argument("--allow-generation-fallback", action="store_true",
-                        help="Generate aux docs for links not found in corpus "
-                             "(default: off when --dataset provided, on otherwise).")
+    parser.add_argument(
+        "--link-retrieval-mode",
+        choices=["corpus_only", "generate_only", "corpus_then_generate",
+                 "link_but_skip", "full_skip"],
+        default=None,
+        help="How to resolve links during generation. Default: 'corpus_only' when "
+             "--dataset is provided, 'corpus_then_generate' otherwise.",
+    )
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--repetition-penalty", type=float, default=1.3,
@@ -586,7 +591,11 @@ def main():
         corpus = PretokCorpus(args.dataset)
 
     # ── Generation config ─────────────────────────────────────────────────────
-    allow_gen_fallback = args.allow_generation_fallback or (corpus is None)
+    # Default mode: corpus_only when a dataset is provided (no generation fallback),
+    # corpus_then_generate otherwise (no corpus → generation is the only option).
+    link_retrieval_mode = args.link_retrieval_mode or (
+        "corpus_only" if corpus is not None else "corpus_then_generate"
+    )
     # max_tokens_per_document must be >= max_new_tokens (GenerationConfig validates this).
     # Give a small 256-token headroom above max_new_tokens for layout prefix/suffix,
     # but cap at half the model's context window.
@@ -598,7 +607,7 @@ def main():
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
         max_link_depth=args.max_link_depth,
-        allow_generation_fallback=allow_gen_fallback,
+        link_retrieval_mode=link_retrieval_mode,
         max_context_length=hp["model"]["max_seq_len"],
         max_tokens_per_document=max_tokens_per_document,
         device=args.device,

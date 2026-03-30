@@ -128,7 +128,7 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
         max_tokens_per_document=200,
         max_context_length=2048,
         max_link_depth=1,
-        allow_generation_fallback=True,
+        link_retrieval_mode="corpus_then_generate",
         max_auxiliary_documents=4,
         temperature=1.0,
         repetition_penalty=1.3,
