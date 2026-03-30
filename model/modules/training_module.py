@@ -124,7 +124,7 @@ class TS2TSTrainingModule(nn.Module):
             weight_tying: Whether to tie embedding and output head weights
             ignore_index: Index to ignore in loss computation
             dtype: Data type for loss computation
-            attention_backend: "flex" (default) or "triton_v12"
+            attention_backend: "flex" (default), "triton_v12", or "triton_v17"
 
         Returns:
             Configured TS2TSTrainingModule ready for training
@@ -140,13 +140,13 @@ class TS2TSTrainingModule(nn.Module):
             activation_checkpointing=activation_checkpointing,
             attention_backend=attention_backend,
         )
-        
+
         # Construct embedding
         embedding = nn.Embedding(vocab_size, model_dim)
-        
+
         # Construct normalization
         norm = RMSNorm(model_dim)
-        
+
         # Construct loss function with optional weight tying
         loss_weight = embedding.weight if weight_tying else None
         loss_fn = FusedLinearCELoss(

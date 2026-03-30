@@ -735,6 +735,35 @@ def _impl_cdb_bim_v12(q, k, v, mask_inputs, scale):
     )
 
 
+_bim64_cache: Dict[int, Any] = {}
+
+def _get_bim64(mask_inputs):
+    """Build (and cache) a BIM at block_size=64 for the given mask_inputs."""
+    from kernels.cross_doc_bitmask_bim_v17 import _build_bim_64
+    key = id(mask_inputs)
+    if key not in _bim64_cache:
+        _bim64_cache[key] = _build_bim_64(
+            mask_inputs.seq_len, mask_inputs.document_ids,
+            mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks,
+            mask_inputs.document_ids.device, mask_inputs.q_bitmasks.shape[0],
+        )
+    return _bim64_cache[key]
+
+
+def _impl_cdb_bim_v17(q, k, v, mask_inputs, scale):
+    """cdb_bim_v17: BIM_BS=128 forward, BIM_BS=64 backward (SMEM fix for Dh=128)."""
+    from kernels.cross_doc_bitmask_bim_v17 import (
+        triton_attn_cross_doc_bitmask_bim_v17,
+    )
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _get_bim128(mask_inputs)
+    bim64  = _get_bim64(mask_inputs)
+    return triton_attn_cross_doc_bitmask_bim_v17(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, bim64, scale,
+    )
+
+
 def _impl_cdb_bim_v13(q, k, v, mask_inputs, scale):
     """cdb_bim_v13: v12 + pure-cross dispatch (bitmask-only inner kernel)."""
     from kernels.cross_doc_bitmask_bim_v13 import triton_attn_cross_doc_bitmask_bim_v13
@@ -970,7 +999,8 @@ REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
         ("cdb_bim_v9",       _impl_cdb_bim_v9),       # split pipelined same-doc + BIM cross-doc
         ("cdb_bim_v10",      _impl_cdb_bim_v10),      # native-dtype matmuls (bf16 TC)
         ("cdb_bim_v11",      _impl_cdb_bim_v11),      # v10 + no permute copies
-        ("cdb_bim_v12",      _impl_cdb_bim_v12),      # v11 + BIM_BLOCK_SIZE=128
+        ("cdb_bim_v12",        _impl_cdb_bim_v12),        # v11 + BIM_BLOCK_SIZE=128
+        ("cdb_bim_v17", _impl_cdb_bim_v17), # v12 fwd + BIM_BS=64 bwd (SMEM fix for Dh=128)
         ("cdb_bim_v13",      _impl_cdb_bim_v13),      # v12 + pure-cross dispatch
         ("cdb_bim_v14",      _impl_cdb_bim_v14),      # v12 + expanded bwd autotune
         ("cdb_bim_v15",      _impl_cdb_bim_v15),      # v12 + persistent-CTA backward

@@ -516,7 +516,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 f"Unknown model.link_detector '{link_detector_name}'. "
                 "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
             )
-        attention_backend = 'triton_v12' if use_triton else 'flex'
+        attention_backend = 'triton_v17' if use_triton else 'flex'
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=detector,

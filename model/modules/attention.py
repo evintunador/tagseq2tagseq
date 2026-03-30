@@ -1,8 +1,15 @@
 """
-BIMv12Attention — drop-in replacement for FlexSelfAttention using the v12
-Triton kernel (cross-doc BIM, BIM_BLOCK_SIZE=128, bf16 TC, no permute copies).
+BIMv12Attention / BIMv17Attention — drop-in replacements for
+FlexSelfAttention using custom Triton cross-doc kernels.
 
-Accepts a TritonMaskInputs bundle instead of a FlexAttention BlockMask.
+BIMv12Attention: v12 kernel throughout (BIM_BLOCK_SIZE=128 fwd+bwd).
+                 Correct at Dh=64; OOMs in backward at Dh=128 on A100.
+BIMv17Attention: v17 kernel — BIM_BLOCK_SIZE=128 forward,
+                 BIM_BLOCK_SIZE=64 backward.  Fixes the A100 SMEM OOM at
+                 Dh=128 and is ~2× faster in backward than BIMv12Attention
+                 at Dh=128 (reduced register pressure → better occupancy).
+
+Both accept a TritonMaskInputs bundle instead of a FlexAttention BlockMask.
 Inherits QKV projection, RoPE, QK norm, and output projection from
 FlexSelfAttention unchanged.
 """
@@ -58,6 +65,58 @@ class BIMv12Attention(FlexSelfAttention):
             block_mask.q_bitmasks,
             block_mask.kv_bitmasks,
             block_mask.bim,
+            self.scale,
+        )  # (T, H, Dh)
+
+        y = y.unsqueeze(0).reshape(B, T, self.num_heads * self.head_dim)
+        return self.Wout(y)
+
+
+def _triton_attn_v17(q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim128, bim64, scale):
+    from kernels.cross_doc_bitmask_bim_v17 import triton_attn_cross_doc_bitmask_bim_v17
+    return triton_attn_cross_doc_bitmask_bim_v17(
+        q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim128, bim64, scale
+    )
+
+_triton_attn_v17_disabled = torch._dynamo.disable(_triton_attn_v17)
+
+
+class BIMv17Attention(FlexSelfAttention):
+    """Cross-doc attention using the v17 Triton kernel.
+
+    Forward: BIM_BLOCK_SIZE=128 (identical to BIMv12Attention).
+    Backward: BIM_BLOCK_SIZE=64 — fixes the A100 SMEM OOM at Dh=128 and is
+    ~2× faster in backward at Dh=128 due to reduced register pressure.
+
+    Expects block_mask to be a TritonMaskInputs with bim64 set (from
+    CrossDocLinkMaskCreator with backend="triton_v17").
+    """
+
+    def forward(self, x: Tensor, block_mask: TritonMaskInputs) -> Tensor:
+        B, T = x.size(0), x.size(1)
+        assert B == 1, "BIMv17Attention requires batch size = 1 (packed sequences)"
+        assert block_mask.bim64 is not None, \
+            "BIMv17Attention requires TritonMaskInputs.bim64 (backend='triton_v17')"
+
+        q, k, v = (
+            F.linear(x, self.Wqkv.flatten(end_dim=1).type_as(x))
+            .view(B, T, 3 * self.num_heads, self.head_dim)
+            .chunk(3, dim=-2)
+        )
+        q, k = self.norm(q), self.norm(k)
+        q, k = self.rotary(q), self.rotary(k)
+
+        q_thd = q.squeeze(0)
+        k_thd = k.squeeze(0)
+        v_thd = v.squeeze(0)
+
+        y = _triton_attn_v17_disabled(
+            q_thd, k_thd, v_thd,
+            block_mask.document_ids,
+            block_mask.q_bitmasks,
+            block_mask.kv_bitmasks,
+            block_mask.bim,
+            block_mask.bim64,
             self.scale,
         )  # (T, H, Dh)
 
