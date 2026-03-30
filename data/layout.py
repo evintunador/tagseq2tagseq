@@ -200,6 +200,66 @@ class IdentifierPrefixBOSEOSLayoutPolicy(DocLayoutPolicy):
         return [self.eos_token_id]
 
 
+class StochasticIdentifierPrefixLayoutPolicy(DocLayoutPolicy):
+    """
+    Layout policy that randomly includes or omits the ``"# {raw_identifier}\\n\\n"``
+    identifier prefix on a per-document, per-epoch basis.
+
+    Inclusion is decided by::
+
+        hash(normed_identifier + ":" + str(epoch)) % 2 == 0
+
+    This is deterministic: the same ``(doc, epoch)`` pair always produces the
+    same decision across ranks, restarts, and between the ``prefix_length()``
+    and ``prefix_tokens()`` calls for the same document, with no shared state
+    or cache required.
+
+    An EOS token is always appended as suffix so that aux docs can end cleanly
+    during generation regardless of whether the prefix was included.
+
+    Use case: train with 50-50 prefix/no-prefix so the model is not OOD on
+    external benchmarks that have no identifier prefix, while still being able
+    to generate aux docs (which need a starting string).  During inference,
+    wire a separate deterministic policy (e.g. ``identifier_prefix_bos_eos``)
+    via the ``data.inference_layout_policy`` config key.
+
+    Call ``set_epoch(n)`` at the start of each epoch.  The training loop does
+    this automatically via ``hasattr(layout, 'set_epoch')`` check.
+    """
+
+    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
+        self._encode = encode_fn
+        self.eos_token_id = eos_token_id
+        self._epoch: int = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        """Update the epoch counter. Called by BucketedPackDataset on epoch advance."""
+        self._epoch = epoch
+
+    def _include_prefix(self, normed_identifier: str) -> bool:
+        """Deterministic per-(doc, epoch) coin flip; no cache, no shared state."""
+        return hash(normed_identifier + ":" + str(self._epoch)) % 2 == 0
+
+    def _get_prefix_tokens(self, raw_identifier: str) -> List[int]:
+        return self._encode(f"# {raw_identifier}\n\n")
+
+    def prefix_length(self, info: DocLayoutInfo) -> int:
+        if not self._include_prefix(info.normed_identifier):
+            return 0
+        return len(self._get_prefix_tokens(info.raw_identifier))
+
+    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
+        return 1
+
+    def prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
+        if not self._include_prefix(info.normed_identifier):
+            return []
+        return self._get_prefix_tokens(info.raw_identifier)
+
+    def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
+        return [self.eos_token_id]
+
+
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
@@ -218,9 +278,10 @@ def make_layout_policy(
 
     Args:
         name: One of ``"null"``, ``"bos_eos"``, ``"identifier_prefix"``,
-              ``"identifier_prefix_bos_eos"``.
+              ``"identifier_prefix_bos_eos"``, ``"stochastic_identifier_prefix"``.
         encode_fn: Required for policies that tokenise the identifier
-            (``"identifier_prefix"`` and ``"identifier_prefix_bos_eos"``).
+            (``"identifier_prefix"``, ``"identifier_prefix_bos_eos"``,
+            and ``"stochastic_identifier_prefix"``).
         bos_token_id: BOS token id (default: GPT-2 ``<|endoftext|>`` = 50256).
         eos_token_id: EOS token id (default: GPT-2 ``<|endoftext|>`` = 50256).
 
@@ -246,7 +307,15 @@ def make_layout_policy(
             bos_token_id=bos_token_id,
             eos_token_id=eos_token_id,
         )
+    if name == "stochastic_identifier_prefix":
+        if encode_fn is None:
+            raise ValueError(
+                "layout_policy='stochastic_identifier_prefix' requires encode_fn "
+                "(a tokeniser callable)."
+            )
+        return StochasticIdentifierPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
     raise ValueError(
         f"Unknown layout_policy '{name}'. "
-        "Valid options: 'null', 'bos_eos', 'identifier_prefix', 'identifier_prefix_bos_eos'."
+        "Valid options: 'null', 'bos_eos', 'identifier_prefix', "
+        "'identifier_prefix_bos_eos', 'stochastic_identifier_prefix'."
     )

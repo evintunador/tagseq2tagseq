@@ -304,12 +304,28 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     # Configure Layout Policy
     # Options: null | bos_eos | identifier_prefix | identifier_prefix_bos_eos
+    #          | stochastic_identifier_prefix
     layout_policy_name = cfg.get('data', {}).get('layout_policy', 'null')
     enc = tiktoken.get_encoding(graph_index.metadata.get('tokenizer', 'gpt2'))
     layout_policy = make_layout_policy(
         name=layout_policy_name,
         encode_fn=enc.encode_ordinary,
     )
+
+    # Inference layout policy — defaults to training policy, but can be
+    # overridden via data.inference_layout_policy.  Needed when training with
+    # 'stochastic_identifier_prefix' so inference always uses a deterministic
+    # policy (e.g. 'identifier_prefix') for stable aux-doc generation.
+    inference_layout_policy_name = cfg.get('data', {}).get(
+        'inference_layout_policy', layout_policy_name
+    )
+    if inference_layout_policy_name == layout_policy_name:
+        inference_layout_policy = layout_policy
+    else:
+        inference_layout_policy = make_layout_policy(
+            name=inference_layout_policy_name,
+            encode_fn=enc.encode_ordinary,
+        )
 
     # Configure Traversal Strategy
     strategy_name = cfg.get('data', {}).get('strategy', 'bfs')
@@ -678,14 +694,14 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         _flex_inference_model = _build_inference_model(
             training_module_unwrapped=training_module_unwrapped,
             cfg=cfg, enc=enc, detector=detector,
-            layout_policy=layout_policy, device=str(dist.device),
+            layout_policy=inference_layout_policy, device=str(dist.device),
         )
 
         _run_generation_demo(
             training_module=training_module_unwrapped,
             tokenizer=enc,
             link_detector=detector,
-            layout_policy=layout_policy,
+            layout_policy=inference_layout_policy,
             mask_type=mask_type,
             inference_model=_flex_inference_model,
         )
