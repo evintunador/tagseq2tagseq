@@ -274,7 +274,7 @@ class CrossDocLinkMaskCreator:
                                     Should match the BLOCK_SIZE used by the Triton
                                     kernel (typically the autotune winner, default 64).
         """
-        assert backend in ("flex", "triton", "triton_v12", "triton_v17"), \
+        assert backend in ("flex", "triton", "triton_v12", "triton_v17", "triton_v18"), \
             f"backend must be 'flex', 'triton', 'triton_v12', or 'triton_v17', got {backend!r}"
         self.link_detector = link_detector
         self.max_grants = max_grants
@@ -883,7 +883,7 @@ class CrossDocLinkMaskCreator:
                 seq_len, document_ids, q_bms, kv_bms, device
             )
 
-        if self.backend in ("triton_v12", "triton_v17"):
+        if self.backend in ("triton_v12", "triton_v17", "triton_v18"):
             # Build BIM at block_size=128 (forward tiles) and package all
             # kernel inputs into a TritonMaskInputs bundle.
             saved_bs = self.triton_block_size
@@ -896,7 +896,7 @@ class CrossDocLinkMaskCreator:
             # For v12_bwd64: also build BIM at block_size=64 for the backward
             # passes (halves register pressure, fits within A100 SMEM at Dh=128).
             bim64 = None
-            if self.backend == "triton_v17":
+            if self.backend in ("triton_v17", "triton_v18"):
                 self.triton_block_size = 64
                 bim64 = self._build_block_interaction_mask(
                     seq_len, document_ids, q_bms, kv_bms, device

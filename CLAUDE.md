@@ -2,7 +2,7 @@
 
 ## Custom kernels are the default — don't revert to flex
 
-`attention_backend: triton` (default) automatically selects the fastest custom Triton kernel per mask type: `cross_doc_link` → `triton_v12`, `doc_causal` → `varlen_bim_v1`. Don't set it to `flex` unless benchmarking against FlexAttention.
+`attention_backend: triton` (default) automatically selects the fastest custom Triton kernel per mask type: `cross_doc_link` → `triton_v18`, `doc_causal` → `varlen_bim_v2`. Don't set it to `flex` unless benchmarking against FlexAttention.
 
 ## Never disable torch.compile
 

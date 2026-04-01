@@ -32,18 +32,20 @@ optimizer:
   momentum: 0.95
   beta1: 0.9
   beta2: 0.95
-  muon_lr: 0.003
-  adamw_lr: 0.00004
+  muon_lr: 0.001
+  adamw_lr: 0.00001
   muon_momentum_warmup_steps: 300  # ramp momentum 0.85→0.95 over first N steps
   adamw_embed_beta1: 0.5           # lower β1 for embedding/lm_head (sparse gradients)
 
 train_loop:
   epochs: 1
   max_optimizer_steps: 16000
+  warmup_steps: 300       # linear LR ramp 0→1× over first 300 steps (~160M tokens)
   cooldown_frac: 0.4    # decay LR over the final 40% of training
   min_lr_ratio: 0.1     # LR at end = base_lr * min_lr_ratio
   val_steps: 20
   val_interval: 100
-  atomic_feature_kwargs: {}
+  atomic_feature_kwargs:
+    norm_clip_value: 1.0  # gradient norm clipping
 
 seed: 42

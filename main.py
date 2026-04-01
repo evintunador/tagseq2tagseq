@@ -73,6 +73,9 @@ class LRCooldownScheduler:
             (not adjusted for resume — use the *original* schedule total).
         start_step: Step number at which this training run begins.  0 for a fresh
             run; ``resumed_steps`` when resuming from a checkpoint.
+        warmup_steps: Number of steps to linearly ramp LR from 0 to 1×.  Applied
+            at the start of the *full* run (absolute step numbers), so a resumed
+            run that starts after warmup_steps simply skips the warmup.
         cooldown_frac: Fraction of total_steps over which to decay the LR.
             E.g. 0.4 starts cooldown at step int(total_steps * 0.6).
         min_lr_ratio: Final LR as a fraction of the base LR.  0.1 means the LR
@@ -92,6 +95,7 @@ class LRCooldownScheduler:
         optimizer,
         total_steps: int,
         start_step: int = 0,
+        warmup_steps: int = 0,
         cooldown_frac: float = 0.4,
         min_lr_ratio: float = 0.1,
         muon_momentum_warmup_steps: int = 0,
@@ -101,6 +105,7 @@ class LRCooldownScheduler:
     ):
         self.optimizer = optimizer
         self.total_steps = total_steps
+        self.warmup_steps = warmup_steps
         self.cooldown_start = int(total_steps * (1.0 - cooldown_frac))
         self.min_lr_ratio = min_lr_ratio
         self._step_count = start_step
@@ -125,6 +130,8 @@ class LRCooldownScheduler:
 
     def _lr_mul(self) -> float:
         step = self._step_count
+        if self.warmup_steps > 0 and step < self.warmup_steps:
+            return step / self.warmup_steps
         if step < self.cooldown_start or self.cooldown_start >= self.total_steps:
             return 1.0
         progress = (step - self.cooldown_start) / max(1, self.total_steps - self.cooldown_start)
@@ -546,7 +553,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 f"Unknown model.link_detector '{link_detector_name}'. "
                 "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
             )
-        attention_backend = 'triton_v17' if use_triton else 'flex'
+        attention_backend = 'triton_v18' if use_triton else 'flex'
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=detector,
@@ -558,7 +565,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         )
     else:
         if use_triton and mask_type == 'doc_causal':
-            attention_backend = 'varlen_bim_v1'
+            attention_backend = 'varlen_bim_v2'
             from model.graph_traversal.block_mask_creator import create_doc_causal_triton_mask
             block_mask_creator = make_mask_creator_callable_from(create_doc_causal_triton_mask)
         else:
@@ -708,6 +715,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # -------------------------------------------------------------------------
     cooldown_frac = cfg.get('train_loop', {}).get('cooldown_frac', 0.0)
     min_lr_ratio = cfg.get('train_loop', {}).get('min_lr_ratio', 0.1)
+    warmup_steps = int(cfg.get('train_loop', {}).get('warmup_steps', 0))
     muon_momentum_warmup_steps = int(cfg.get('optimizer', {}).get('muon_momentum_warmup_steps', 0))
     max_steps_for_cooldown = cfg.get('train_loop', {}).get('max_optimizer_steps')
 
@@ -763,7 +771,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # Construct LRCooldownScheduler now that model is in its final form (after
     # DDP wrapping), so split closures can reference model.module correctly.
     needs_scheduler = (
-        cooldown_frac > 0.0
+        warmup_steps > 0
+        or cooldown_frac > 0.0
         or muon_momentum_warmup_steps > 0
         or untie_at_frac is not None
     )
@@ -837,6 +846,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             optimizer,
             total_steps=total_steps_original,
             start_step=resumed_steps,
+            warmup_steps=warmup_steps,
             cooldown_frac=cooldown_frac,
             min_lr_ratio=min_lr_ratio,
             muon_momentum_warmup_steps=muon_momentum_warmup_steps,
@@ -845,12 +855,12 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             split_fn=split_fn,
         )
         logger.info(
-            "Training scheduler: cooldown_frac=%.2f, min_lr_ratio=%.2f, "
+            "Training scheduler: warmup_steps=%d, cooldown_frac=%.2f, min_lr_ratio=%.2f, "
             "total_steps=%d, cooldown_starts_at_step=%d; "
             "muon_momentum_warmup_steps=%d; "
             "untie_at_frac=%s (split_step=%d); "
             "(resumed_steps=%d).",
-            cooldown_frac, min_lr_ratio,
+            warmup_steps, cooldown_frac, min_lr_ratio,
             total_steps_original, optimizer.cooldown_start,
             muon_momentum_warmup_steps,
             f"{untie_at_frac:.3f}" if untie_at_frac is not None else "None", split_step,

@@ -30,14 +30,16 @@ class Layer(nn.Module):
             self.attn = BIMv12Attention(
                 dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
             )
-        elif attention_backend == "triton_v17":
-            from model.modules.attention import BIMv17Attention
-            self.attn = BIMv17Attention(
+        elif attention_backend in ("triton_v17", "triton_v18"):
+            from model.modules.attention import BIMv17Attention, BIMv18Attention
+            _cls = BIMv18Attention if attention_backend == "triton_v18" else BIMv17Attention
+            self.attn = _cls(
                 dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
             )
-        elif attention_backend == "varlen_bim_v1":
-            from model.modules.attention import VarlenBIMv1Attention
-            self.attn = VarlenBIMv1Attention(
+        elif attention_backend in ("varlen_bim_v1", "varlen_bim_v2"):
+            from model.modules.attention import VarlenBIMv1Attention, VarlenBIMv2Attention
+            _cls = VarlenBIMv2Attention if attention_backend == "varlen_bim_v2" else VarlenBIMv1Attention
+            self.attn = _cls(
                 dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
             )
         else:
