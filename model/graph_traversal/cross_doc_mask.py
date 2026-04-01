@@ -590,6 +590,14 @@ class CrossDocLinkMaskCreator:
         # 4. Causal mask: kv_block <= q_block
         causal = np.arange(n_blocks)[:, None] >= np.arange(n_blocks)[None, :]
 
+        # 4b. Diagonal guard: same_doc[i,i] can be False when doc_ids=-1 (layout-gap
+        #     tokens, e.g. BOS/EOS outside a span) fall at the END of a block, making
+        #     blk_max_doc[i]=-1 < blk_min_doc[i]≥0.  A block always attends causally
+        #     to itself, so force the diagonal True before building the interaction
+        #     matrix.  Without this guard the backward kernel reads
+        #     q_kv_indices[start - 1] (OOB) for any Q-block with 0 interactions.
+        np.fill_diagonal(same_doc, True)
+
         # 5. Final interaction matrix and CSR construction via np.where
         interact = causal & (same_doc | grant)  # [n_blocks, n_blocks] bool
 

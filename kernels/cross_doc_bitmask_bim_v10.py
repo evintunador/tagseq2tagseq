@@ -494,10 +494,9 @@ def _bwd_q_cdb_v10(
 @triton.autotune(
     [
         triton.Config({"BLOCK_SIZE_MICRO": m}, num_stages=ns, num_warps=nw)
-        for m in [16, 32, 64, 128]
+        for m in [16, 32, 64]  # 128 excluded: violates BIM_BLOCK_SIZE%BLOCK_SIZE_MICRO==0 when BIM_BS=64 (v18 bwd)
         for ns in [3, 4, 5]
         for nw in [4, 8]
-        if m <= 128
     ],
     key=["N", "Dh", "n_chunks", "BIM_BLOCK_SIZE"],
 )
@@ -606,10 +605,9 @@ def _attn_backward_KV_cdb_bim_v10(
 @triton.autotune(
     [
         triton.Config({"BLOCK_SIZE_MICRO": m}, num_stages=ns, num_warps=nw)
-        for m in [16, 32, 64, 128]
+        for m in [16, 32, 64]  # 128 excluded: violates BIM_BLOCK_SIZE%BLOCK_SIZE_MICRO==0 when BIM_BS=64 (v18 bwd)
         for ns in [3, 4, 5]
         for nw in [4, 8]
-        if m <= 128
     ],
     key=["N", "Dh", "n_chunks", "BIM_BLOCK_SIZE"],
 )
