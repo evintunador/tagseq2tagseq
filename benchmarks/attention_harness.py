@@ -1551,7 +1551,7 @@ def _add_common_args(p: argparse.ArgumentParser):
     p.add_argument("--dataset-dir", type=str, default=None,
                    help="Path to pretokenized dataset (enables real-data fixtures for cross_doc)")
     p.add_argument("--num-heads", type=int, default=16)
-    p.add_argument("--head-dim", type=int, default=64)
+    p.add_argument("--head-dim", type=int, default=128)
     p.add_argument("--dtype", type=str, default="bfloat16")
 
 

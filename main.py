@@ -10,7 +10,7 @@ import json
 # Set before any CUDA allocation so the memory allocator picks it up.
 # Expandable segments dramatically reduce fragmentation when sequence lengths
 # vary across steps (which they do for packed graph batches).
-os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
