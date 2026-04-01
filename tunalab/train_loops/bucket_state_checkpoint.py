@@ -14,11 +14,9 @@ Extends checkpoint_best_model by:
      Results are printed per-step (no rolling average) and saved to
      ``step_timing_rank{N}.csv`` in output_dir.
 
-When ``step_timing_all_ranks=True`` is passed alongside ``bucket_state_fn``,
-smart_train selects this single feature rather than trying to LLM-compile a
-combination of bucket_state_checkpoint + step_timer.  This is the intended
-usage: the step_timer feature continues to exist for cases where bucket_state
-checkpointing is not needed.
+``step_timing_all_ranks`` and ``step_timing_csv`` are optional and passed
+via **kwargs; they are not registered as feature-selection kwargs so that
+smart_train selects this feature purely on the presence of ``bucket_state_fn``.
 
 Usage in main.py
 ----------------
@@ -59,9 +57,6 @@ def run_training(
     val_interval: int = 10,
     # ---- bucket_state extension ----------------------------------------------
     bucket_state_fn: Optional[Callable] = None,
-    # ---- per-step timing (step_timer interface) ------------------------------
-    step_timing_all_ranks: bool = False,
-    step_timing_csv: bool = True,
     device: str = "cpu",
     **kwargs,
 ) -> Dict[str, Any]:
@@ -79,14 +74,15 @@ def run_training(
                                 (typically ``BucketedPackDataset.get_state``).
                                 When provided, its result is embedded in every
                                 saved checkpoint's metadata for exact resume.
-        step_timing_all_ranks:  If True, every DDP rank prints per-step timing
-                                and writes its own CSV.  If False, only rank 0.
-                                Setting this to True selects this combined feature
-                                instead of triggering LLM compilation.
-        step_timing_csv:        Write per-step timings to step_timing_rank{N}.csv.
         device:                 Device string used for cuda.synchronize().
+        **kwargs:               step_timing_all_ranks (bool, default False) — if
+                                True every DDP rank prints timing and writes CSV;
+                                otherwise only rank 0.  step_timing_csv (bool,
+                                default True) — write per-step timing CSV.
         **kwargs:               Forwarded to checkpoint metadata["config"].
     """
+    step_timing_all_ranks: bool = kwargs.get('step_timing_all_ranks', False)
+    step_timing_csv: bool = kwargs.get('step_timing_csv', True)
     is_distributed = dist.is_available() and dist.is_initialized()
     rank = dist.get_rank() if is_distributed else 0
     _dev = torch.device(device)
