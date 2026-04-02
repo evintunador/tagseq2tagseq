@@ -20,7 +20,7 @@ model:
   ignore_index: -100
   dtype: 'bfloat16'
   logit_softcap: 30.0  # tanh softcap: softcap * tanh(logits / softcap)
-  mtp_extra_weights: []   # e.g. [0.3, 0.1] to predict +2 and +3 tokens ahead
+  mtp_extra_weights: [0.5, 0.25]   # predict +2 and +3 tokens ahead
   mtp_decay_steps: 0      # optimizer steps to linearly decay mtp weights to 0 (0=constant)
 
 optimizer:
