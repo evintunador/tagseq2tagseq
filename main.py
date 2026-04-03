@@ -21,7 +21,7 @@ from tunalab.distributed import DistributedManager, setup_signal_handlers
 from tunalab.reproducibility import ReproducibilityManager
 from tunalab import tracking
 from tunalab.smart_train import smart_train
-from tunalab.optimizers.muon import MuonWithAuxAdam, SingleDeviceMuonWithAuxAdam
+from optimizers.muon import MuonWithAuxAdam, SingleDeviceMuonWithAuxAdam
 from tunalab.llm_compilers.auto import get_default_llm_client
 
 # Local imports
@@ -629,6 +629,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     other_beta1   = cfg['optimizer'].get('beta1', 0.9)
     muon_wd       = cfg['optimizer'].get('muon_wd', cfg['optimizer'].get('wd', 0.1))
     adamw_wd      = cfg['optimizer'].get('adamw_wd', cfg['optimizer'].get('wd', 0.1))
+    muon_beta2    = cfg['optimizer'].get('muon_beta2', 0.95)
 
     param_groups = [
         dict(
@@ -637,6 +638,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             lr=cfg['optimizer']['muon_lr'],
             momentum=cfg['optimizer'].get('momentum', 0.95),
             weight_decay=muon_wd,
+            beta2=muon_beta2,
         ),
         dict(
             params=embed_adamw_params,

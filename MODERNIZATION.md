@@ -5,6 +5,51 @@ Each item gets its own commit. Check off as done.
 
 ---
 
+## Smoke Test Protocol
+
+After every item below, run all three conditions to catch runtime regressions,
+OOMs, and confirm loss is still declining.
+
+All conditions use `CUDA_VISIBLE_DEVICES=4,5 torchrun --nproc_per_node=2`
+(exercises the distributed `MuonWithAuxAdam` all_gather path, not just
+single-device).  Single-process `python main.py` is NOT sufficient — it only
+hits `SingleDeviceMuonWithAuxAdam` and misses the rank-sharding logic entirely.
+
+`--dataset-dir` and `--strategy` are named argparse args in main.py; all other
+overrides use dotted-key notation via `compose_config`.
+
+Condition A: baseline (doc_causal + random, `stack_100m_32k_baseline.yaml`):
+```bash
+CUDA_VISIBLE_DEVICES=4,5 torchrun --nproc_per_node=2 main.py \
+    --config configs/stack_100m_32k_baseline.yaml \
+    --dataset-dir /fss/evin_t/tagseq2tagseq/data/pretokenized_datasets/stack_100m \
+    --train_loop.max_optimizer_steps 5 \
+    --train_loop.val_steps 2
+```
+
+Condition B: experimental (cross_doc_link + BFS, `stack_100m_32k.yaml`):
+```bash
+CUDA_VISIBLE_DEVICES=4,5 torchrun --nproc_per_node=2 main.py \
+    --config configs/stack_100m_32k.yaml \
+    --dataset-dir /fss/evin_t/tagseq2tagseq/data/pretokenized_datasets/stack_100m \
+    --train_loop.max_optimizer_steps 5 \
+    --train_loop.val_steps 2
+```
+
+Pass criteria:
+1. No CUDA OOM
+2. No NaN/Inf loss at any step
+3. Loss is not diverging by step 5 (not strictly monotone over 5 steps, but
+   should not be trending upward relative to step 1)
+4. Wall-clock time per step not significantly regressed vs. before the change
+   (run condition A both before and after the implementation to compare)
+
+If an item causes an OOM or significant slowdown, note it and evaluate whether
+stepping down model size (e.g. from 24L/1024D to 12L/768D) restores
+acceptable performance before deciding whether to keep it for the final run.
+
+---
+
 ## Tier 1 — Trivial, extremely well validated
 
 - [x] **1. Remove MLP dropout (0.1 → 0.0)**
@@ -81,11 +126,238 @@ Each item gets its own commit. Check off as done.
 
 ---
 
+## Tier 5 — NorMuon optimizer overhaul (no architecture risk)
+
+These four items share a prerequisite: the Muon optimizer moves out of tunalab
+and into the repo as `optimizers/muon.py`. The tunalab `MuonWithAuxAdam` /
+`SingleDeviceMuonWithAuxAdam` imports in `main.py` are replaced with the new
+in-repo classes. This is also the right time to add the beta2 config knob
+(see item 13b). Items 14–16 then layer on top of the new in-repo base.
+
+Target world sizes: 1–4 nodes (4–32 GPUs). Nothing in these items is
+world-size-specific, so behavior should be identical across that range.
+
+- [x] **13. In-repo Muon + cautious weight decay**
+  Copy `MuonWithAuxAdam` and `SingleDeviceMuonWithAuxAdam` (and their helpers
+  `muon_update`, `zeropower_via_newtonschulz5`, `adam_update`) from
+  `tunalab/catalogs/common/src/tunalab/optimizers/muon.py` into a new
+  `optimizers/muon.py`. Remove the tunalab import from `main.py`.
+
+  While doing this, add **cautious weight decay** to both the Muon and Adam
+  update paths. The change is: before applying weight decay, mask it so it
+  only fires when the gradient and the parameter are sign-aligned:
+  ```python
+  mask = (grad * p) >= 0          # True where update and current weight agree
+  p.mul_(1 - lr * wd * mask)      # decay only the aligned components
+  p.add_(update, alpha=-lr)
+  ```
+  For the Muon path `update` is the Newton-Schulz-orthogonalized gradient;
+  for the Adam path it is the bias-corrected Adam step. Both masks use the
+  post-update direction (not raw gradient) — this matches the reference code.
+
+  Note: the modded-nanogpt reference uses `lr² * wd` for the weight-decay
+  magnitude (calibrated to their large LR values 0.04–0.6). We use `lr * wd`
+  because our AdamW LR (~3e-4) would make `lr² * wd ≈ 5e-10` — effectively
+  zero. Muon LR (0.02) is comparable, so `lr * wd` is used there too.
+
+  `muon_beta2` config key deferred to item 14 (unused until variance reduction
+  second-moment buffer exists).
+
+  Files: new `optimizers/muon.py`, `main.py` (swap import).
+
+- [x] **14. NorMuon variance reduction**
+  Add an Adafactor-style low-rank second moment to the Muon update. After the
+  Newton-Schulz orthogonalization step, scale the update by the inverse square
+  root of a running mean of its squared row/column norms. This gives Muon
+  per-row adaptive step sizes without the full O(n²) second-moment matrix.
+
+  Concretely, for a gradient matrix `v` (post-orthogonalization, shape [M, N]):
+  - Reduce along the shorter dimension: `v_mean = (v² ).mean(dim=red_dim, keepdim=True)`
+    where `red_dim = -1` if M ≥ N else `-2`.
+  - Maintain `second_momentum_buffer` (same shape as `v_mean`) with EMA:
+    `second_momentum_buffer = beta2 * buf + (1-beta2) * v_mean`
+  - Scale: `v = v * (second_momentum_buffer.clamp_min(1e-10).rsqrt() * renorm_factor)`
+    where `renorm_factor` preserves the Frobenius norm of `v` before/after scaling.
+
+  Reference implementation: `NorMuonAndAdam._apply_normuon_variance_reduction`
+  in `/fss/evin_t/modded-nanogpt/train_gpt.py:929`.
+
+  New optimizer state key: `second_momentum_buffer` per Muon param. New config
+  key: `muon_beta2` (shared with item 13 if done together). Checkpoint
+  compatibility: new state key, so resumed checkpoints cold-start the second
+  moment (fine, recovers quickly).
+
+  Files: `optimizers/muon.py` (Muon update path only).
+
+- [x] **15. Polar Express orthogonalization (replace Newton-Schulz)**
+  Newton-Schulz is already stable in BF16 and good for our use, but Polar
+  Express ([arxiv 2505.16932](https://arxiv.org/pdf/2505.16932)) converges
+  faster per iteration and has better theoretical guarantees. This gives a
+  small training-speed win (fewer NS steps needed) and potentially better
+  gradient conditioning.
+
+  The algorithm is structurally identical to Newton-Schulz: iterative
+  polynomial refinement of X toward its polar factor. It uses a different
+  set of precomputed coefficients (5 iterations) and requires two custom
+  Triton helper kernels:
+  - `XXT(X, out)` — computes `X @ X.T` into a pre-allocated buffer (symmetric,
+    so only the lower triangle is computed; ~2× faster than `torch.mm`)
+  - `XTX(X, out)` — same but `X.T @ X`
+  - `ba_plus_cAA(A, alpha, beta, out)` — fused `beta*A + alpha*(A@A)`, avoids
+    materializing the intermediate
+
+  For tall matrices (M > N) use XTX + right-multiply; for wide use XXT +
+  left-multiply. The modded-nanogpt reference implementation also has a
+  `split_baddbmm` flag for matrices larger than 1024 rows to avoid PyTorch's
+  defensive copy in `baddbmm`.
+
+  Place the three Triton kernels in `kernels/polar_express.py`. Add a
+  `polar_express(grad_chunk, momentum_buffer, momentum_t)` function (same
+  signature as the current `zeropower_via_newtonschulz5` call site but with
+  the new kernels and coefficients). Swap the call in `optimizers/muon.py`.
+
+  Precomputed coefficients (for num_iters=5, safety_factor=2e-2):
+  ```python
+  polar_express_coeffs = [
+      (8.156554524902461,  -22.48329292557795,  15.878769915207462),
+      (4.042929935166739,   -2.808917465908714,  0.5000178451051316),
+      (3.8916678022926607,  -2.772484153217685,  0.5060648178503393),
+      (3.285753657755655,   -2.3681294933425376, 0.46449024233003106),
+      (2.3465413258596377,  -1.7097828382687081, 0.42323551169305323),
+  ]
+  ```
+
+  Files: new `kernels/polar_express.py`, `optimizers/muon.py`.
+
+- [x] **16. Mantissa tracking for BF16 Muon params**
+  BF16 has only 7 mantissa bits. When the Muon LR is small (late training,
+  cooldown phase), the update magnitude can be smaller than a BF16 ULP, so
+  the update is silently lost. Fix: maintain a separate `uint16` mantissa
+  buffer per Muon param and reconstruct FP32 precision before each update:
+  ```python
+  # p and mantissa are both uint16 views of the param storage
+  p32 = ((p.to(uint32) << 16) | mantissa.to(uint32)).view(float32)
+  mask = (grad * p32) >= 0                          # cautious WD mask
+  p32 -= p32 * mask * wd_factor * lr_factor         # weight decay
+  p32 -= grad * lr_factor                           # parameter update
+  p.copy_((p32.view(uint32) >> 16).to(uint16))      # store high bits back
+  mantissa.copy_(p32.view(uint32).to(uint16))       # store low bits
+  ```
+  This effectively gives the optimizer FP32 accumulation precision for Muon
+  params stored in BF16, at the cost of one extra uint16 buffer (half the
+  size of the param itself).
+
+  New optimizer state key: `mantissa` per Muon param (uint16, same shape as
+  param). Implemented together with item 13 (cautious WD) since both operate
+  on the FP32-reconstructed param. Non-BF16 params (e.g. FP32 in tests) fall
+  back to a simple cautious update without mantissa tracking.
+
+  Reference: `NorMuonAndAdam._cautious_wd_and_update_inplace`
+  in `/fss/evin_t/modded-nanogpt/train_gpt.py:909`.
+
+  Files: `optimizers/muon.py`.
+
+---
+
+## Tier 6 — Architecture additions (more experimental, optional)
+
+These were previously marked "not applicable" as competition-specific tricks.
+As of Record 78 (March 2026) they have been baked into the speedrun architecture
+for 3+ months and show up in every run. Still, they were tuned on short-context
+dense text (FineWeb, ≤2k tokens) and our setting is long-context
+graph-structured text (32k, sparse cross-doc attention). Treat these as
+hypotheses to test, not proven wins.
+
+- [ ] **17. Smear module (one-position look-back gate)**
+  Before the transformer layers, let each position peek at the previous
+  position's embedding through a learned scalar gate:
+  ```python
+  # smear_gate: Linear(12, 1, bias=False), zero-initialized
+  # smear_lambda: scalar Parameter, zero-initialized
+  gate = smear_lambda * sigmoid(smear_gate(x[1:, :12]))  # (T-1, 1)
+  x = cat([x[:1], x[1:] + gate * x[:-1]], dim=0)
+  ```
+  Zero init means it starts as a no-op, so it cannot hurt at the start of
+  training. Very cheap (2 tiny params + one elementwise op). The gate uses
+  only the first 12 dimensions of the embedding to keep it fast.
+
+  Implementation goes in `model/modules/backbone.py` before the first layer
+  call. Also expose `smear_gate` and `smear_lambda` as named parameters so
+  they fall into the AdamW scalar group (not Muon).
+
+  Files: `model/modules/backbone.py`.
+
+- [ ] **18. x0 injection into every layer (embedding residual highway)**
+  In modded-nanogpt each layer receives a small injection of the raw input
+  embedding (before any transformer processing). A per-layer scalar
+  `x0_lambda[i]` gates how much of `x0` is added to the residual stream at
+  layer i. Zero-initialized → no-op at start.
+
+  tagseq2tagseq already has skip connections from the first half of layers to
+  the second half, but nothing that propagates the original embedding all the
+  way through. This creates an information highway for the raw token signal.
+
+  Implementation: add `x0_lambdas = nn.Parameter(torch.zeros(num_layers))` to
+  `TS2TSBackbone`; in the layer loop, before or after the layer call, add
+  `x = x + x0_lambdas[i] * x0` (where `x0` is the embedding output saved
+  before the first layer). `x0_lambdas` go into the AdamW scalar group.
+
+  Files: `model/modules/backbone.py`.
+
+- [ ] **19. Value embeddings**
+  A `5 × vocab_size × model_dim` parameter bank (init: `0.01 * randn`, BF16).
+  Inside the attention forward, look up per-token value vectors from this bank
+  and add them (with a learned gated per-head weight) to the attention output
+  before the output projection. Only a subset of layers uses them (in
+  modded-nanogpt: layers 1, 2, 8, 9, 10 of 11).
+
+  The gate is a small `(num_heads, 12)` parameter per layer that uses the
+  first 12 dims of the input to compute a per-head scalar.
+
+  This is the most parameter-expensive item (~250M new params at 768D model,
+  ~5× vocab_size × model_dim / num_banks). The value_embeds get sparse
+  gradients (only rows touched by tokens in the batch are updated) so they
+  use a separate Adam group with `beta1=0.75` (modded-nanogpt's choice for
+  value embeds). Weight decay should be very low (0.0 or 0.005).
+
+  Before committing to this for the final run, verify that the added parameter
+  count doesn't push us past Chinchilla-optimal for the target dataset size —
+  a 250M parameter addition requires proportionally more tokens to be compute-
+  optimal.
+
+  Files: `model/modules/attention.py` (or equivalent), `model/modules/backbone.py`,
+  `main.py` (new param group for value_embeds).
+
+- [ ] **20. Bigram hash embedding**
+  For each position, compute a hash of the (prev_token, curr_token) pair and
+  look it up in a small embedding table. The hash is a simple XOR-with-random-
+  multiplier scheme: `hash = (tokens[i-1] * A) XOR (tokens[i] * B) mod vocab_size_bigram`.
+  The bigram embedding is injected into the residual stream at each layer (like
+  x0_lambdas in item 18) with its own per-layer scalar.
+
+  Bigram vocab size in modded-nanogpt: `50304 * 5` (much larger than the
+  unigram vocab). The table is zero-initialized so it starts as a no-op.
+
+  This is probably the least likely to transfer: FineWeb has many repetitive
+  bigrams (common English phrases), while Wikipedia/code have more diverse
+  token patterns. Worth testing but lower priority.
+
+  Files: `data/collate.py` or `main.py` (bigram hash computation), new
+  embedding in `model/modules/backbone.py`, new AdamW group in `main.py`.
+
+---
+
 ## Not applicable
 
 - Multi-stage sequence length scheduling (they sprint at ≤2k context; we're at 32k)
 - RoPE base 1/1024 (wrong for 32k context)
-- Bigram/value embeddings, smear gate, skip gate, paired-head attention, backout —
-  competition-specific tricks not validated outside their narrow setting
-- Adam on odd steps only (unclear motivation)
-- FP8 (efficiency only, not training dynamics)
+- Paired-head attention (risky, not validated outside speedrun, conflicts with
+  doc-level masking semantics)
+- Backout pattern (x -= backout_lambda × x_backout) — adds a non-monotone
+  forward path, unclear motivation outside the speedrun setting
+- Skip gate / sparse attention gate on layer 6 — too architecture-specific
+- Adam on odd steps only — minor compute savings, complicates training loop
+  and checkpoint logic significantly for unclear benefit at our scale
+- FP8 matmul (efficiency only, not training dynamics; worth revisiting
+  separately if memory becomes the binding constraint)
+- YaRN / dynamic window warmup — we use fixed 32k context throughout

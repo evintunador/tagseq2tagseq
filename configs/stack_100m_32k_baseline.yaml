@@ -30,6 +30,7 @@ optimizer:
   momentum: 0.95
   beta1: 0.9
   beta2: 0.95
+  muon_beta2: 0.95      # NorMuon second-moment EMA coefficient
   muon_lr: 0.001
   adamw_lr: 0.00001
   muon_momentum_warmup_steps: 300  # ramp momentum 0.85→0.95 over first N steps
