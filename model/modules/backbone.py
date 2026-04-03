@@ -64,6 +64,7 @@ class TS2TSBackbone(nn.Module):
             attention_backend=attention_backend,
         ) for _ in range(num_layers)])
         self.skip_weights = nn.Parameter(torch.ones(num_layers//2))
+        self.x0_lambdas = nn.Parameter(torch.zeros(num_layers))
         self.activation_checkpointing = activation_checkpointing
 
     def forward(self, x: Tensor, block_mask: Any) -> Tensor:
@@ -88,13 +89,14 @@ class TS2TSBackbone(nn.Module):
         """
         skip_connections = []
         n_skip = len(self.skip_weights)
-        
+        x0 = x  # embedding residual highway: saved before any transformer layers
+
         for i, layer in enumerate(self.layers):
             if i >= n_skip:
                  # Pop skip connection
                  if skip_connections:
                     x = x + self.skip_weights[i - n_skip] * skip_connections.pop()
-            
+
             if self.activation_checkpointing:
                 x = torch.utils.checkpoint.checkpoint(
                     layer, x, block_mask, use_reentrant=False
@@ -102,7 +104,9 @@ class TS2TSBackbone(nn.Module):
             else:
                 x = layer(x, block_mask)
 
+            x = x + self.x0_lambdas[i] * x0
+
             if i < n_skip:
                 skip_connections.append(x)
-                
+
         return x

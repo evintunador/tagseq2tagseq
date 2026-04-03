@@ -268,26 +268,7 @@ dense text (FineWeb, ≤2k tokens) and our setting is long-context
 graph-structured text (32k, sparse cross-doc attention). Treat these as
 hypotheses to test, not proven wins.
 
-- [ ] **17. Smear module (one-position look-back gate)**
-  Before the transformer layers, let each position peek at the previous
-  position's embedding through a learned scalar gate:
-  ```python
-  # smear_gate: Linear(12, 1, bias=False), zero-initialized
-  # smear_lambda: scalar Parameter, zero-initialized
-  gate = smear_lambda * sigmoid(smear_gate(x[1:, :12]))  # (T-1, 1)
-  x = cat([x[:1], x[1:] + gate * x[:-1]], dim=0)
-  ```
-  Zero init means it starts as a no-op, so it cannot hurt at the start of
-  training. Very cheap (2 tiny params + one elementwise op). The gate uses
-  only the first 12 dimensions of the embedding to keep it fast.
-
-  Implementation goes in `model/modules/backbone.py` before the first layer
-  call. Also expose `smear_gate` and `smear_lambda` as named parameters so
-  they fall into the AdamW scalar group (not Muon).
-
-  Files: `model/modules/backbone.py`.
-
-- [ ] **18. x0 injection into every layer (embedding residual highway)**
+- [x] **17. x0 injection into every layer (embedding residual highway)**
   In modded-nanogpt each layer receives a small injection of the raw input
   embedding (before any transformer processing). A per-layer scalar
   `x0_lambda[i]` gates how much of `x0` is added to the residual stream at
