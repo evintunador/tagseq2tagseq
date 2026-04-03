@@ -1,11 +1,11 @@
 import math
+from typing import Optional
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Any
 
-from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
 from tunalab.modules.regularization.drop_path import DropPath
 from tunalab.modules.norms.rms_norm import RMSNorm
 from kernels.fused_relu_sq_mlp import FusedReLUSquaredMLP
@@ -43,7 +43,8 @@ class Layer(nn.Module):
                 dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
             )
         else:
-            self.attn = FlexSelfAttention(
+            from model.modules.attention import VEFlexSelfAttention
+            self.attn = VEFlexSelfAttention(
                 dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
             )
 
@@ -60,9 +61,12 @@ class Layer(nn.Module):
         self.resid_lambdas = nn.Parameter(torch.full((2,), math.sqrt(1.1)))
         self.post_lambdas = nn.Parameter(torch.ones(2))
 
-    def forward(self, x: Tensor, block_mask: Any):
+    def forward(self, x: Tensor, block_mask: Any,
+                ve: Optional[Tensor] = None, ve_gate_w: Optional[Tensor] = None):
         rl = self.resid_lambdas
         pl = self.post_lambdas
-        x = rl[0] * x + pl[0] * self.drop_path(self.attn(self.ln_1(x), block_mask=block_mask))
+        x = rl[0] * x + pl[0] * self.drop_path(
+            self.attn(self.ln_1(x), block_mask=block_mask, ve=ve, ve_gate_w=ve_gate_w)
+        )
         x = rl[1] * x + pl[1] * self.drop_path(self.mlp(self.ln_2(x)))
         return x

@@ -22,6 +22,8 @@ model:
   logit_softcap: 30.0  # tanh softcap: softcap * tanh(logits / softcap)
   mtp_extra_weights: [0.5, 0.25]   # predict +2 and +3 tokens ahead
   mtp_decay_steps: 0      # optimizer steps to linearly decay mtp weights to 0 (0=constant)
+  ve_layers: [1, 2, 21, 22, 23]   # layers receiving value-embedding injection (reference pattern)
+  shared_ve_bank: false            # false = one bank per ve_layer (~490 MB); true = shared (~98 MB)
 
 optimizer:
   type: 'muon'

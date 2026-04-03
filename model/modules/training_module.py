@@ -105,6 +105,8 @@ class TS2TSTrainingModule(nn.Module):
         logit_softcap: float = None,
         mtp_extra_weights: Optional[List[float]] = None,
         mtp_decay_micro_steps: int = 0,
+        ve_layers: Optional[List[int]] = None,
+        shared_ve_bank: bool = False,
     ) -> 'TS2TSTrainingModule':
         """
         Factory method to construct a training module from configuration parameters.
@@ -139,6 +141,9 @@ class TS2TSTrainingModule(nn.Module):
             fp8=fp8,
             activation_checkpointing=activation_checkpointing,
             attention_backend=attention_backend,
+            ve_layers=ve_layers or [],
+            shared_ve_bank=shared_ve_bank,
+            vocab_size=vocab_size,
         )
 
         # Construct embedding
@@ -236,7 +241,8 @@ class TS2TSTrainingModule(nn.Module):
         block_mask = self.block_mask_creator(**mask_batch)
 
         x = self.embedding(input_ids)
-        x = self.backbone(x, block_mask=block_mask)
+        ve_map = self.backbone.prepare_ve(input_ids)
+        x = self.backbone(x, block_mask=block_mask, ve_map=ve_map)
         x = self.norm(x)
 
         # Disable dynamo tracing for the Liger loss: its AOT-compiled forward has

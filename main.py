@@ -577,6 +577,13 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     if isinstance(mtp_extra_weights, str):
         import ast
         mtp_extra_weights = ast.literal_eval(mtp_extra_weights)
+
+    ve_layers = cfg['model'].get('ve_layers') or []
+    if isinstance(ve_layers, str):
+        import ast
+        ve_layers = ast.literal_eval(ve_layers)
+    ve_layers = [int(x) for x in ve_layers]
+    shared_ve_bank = bool(cfg['model'].get('shared_ve_bank', False))
     mtp_decay_steps = int(cfg['model'].get('mtp_decay_steps', 0))
     accum_steps_val = int(
         cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1)
@@ -603,18 +610,27 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         logit_softcap=cfg['model'].get('logit_softcap'),
         mtp_extra_weights=mtp_extra_weights,
         mtp_decay_micro_steps=mtp_decay_micro_steps,
+        ve_layers=ve_layers,
+        shared_ve_bank=shared_ve_bank,
     ).to(dist.device)
 
     # Build optimizer param groups BEFORE compile/DDP so that named_parameters()
     # gives clean names and weight-tied tensors are only counted once.
     logger.info("Initializing Optimizer...")
-    muon_params, embed_adamw_params, other_adamw_params = [], [], []
+    muon_params, embed_adamw_params, other_adamw_params, ve_embed_params = [], [], [], []
     seen_ids: set = set()
     for name, param in model.named_parameters():
         if id(param) in seen_ids:
             continue
         seen_ids.add(id(param))
-        if 'backbone' in name and param.ndim >= 2:
+        if 'value_embeds' in name:
+            # Sparse lookup table: lower β1 (0.75) for sparse gradients,
+            # no weight decay (rows not seen this step must not shrink).
+            ve_embed_params.append(param)
+        elif 've_gate_bank' in name:
+            # Small gating tensor — standard AdamW scalar group.
+            other_adamw_params.append(param)
+        elif 'backbone' in name and param.ndim >= 2:
             # Backbone 2-D weights → Muon (spectral-norm optimizer)
             muon_params.append(param)
         elif 'embedding' in name or 'loss_fn' in name:
@@ -655,6 +671,17 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             weight_decay=adamw_wd,
         ),
     ]
+    if ve_embed_params:
+        # value_embeds: sparse lookup table — lower β1=0.75 (reference choice),
+        # no weight decay (rows not updated this step must not shrink).
+        ve_beta1 = cfg['optimizer'].get('ve_beta1', 0.75)
+        param_groups.append(dict(
+            params=ve_embed_params,
+            use_muon=False,
+            lr=cfg['optimizer']['adamw_lr'],
+            betas=(ve_beta1, adamw_beta2),
+            weight_decay=0.0,
+        ))
 
     # MuonWithAuxAdam handles distributed Muon parameter-sharding via all_gather.
     # SingleDeviceMuon is used when there is no process group (single GPU / CPU).

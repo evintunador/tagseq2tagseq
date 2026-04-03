@@ -285,29 +285,29 @@ hypotheses to test, not proven wins.
 
   Files: `model/modules/backbone.py`.
 
-- [ ] **19. Value embeddings**
-  A `5 × vocab_size × model_dim` parameter bank (init: `0.01 * randn`, BF16).
-  Inside the attention forward, look up per-token value vectors from this bank
-  and add them (with a learned gated per-head weight) to the attention output
-  before the output projection. Only a subset of layers uses them (in
-  modded-nanogpt: layers 1, 2, 8, 9, 10 of 11).
+- [x] **19. Value embeddings**
+  A `num_banks × vocab_size × model_dim` parameter bank (init: `0.01 * randn`,
+  BF16). Before the attention kernel, per-token value vectors are looked up and
+  added to V through a learned per-head gate — no kernel changes required (the
+  gated ve is mixed through the attention distribution exactly like ordinary
+  value vectors).
 
-  The gate is a small `(num_heads, 12)` parameter per layer that uses the
-  first 12 dims of the input to compute a per-head scalar.
+  Config keys (both optional; omitting `ve_layers` disables the feature):
+  - `ve_layers: [1, 2, 21, 22, 23]` — which layers receive ve injection
+  - `shared_ve_bank: false` — true = one bank shared by all ve_layers (~98 MB);
+    false = one bank per ve_layer (~490 MB for 5 layers at 1024D)
 
-  This is the most parameter-expensive item (~250M new params at 768D model,
-  ~5× vocab_size × model_dim / num_banks). The value_embeds get sparse
-  gradients (only rows touched by tokens in the batch are updated) so they
-  use a separate Adam group with `beta1=0.75` (modded-nanogpt's choice for
-  value embeds). Weight decay should be very low (0.0 or 0.005).
+  The gate is a `(H, 12)` parameter per bank using first 6 dims of the
+  (pre-norm) input and first 6 dims of ve: `2*σ(linear([x[:6], ve[:6]], W))`.
+  Gate zero-init → no-op at start.
 
-  Before committing to this for the final run, verify that the added parameter
-  count doesn't push us past Chinchilla-optimal for the target dataset size —
-  a 250M parameter addition requires proportionally more tokens to be compute-
-  optimal.
+  value_embeds use a dedicated Adam group: β1=0.75 (sparse gradients; only
+  rows for tokens in the current pack are updated), wd=0.0 (unseen rows must
+  not shrink). ve_gate_bank goes in other_adamw_params.
 
-  Files: `model/modules/attention.py` (or equivalent), `model/modules/backbone.py`,
-  `main.py` (new param group for value_embeds).
+  Files: `model/modules/attention.py`, `model/modules/layer.py`,
+  `model/modules/backbone.py`, `model/modules/training_module.py`,
+  `model/model.py`, `main.py`.
 
 - [ ] **20. Bigram hash embedding**
   For each position, compute a hash of the (prev_token, curr_token) pair and

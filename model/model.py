@@ -228,8 +228,9 @@ class TS2TSModel:
             Logits tensor of shape [1, T, vocab_size]
         """
         block_mask = self.block_mask_creator(tokens=tokens, doc_spans=doc_spans or [], **kwargs)
-        x = F.embedding(tokens, self.embedding_weight)   # [1, T, D]
-        x = self.backbone(x, block_mask=block_mask)      # [1, T, D]
+        x = F.embedding(tokens, self.embedding_weight)                        # [1, T, D]
+        ve_map = self.backbone.prepare_ve(tokens)
+        x = self.backbone(x, block_mask=block_mask, ve_map=ve_map)            # [1, T, D]
         x = self.norm(x)
         logits = F.linear(x, self.lm_head_weight)        # [1, T, V]
         return logits
