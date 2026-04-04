@@ -7,6 +7,10 @@ from torch import Tensor
 
 from .layer import Layer
 
+_BIGRAM_VOCAB_SIZE_DEFAULT = 50304 * 5  # 251520 — matches modded-nanogpt reference
+_BIGRAM_RAND_A = 36313
+_BIGRAM_RAND_B = 27191
+
 
 class TS2TSBackbone(nn.Module):
     """
@@ -20,6 +24,7 @@ class TS2TSBackbone(nn.Module):
     - Skip connections from first half to second half of layers
     - Per-layer x0 injection (embedding residual highway, zero-init)
     - Optional value embeddings (ve_layers / shared_ve_bank config)
+    - Optional bigram hash embedding (use_bigram config)
     - FlexAttention with custom block masks for graph-aware attention patterns
 
     Args:
@@ -33,10 +38,9 @@ class TS2TSBackbone(nn.Module):
         attention_backend: Kernel selection string
         ve_layers: Layer indices that receive value-embedding injection.
             Empty list (default) disables the feature entirely.
-        shared_ve_bank: If True, all ve_layers share one bank + gate (cheap
-            test mode, ~1/N memory).  If False (default), each layer gets
-            its own bank + gate (reference behaviour).
+        shared_ve_bank: If True, all ve_layers share one bank + gate.
         vocab_size: Vocabulary size — required when ve_layers is non-empty.
+        use_bigram: Enable bigram hash embedding injection (default False).
     """
     def __init__(
         self,
@@ -51,6 +55,8 @@ class TS2TSBackbone(nn.Module):
         ve_layers: Optional[List[int]] = None,
         shared_ve_bank: bool = False,
         vocab_size: int = 0,
+        use_bigram: bool = False,
+        bigram_vocab_size: int = _BIGRAM_VOCAB_SIZE_DEFAULT,
         **kwargs
     ):
         super().__init__()
@@ -70,7 +76,6 @@ class TS2TSBackbone(nn.Module):
         self.activation_checkpointing = activation_checkpointing
 
         # Value embeddings (optional).
-        # ve_layers is stored as a list to preserve bank-assignment order.
         self.ve_layers: List[int] = list(ve_layers) if ve_layers else []
         self.shared_ve_bank: bool = shared_ve_bank
 
@@ -78,19 +83,27 @@ class TS2TSBackbone(nn.Module):
             if vocab_size <= 0:
                 raise ValueError("vocab_size must be > 0 when ve_layers is non-empty")
             num_banks = 1 if shared_ve_bank else len(self.ve_layers)
-            # BF16 to match the reference; ~98 MB per bank at vocab=50304, D=1024.
+            # BF16; ~98 MB per bank at vocab=50304, D=1024.
             self.value_embeds = nn.Parameter(
                 0.01 * torch.randn(num_banks, vocab_size, model_dim, dtype=torch.bfloat16)
             )
             # Gate weights: (num_banks, num_heads, 12), zero-init → no-op at start.
             self.ve_gate_bank = nn.Parameter(torch.zeros(num_banks, num_heads, 12))
 
+        # Bigram hash embedding (optional).
+        # bigram_lambdas: 0.05-init (non-zero, but embed weight=0 → still no-op at start).
+        if use_bigram:
+            self.bigram_embed = nn.Embedding(bigram_vocab_size, model_dim)
+            nn.init.zeros_(self.bigram_embed.weight)
+            self.bigram_lambdas = nn.Parameter(0.05 * torch.ones(num_layers))
+
+    # ------------------------------------------------------------------
+    # Preparation helpers (called by training_module / inference model
+    # before forward() to keep the backbone's forward interface clean)
+    # ------------------------------------------------------------------
+
     def prepare_ve(self, input_ids: Tensor) -> Dict[int, Tuple[Tensor, Tensor]]:
         """Look up value embeddings for a sequence and return a per-layer map.
-
-        Call this before forward() when value embeddings are enabled.  Keeping
-        the vocab lookup here (rather than inside forward) preserves the
-        backbone's contract of operating purely on continuous representations.
 
         Args:
             input_ids: Token IDs (B, T) with B=1 for packed sequences.
@@ -111,8 +124,43 @@ class TS2TSBackbone(nn.Module):
             )
         return ve_map
 
-    def forward(self, x: Tensor, block_mask: Any,
-                ve_map: Optional[Dict[int, Tuple[Tensor, Tensor]]] = None) -> Tensor:
+    def prepare_bigram(self, input_ids: Tensor) -> Optional[Tensor]:
+        """Compute bigram hash indices and look up embeddings.
+
+        Hash: position 0 → reserved index (bigram_vocab_size - 1).
+              position i≥1 → (A * curr_token XOR B * prev_token) % (vocab-1).
+        Matches modded-nanogpt get_bigram_hash exactly.
+
+        Args:
+            input_ids: Token IDs (B, T) with B=1 for packed sequences.
+
+        Returns:
+            Bigram embedding tensor (T, D), or None if use_bigram is False.
+        """
+        if not hasattr(self, 'bigram_embed'):
+            return None
+        ids = input_ids.squeeze(0).to(torch.int32)  # (T,)
+        mod = self.bigram_embed.num_embeddings - 1
+        bigram_ids = ids.clone()
+        bigram_ids[0] = mod
+        # bigram_ids[:-1] at this point: [mod, ids[1], ..., ids[T-2]]
+        bigram_ids[1:] = torch.bitwise_xor(
+            _BIGRAM_RAND_A * ids[1:],
+            _BIGRAM_RAND_B * bigram_ids[:-1],
+        ) % mod
+        return self.bigram_embed(bigram_ids.long())  # (T, D)
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+
+    def forward(
+        self,
+        x: Tensor,
+        block_mask: Any,
+        ve_map: Optional[Dict[int, Tuple[Tensor, Tensor]]] = None,
+        bigram: Optional[Tensor] = None,
+    ) -> Tensor:
         """
         Forward pass through the transformer backbone.
 
@@ -120,17 +168,21 @@ class TS2TSBackbone(nn.Module):
             x: Pre-embedded input (B, T, C).
             block_mask: FlexAttention BlockMask or TritonMaskInputs.
             ve_map: Per-layer value-embedding map from prepare_ve().
-                    None or empty dict disables value embeddings.
+            bigram: Pre-looked-up bigram embeddings (T, D) from prepare_bigram().
 
         Returns:
             Hidden states (B, T, C) after all transformer layers.
         """
         skip_connections = []
         n_skip = len(self.skip_weights)
-        x0 = x  # embedding residual highway: saved before any transformer layers
+        x0 = x  # embedding residual highway: saved before any injections
 
         if ve_map is None:
             ve_map = {}
+
+        # Pre-loop bigram injection (layer-0 contribution).
+        if bigram is not None:
+            x = x + self.bigram_lambdas[0] * bigram.unsqueeze(0)
 
         for i, layer in enumerate(self.layers):
             if i >= n_skip:
@@ -141,8 +193,6 @@ class TS2TSBackbone(nn.Module):
 
             if self.activation_checkpointing:
                 if ve_i is not None:
-                    # ve_i and ve_gate_i are tensors whose gradients must flow,
-                    # so they must be explicit args (not closure) for checkpointing.
                     x = torch.utils.checkpoint.checkpoint(
                         lambda x_, ve_, vg_: layer(x_, block_mask, ve=ve_, ve_gate_w=vg_),
                         x, ve_i, ve_gate_i,
@@ -155,7 +205,10 @@ class TS2TSBackbone(nn.Module):
             else:
                 x = layer(x, block_mask, ve=ve_i, ve_gate_w=ve_gate_i)
 
+            # x0 injection (all layers) + bigram injection (layers 1+).
             x = x + self.x0_lambdas[i] * x0
+            if bigram is not None and i >= 1:
+                x = x + self.bigram_lambdas[i] * bigram.unsqueeze(0)
 
             if i < n_skip:
                 skip_connections.append(x)

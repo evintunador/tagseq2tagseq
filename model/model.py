@@ -230,7 +230,8 @@ class TS2TSModel:
         block_mask = self.block_mask_creator(tokens=tokens, doc_spans=doc_spans or [], **kwargs)
         x = F.embedding(tokens, self.embedding_weight)                        # [1, T, D]
         ve_map = self.backbone.prepare_ve(tokens)
-        x = self.backbone(x, block_mask=block_mask, ve_map=ve_map)            # [1, T, D]
+        bigram = self.backbone.prepare_bigram(tokens)
+        x = self.backbone(x, block_mask=block_mask, ve_map=ve_map, bigram=bigram)  # [1, T, D]
         x = self.norm(x)
         logits = F.linear(x, self.lm_head_weight)        # [1, T, V]
         return logits

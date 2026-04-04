@@ -309,7 +309,7 @@ hypotheses to test, not proven wins.
   `model/modules/backbone.py`, `model/modules/training_module.py`,
   `model/model.py`, `main.py`.
 
-- [ ] **20. Bigram hash embedding**
+- [x] **20. Bigram hash embedding**
   For each position, compute a hash of the (prev_token, curr_token) pair and
   look it up in a small embedding table. The hash is a simple XOR-with-random-
   multiplier scheme: `hash = (tokens[i-1] * A) XOR (tokens[i] * B) mod vocab_size_bigram`.

@@ -584,6 +584,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         ve_layers = ast.literal_eval(ve_layers)
     ve_layers = [int(x) for x in ve_layers]
     shared_ve_bank = bool(cfg['model'].get('shared_ve_bank', False))
+    use_bigram = bool(cfg['model'].get('use_bigram', False))
+    bigram_vocab_size = int(cfg['model'].get('bigram_vocab_size', 50304 * 5))
     mtp_decay_steps = int(cfg['model'].get('mtp_decay_steps', 0))
     accum_steps_val = int(
         cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1)
@@ -612,6 +614,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         mtp_decay_micro_steps=mtp_decay_micro_steps,
         ve_layers=ve_layers,
         shared_ve_bank=shared_ve_bank,
+        use_bigram=use_bigram,
+        bigram_vocab_size=bigram_vocab_size,
     ).to(dist.device)
 
     # Build optimizer param groups BEFORE compile/DDP so that named_parameters()
@@ -623,8 +627,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         if id(param) in seen_ids:
             continue
         seen_ids.add(id(param))
-        if 'value_embeds' in name:
-            # Sparse lookup table: lower β1 (0.75) for sparse gradients,
+        if 'value_embeds' in name or 'bigram_embed' in name:
+            # Sparse lookup tables: lower β1 (0.75) for sparse gradients,
             # no weight decay (rows not seen this step must not shrink).
             ve_embed_params.append(param)
         elif 've_gate_bank' in name:

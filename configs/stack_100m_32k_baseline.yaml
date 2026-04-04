@@ -24,6 +24,10 @@ model:
   mtp_decay_steps: 0      # optimizer steps to linearly decay mtp weights to 0 (0=constant)
   ve_layers: [1, 2, 21, 22, 23]   # layers receiving value-embedding injection (reference pattern)
   shared_ve_bank: false            # false = one bank per ve_layer (~490 MB); true = shared (~98 MB)
+  # use_bigram: false              # bigram hash embedding injection (disabled by default)
+  # bigram_vocab_size: 251520      # 50304 × N; memory limits tested on 80 GB A100 (24L/1024D, 32k):
+  #   shared_ve_bank: false  → max 50304×2 = 100608  (×3 = 150912 OOMs by ~6 MB, fragmentation-sensitive)
+  #   shared_ve_bank: true   → max 50304×4 = 201216  (×5 = 251520 OOMs by ~28 MB)
 
 optimizer:
   type: 'muon'

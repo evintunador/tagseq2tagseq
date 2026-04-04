@@ -107,6 +107,8 @@ class TS2TSTrainingModule(nn.Module):
         mtp_decay_micro_steps: int = 0,
         ve_layers: Optional[List[int]] = None,
         shared_ve_bank: bool = False,
+        use_bigram: bool = False,
+        bigram_vocab_size: int = 50304 * 5,
     ) -> 'TS2TSTrainingModule':
         """
         Factory method to construct a training module from configuration parameters.
@@ -144,6 +146,8 @@ class TS2TSTrainingModule(nn.Module):
             ve_layers=ve_layers or [],
             shared_ve_bank=shared_ve_bank,
             vocab_size=vocab_size,
+            use_bigram=use_bigram,
+            bigram_vocab_size=bigram_vocab_size,
         )
 
         # Construct embedding
@@ -242,7 +246,8 @@ class TS2TSTrainingModule(nn.Module):
 
         x = self.embedding(input_ids)
         ve_map = self.backbone.prepare_ve(input_ids)
-        x = self.backbone(x, block_mask=block_mask, ve_map=ve_map)
+        bigram = self.backbone.prepare_bigram(input_ids)
+        x = self.backbone(x, block_mask=block_mask, ve_map=ve_map, bigram=bigram)
         x = self.norm(x)
 
         # Disable dynamo tracing for the Liger loss: its AOT-compiled forward has
