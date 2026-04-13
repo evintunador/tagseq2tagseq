@@ -22,7 +22,7 @@ import logging
 import math
 import random
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 
@@ -36,10 +36,11 @@ logger = logging.getLogger(__name__)
 def run_held_out_perplexity(
     model,
     dataset_dir: Union[str, Path],
-    layout_policy: DocLayoutPolicy,
+    layout_policy: Optional[DocLayoutPolicy] = None,
     split: str = "all",
     max_docs: int = 500,
     device: str = "cuda",
+    mask_type_override: Optional[str] = None,
 ) -> Dict[str, float]:
     """Evaluate model perplexity on held-out corpus documents.
 
@@ -52,9 +53,8 @@ def run_held_out_perplexity(
         model: TS2TSModel in eval mode.
         dataset_dir: Path to a pretokenized dataset directory containing
             ``tokenized_graph.jsonl``, ``metadata.json``, and shard files.
-        layout_policy: The layout policy used during training. Applied when
-            building each document's token sequence so the model sees the
-            same prefix/suffix tokens it saw during training.
+        layout_policy: Layout policy for prefix/suffix decoration. Defaults
+            to model.active_layout_policy if not provided.
         split: Graph split name to evaluate on. Common values:
             ``"val_community"``, ``"val_random"``. Pass ``"all"`` to sample
             ``max_docs`` documents uniformly at random from the full graph
@@ -63,6 +63,9 @@ def run_held_out_perplexity(
         max_docs: Maximum number of documents to evaluate. Capped to the
             number of documents available in the split.
         device: Device for token tensors.
+        mask_type_override: Optional mask type passed to score_doc's
+            forward_inference call. None uses the model's default. Pass
+            'doc_causal' for the baseline condition.
 
     Returns:
         Dictionary with keys:
@@ -130,6 +133,7 @@ def run_held_out_perplexity(
                 raw_identifier=raw_id,
                 normed_identifier=normed_id,
                 device=device,
+                mask_type=mask_type_override,
             )
 
             if result["num_tokens"] > 0:
@@ -145,9 +149,15 @@ def run_held_out_perplexity(
             return _empty_result(split)
 
         mean_nll = float(np.mean(nll_list))
-        perplexity = math.exp(mean_nll)
+        try:
+            perplexity = math.exp(mean_nll)
+        except OverflowError:
+            perplexity = float('inf')
         nll_ci = calculate_bootstrap_ci(nll_list)
-        perplexity_ci = (math.exp(nll_ci[0]), math.exp(nll_ci[1]))
+        try:
+            perplexity_ci = (math.exp(nll_ci[0]), math.exp(nll_ci[1]))
+        except OverflowError:
+            perplexity_ci = (float('inf'), float('inf'))
 
         logger.info(
             "Held-out perplexity (%s, n=%d): ppl=%.3f  mean_nll=%.4f  "

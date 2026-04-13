@@ -95,11 +95,14 @@ def mock_model():
     """Mock TS2TSModel with uniform logits (NLL = log(256))."""
     model = MagicMock()
 
-    def _forward(tokens, doc_spans):
+    def _forward(tokens, doc_spans, **kwargs):
         T = tokens.shape[1]
         return torch.zeros(1, T, 256)
 
     model.forward_inference.side_effect = _forward
+    model.active_layout_policy = MagicMock()
+    model.active_layout_policy.prefix_tokens.return_value = []
+    model.active_layout_policy.suffix_tokens.return_value = []
     dummy_param = nn.Parameter(torch.zeros(1))
     model.backbone.parameters.return_value = iter([dummy_param])
     return model

@@ -39,22 +39,25 @@ from data.layout import DocLayoutInfo, DocLayoutPolicy, NullLayoutPolicy
 def score_doc(
     model,
     tokens: List[int],
-    layout_policy: DocLayoutPolicy,
+    layout_policy: Optional[DocLayoutPolicy] = None,
     raw_identifier: str = "",
     normed_identifier: str = "",
     device: str = "cuda",
+    mask_type: Optional[str] = None,
 ) -> Dict[str, float]:
-    """Score a single document under its training layout policy.
+    """Score a single document under its layout policy.
 
     Args:
         model: TS2TSModel in eval mode (forward_inference is @no_grad).
         tokens: Raw body token IDs (no prefix/suffix decoration).
-        layout_policy: The layout policy used during training for this
-            checkpoint. Prefix/suffix are prepended/appended to the body
-            before the forward pass but are excluded from the NLL.
+        layout_policy: The layout policy for prefix/suffix decoration.
+            Defaults to model.active_layout_policy if not provided.
         raw_identifier: Human-readable document identifier (e.g. filename).
         normed_identifier: Normalised + hashed identifier used as the corpus key.
         device: Target device for the token tensor.
+        mask_type: Optional mask type override passed to forward_inference.
+            None uses the model's default. Pass 'doc_causal' to explicitly
+            disable cross-doc attention (e.g. for baseline comparisons).
 
     Returns:
         {"mean_nll": float, "num_tokens": int}
@@ -62,6 +65,9 @@ def score_doc(
     """
     if not tokens:
         return {"mean_nll": 0.0, "num_tokens": 0}
+
+    if layout_policy is None:
+        layout_policy = model.active_layout_policy
 
     info = DocLayoutInfo(
         raw_identifier=raw_identifier,
@@ -93,7 +99,7 @@ def score_doc(
     )
 
     # forward_inference is decorated with @torch.no_grad() — no extra context needed.
-    logits = model.forward_inference(tokens_tensor, [span])  # [1, T, V]
+    logits = model.forward_inference(tokens_tensor, [span], mask_type=mask_type)  # [1, T, V]
     log_probs = F.log_softmax(logits[0].float(), dim=-1)     # [T, V]
 
     # Logit at position t predicts token t+1.
@@ -123,6 +129,11 @@ def score_doc(
     return {"mean_nll": mean_nll, "num_tokens": len(logit_indices)}
 
 
+# TODO: add score_completions_batched(model, context_tokens, list[completion_tokens])
+# that packs all K (context + choice) sequences as K separate DocSpans in a single
+# forward pass, scoring each choice's NLL from the combined logits. doc_causal masking
+# makes each span independent — semantically identical to K separate calls but ~K×
+# faster. Required before multiple-choice benchmarks (HellaSwag, ARC, etc.) are practical.
 def score_completion(
     model,
     context_tokens: List[int],
@@ -177,7 +188,9 @@ def score_completion(
         raw_identifier="",
     )
 
-    logits = model.forward_inference(tokens_tensor, [span])  # [1, T, V]
+    # MC eval always uses doc_causal: external benchmarks are out-of-distribution
+    # text with no meaningful cross-doc link structure.
+    logits = model.forward_inference(tokens_tensor, [span], mask_type='doc_causal')  # [1, T, V]
     log_probs = F.log_softmax(logits[0].float(), dim=-1)     # [T, V]
 
     # Logit at position (ctx_len - 1) predicts the first completion token.

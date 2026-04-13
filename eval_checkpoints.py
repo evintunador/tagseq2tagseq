@@ -4,6 +4,11 @@ eval_checkpoints.py — downstream benchmark evaluation for TS2TS checkpoints.
 Loads a checkpoint, reconstructs the model in inference mode, and runs the
 configured benchmark suite. Results are written as JSON.
 
+Benchmarks can be run under multiple named conditions in a single pass.
+Each condition specifies a mask_type and layout_policy override, allowing
+direct comparison between e.g. the model's experimental cross_doc_link
+behaviour and a doc_causal baseline.
+
 Usage (CLI):
     python eval_checkpoints.py \\
         --checkpoint runs/YYYYMMDD/checkpoints/best_model.pt \\
@@ -17,6 +22,13 @@ Usage (CLI):
 Importable:
     from eval_checkpoints import run_eval
     results = run_eval(checkpoint_path, dataset_dir, eval_cfg, device)
+
+Results dict structure (with conditions):
+    {
+        "held_out_perplexity/baseline":     {...},
+        "held_out_perplexity/experimental": {...},
+        "hellaswag/baseline":               {...},
+    }
 """
 from __future__ import annotations
 
@@ -33,15 +45,67 @@ from generate import load_inference_model
 
 logger = logging.getLogger(__name__)
 
-# ─── Registry ────────────────────────────────────────────────────────────────
+# ─── Benchmark registry ──────────────────────────────────────────────────────
 
 _KNOWN_BENCHMARKS = ("held_out_perplexity", "hellaswag")
 
-_DEFAULTS: Dict[str, Any] = {
-    "benchmarks": ["held_out_perplexity"],
-    "max_docs": 500,
-    "split": "all",  # "all" = random sample; use "val_community" for datasets with split annotations
+# ─── Condition registry ───────────────────────────────────────────────────────
+# Condition dicts specify per-call overrides for forward_inference.
+# Special layout_policy string values:
+#   'eos'       → EOS-suffix-only layout (no identifier prefix); currently
+#                 BOSEOSLayoutPolicy until BOS is removed from all policies.
+#   'inference' → model.inference_layout_policy
+#   'training'  → model.training_layout_policy
+#   'null'      → NullLayoutPolicy()
+# mask_type None means "use model default" (self.mask_type).
+#
+# requires_cross_doc_link: True → condition is silently skipped when the model's
+#   mask_type is 'doc_causal'. Doc-causal models ARE the baseline; running the
+#   baseline condition on them produces identical results to experimental and
+#   adds no information.
+
+_BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
+    "baseline": {
+        "mask_type":              "doc_causal",
+        "layout_policy":          "eos",
+        "requires_cross_doc_link": True,   # meaningless on doc_causal models
+    },
+    "experimental": {
+        "mask_type":    None,        # use model's trained mask_type
+        "layout_policy": "inference",
+    },
 }
+
+_DEFAULTS: Dict[str, Any] = {
+    "benchmarks": [
+        {"name": "held_out_perplexity", "conditions": ["experimental"]},
+    ],
+    "conditions": {},   # user-defined conditions merged with _BUILTIN_CONDITIONS
+    "max_docs": 500,
+    "split": "all",
+}
+
+
+def _resolve_layout_policy(policy_str: Optional[str], model):
+    """Resolve a layout_policy string to a DocLayoutPolicy instance."""
+    from data.layout import EOSLayoutPolicy, NullLayoutPolicy
+    if policy_str is None or policy_str == "inference":
+        return model.inference_layout_policy
+    elif policy_str == "training":
+        return model.training_layout_policy
+    elif policy_str == "null":
+        return NullLayoutPolicy()
+    elif policy_str == "eos":
+        # EOS-suffix-only layout: no identifier prefix, just an EOS stop token.
+        # Always in-distribution: StochasticIdentifierPrefixLayoutPolicy always
+        # appends EOS during training, so the model always sees this suffix.
+        eos_id = getattr(model.inference_layout_policy, 'eos_token_id', 50256)
+        return EOSLayoutPolicy(eos_token_id=eos_id)
+    else:
+        raise ValueError(
+            f"Unknown layout_policy condition value {policy_str!r}. "
+            "Expected 'eos', 'inference', 'training', or 'null'."
+        )
 
 
 # ─── Core dispatch ───────────────────────────────────────────────────────────
@@ -57,51 +121,93 @@ def run_benchmarks_on_model(
     Used by main.py to evaluate the end-of-training model without loading from
     disk again (which would trigger a fresh torch.compile).
 
+    Each benchmark is run once per listed condition. Results are keyed as
+    ``'{benchmark}/{condition}'`` (e.g. ``'held_out_perplexity/experimental'``).
+    When a benchmark lists only one condition, the condition suffix is still
+    included for consistency.
+
     Args:
-        model: TS2TSModel in eval mode. Must have ``model.layout_policy`` set.
+        model:       TS2TSModel in eval mode. Must have layout policies set.
         dataset_dir: Path to the pretokenized dataset directory.
-        eval_cfg: Optional config dict from the YAML ``eval:`` block.
-        device: Device string.
+        eval_cfg:    Optional config dict from the YAML ``eval:`` block.
+        device:      Device string.
 
     Returns:
-        Dict mapping benchmark name to its result dict.
+        Dict mapping ``'{benchmark}/{condition}'`` to its result dict.
     """
     cfg = {**_DEFAULTS, **(eval_cfg or {})}
-    benchmarks: List[str] = cfg.get("benchmarks", _DEFAULTS["benchmarks"])
     max_docs: int = int(cfg.get("max_docs", _DEFAULTS["max_docs"]))
-    split: str = cfg.get("split", _DEFAULTS["split"])
+    split: str    = cfg.get("split", _DEFAULTS["split"])
 
-    unknown = [b for b in benchmarks if b not in _KNOWN_BENCHMARKS]
+    # Merge built-in conditions with any user-defined overrides
+    all_conditions = {**_BUILTIN_CONDITIONS, **cfg.get("conditions", {})}
+
+    # Normalise benchmark list — supports both string shorthand and dict form:
+    #   "held_out_perplexity"  →  {"name": "held_out_perplexity", "conditions": ["experimental"]}
+    raw_benchmarks = cfg.get("benchmarks", _DEFAULTS["benchmarks"])
+    benchmark_specs: List[Dict[str, Any]] = []
+    for b in raw_benchmarks:
+        if isinstance(b, str):
+            benchmark_specs.append({"name": b, "conditions": ["experimental"]})
+        else:
+            benchmark_specs.append(b)
+
+    unknown = [b["name"] for b in benchmark_specs if b["name"] not in _KNOWN_BENCHMARKS]
     if unknown:
         raise ValueError(
             f"Unknown benchmarks: {unknown}. "
             f"Valid options: {list(_KNOWN_BENCHMARKS)}"
         )
 
-    layout_policy = model.layout_policy
     results: Dict[str, Any] = {}
 
-    for benchmark in benchmarks:
-        logger.info("Running benchmark: %s", benchmark)
+    for spec in benchmark_specs:
+        bname      = spec["name"]
+        conditions = spec.get("conditions", ["experimental"])
 
-        if benchmark == "held_out_perplexity":
-            from eval.perplexity import run_held_out_perplexity
-            results["held_out_perplexity"] = run_held_out_perplexity(
-                model=model,
-                dataset_dir=dataset_dir,
-                layout_policy=layout_policy,
-                split=split,
-                max_docs=max_docs,
-                device=device,
-            )
+        for cname in conditions:
+            if cname not in all_conditions:
+                raise ValueError(
+                    f"Unknown condition {cname!r} for benchmark {bname!r}. "
+                    f"Available: {sorted(all_conditions)}."
+                )
+            cond = all_conditions[cname]
 
-        elif benchmark == "hellaswag":
-            from eval.hellaswag import run_hellaswag
-            results["hellaswag"] = run_hellaswag(
-                model=model,
-                max_examples=max_docs,
-                device=device,
-            )
+            # Skip conditions that only make sense for cross_doc_link models.
+            # Doc-causal models ARE the baseline; running the baseline condition
+            # on them gives identical mask_type as experimental — no information.
+            if cond.get("requires_cross_doc_link") and model.mask_type != "cross_doc_link":
+                logger.debug(
+                    "Skipping condition %r for %s/%r: requires cross_doc_link model",
+                    cname, bname, model.mask_type,
+                )
+                continue
+
+            mask_type = cond.get("mask_type")    # None → model default
+            layout    = _resolve_layout_policy(cond.get("layout_policy"), model)
+            key       = f"{bname}/{cname}"
+
+            logger.info("Running %s (condition=%s)", bname, cname)
+
+            if bname == "held_out_perplexity":
+                from eval.perplexity import run_held_out_perplexity
+                results[key] = run_held_out_perplexity(
+                    model=model,
+                    dataset_dir=dataset_dir,
+                    layout_policy=layout,
+                    split=split,
+                    max_docs=max_docs,
+                    device=device,
+                    mask_type_override=mask_type,
+                )
+
+            elif bname == "hellaswag":
+                from eval.hellaswag import run_hellaswag
+                results[key] = run_hellaswag(
+                    model=model,
+                    max_examples=max_docs,
+                    device=device,
+                )
 
     _log_summary(results)
     return results
@@ -117,18 +223,17 @@ def run_eval(
 ) -> Dict[str, Any]:
     """Load a checkpoint and run the configured benchmark suite.
 
-    Loads the checkpoint from disk (calls load_inference_model). For
-    post-training evaluation inside main.py use run_benchmarks_on_model()
+    For post-training evaluation inside main.py use run_benchmarks_on_model()
     instead to avoid a redundant torch.compile.
 
     Args:
         checkpoint_path: Path to ``best_model.pt``.
-        dataset_dir: Path to the pretokenized dataset directory.
-        eval_cfg: Optional config dict from the YAML ``eval:`` block.
-        device: Device to run inference on.
+        dataset_dir:     Path to the pretokenized dataset directory.
+        eval_cfg:        Optional config dict from the YAML ``eval:`` block.
+        device:          Device to run inference on.
 
     Returns:
-        Dict mapping benchmark name to its result dict.
+        Dict mapping ``'{benchmark}/{condition}'`` to its result dict.
     """
     logger.info("Loading checkpoint: %s", checkpoint_path)
     model, _hp = load_inference_model(str(checkpoint_path), device=device)
@@ -143,7 +248,7 @@ def _log_summary(results: Dict[str, Any]) -> None:
     for name, res in results.items():
         if isinstance(res, dict) and "perplexity" in res:
             logger.info(
-                "  %-30s  ppl=%.3f  mean_nll=%.4f  n=%d",
+                "  %-40s  ppl=%.3f  mean_nll=%.4f  n=%d",
                 name,
                 res.get("perplexity", float("nan")),
                 res.get("mean_nll", float("nan")),
@@ -151,13 +256,13 @@ def _log_summary(results: Dict[str, Any]) -> None:
             )
         elif isinstance(res, dict) and "accuracy" in res:
             logger.info(
-                "  %-30s  acc=%.4f  n=%d",
+                "  %-40s  acc=%.4f  n=%d",
                 name,
                 res.get("accuracy", float("nan")),
                 res.get("total_examples", 0),
             )
         else:
-            logger.info("  %-30s  %s", name, res)
+            logger.info("  %-40s  %s", name, res)
     logger.info("─────────────────────────────────────────────────────")
 
 
@@ -188,14 +293,20 @@ def main() -> None:
         help="Benchmarks to run.",
     )
     parser.add_argument(
+        "--conditions", nargs="+", default=["experimental"],
+        help="Named conditions to run each benchmark under. "
+             "Built-in: 'baseline' (doc_causal + null layout), "
+             "'experimental' (model default). "
+             "Multiple conditions produce side-by-side results.",
+    )
+    parser.add_argument(
         "--split", default="all",
         help='Graph split to evaluate (held_out_perplexity only). '
-             'Use "all" (default) to sample randomly from the full graph; '
-             'use "val_community" or "val_random" for datasets with split annotations.',
+             'Use "all" to sample randomly from the full graph.',
     )
     parser.add_argument(
         "--max-docs", type=int, default=500,
-        help="Maximum number of documents / examples per benchmark.",
+        help="Maximum number of documents / examples per benchmark+condition.",
     )
     parser.add_argument(
         "--output", default=None,
@@ -209,7 +320,10 @@ def main() -> None:
     args = parser.parse_args()
 
     eval_cfg = {
-        "benchmarks": args.benchmarks,
+        "benchmarks": [
+            {"name": b, "conditions": args.conditions}
+            for b in args.benchmarks
+        ],
         "split": args.split,
         "max_docs": args.max_docs,
     }

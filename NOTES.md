@@ -7,6 +7,26 @@ Not a spec; just enough to orient a planning session for each item.
 
 ## Eval pipeline — extensions
 
+### Cross-doc contrastive perplexity
+The core research claim is that cross_doc_link attention helps the model leverage
+linked documents. The direct eval: take pairs (doc_A, doc_B) where A links to B,
+score doc_A under two conditions:
+1. With B packed as a preceding DocSpan + cross_doc_link mask (model can attend to B)
+2. Same pack but doc_causal mask (B is present but isolated — no cross-doc attention)
+
+Report mean NLL delta across linked pairs on the val set. This directly measures
+whether the cross-doc attention actually improves predictions, not just perplexity on
+random docs. Run for both wiki (markdown links) and code (Python imports).
+
+Implementation sketch: extend `eval/scoring.py` with `score_doc_with_context(model,
+context_doc_tokens, target_doc_tokens, mask_type)` → runs two forward passes, returns
+dict with both NLLs and the delta. Pair-sampling can come from `GraphIndex.get_neighbors`.
+
+### Batched MC scoring
+Add `score_completions_batched` to `eval/scoring.py` — packs K (context + choice)
+sequences as K DocSpans in one forward pass (~K× faster). Required before HellaSwag,
+ARC, WinoGrande, etc. are practical. See TODO comment in scoring.py.
+
 ### Split annotations
 The existing datasets have no `split` field in `tokenized_graph.jsonl`, so
 `split="all"` just random-samples from the whole corpus. For real held-out

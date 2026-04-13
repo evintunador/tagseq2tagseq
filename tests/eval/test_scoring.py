@@ -11,7 +11,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from data.layout import BOSEOSLayoutPolicy, NullLayoutPolicy
+from data.layout import EOSLayoutPolicy, NullLayoutPolicy
 from eval.scoring import score_completion, score_doc
 
 
@@ -28,11 +28,14 @@ def _make_mock_model(vocab_size: int = VOCAB_SIZE):
     """
     model = MagicMock()
 
-    def _forward(tokens, doc_spans):
+    def _forward(tokens, doc_spans, **kwargs):
         T = tokens.shape[1]
         return torch.zeros(1, T, vocab_size)
 
     model.forward_inference.side_effect = _forward
+
+    # score_doc falls back to model.active_layout_policy when layout_policy=None
+    model.active_layout_policy = NullLayoutPolicy()
 
     # score_completion reads device from model.backbone.parameters()
     dummy_param = nn.Parameter(torch.zeros(1))
@@ -52,8 +55,8 @@ def null_policy():
 
 
 @pytest.fixture
-def bos_eos_policy():
-    return BOSEOSLayoutPolicy(bos_token_id=0, eos_token_id=1)
+def eos_policy():
+    return EOSLayoutPolicy(eos_token_id=1)
 
 
 BODY_TOKENS = [10, 20, 30, 40, 50]
@@ -73,11 +76,11 @@ def test_score_doc_uniform_logits_approx_log_V(mock_model, null_policy):
     assert abs(result["mean_nll"] - expected_nll) < 1e-4
 
 
-def test_score_doc_excludes_prefix_suffix_from_num_tokens(mock_model, bos_eos_policy):
-    # BOSEOSLayoutPolicy adds 1 prefix + 1 suffix token.
-    # num_tokens should still equal len(BODY_TOKENS) — only body tokens are scored.
-    result = score_doc(mock_model, BODY_TOKENS, bos_eos_policy, device="cpu")
-    assert result["num_tokens"] == len(BODY_TOKENS)
+def test_score_doc_excludes_prefix_suffix_from_num_tokens(mock_model, eos_policy):
+    # EOSLayoutPolicy has no prefix. Because prefix_len==0, the first body token
+    # has no preceding logit and is skipped. num_tokens = len(BODY_TOKENS) - 1.
+    result = score_doc(mock_model, BODY_TOKENS, eos_policy, device="cpu")
+    assert result["num_tokens"] == len(BODY_TOKENS) - 1
 
 
 def test_score_doc_empty_body_returns_zero(mock_model, null_policy):
@@ -85,11 +88,11 @@ def test_score_doc_empty_body_returns_zero(mock_model, null_policy):
     assert result == {"mean_nll": 0.0, "num_tokens": 0}
 
 
-def test_score_doc_single_token_with_prefix(mock_model, bos_eos_policy):
-    # Single-token body with prefix: [BOS, tok, EOS]. Body is at index 1.
-    # Logit at index 0 (BOS) predicts index 1 (body token). Should score 1 token.
-    result = score_doc(mock_model, [99], bos_eos_policy, device="cpu")
-    assert result["num_tokens"] == 1
+def test_score_doc_single_token_no_prefix(mock_model, eos_policy):
+    # Single-token body with EOS suffix: [tok, EOS]. prefix_len==0 → the body
+    # token has no preceding logit, so it is skipped. num_tokens == 0.
+    result = score_doc(mock_model, [99], eos_policy, device="cpu")
+    assert result["num_tokens"] == 0
 
 
 def test_score_doc_calls_forward_inference_once(mock_model, null_policy):
@@ -97,12 +100,12 @@ def test_score_doc_calls_forward_inference_once(mock_model, null_policy):
     assert mock_model.forward_inference.call_count == 1
 
 
-def test_score_doc_passes_correct_token_length_to_forward(mock_model, bos_eos_policy):
-    # With BOSEOSLayoutPolicy, total sequence = 1 + 5 + 1 = 7 tokens.
-    score_doc(mock_model, BODY_TOKENS, bos_eos_policy, device="cpu")
+def test_score_doc_passes_correct_token_length_to_forward(mock_model, eos_policy):
+    # With EOSLayoutPolicy, total sequence = 5 body + 1 EOS = 6 tokens.
+    score_doc(mock_model, BODY_TOKENS, eos_policy, device="cpu")
     call_args = mock_model.forward_inference.call_args
     tokens_arg = call_args[0][0]  # positional arg 0
-    assert tokens_arg.shape == (1, 1 + len(BODY_TOKENS) + 1)
+    assert tokens_arg.shape == (1, len(BODY_TOKENS) + 1)  # body + EOS
 
 
 # ─── score_completion tests ───────────────────────────────────────────────────

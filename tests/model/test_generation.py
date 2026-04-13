@@ -294,8 +294,8 @@ def test_model_generate_requires_tokenizer():
         embedding_weight=emb.weight,
         lm_head_weight=emb.weight,
         norm=norm,
-        block_mask_creator=lambda **kw: None,
         vocab_size=VOCAB_SIZE,
+        mask_type='doc_causal',
         tokenizer=None,
     )
     with pytest.raises(RuntimeError, match="tokenizer"):
@@ -330,7 +330,7 @@ def small_inference_model(device):
         max_seq_len=128,
         dropout=0.0,
         drop_path_rate=0.0,
-        block_mask_creator=simple_causal_mask_creator,
+        mask_type='doc_causal',
         weight_tying=True,
     )
     model.to(torch.device(device))
@@ -376,7 +376,7 @@ def test_generate_with_tokenizer_terminates(device):
         max_seq_len=128,
         dropout=0.0,
         drop_path_rate=0.0,
-        block_mask_creator=simple_causal_mask_creator,
+        mask_type='doc_causal',
         weight_tying=True,
         tokenizer=make_mock_tokenizer([10, 20]),
     )
@@ -412,7 +412,7 @@ def test_generate_result_has_text(device):
         max_seq_len=128,
         dropout=0.0,
         drop_path_rate=0.0,
-        block_mask_creator=simple_causal_mask_creator,
+        mask_type='doc_causal',
         weight_tying=True,
         tokenizer=make_mock_tokenizer([10, 20]),
     )
