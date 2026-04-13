@@ -18,9 +18,10 @@ Report mean NLL delta across linked pairs on the val set. This directly measures
 whether the cross-doc attention actually improves predictions, not just perplexity on
 random docs. Run for both wiki (markdown links) and code (Python imports).
 
-Implementation sketch: extend `eval/scoring.py` with `score_doc_with_context(model,
-context_doc_tokens, target_doc_tokens, mask_type)` → runs two forward passes, returns
-dict with both NLLs and the delta. Pair-sampling can come from `GraphIndex.get_neighbors`.
+Infrastructure DONE: `forward_inference(mask_type='doc_causal')` override and the
+`_creators` dict on `TS2TSModel` make both forward passes trivial. Still needed:
+a `score_doc_with_context` function in `eval/scoring.py` and pair-sampling via
+`GraphIndex.get_neighbors`.
 
 ### Batched MC scoring
 Add `score_completions_batched` to `eval/scoring.py` — packs K (context + choice)
@@ -70,18 +71,18 @@ Low priority but worth doing before the pipeline gets heavy.
 
 ## Data & datasets
 
-### Wikipedia / ArXiv / FineWeb pipeline
-For NL benchmarks to matter, we need NL training data. Open questions:
-- Bring back simplewiki/enwikisource? Or go straight to full English Wikipedia?
-- ArXiv: good graph structure (citations), high-quality text, relevant to paper
-- FineWeb: flat (no graph), but volume; how does it mix with TAG data?
-- Mixing strategy: what ratio TAG-structured vs flat data? Separate streams or
-  interleaved packs?
-Needs a proper data planning session before any implementation.
+### Dataset plan (settled)
+Three datasets, trained independently:
+1. **Wikipedia** — combine simplewiki + enwikisource + full English Wikipedia into
+   one pretokenized dataset. Markdown link detector.
+2. **Stack 100M** — the 100M-node split only (stack_10m retired). Python import
+   detector. `stack_100m_32k.yaml` config already exists.
+3. **ArXiv** (future) — LaTeX citation link detector. Dataset not yet built.
 
-### Stack 100M training
-The `stack_100m_32k.yaml` config exists. A full 100M node run is the natural
-next training milestone after the current 10M checkpoint experiments.
+Aggregate model combining all three with a composite link detector (runs all three
+individual detectors, doesn't need to be fast) is a future milestone.
+
+No FineWeb or other flat data planned — the point is structured graph data.
 
 ---
 
@@ -92,15 +93,21 @@ next training milestone after the current 10M checkpoint experiments.
 larger scale. Needs decisions on: target param count, num_layers/model_dim
 tradeoff, whether to use the same BFS+cross_doc_link config as current best runs.
 
-### Stochastic layout policy — DONE
-`StochasticIdentifierPrefixLayoutPolicy` is implemented in `data/layout.py`.
-Use `layout_policy: stochastic_identifier_prefix` in config for training.
-Set `inference_layout_policy: identifier_prefix` (or `identifier_prefix_bos_eos`)
-so inference always uses a deterministic prefix. `BucketedPackDataset` calls
-`set_epoch()` on epoch advance; `PackedSequenceDataset` + `multi_epoch` path
+### Layout policies — DONE (BOS removed)
+All layout policies now use EOS-only suffix (no BOS prefix). Current names:
+- `eos` — EOS suffix, no prefix (`EOSLayoutPolicy`)
+- `identifier_prefix_eos` — "# {id}\n\n" prefix + EOS suffix
+- `stochastic_identifier_prefix` — stochastic 50/50 prefix + always EOS suffix
+- `identifier_prefix` — prefix only, no EOS (external benchmark use)
+- `null` — no decoration
+
+Training always uses `stochastic_identifier_prefix`. Inference uses either
+`identifier_prefix_eos` (prefix on) or `eos` (prefix off) — both stored on
+`TS2TSModel` as `training_layout_policy` / `inference_layout_policy`. `BucketedPackDataset`
+calls `set_epoch()` on epoch advance; `PackedSequenceDataset` + `multi_epoch` path
 has no epoch hook (deferred until BucketedPackDataset is sole production path).
 Science question remains open: does stochastic training meaningfully help on
-external benchmarks vs. fixed null layout?
+external benchmarks vs. fixed eos layout?
 
 ---
 
@@ -117,6 +124,25 @@ external benchmarks vs. fixed null layout?
 ---
 
 ## Infrastructure / tech debt
+
+### Multi-mode model config — DONE
+`TS2TSModel` now exposes four explicit axes: mask_type, link_detector,
+training/inference backends, dual layout policies. `_creators` dict keyed by
+`'{mask_type}_{backend}'`; `forward_inference(mask_type=, backend=)` accepts
+per-call overrides. `to_inference_model()` takes the new axes directly; callers
+no longer build mask creators. `load_inference_model()` in `generate.py` reads
+`data.inference_layout_policy` from hyperparameters.json.
+
+### Eval conditions dispatch — DONE
+`eval_checkpoints.py` runs named conditions (experimental / baseline) per benchmark.
+`baseline` overrides `mask_type='doc_causal'` + eos layout; skipped automatically
+for doc_causal models. Conditions configurable via `eval.conditions` in YAML.
+
+### TS2TSAttention single-class refactor — DONE
+`BIMv12Attention` / `VarlenBIMv1Attention` / `FlexSelfAttention` collapsed into
+`TS2TSAttention(backend='triton'|'flex')`. Inference switch is `layer.attn.backend='flex'`
+not `__class__` reassignment. Flex path calls `flex_attention` directly, not via
+tunalab's FlexSelfAttention.forward.
 
 ### `smart_train` compiled loop for checkpoint saving
 `tunalab/smart_train.py` now validates `__atomic_features__` on cache load and
