@@ -1,12 +1,12 @@
 """Tests for DocLayoutPolicy implementations."""
 import pytest
 from data.layout import (
-    BOSEOSLayoutPolicy,
-    DocLayoutInfo,
-    IdentifierPrefixBOSEOSLayoutPolicy,
+    EOSLayoutPolicy,
+    IdentifierPrefixEOSLayoutPolicy,
     IdentifierPrefixLayoutPolicy,
     NullLayoutPolicy,
     make_layout_policy,
+    DocLayoutInfo,
 )
 
 
@@ -67,23 +67,23 @@ def test_null_policy_tokens_are_empty():
 
 
 # ---------------------------------------------------------------------------
-# BOSEOSLayoutPolicy
+# EOSLayoutPolicy
 # ---------------------------------------------------------------------------
 
-def test_bos_eos_lengths():
-    p = BOSEOSLayoutPolicy(bos_token_id=1, eos_token_id=2)
-    assert p.prefix_length(make_info("doc")) == 1
+def test_eos_lengths():
+    p = EOSLayoutPolicy(eos_token_id=2)
+    assert p.prefix_length(make_info("doc")) == 0
     assert p.suffix_length(make_info("doc")) == 1
 
 
-def test_bos_eos_tokens():
-    p = BOSEOSLayoutPolicy(bos_token_id=50256, eos_token_id=50257)
-    assert p.prefix_tokens(make_info("doc")) == [50256]
-    assert p.suffix_tokens(make_info("doc")) == [50257]
+def test_eos_tokens():
+    p = EOSLayoutPolicy(eos_token_id=50256)
+    assert p.prefix_tokens(make_info("doc")) == []
+    assert p.suffix_tokens(make_info("doc")) == [50256]
 
 
-def test_bos_eos_ignores_all_info_fields():
-    p = BOSEOSLayoutPolicy(bos_token_id=1, eos_token_id=2)
+def test_eos_ignores_all_info_fields():
+    p = EOSLayoutPolicy(eos_token_id=2)
     info_a = make_info("Python", outgoing=["ruby"], body_tokens=[1, 2, 3])
     info_b = make_info("Ruby", incoming=["java"])
     assert p.prefix_tokens(info_a) == p.prefix_tokens(info_b)
@@ -147,7 +147,6 @@ def test_identifier_prefix_different_identifiers_encoded_separately():
 
 def test_identifier_prefix_uses_raw_identifier_not_normed():
     p = IdentifierPrefixLayoutPolicy(_simple_encode)
-    # normed_identifier is irrelevant — prefix derived from raw only
     info_a = make_info("Python", "python_abc123")
     info_b = make_info("Python", "something_completely_different")
     assert p.prefix_tokens(info_a) == p.prefix_tokens(info_b)
@@ -161,35 +160,39 @@ def test_identifier_prefix_ignores_body_and_links():
 
 
 # ---------------------------------------------------------------------------
-# IdentifierPrefixBOSEOSLayoutPolicy
+# IdentifierPrefixEOSLayoutPolicy
 # ---------------------------------------------------------------------------
 
-def test_identifier_prefix_bos_eos_prefix_starts_with_bos():
-    p = IdentifierPrefixBOSEOSLayoutPolicy(_simple_encode, bos_token_id=1, eos_token_id=2)
+def test_identifier_prefix_eos_prefix_is_title_only():
+    p = IdentifierPrefixEOSLayoutPolicy(_simple_encode, eos_token_id=2)
     tokens = p.prefix_tokens(make_info("Python"))
-    assert tokens[0] == 1  # BOS first
+    assert tokens == _simple_encode("# Python\n\n")
 
-def test_identifier_prefix_bos_eos_prefix_contains_title():
-    p = IdentifierPrefixBOSEOSLayoutPolicy(_simple_encode, bos_token_id=1, eos_token_id=2)
+
+def test_identifier_prefix_eos_prefix_contains_title():
+    p = IdentifierPrefixEOSLayoutPolicy(_simple_encode, eos_token_id=2)
     tokens = p.prefix_tokens(make_info("Python"))
-    assert tokens[1:] == _simple_encode("# Python\n\n")
+    assert tokens == _simple_encode("# Python\n\n")
 
-def test_identifier_prefix_bos_eos_suffix_is_eos():
-    p = IdentifierPrefixBOSEOSLayoutPolicy(_simple_encode, bos_token_id=1, eos_token_id=2)
+
+def test_identifier_prefix_eos_suffix_is_eos():
+    p = IdentifierPrefixEOSLayoutPolicy(_simple_encode, eos_token_id=2)
     assert p.suffix_tokens(make_info("Python")) == [2]
 
-def test_identifier_prefix_bos_eos_lengths_match_tokens():
-    p = IdentifierPrefixBOSEOSLayoutPolicy(_simple_encode, bos_token_id=1, eos_token_id=2)
+
+def test_identifier_prefix_eos_lengths_match_tokens():
+    p = IdentifierPrefixEOSLayoutPolicy(_simple_encode, eos_token_id=2)
     info = make_info("Some Title")
     assert p.prefix_length(info) == len(p.prefix_tokens(info))
     assert p.suffix_length(info) == len(p.suffix_tokens(info))
 
-def test_identifier_prefix_bos_eos_caches_title():
+
+def test_identifier_prefix_eos_caches_title():
     calls = [0]
     def counting_encode(text):
         calls[0] += 1
         return _simple_encode(text)
-    p = IdentifierPrefixBOSEOSLayoutPolicy(counting_encode, bos_token_id=1, eos_token_id=2)
+    p = IdentifierPrefixEOSLayoutPolicy(counting_encode, eos_token_id=2)
     p.prefix_tokens(make_info("Python"))
     p.prefix_tokens(make_info("Python"))
     p.prefix_length(make_info("Python"))
@@ -204,31 +207,34 @@ def test_factory_null():
     p = make_layout_policy("null")
     assert isinstance(p, NullLayoutPolicy)
 
-def test_factory_bos_eos():
-    p = make_layout_policy("bos_eos", bos_token_id=7, eos_token_id=8)
-    assert p.prefix_tokens(make_info("x")) == [7]
+
+def test_factory_eos():
+    p = make_layout_policy("eos", eos_token_id=8)
+    assert isinstance(p, EOSLayoutPolicy)
+    assert p.prefix_tokens(make_info("x")) == []
     assert p.suffix_tokens(make_info("x")) == [8]
+
 
 def test_factory_identifier_prefix():
     p = make_layout_policy("identifier_prefix", encode_fn=_simple_encode)
     assert isinstance(p, IdentifierPrefixLayoutPolicy)
     assert p.prefix_tokens(make_info("Foo")) == _simple_encode("# Foo\n\n")
 
-def test_factory_identifier_prefix_bos_eos():
-    p = make_layout_policy("identifier_prefix_bos_eos", encode_fn=_simple_encode,
-                           bos_token_id=1, eos_token_id=2)
-    assert isinstance(p, IdentifierPrefixBOSEOSLayoutPolicy)
-    assert p.prefix_tokens(make_info("Foo"))[0] == 1
+
+def test_factory_identifier_prefix_eos():
+    p = make_layout_policy("identifier_prefix_eos", encode_fn=_simple_encode, eos_token_id=2)
+    assert isinstance(p, IdentifierPrefixEOSLayoutPolicy)
+    assert p.prefix_tokens(make_info("Foo")) == _simple_encode("# Foo\n\n")
     assert p.suffix_tokens(make_info("Foo")) == [2]
 
+
 def test_factory_requires_encode_fn_for_prefix_policies():
-    import pytest
     with pytest.raises(ValueError, match="encode_fn"):
         make_layout_policy("identifier_prefix")
     with pytest.raises(ValueError, match="encode_fn"):
-        make_layout_policy("identifier_prefix_bos_eos")
+        make_layout_policy("identifier_prefix_eos")
+
 
 def test_factory_unknown_name_raises():
-    import pytest
     with pytest.raises(ValueError, match="Unknown layout_policy"):
         make_layout_policy("banana")

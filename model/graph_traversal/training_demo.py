@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import tiktoken
 
 from data.dataset import GraphIndex, PretokShardedBackend
-from data.layout import BOSEOSLayoutPolicy, NullLayoutPolicy
+from data.layout import EOSLayoutPolicy, NullLayoutPolicy
 from data.packed_dataset import PackedSequenceDataset
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
@@ -56,9 +56,9 @@ def main() -> None:
         help="Optional per-document body token budget. Use None for no limit.",
     )
     parser.add_argument(
-        "--use-bos-eos",
+        "--use-eos",
         action="store_true",
-        help="If set, wrap each document with BOS/EOS tokens via BOSEOSLayoutPolicy.",
+        help="If set, append an EOS token after each document via EOSLayoutPolicy.",
     )
     parser.add_argument(
         "--strategy",
@@ -104,16 +104,11 @@ def main() -> None:
 
         # Choose a simple layout policy. For the demo we support either:
         #   - NullLayoutPolicy(): no decoration
-        #   - BOSEOSLayoutPolicy(): add BOS/EOS around each document
-        if args.use_bos_eos:
-            # These token ids are experiment-specific; for a demo we use
-            # placeholder values that can be wired up to a real tokenizer later.
-            bos_id = 1
+        #   - EOSLayoutPolicy(): append EOS after each document
+        if args.use_eos:
             eos_id = 2
-            layout_policy = BOSEOSLayoutPolicy(bos_token_id=bos_id, eos_token_id=eos_id)
-            logger.info(
-                "Using BOSEOSLayoutPolicy with BOS id=%d and EOS id=%d.", bos_id, eos_id
-            )
+            layout_policy = EOSLayoutPolicy(eos_token_id=eos_id)
+            logger.info("Using EOSLayoutPolicy with EOS id=%d.", eos_id)
         else:
             layout_policy = NullLayoutPolicy()
             logger.info("Using NullLayoutPolicy (no per-doc decoration).")

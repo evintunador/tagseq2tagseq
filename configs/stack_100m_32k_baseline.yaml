@@ -1,6 +1,7 @@
 data:
   strategy: 'random'
-  layout_policy: 'bos_eos'  # null | bos_eos | identifier_prefix | identifier_prefix_bos_eos
+  layout_policy: 'eos'  # null | eos | identifier_prefix | identifier_prefix_eos | stochastic_identifier_prefix
+  inference_layout_policy: 'eos'  # deterministic equivalent used at inference/eval; must not be stochastic
   order_mode: 'prefer_targets_first'
   doc_budget: null
 

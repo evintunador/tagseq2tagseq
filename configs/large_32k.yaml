@@ -1,6 +1,7 @@
 data:
   strategy: 'dfs'
-  use_bos_eos: false
+  layout_policy: 'null'
+  inference_layout_policy: 'null'
   order_mode: 'prefer_targets_first'
   doc_budget: null
 

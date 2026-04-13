@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import tiktoken
 
 from data.dataset import GraphIndex, PretokShardedBackend
-from data.layout import BOSEOSLayoutPolicy, IdentifierPrefixLayoutPolicy, NullLayoutPolicy
+from data.layout import EOSLayoutPolicy, IdentifierPrefixLayoutPolicy, NullLayoutPolicy
 from data.packed_dataset import PackedSequenceDataset
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
@@ -134,10 +134,10 @@ def main() -> None:
             logger.info(
                 "Using IdentifierPrefixLayoutPolicy (tokenizer=%r).", tokenizer_name
             )
-        elif args.layout_policy == "bos-eos":
-            bos_id = encoding.eot_token if encoding is not None else 1
-            layout_policy = BOSEOSLayoutPolicy(bos_token_id=bos_id, eos_token_id=bos_id)
-            logger.info("Using BOSEOSLayoutPolicy with BOS/EOS id=%d.", bos_id)
+        elif args.layout_policy == "eos":
+            eos_id = encoding.eot_token if encoding is not None else 1
+            layout_policy = EOSLayoutPolicy(eos_token_id=eos_id)
+            logger.info("Using EOSLayoutPolicy with EOS id=%d.", eos_id)
         else:
             layout_policy = NullLayoutPolicy()
             logger.info("Using NullLayoutPolicy (no per-doc decoration).")
