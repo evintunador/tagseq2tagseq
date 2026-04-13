@@ -9,6 +9,9 @@ def causal(b, h, q_idx, kv_idx):
     return q_idx >= kv_idx
 
 
+# TODO: this uses a plain full-causal mask, which is not representative of the real
+# training workload. Replace with actual doc_causal (and optionally cross_doc_link)
+# mask creators so throughput numbers reflect production. See block_mask_creator.py.
 def simple_block_mask_creator(**kwargs) -> BlockMask:
     tokens = kwargs['tokens']
     seq_len = tokens.shape[1] - 1

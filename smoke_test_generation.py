@@ -79,7 +79,10 @@ def load_model(checkpoint_path: Path, device: torch.device):
     assert not unexpected, f"Unexpected keys: {unexpected}"
 
     tokenizer = tiktoken.get_encoding("gpt2")
-    model = training_module.to_inference_model(tokenizer=tokenizer)
+    model = training_module.to_inference_model(
+        tokenizer=tokenizer,
+        mask_type=mask_type,
+    )
     model.to(device, dtype)
     model.eval()
     return model, dtype

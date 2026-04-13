@@ -93,8 +93,9 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
         try:
             inference_model = training_module.to_inference_model(
                 tokenizer=tokenizer,
+                mask_type=mask_type,
                 link_detector=link_detector,
-                layout_policy=layout_policy,
+                inference_layout_policy=layout_policy,
             )
             inference_model.to(next(training_module.parameters()).device)
         except Exception as e:
@@ -169,49 +170,34 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
     logger.info("=" * 60)
 
 
-def _build_inference_model(training_module_unwrapped, cfg, enc, detector, layout_policy, device):
+def _build_inference_model(
+    training_module_unwrapped, cfg, enc, detector,
+    training_layout_policy, inference_layout_policy, device,
+):
     """Build a post-training inference model using the configured inference backend.
 
-    Reads model.inference_attention_backend from cfg (default: 'flex').  Calls
-    to_inference_model with that backend, which does a zero-copy __class__ swap
-    on each attention layer so the uncompiled backbone uses FlexSelfAttention
-    (or whichever backend is requested) without duplicating weights.
+    Calls to_inference_model which does a zero-copy __class__ swap on each
+    attention layer so the uncompiled backbone uses FlexSelfAttention for
+    inference without duplicating weights.
 
-    Used for the generation demo and benchmark eval at the end of training so
-    inference uses the optimal single-doc path regardless of training backend.
-
+    Used for the generation demo and benchmark eval at the end of training.
     Returns None on failure (caller should fall back gracefully).
     """
     try:
         model_cfg = cfg.get('model', {})
         inference_backend = model_cfg.get('inference_attention_backend', 'flex')
         mask_type = model_cfg.get('mask_type', 'doc_causal')
-
-        from model.graph_traversal.block_mask_creator import (
-            make_mask_creator_callable, make_mask_creator_callable_from,
-        )
-
-        if inference_backend == 'flex':
-            if mask_type == 'cross_doc_link':
-                from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
-                flex_bmc = make_mask_creator_callable_from(
-                    CrossDocLinkMaskCreator(
-                        link_detector=detector,
-                        max_grants=model_cfg.get('max_grants', 64),
-                        backend='flex',
-                    )
-                )
-            else:
-                flex_bmc = make_mask_creator_callable(mask_type)
-        else:
-            flex_bmc = None  # keep training block_mask_creator
+        use_triton = model_cfg.get('attention_backend', 'triton') != 'flex'
+        training_backend = 'triton' if use_triton else 'flex'
 
         inference_model = training_module_unwrapped.to_inference_model(
             tokenizer=enc,
+            mask_type=mask_type,
             link_detector=detector,
-            layout_policy=layout_policy,
-            inference_attention_backend=inference_backend,
-            inference_block_mask_creator=flex_bmc,
+            training_backend=training_backend,
+            inference_backend=inference_backend,
+            training_layout_policy=training_layout_policy,
+            inference_layout_policy=inference_layout_policy,
         )
         inference_model.to(torch.device(device), torch.bfloat16)
 
@@ -303,7 +289,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     backend = PretokShardedBackend(graph_index)
 
     # Configure Layout Policy
-    # Options: null | bos_eos | identifier_prefix | identifier_prefix_bos_eos
+    # Options: null | eos | identifier_prefix | identifier_prefix_eos | stochastic_identifier_prefix
     #          | stochastic_identifier_prefix
     layout_policy_name = cfg.get('data', {}).get('layout_policy', 'null')
     enc = tiktoken.get_encoding(graph_index.metadata.get('tokenizer', 'gpt2'))
@@ -694,7 +680,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         _flex_inference_model = _build_inference_model(
             training_module_unwrapped=training_module_unwrapped,
             cfg=cfg, enc=enc, detector=detector,
-            layout_policy=inference_layout_policy, device=str(dist.device),
+            training_layout_policy=layout_policy,
+            inference_layout_policy=inference_layout_policy,
+            device=str(dist.device),
         )
 
         _run_generation_demo(
