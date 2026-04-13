@@ -2,10 +2,11 @@ import torch.nn as nn
 from torch import Tensor
 from typing import Any
 
-from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
 from tunalab.modules.channel_mixing.glu import GLU
 from tunalab.modules.regularization.drop_path import DropPath
 from tunalab.modules.norms.rms_norm import RMSNorm
+
+from model.modules.attention import TS2TSAttention
 
 
 class Layer(nn.Module):
@@ -23,20 +24,14 @@ class Layer(nn.Module):
         self.drop_path = DropPath(drop_path_rate)
         self.ln_1 = RMSNorm(n_embd)
 
-        if attention_backend == "triton_v12":
-            from model.modules.attention import BIMv12Attention
-            self.attn = BIMv12Attention(
-                dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
-            )
-        elif attention_backend == "varlen_bim_v1":
-            from model.modules.attention import VarlenBIMv1Attention
-            self.attn = VarlenBIMv1Attention(
-                dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
-            )
-        else:
-            self.attn = FlexSelfAttention(
-                dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
-            )
+        # Normalize to 'flex' or 'triton'. Legacy specific-kernel names
+        # ('triton_v12', 'varlen_bim_v1') map to 'triton'; TS2TSAttention
+        # selects the right kernel from the block_mask type at runtime.
+        backend = 'flex' if attention_backend == 'flex' else 'triton'
+        self.attn = TS2TSAttention(
+            dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len,
+            fp8_out_proj=fp8, backend=backend,
+        )
 
         self.ln_2 = RMSNorm(n_embd)
         self.mlp = GLU(
