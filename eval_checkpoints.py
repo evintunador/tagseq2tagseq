@@ -47,13 +47,12 @@ logger = logging.getLogger(__name__)
 
 # ─── Benchmark registry ──────────────────────────────────────────────────────
 
-_KNOWN_BENCHMARKS = ("held_out_perplexity", "hellaswag")
+_KNOWN_BENCHMARKS = ("held_out_perplexity", "hellaswag", "pack_contrastive_perplexity")
 
 # ─── Condition registry ───────────────────────────────────────────────────────
 # Condition dicts specify per-call overrides for forward_inference.
 # Special layout_policy string values:
-#   'eos'       → EOS-suffix-only layout (no identifier prefix); currently
-#                 BOSEOSLayoutPolicy until BOS is removed from all policies.
+#   'eos'       → EOS-suffix-only layout (no identifier prefix, EOS suffix only).
 #   'inference' → model.inference_layout_policy
 #   'training'  → model.training_layout_policy
 #   'null'      → NullLayoutPolicy()
@@ -83,6 +82,7 @@ _DEFAULTS: Dict[str, Any] = {
     "conditions": {},   # user-defined conditions merged with _BUILTIN_CONDITIONS
     "max_docs": 500,
     "split": "all",
+    "epoch_dirs": [],   # pre-computed epoch dirs for pack_contrastive_perplexity
 }
 
 
@@ -136,8 +136,9 @@ def run_benchmarks_on_model(
         Dict mapping ``'{benchmark}/{condition}'`` to its result dict.
     """
     cfg = {**_DEFAULTS, **(eval_cfg or {})}
-    max_docs: int = int(cfg.get("max_docs", _DEFAULTS["max_docs"]))
-    split: str    = cfg.get("split", _DEFAULTS["split"])
+    max_docs: int  = int(cfg.get("max_docs", _DEFAULTS["max_docs"]))
+    split: str     = cfg.get("split", _DEFAULTS["split"])
+    epoch_dirs     = cfg.get("epoch_dirs", [])
 
     # Merge built-in conditions with any user-defined overrides
     all_conditions = {**_BUILTIN_CONDITIONS, **cfg.get("conditions", {})}
@@ -209,6 +210,30 @@ def run_benchmarks_on_model(
                     device=device,
                 )
 
+            elif bname == "pack_contrastive_perplexity":
+                if model.mask_type != "cross_doc_link":
+                    logger.info(
+                        "Skipping pack_contrastive_perplexity: "
+                        "model.mask_type=%r (requires cross_doc_link)",
+                        model.mask_type,
+                    )
+                    continue
+                if not epoch_dirs:
+                    logger.warning(
+                        "Skipping pack_contrastive_perplexity: "
+                        "no epoch_dirs configured (set eval.epoch_dirs in config)."
+                    )
+                    continue
+                from eval.perplexity import run_pack_contrastive_perplexity
+                results[key] = run_pack_contrastive_perplexity(
+                    model=model,
+                    epoch_dirs=epoch_dirs,
+                    dataset_dir=dataset_dir,
+                    layout_policy=layout,
+                    max_packs=max_docs,
+                    device=device,
+                )
+
     _log_summary(results)
     return results
 
@@ -261,6 +286,21 @@ def _log_summary(results: Dict[str, Any]) -> None:
                 res.get("accuracy", float("nan")),
                 res.get("total_examples", 0),
             )
+        elif isinstance(res, dict) and any(
+            isinstance(v, dict) and "mean_delta" in v for v in res.values()
+        ):
+            # pack_contrastive_perplexity: result is a dict of strategy -> stats
+            for strategy, stats in res.items():
+                logger.info(
+                    "  %-40s  delta=%.4f [%.4f, %.4f]  cross=%.4f  base=%.4f  n=%d",
+                    f"{name}/{strategy}",
+                    stats.get("mean_delta", float("nan")),
+                    stats.get("delta_ci_low", float("nan")),
+                    stats.get("delta_ci_high", float("nan")),
+                    stats.get("mean_nll_cross_doc", float("nan")),
+                    stats.get("mean_nll_baseline", float("nan")),
+                    stats.get("n_packs", 0),
+                )
         else:
             logger.info("  %-40s  %s", name, res)
     logger.info("─────────────────────────────────────────────────────")

@@ -6,16 +6,17 @@ No CUDA required.
 """
 import json
 import math
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import torch
 import torch.nn as nn
-from pathlib import Path
 
+from data.collate import DocSpan
 from data.layout import NullLayoutPolicy
-from eval.perplexity import run_held_out_perplexity
+from eval.perplexity import run_held_out_perplexity, run_pack_contrastive_perplexity
 
 
 # ─── Dataset fixture ──────────────────────────────────────────────────────────
@@ -196,3 +197,192 @@ def test_nonexistent_split_returns_empty(mock_model, dummy_split_dataset, null_p
     )
     assert result["num_docs"] == 0
     assert math.isnan(result["perplexity"])
+
+
+# ─── run_pack_contrastive_perplexity tests ────────────────────────────────────
+
+VOCAB_SIZE = 256
+
+
+def _make_contrastive_mock_model():
+    """Mock TS2TSModel for contrastive tests. Returns uniform logits."""
+    model = MagicMock()
+
+    def _forward(tokens, doc_spans, **kwargs):
+        T = tokens.shape[1]
+        return torch.zeros(1, T, VOCAB_SIZE)
+
+    model.forward_inference.side_effect = _forward
+    model.active_layout_policy = NullLayoutPolicy()
+    model.mask_type = "cross_doc_link"
+    return model
+
+
+def _make_contrastive_batch(T: int = 20, n_docs: int = 2):
+    """Synthetic batch dict as yielded by BucketedPackDataset."""
+    tokens = torch.zeros(1, T, dtype=torch.long)
+    doc_len = T // n_docs
+    spans = [
+        DocSpan(
+            doc_id=i,
+            normed_identifier=f"doc_{i}",
+            raw_identifier=f"Doc {i}",
+            start=i * doc_len,
+            end=(i + 1) * doc_len,
+            truncated=False,
+            outgoing_identifiers=[],
+        )
+        for i in range(n_docs)
+    ]
+    return {"tokens": tokens, "doc_spans": spans, "link_to_target": {}}
+
+
+@pytest.fixture
+def epoch_dir_bfs(tmp_path):
+    """Fake epoch dir with metadata.json strategy=bfs and 5 synthetic packs."""
+    epoch_dir = tmp_path / "epoch_bfs"
+    epoch_dir.mkdir()
+    meta = {"strategy": "bfs", "n_packs": 5, "token_budget": 20}
+    with open(epoch_dir / "metadata.json", "w") as f:
+        json.dump(meta, f)
+    return epoch_dir
+
+
+def _mock_bucketed_dataset(batches):
+    """Return a MagicMock that iterates over the given batches."""
+    mock_ds = MagicMock()
+    mock_ds.__iter__ = MagicMock(return_value=iter(batches))
+    return mock_ds
+
+
+def test_pack_contrastive_returns_strategy_key(tmp_path, epoch_dir_bfs, dummy_split_dataset):
+    model = _make_contrastive_mock_model()
+    batches = [_make_contrastive_batch() for _ in range(3)]
+
+    with patch("eval.perplexity.BucketedPackDataset", return_value=_mock_bucketed_dataset(batches)), \
+         patch("eval.perplexity.GraphIndex"), \
+         patch("eval.perplexity.PretokShardedBackend") as mock_backend_cls:
+        mock_backend_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        mock_backend_cls.return_value.close = MagicMock()
+        result = run_pack_contrastive_perplexity(
+            model=model,
+            epoch_dirs=[epoch_dir_bfs],
+            dataset_dir=dummy_split_dataset,
+            layout_policy=NullLayoutPolicy(),
+            max_packs=10,
+            device="cpu",
+        )
+
+    assert "bfs" in result
+
+
+def test_pack_contrastive_result_structure(tmp_path, epoch_dir_bfs, dummy_split_dataset):
+    model = _make_contrastive_mock_model()
+    batches = [_make_contrastive_batch() for _ in range(3)]
+
+    with patch("eval.perplexity.BucketedPackDataset", return_value=_mock_bucketed_dataset(batches)), \
+         patch("eval.perplexity.GraphIndex"), \
+         patch("eval.perplexity.PretokShardedBackend") as mock_backend_cls:
+        mock_backend_cls.return_value.close = MagicMock()
+        result = run_pack_contrastive_perplexity(
+            model=model,
+            epoch_dirs=[epoch_dir_bfs],
+            dataset_dir=dummy_split_dataset,
+            layout_policy=NullLayoutPolicy(),
+            max_packs=10,
+            device="cpu",
+        )
+
+    expected_keys = {
+        "strategy", "n_packs",
+        "mean_nll_cross_doc", "mean_nll_baseline", "mean_delta",
+        "delta_ci_low", "delta_ci_high",
+        "cross_doc_ci_low", "cross_doc_ci_high",
+        "baseline_ci_low", "baseline_ci_high",
+    }
+    assert set(result["bfs"].keys()) == expected_keys
+
+
+def test_pack_contrastive_n_packs(tmp_path, epoch_dir_bfs, dummy_split_dataset):
+    model = _make_contrastive_mock_model()
+    batches = [_make_contrastive_batch() for _ in range(5)]
+
+    with patch("eval.perplexity.BucketedPackDataset", return_value=_mock_bucketed_dataset(batches)), \
+         patch("eval.perplexity.GraphIndex"), \
+         patch("eval.perplexity.PretokShardedBackend") as mock_backend_cls:
+        mock_backend_cls.return_value.close = MagicMock()
+        result = run_pack_contrastive_perplexity(
+            model=model,
+            epoch_dirs=[epoch_dir_bfs],
+            dataset_dir=dummy_split_dataset,
+            layout_policy=NullLayoutPolicy(),
+            max_packs=3,
+            device="cpu",
+        )
+
+    assert result["bfs"]["n_packs"] == 3
+
+
+def test_pack_contrastive_respects_max_packs(tmp_path, epoch_dir_bfs, dummy_split_dataset):
+    """max_packs=3 with 5 available batches → only 3 scored."""
+    model = _make_contrastive_mock_model()
+    batches = [_make_contrastive_batch() for _ in range(5)]
+
+    with patch("eval.perplexity.BucketedPackDataset", return_value=_mock_bucketed_dataset(batches)), \
+         patch("eval.perplexity.GraphIndex"), \
+         patch("eval.perplexity.PretokShardedBackend") as mock_backend_cls:
+        mock_backend_cls.return_value.close = MagicMock()
+        result = run_pack_contrastive_perplexity(
+            model=model,
+            epoch_dirs=[epoch_dir_bfs],
+            dataset_dir=dummy_split_dataset,
+            layout_policy=NullLayoutPolicy(),
+            max_packs=3,
+            device="cpu",
+        )
+
+    # 3 packs × 2 calls (cross + base) = 6 total forward_inference calls
+    assert model.forward_inference.call_count == 6
+
+
+def test_pack_contrastive_delta_equals_base_minus_cross(tmp_path, epoch_dir_bfs, dummy_split_dataset):
+    """With uniform logits both conditions return the same NLL, so delta == 0."""
+    model = _make_contrastive_mock_model()
+    batches = [_make_contrastive_batch() for _ in range(3)]
+
+    with patch("eval.perplexity.BucketedPackDataset", return_value=_mock_bucketed_dataset(batches)), \
+         patch("eval.perplexity.GraphIndex"), \
+         patch("eval.perplexity.PretokShardedBackend") as mock_backend_cls:
+        mock_backend_cls.return_value.close = MagicMock()
+        result = run_pack_contrastive_perplexity(
+            model=model,
+            epoch_dirs=[epoch_dir_bfs],
+            dataset_dir=dummy_split_dataset,
+            layout_policy=NullLayoutPolicy(),
+            max_packs=10,
+            device="cpu",
+        )
+
+    stats = result["bfs"]
+    assert abs(stats["mean_delta"]) < 1e-6
+    assert math.isclose(
+        stats["mean_delta"],
+        stats["mean_nll_baseline"] - stats["mean_nll_cross_doc"],
+        abs_tol=1e-6,
+    )
+
+
+def test_pack_contrastive_empty_epoch_dirs(dummy_split_dataset):
+    """Empty epoch_dirs list returns empty dict."""
+    model = _make_contrastive_mock_model()
+    with patch("eval.perplexity.GraphIndex"), \
+         patch("eval.perplexity.PretokShardedBackend") as mock_backend_cls:
+        mock_backend_cls.return_value.close = MagicMock()
+        result = run_pack_contrastive_perplexity(
+            model=model,
+            epoch_dirs=[],
+            dataset_dir=dummy_split_dataset,
+            layout_policy=NullLayoutPolicy(),
+            device="cpu",
+        )
+    assert result == {}

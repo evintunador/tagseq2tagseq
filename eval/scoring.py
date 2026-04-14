@@ -1,7 +1,7 @@
 """
 eval/scoring.py — primitive scoring utilities for TS2TS models.
 
-Provides two entry points:
+Provides three entry points:
 
   score_doc(model, tokens, layout_policy, raw_identifier, normed_identifier, device)
       -> {"mean_nll": float, "num_tokens": int}
@@ -24,11 +24,19 @@ Provides two entry points:
           Hook for the future link-injection feature — if provided, it is
           called on context_tokens before packing, allowing a pre-processor
           to annotate the context with generated aux-doc links.
+
+  score_packed_batch_body_tokens(model, batch, layout_policy, device, mask_type)
+      -> {"mean_nll": float, "num_tokens": int}
+
+      Scores all body tokens across every DocSpan in a pre-computed pack
+      batch (as yielded by BucketedPackDataset). Used by the pack-level
+      contrastive perplexity benchmark.
 """
 
 import math
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -78,6 +86,14 @@ def score_doc(
     suffix = layout_policy.suffix_tokens(info)
     prefix_len = len(prefix)
     suffix_len = len(suffix)
+
+    # Truncate body to fit within the model's max_seq_len.
+    max_seq_len = getattr(getattr(model, "backbone", None), "max_seq_len", None)
+    if isinstance(max_seq_len, int):
+        max_body = max_seq_len - prefix_len - suffix_len
+        if max_body <= 0:
+            return {"mean_nll": 0.0, "num_tokens": 0}
+        tokens = tokens[:max_body]
 
     full_seq = prefix + tokens + suffix
     T = len(full_seq)
@@ -203,3 +219,111 @@ def score_completion(
     nll_per_tok = -lp_slice[torch.arange(len(tgt), device=device), tgt]  # [C]
 
     return nll_per_tok.mean().item()
+
+
+def score_packed_batch_body_tokens(
+    model,
+    batch: Dict[str, Any],
+    layout_policy: Optional[DocLayoutPolicy] = None,
+    device: str = "cuda",
+    mask_type: Optional[str] = None,
+) -> Dict[str, float]:
+    """Score all body tokens across every DocSpan in a pre-computed pack batch.
+
+    Runs a single forward pass over the full packed sequence, then extracts
+    the NLL for each body token (excluding prefix and suffix decoration) across
+    all documents in the pack.
+
+    Args:
+        model: TS2TSModel in eval mode.
+        batch: Batch dict as yielded by BucketedPackDataset. Expected keys:
+            ``"tokens"`` (LongTensor [1, T]) and ``"doc_spans"`` (List[DocSpan]).
+        layout_policy: Layout policy used to determine per-span prefix/suffix
+            lengths. Defaults to model.active_layout_policy if not provided.
+        device: Device string (e.g. "cuda", "cpu").
+        mask_type: Optional mask type override passed to forward_inference.
+            None uses the model's default. Pass 'doc_causal' for the
+            baseline condition in contrastive evaluation.
+
+    Returns:
+        {"mean_nll": float, "num_tokens": int}
+        Returns {"mean_nll": 0.0, "num_tokens": 0} if no scoreable body
+        tokens are found (e.g. all spans are pure prefix/suffix).
+    """
+    if layout_policy is None:
+        layout_policy = model.active_layout_policy
+
+    tokens_tensor = batch["tokens"].to(device)   # [1, T]
+    doc_spans = batch["doc_spans"]
+
+    if not doc_spans:
+        return {"mean_nll": 0.0, "num_tokens": 0}
+
+    # Truncate to model's max_seq_len if the pack is longer.
+    # In production the pack token budget equals max_seq_len; truncation is
+    # only triggered when a smoke-test model with a short context scores packs
+    # built for a longer context.
+    max_seq_len = getattr(getattr(model, "backbone", None), "max_seq_len", None)
+    if isinstance(max_seq_len, int) and tokens_tensor.shape[1] > max_seq_len:
+        from data.collate import DocSpan as _DocSpan
+        tokens_tensor = tokens_tensor[:, :max_seq_len]
+        clipped = []
+        for s in doc_spans:
+            if s.start >= max_seq_len:
+                continue
+            if s.end > max_seq_len:
+                s = _DocSpan(
+                    doc_id=s.doc_id, normed_identifier=s.normed_identifier,
+                    raw_identifier=s.raw_identifier,
+                    start=s.start, end=max_seq_len,
+                    truncated=True, outgoing_identifiers=s.outgoing_identifiers,
+                )
+            clipped.append(s)
+        doc_spans = clipped
+
+    if not doc_spans:
+        return {"mean_nll": 0.0, "num_tokens": 0}
+
+    # Single forward pass over the full packed sequence.
+    logits = model.forward_inference(tokens_tensor, doc_spans, mask_type=mask_type)  # [1, T, V]
+    log_probs = F.log_softmax(logits[0].float(), dim=-1)  # [T, V]
+
+    nll_list: List[float] = []
+
+    for span in doc_spans:
+        info = DocLayoutInfo(
+            raw_identifier=span.raw_identifier,
+            normed_identifier=span.normed_identifier,
+        )
+        prefix_len = layout_policy.prefix_length(info)
+        suffix_len = layout_policy.suffix_length(info)
+
+        body_start = span.start + prefix_len
+        body_end = span.end - suffix_len
+
+        if body_end <= body_start:
+            continue
+
+        # Logit at position t predicts token t+1. Body token at body_start is
+        # predicted by logit at body_start - 1.
+        logit_indices = list(range(body_start - 1, body_end - 1))
+        target_indices = list(range(body_start, body_end))
+
+        # The very first position in the full sequence has no preceding logit.
+        # This only occurs for the first span when prefix_len == 0.
+        if body_start == 0:
+            logit_indices = logit_indices[1:]
+            target_indices = target_indices[1:]
+
+        if not logit_indices:
+            continue
+
+        tgt = tokens_tensor[0, target_indices]                                    # [N]
+        lp_slice = log_probs[logit_indices, :]                                    # [N, V]
+        nll_per_tok = -lp_slice[torch.arange(len(tgt), device=device), tgt]      # [N]
+        nll_list.extend(nll_per_tok.tolist())
+
+    if not nll_list:
+        return {"mean_nll": 0.0, "num_tokens": 0}
+
+    return {"mean_nll": float(np.mean(nll_list)), "num_tokens": len(nll_list)}
