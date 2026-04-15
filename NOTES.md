@@ -7,21 +7,18 @@ Not a spec; just enough to orient a planning session for each item.
 
 ## Eval pipeline — extensions
 
-### Cross-doc contrastive perplexity
+### Cross-doc contrastive perplexity — DONE
 The core research claim is that cross_doc_link attention helps the model leverage
-linked documents. The direct eval: take pairs (doc_A, doc_B) where A links to B,
-score doc_A under two conditions:
-1. With B packed as a preceding DocSpan + cross_doc_link mask (model can attend to B)
-2. Same pack but doc_causal mask (B is present but isolated — no cross-doc attention)
+linked documents. `run_pack_contrastive_perplexity` scores pre-computed training
+packs under both cross_doc_link and doc_causal masks, reporting mean NLL delta
+per traversal strategy.
 
-Report mean NLL delta across linked pairs on the val set. This directly measures
-whether the cross-doc attention actually improves predictions, not just perplexity on
-random docs. Run for both wiki (markdown links) and code (Python imports).
-
-Infrastructure DONE: `forward_inference(mask_type='doc_causal')` override and the
-`_creators` dict on `TS2TSModel` make both forward passes trivial. Still needed:
-a `score_doc_with_context` function in `eval/scoring.py` and pair-sampling via
-`GraphIndex.get_neighbors`.
+Implementation uses pack-based topology-aware scoring: within each pack, only body
+tokens of docs with incoming cross-doc edges (target docs) are scored. Context-only
+docs (no incoming edges in the pack) produce identical NLL under both conditions
+and are excluded to keep the signal clean. `score_doc_with_context` in
+`eval/scoring.py` is the primitive; the full forward pass runs over the entire
+packed sequence so cross-doc grants can fire normally.
 
 ### Batched MC scoring
 Add `score_completions_batched` to `eval/scoring.py` — packs K (context + choice)

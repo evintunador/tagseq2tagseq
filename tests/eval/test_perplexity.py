@@ -219,21 +219,27 @@ def _make_contrastive_mock_model():
 
 
 def _make_contrastive_batch(T: int = 20, n_docs: int = 2):
-    """Synthetic batch dict as yielded by BucketedPackDataset."""
+    """Synthetic batch dict as yielded by BucketedPackDataset.
+
+    doc_0 links to doc_1 so that score_doc_with_context has a target to score.
+    All subsequent docs (if n_docs > 2) have no outgoing links and are
+    context-only.
+    """
     tokens = torch.zeros(1, T, dtype=torch.long)
     doc_len = T // n_docs
-    spans = [
-        DocSpan(
+    spans = []
+    for i in range(n_docs):
+        # doc_0 links to doc_1 — provides a cross-doc edge for scoring.
+        outgoing = [f"doc_{i + 1}"] if i == 0 and n_docs > 1 else []
+        spans.append(DocSpan(
             doc_id=i,
             normed_identifier=f"doc_{i}",
             raw_identifier=f"Doc {i}",
             start=i * doc_len,
             end=(i + 1) * doc_len,
             truncated=False,
-            outgoing_identifiers=[],
-        )
-        for i in range(n_docs)
-    ]
+            outgoing_identifiers=outgoing,
+        ))
     return {"tokens": tokens, "doc_spans": spans, "link_to_target": {}}
 
 

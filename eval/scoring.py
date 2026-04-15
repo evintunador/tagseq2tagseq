@@ -25,12 +25,13 @@ Provides three entry points:
           called on context_tokens before packing, allowing a pre-processor
           to annotate the context with generated aux-doc links.
 
-  score_packed_batch_body_tokens(model, batch, layout_policy, device, mask_type)
+  score_doc_with_context(model, batch, layout_policy, device, mask_type)
       -> {"mean_nll": float, "num_tokens": int}
 
-      Scores all body tokens across every DocSpan in a pre-computed pack
-      batch (as yielded by BucketedPackDataset). Used by the pack-level
-      contrastive perplexity benchmark.
+      Scores body tokens of docs that have incoming cross-doc edges within
+      the pack (as yielded by BucketedPackDataset). Context-only docs are
+      excluded — their NLL is identical under both mask conditions and only
+      dilutes the contrastive signal. Used by pack_contrastive_perplexity.
 """
 
 import math
@@ -145,11 +146,6 @@ def score_doc(
     return {"mean_nll": mean_nll, "num_tokens": len(logit_indices)}
 
 
-# TODO: add score_completions_batched(model, context_tokens, list[completion_tokens])
-# that packs all K (context + choice) sequences as K separate DocSpans in a single
-# forward pass, scoring each choice's NLL from the combined logits. doc_causal masking
-# makes each span independent — semantically identical to K separate calls but ~K×
-# faster. Required before multiple-choice benchmarks (HellaSwag, ARC, etc.) are practical.
 def score_completion(
     model,
     context_tokens: List[int],
@@ -221,18 +217,20 @@ def score_completion(
     return nll_per_tok.mean().item()
 
 
-def score_packed_batch_body_tokens(
+def score_doc_with_context(
     model,
     batch: Dict[str, Any],
     layout_policy: Optional[DocLayoutPolicy] = None,
     device: str = "cuda",
     mask_type: Optional[str] = None,
 ) -> Dict[str, float]:
-    """Score all body tokens across every DocSpan in a pre-computed pack batch.
+    """Score body tokens of docs that have incoming cross-doc edges within the pack.
 
-    Runs a single forward pass over the full packed sequence, then extracts
-    the NLL for each body token (excluding prefix and suffix decoration) across
-    all documents in the pack.
+    Runs a single forward pass over the full packed sequence, then computes NLL
+    only for spans whose normed_identifier appears in another span's
+    outgoing_identifiers. Context-only docs (no incoming edges in the pack)
+    are excluded — their NLL is identical under both mask conditions and only
+    dilutes the contrastive signal.
 
     Args:
         model: TS2TSModel in eval mode.
@@ -247,8 +245,8 @@ def score_packed_batch_body_tokens(
 
     Returns:
         {"mean_nll": float, "num_tokens": int}
-        Returns {"mean_nll": 0.0, "num_tokens": 0} if no scoreable body
-        tokens are found (e.g. all spans are pure prefix/suffix).
+        Returns {"mean_nll": 0.0, "num_tokens": 0} if the pack has no
+        cross-doc edges (no target docs to score) or if doc_spans is empty.
     """
     if layout_policy is None:
         layout_policy = model.active_layout_policy
@@ -257,6 +255,18 @@ def score_packed_batch_body_tokens(
     doc_spans = batch["doc_spans"]
 
     if not doc_spans:
+        return {"mean_nll": 0.0, "num_tokens": 0}
+
+    # Identify target docs: spans whose normed_identifier is referenced by
+    # at least one other span's outgoing_identifiers.
+    pack_normed_ids = {span.normed_identifier for span in doc_spans}
+    target_ids: set = set()
+    for span in doc_spans:
+        for oid in span.outgoing_identifiers:
+            if oid in pack_normed_ids:
+                target_ids.add(oid)
+
+    if not target_ids:
         return {"mean_nll": 0.0, "num_tokens": 0}
 
     # Truncate to model's max_seq_len if the pack is longer.
@@ -291,6 +301,10 @@ def score_packed_batch_body_tokens(
     nll_list: List[float] = []
 
     for span in doc_spans:
+        # Only score target docs — those with at least one incoming pack edge.
+        if span.normed_identifier not in target_ids:
+            continue
+
         info = DocLayoutInfo(
             raw_identifier=span.raw_identifier,
             normed_identifier=span.normed_identifier,

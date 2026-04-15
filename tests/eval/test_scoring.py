@@ -13,7 +13,7 @@ import torch.nn as nn
 
 from data.collate import DocSpan
 from data.layout import EOSLayoutPolicy, NullLayoutPolicy
-from eval.scoring import score_completion, score_doc, score_packed_batch_body_tokens
+from eval.scoring import score_completion, score_doc, score_doc_with_context
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -163,101 +163,94 @@ def test_score_completion_preprocessor_none_unchanged(mock_model):
     assert tokens_arg.shape == (1, len(context) + len(completion))
 
 
-# ─── score_packed_batch_body_tokens tests ─────────────────────────────────────
+# ─── score_doc_with_context tests ────────────────────────────────────────────
 
-def _make_pack_batch(T: int = 20, n_docs: int = 2, vocab_size: int = VOCAB_SIZE):
-    """Synthetic batch with uniform-length docs and a matching mock model."""
+def _make_linked_batch(T: int = 20, vocab_size: int = VOCAB_SIZE):
+    """Batch where doc_0 (context-only) links to doc_1 (target).
+
+    doc_0: positions [0, 10), outgoing_identifiers=['doc_1']  — context only
+    doc_1: positions [10, 20), outgoing_identifiers=[]        — target (has incoming)
+    """
     tokens = torch.zeros(1, T, dtype=torch.long)
-    doc_len = T // n_docs
     spans = [
         DocSpan(
-            doc_id=i,
-            normed_identifier=f"doc_{i}",
-            raw_identifier=f"Doc {i}",
-            start=i * doc_len,
-            end=(i + 1) * doc_len,
-            truncated=False,
-            outgoing_identifiers=[],
-        )
-        for i in range(n_docs)
+            doc_id=0, normed_identifier="doc_0", raw_identifier="Doc 0",
+            start=0, end=10, truncated=False, outgoing_identifiers=["doc_1"],
+        ),
+        DocSpan(
+            doc_id=1, normed_identifier="doc_1", raw_identifier="Doc 1",
+            start=10, end=20, truncated=False, outgoing_identifiers=[],
+        ),
     ]
     batch = {"tokens": tokens, "doc_spans": spans}
 
     model = MagicMock()
 
     def _forward(tokens, doc_spans, **kwargs):
-        T_ = tokens.shape[1]
-        return torch.zeros(1, T_, vocab_size)
+        return torch.zeros(1, tokens.shape[1], vocab_size)
 
     model.forward_inference.side_effect = _forward
     model.active_layout_policy = NullLayoutPolicy()
     return model, batch
 
 
-def test_score_packed_batch_returns_expected_keys():
-    model, batch = _make_pack_batch()
-    result = score_packed_batch_body_tokens(model, batch, NullLayoutPolicy(), device="cpu")
+def test_score_doc_with_context_returns_expected_keys():
+    model, batch = _make_linked_batch()
+    result = score_doc_with_context(model, batch, NullLayoutPolicy(), device="cpu")
     assert set(result.keys()) == {"mean_nll", "num_tokens"}
 
 
-def test_score_packed_batch_uniform_logits_approx_log_V():
-    model, batch = _make_pack_batch(T=20, n_docs=2)
-    result = score_packed_batch_body_tokens(model, batch, NullLayoutPolicy(), device="cpu")
+def test_score_doc_with_context_uniform_logits_approx_log_V():
+    model, batch = _make_linked_batch()
+    result = score_doc_with_context(model, batch, NullLayoutPolicy(), device="cpu")
     assert result["num_tokens"] > 0
     assert abs(result["mean_nll"] - math.log(VOCAB_SIZE)) < 1e-4
 
 
-def test_score_packed_batch_num_tokens_with_null_policy():
-    # NullLayoutPolicy: prefix_len=0, suffix_len=0.
-    # First span starts at 0 with no prefix → first body token skipped.
-    # Total scored = T - 1 (first token of first span has no preceding logit).
-    T, n_docs = 20, 2
-    model, batch = _make_pack_batch(T=T, n_docs=n_docs)
-    result = score_packed_batch_body_tokens(model, batch, NullLayoutPolicy(), device="cpu")
-    assert result["num_tokens"] == T - 1
+def test_score_doc_with_context_only_scores_target_doc():
+    # doc_1 occupies positions [10, 20). NullLayoutPolicy: prefix=0, suffix=0.
+    # body_start=10: logit at position 9 is valid → all 10 body tokens scored.
+    model, batch = _make_linked_batch(T=20)
+    result = score_doc_with_context(model, batch, NullLayoutPolicy(), device="cpu")
+    assert result["num_tokens"] == 10
 
 
-def test_score_packed_batch_excludes_suffix_with_eos_policy():
-    # EOSLayoutPolicy: prefix_len=0, suffix_len=1 per span.
-    # n_docs=2 → 2 tokens excluded as EOS suffix.
-    # First body token of first span also skipped (no preceding logit).
-    T, n_docs = 20, 2
-    model, batch = _make_pack_batch(T=T, n_docs=n_docs)
-    result = score_packed_batch_body_tokens(
-        model, batch, EOSLayoutPolicy(eos_token_id=0), device="cpu"
-    )
-    # Each span: doc_len=10, suffix_len=1 → 9 body tokens per span.
-    # First span: body_start=0, skip first → 8 scored. Second span: 9 scored.
-    assert result["num_tokens"] == 8 + 9
+def test_score_doc_with_context_forward_sees_full_sequence():
+    # forward_inference receives the full packed sequence (both docs), not just
+    # the target doc — the context doc must be present for cross-doc grants.
+    model, batch = _make_linked_batch(T=20)
+    score_doc_with_context(model, batch, NullLayoutPolicy(), device="cpu")
+    tokens_arg = model.forward_inference.call_args[0][0]
+    assert tokens_arg.shape == (1, 20)
 
 
-def test_score_packed_batch_calls_forward_once():
-    model, batch = _make_pack_batch()
-    score_packed_batch_body_tokens(model, batch, NullLayoutPolicy(), device="cpu")
+def test_score_doc_with_context_no_edges_returns_zero():
+    # All spans have empty outgoing_identifiers → no cross-doc edges → skip.
+    model = MagicMock()
+    batch = {
+        "tokens": torch.zeros(1, 20, dtype=torch.long),
+        "doc_spans": [
+            DocSpan(doc_id=0, normed_identifier="a", raw_identifier="A",
+                    start=0, end=10, truncated=False, outgoing_identifiers=[]),
+            DocSpan(doc_id=1, normed_identifier="b", raw_identifier="B",
+                    start=10, end=20, truncated=False, outgoing_identifiers=[]),
+        ],
+    }
+    result = score_doc_with_context(model, batch, NullLayoutPolicy(), device="cpu")
+    assert result == {"mean_nll": 0.0, "num_tokens": 0}
+    assert model.forward_inference.call_count == 0
+
+
+def test_score_doc_with_context_calls_forward_once():
+    model, batch = _make_linked_batch()
+    score_doc_with_context(model, batch, NullLayoutPolicy(), device="cpu")
     assert model.forward_inference.call_count == 1
 
 
-def test_score_packed_batch_passes_mask_type_to_forward():
-    model, batch = _make_pack_batch()
-    score_packed_batch_body_tokens(
+def test_score_doc_with_context_passes_mask_type_to_forward():
+    model, batch = _make_linked_batch()
+    score_doc_with_context(
         model, batch, NullLayoutPolicy(), device="cpu", mask_type="doc_causal"
     )
     call_kwargs = model.forward_inference.call_args[1]
     assert call_kwargs.get("mask_type") == "doc_causal"
-
-
-def test_score_packed_batch_passes_doc_spans_to_forward():
-    model, batch = _make_pack_batch(n_docs=3)
-    score_packed_batch_body_tokens(model, batch, NullLayoutPolicy(), device="cpu")
-    call_args = model.forward_inference.call_args
-    spans_arg = call_args[0][1]
-    assert len(spans_arg) == 3
-
-
-def test_score_packed_batch_empty_spans_returns_zero():
-    model, _ = _make_pack_batch()
-    empty_batch = {"tokens": torch.zeros(1, 10, dtype=torch.long), "doc_spans": []}
-    result = score_packed_batch_body_tokens(model, empty_batch, NullLayoutPolicy(), device="cpu")
-    assert result == {"mean_nll": 0.0, "num_tokens": 0}
-    # forward_inference should not be called for an empty span list
-    assert model.forward_inference.call_count == 0

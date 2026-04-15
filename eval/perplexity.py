@@ -16,11 +16,11 @@ Provides two entry points:
                                    layout_policy, max_packs, device)
       -> Dict[str, Dict[str, float]]
 
-      Scores all body tokens in pre-computed training packs under two
-      conditions — cross_doc_link mask vs doc_causal mask — and reports
-      the mean NLL delta per traversal strategy. epoch_dirs is a list of
-      pre-computed epoch directories (one per strategy); the strategy name
-      is read from each directory's metadata.json.
+      Scores body tokens of docs with incoming cross-doc edges within each
+      pack under two conditions — cross_doc_link mask vs doc_causal mask —
+      and reports the mean NLL delta per traversal strategy. epoch_dirs is
+      a list of pre-computed epoch directories (one per strategy); the
+      strategy name is read from each directory's metadata.json.
 """
 
 import itertools
@@ -39,7 +39,7 @@ from tunalab.stats_funcs import calculate_bootstrap_ci
 from data.bucketed_pack_dataset import BucketedPackDataset
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.layout import DocLayoutPolicy
-from eval.scoring import score_doc, score_packed_batch_body_tokens
+from eval.scoring import score_doc, score_doc_with_context
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +229,9 @@ def run_pack_contrastive_perplexity(
             PretokShardedBackend), shared across all epoch dirs.
         layout_policy: Layout policy for prefix/suffix decoration. Defaults to
             model.active_layout_policy if not provided.
-        max_packs: Maximum number of packs to score per epoch dir.
+        max_packs: Maximum number of packs to score per epoch dir. Packs with
+            no cross-doc edges (no target docs) are skipped and do not count
+            toward this limit.
         device: Device string.
 
     Returns:
@@ -278,10 +280,10 @@ def run_pack_contrastive_perplexity(
             skipped = 0
 
             for batch in itertools.islice(dataset, max_packs):
-                result_cross = score_packed_batch_body_tokens(
+                result_cross = score_doc_with_context(
                     model, batch, layout_policy, device, mask_type=None,
                 )
-                result_base = score_packed_batch_body_tokens(
+                result_base = score_doc_with_context(
                     model, batch, layout_policy, device, mask_type="doc_causal",
                 )
 
