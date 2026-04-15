@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from torch import Tensor
 import torch.nn as nn
 
-from tunalab.evaluation import register_handler
 from tunalab.modules.norms.rms_norm import RMSNorm
 from tunalab.modules.losses.fused_cross_entropy import FusedLinearCELoss
 from .modules import TS2TSBackbone
@@ -375,28 +374,4 @@ class TS2TSModel:
             tokenizer_decode=self.tokenizer.decode,
             layout_policy=self.inference_layout_policy,
             root_identifier=root_identifier,
-        )
-
-    @register_handler("perplexity")
-    def compute_perplexity(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        TODO: Implement perplexity evaluation handler.
-        Convert eval batch → packed sequence → doc_spans → forward_inference → per-token CE.
-        """
-        raise NotImplementedError(
-            "compute_perplexity evaluation handler must be implemented. "
-            "This requires converting standard eval format to your packed "
-            "sequence format with doc_spans."
-        )
-
-    @register_handler("next_token_prediction")
-    def predict_next_token(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        TODO: Implement next-token prediction evaluation handler.
-        Consider cross-document prediction accuracy as the key metric.
-        """
-        raise NotImplementedError(
-            "predict_next_token evaluation handler must be implemented. "
-            "Consider metrics that highlight your model's unique graph-aware "
-            "capabilities, such as cross-document prediction accuracy."
         )

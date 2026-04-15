@@ -1,17 +1,17 @@
 """
 eval_checkpoints.py — downstream benchmark evaluation for TS2TS checkpoints.
 
-Loads a checkpoint, reconstructs the model in inference mode, and runs the
-configured benchmark suite. Results are written as JSON.
+Loads one or more checkpoints, reconstructs each model in inference mode, and
+runs the configured benchmark suite. Results are written as JSON.
 
 Benchmarks can be run under multiple named conditions in a single pass.
 Each condition specifies a mask_type and layout_policy override, allowing
 direct comparison between e.g. the model's experimental cross_doc_link
 behaviour and a doc_causal baseline.
 
-Usage (CLI):
+Usage (CLI — single checkpoint):
     python eval_checkpoints.py \\
-        --checkpoint runs/YYYYMMDD/checkpoints/best_model.pt \\
+        --checkpoints runs/YYYYMMDD/checkpoints/best_model.pt \\
         --dataset data/pretokenized_datasets/stack_10m \\
         [--benchmarks held_out_perplexity] \\
         [--split val_community] \\
@@ -19,8 +19,20 @@ Usage (CLI):
         [--output eval_results.json] \\
         [--device cuda]
 
+    Results are auto-saved to {run_dir}/eval_results.json.
+    Pass --output to override the save path.
+
+Usage (CLI — multiple checkpoints):
+    python eval_checkpoints.py \\
+        --checkpoints runs/RUN_A/checkpoints/best_model.pt \\
+                      runs/RUN_B/checkpoints/best_model.pt \\
+        --dataset data/pretokenized_datasets/stack_10m
+
+    Each checkpoint's results are saved to its own run dir.
+    A combined comparison table is written to evals/YYYYMMDD_HHMMSS/.
+
 Importable:
-    from eval_checkpoints import run_eval
+    from eval_checkpoints import run_eval, run_benchmarks_on_model
     results = run_eval(checkpoint_path, dataset_dir, eval_cfg, device)
 
 Results dict structure (with conditions):
@@ -33,8 +45,10 @@ Results dict structure (with conditions):
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import logging
+import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -45,7 +59,7 @@ from generate import load_inference_model
 
 logger = logging.getLogger(__name__)
 
-# ─── Benchmark registry ──────────────────────────────────────────────────────
+# ─── Benchmark registry ───────────────────────────────────────────────────────
 
 _KNOWN_BENCHMARKS = ("held_out_perplexity", "hellaswag", "pack_contrastive_perplexity")
 
@@ -108,7 +122,21 @@ def _resolve_layout_policy(policy_str: Optional[str], model):
         )
 
 
-# ─── Core dispatch ───────────────────────────────────────────────────────────
+def _default_run_output_path(checkpoint_path: Path) -> Path:
+    """Infer eval_results.json save path from checkpoint location.
+
+    Convention: checkpoint lives at {run_dir}/checkpoints/best_model.pt
+    → run_dir = checkpoint.parent.parent.
+    Falls back to checkpoint.parent if the immediate parent dir is not
+    named 'checkpoints'.
+    """
+    p = checkpoint_path.resolve()
+    if p.parent.name == "checkpoints":
+        return p.parent.parent / "eval_results.json"
+    return p.parent / "eval_results.json"
+
+
+# ─── Core dispatch ────────────────────────────────────────────────────────────
 
 def run_benchmarks_on_model(
     model,
@@ -306,6 +334,139 @@ def _log_summary(results: Dict[str, Any]) -> None:
     logger.info("─────────────────────────────────────────────────────")
 
 
+# ─── Comparison table helpers ─────────────────────────────────────────────────
+
+def _build_comparison_entry(
+    checkpoint_path: Path,
+    dataset_dir: str,
+    results: Dict[str, Any],
+    hp: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build one row for the comparison table from a single checkpoint's results.
+
+    The entry includes checkpoint path, run_dir basename, model metadata read
+    from hyperparameters.json (mask_type, num_layers, model_dim, dataset), and
+    the full results dict for every benchmark/condition that was run.
+
+    Args:
+        checkpoint_path: Resolved path to best_model.pt.
+        dataset_dir:     Dataset path string (for the table).
+        results:         Output of run_benchmarks_on_model for this checkpoint.
+        hp:              Already-loaded hyperparameters dict, or None to load
+                         from {run_dir}/hyperparameters.json if it exists.
+    """
+    p = checkpoint_path.resolve()
+    run_dir = p.parent.parent if p.parent.name == "checkpoints" else p.parent
+
+    # Load hyperparameters if not provided
+    if hp is None:
+        hp_path = run_dir / "hyperparameters.json"
+        if hp_path.exists():
+            try:
+                with open(hp_path) as f:
+                    hp = json.load(f)
+            except Exception:
+                hp = {}
+        else:
+            hp = {}
+
+    model_cfg = hp.get("model", {})
+    data_cfg  = hp.get("data", {})
+
+    entry: Dict[str, Any] = {
+        "checkpoint":  str(checkpoint_path),
+        "run_dir":     str(run_dir),
+        "run_dir_name": run_dir.name,
+        "mask_type":   model_cfg.get("mask_type", "unknown"),
+        "num_layers":  model_cfg.get("num_layers"),
+        "model_dim":   model_cfg.get("model_dim"),
+        "dataset":     Path(data_cfg.get("dataset_dir", dataset_dir)).name,
+        "strategy":    data_cfg.get("strategy"),
+    }
+    entry.update(results)
+    return entry
+
+
+def _headline_metric(key: str, result: Any) -> str:
+    """Extract a single printable number from a benchmark result for the .txt table."""
+    nan = float("nan")
+    if not isinstance(result, dict):
+        return "—"
+
+    # held_out_perplexity → show perplexity
+    if "perplexity" in result:
+        v = result.get("perplexity", nan)
+        return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:.2f}"
+
+    # hellaswag / MC → show accuracy
+    if "accuracy" in result:
+        v = result.get("accuracy", nan)
+        return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:.4f}"
+
+    # pack_contrastive_perplexity → dict of strategy → stats; show first strategy's delta
+    for _strategy, stats in result.items():
+        if isinstance(stats, dict) and "mean_delta" in stats:
+            v = stats.get("mean_delta", nan)
+            return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:+.4f}"
+
+    return "—"
+
+
+def _write_comparison_table(eval_dir: Path, entries: List[Dict[str, Any]]) -> None:
+    """Write comparison_table.json and comparison_table.txt to eval_dir.
+
+    comparison_table.json — list of full entry dicts (one per checkpoint).
+    comparison_table.txt  — human-readable fixed-width ASCII table with one
+        column per benchmark/condition showing its headline metric.
+    """
+    # JSON
+    json_path = eval_dir / "comparison_table.json"
+    json_path.write_text(
+        json.dumps(entries, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    # Collect all benchmark/condition keys present across any entry.
+    meta_keys = {"checkpoint", "run_dir", "run_dir_name", "mask_type",
+                 "num_layers", "model_dim", "dataset", "strategy"}
+    bench_keys: List[str] = []
+    seen: set = set()
+    for entry in entries:
+        for k in entry:
+            if k not in meta_keys and k not in seen:
+                bench_keys.append(k)
+                seen.add(k)
+
+    # Build rows: [run_dir_name, mask_type, dataset, strategy, ...headline metrics...]
+    header = ["run_dir", "mask_type", "dataset", "strategy"] + bench_keys
+    rows: List[List[str]] = [header]
+    for entry in entries:
+        row = [
+            entry.get("run_dir_name", "—"),
+            entry.get("mask_type", "—"),
+            entry.get("dataset", "—"),
+            entry.get("strategy") or "—",
+        ]
+        for k in bench_keys:
+            row.append(_headline_metric(k, entry.get(k)))
+        rows.append(row)
+
+    # Compute column widths
+    col_widths = [max(len(r[i]) for r in rows) for i in range(len(header))]
+
+    lines = []
+    for i, row in enumerate(rows):
+        lines.append("  ".join(cell.ljust(col_widths[j]) for j, cell in enumerate(row)))
+        if i == 0:
+            lines.append("  ".join("-" * w for w in col_widths))
+
+    txt_path = eval_dir / "comparison_table.txt"
+    txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    logger.info("Comparison table written to %s", eval_dir)
+    logger.info("\n%s", "\n".join(lines))
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -316,12 +477,15 @@ def main() -> None:
     )
 
     parser = argparse.ArgumentParser(
-        description="Evaluate a trained TS2TS checkpoint on downstream benchmarks.",
+        description="Evaluate one or more trained TS2TS checkpoints on downstream benchmarks.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--checkpoint", required=True,
-        help="Path to best_model.pt checkpoint.",
+        "--checkpoints", nargs="+", required=True, metavar="PATH",
+        help="One or more paths to best_model.pt checkpoints. "
+             "Each checkpoint's results are saved to its own run dir. "
+             "With multiple checkpoints a comparison table is also written "
+             "to evals/YYYYMMDD_HHMMSS/.",
     )
     parser.add_argument(
         "--dataset", required=True,
@@ -335,7 +499,7 @@ def main() -> None:
     parser.add_argument(
         "--conditions", nargs="+", default=["experimental"],
         help="Named conditions to run each benchmark under. "
-             "Built-in: 'baseline' (doc_causal + null layout), "
+             "Built-in: 'baseline' (doc_causal + eos layout), "
              "'experimental' (model default). "
              "Multiple conditions produce side-by-side results.",
     )
@@ -350,7 +514,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--output", default=None,
-        help="Path to write JSON results (default: print to stdout).",
+        help="Override the save path for results JSON. "
+             "Only valid when a single checkpoint is given; "
+             "ignored when evaluating multiple checkpoints.",
     )
     parser.add_argument(
         "--device",
@@ -358,6 +524,15 @@ def main() -> None:
         help="Device to run inference on.",
     )
     args = parser.parse_args()
+
+    checkpoints = [Path(c) for c in args.checkpoints]
+    multi = len(checkpoints) > 1
+
+    if multi and args.output:
+        logger.warning(
+            "--output is ignored when evaluating multiple checkpoints; "
+            "results are written to each checkpoint's run dir."
+        )
 
     eval_cfg = {
         "benchmarks": [
@@ -368,22 +543,57 @@ def main() -> None:
         "max_docs": args.max_docs,
     }
 
-    results = run_eval(
-        checkpoint_path=args.checkpoint,
-        dataset_dir=args.dataset,
-        eval_cfg=eval_cfg,
-        device=args.device,
-    )
+    from tunalab.reproducibility import ReproducibilityManager
 
-    output_str = json.dumps(results, ensure_ascii=False, indent=2)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(output_str, encoding="utf-8")
-        logger.info("Results written to %s", args.output)
+    # Create eval dir for multi-checkpoint runs.
+    eval_dir: Optional[Path] = None
+    if multi:
+        eval_dir = Path(__file__).parent / "evals" / ts
+        eval_dir.mkdir(parents=True, exist_ok=True)
+
+    # ReproducibilityManager captures git state, pip freeze, and env for the
+    # entire eval session.  For single runs, use a timestamped subdir inside
+    # the run dir so training-time and eval-time snapshots don't collide and
+    # successive re-runs each get their own clean directory.
+    if eval_dir is not None:
+        rm_output_dir = eval_dir
     else:
-        print(output_str)
+        run_dir = _default_run_output_path(checkpoints[0]).parent
+        rm_output_dir = run_dir / "eval" / ts
+
+    with ReproducibilityManager(output_dir=str(rm_output_dir), is_main_process=True):
+        all_entries: List[Dict[str, Any]] = []
+
+        for ckpt_path in checkpoints:
+            results = run_eval(
+                checkpoint_path=ckpt_path,
+                dataset_dir=args.dataset,
+                eval_cfg=eval_cfg,
+                device=args.device,
+            )
+
+            # Per-checkpoint save path
+            if not multi and args.output:
+                out_path = Path(args.output)
+            else:
+                out_path = _default_run_output_path(ckpt_path)
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                json.dumps(results, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info("Results written to %s", out_path)
+
+            if multi:
+                all_entries.append(
+                    _build_comparison_entry(ckpt_path, args.dataset, results)
+                )
+
+        if multi and all_entries:
+            _write_comparison_table(eval_dir, all_entries)
 
 
 if __name__ == "__main__":
