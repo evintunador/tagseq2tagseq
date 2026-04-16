@@ -123,7 +123,6 @@ def score_doc(
         raw_identifier=raw_identifier,
     )
 
-    # forward_inference is decorated with @torch.no_grad() — no extra context needed.
     logits = model.forward_inference(tokens_tensor, [span], mask_type=mask_type)  # [1, T, V]
     log_probs = F.log_softmax(logits[0].float(), dim=-1)     # [T, V]
 
@@ -208,8 +207,6 @@ def score_completion(
         raw_identifier="",
     )
 
-    # MC eval always uses doc_causal: external benchmarks are out-of-distribution
-    # text with no meaningful cross-doc link structure.
     logits = model.forward_inference(tokens_tensor, [span], mask_type='doc_causal')  # [1, T, V]
     log_probs = F.log_softmax(logits[0].float(), dim=-1)     # [T, V]
 
@@ -278,8 +275,6 @@ def score_completions_batched(
         offset += len(seq)
 
     tokens_tensor = torch.tensor(all_tokens, dtype=torch.long, device=device).unsqueeze(0)
-    # MC eval always uses doc_causal: external benchmarks have no cross-doc link structure,
-    # and doc_causal isolation ensures each span is scored independently.
     logits = model.forward_inference(tokens_tensor, spans, mask_type='doc_causal')  # [1, total_T, V]
     log_probs = F.log_softmax(logits[0].float(), dim=-1)  # [total_T, V]
 

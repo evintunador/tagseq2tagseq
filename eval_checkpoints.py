@@ -61,7 +61,15 @@ logger = logging.getLogger(__name__)
 
 # ─── Benchmark registry ───────────────────────────────────────────────────────
 
-_KNOWN_BENCHMARKS = ("held_out_perplexity", "hellaswag", "pack_contrastive_perplexity")
+_KNOWN_BENCHMARKS = (
+    "held_out_perplexity",
+    "hellaswag",
+    "wiki_qa",
+    "lambada",
+    "arc_easy",
+    "arc_challenge",
+    "pack_contrastive_perplexity",
+)
 
 # ─── Condition registry ───────────────────────────────────────────────────────
 # Condition dicts specify per-call overrides for forward_inference.
@@ -76,6 +84,21 @@ _KNOWN_BENCHMARKS = ("held_out_perplexity", "hellaswag", "pack_contrastive_perpl
 #   mask_type is 'doc_causal'. Doc-causal models ARE the baseline; running the
 #   baseline condition on them produces identical results to experimental and
 #   adds no information.
+#
+# Single-doc benchmarks score each document in isolation — cross-doc grants
+# can never fire regardless of mask_type, so 'experimental' on a cross_doc_link
+# model is identical to 'baseline' but pays full BIM construction cost (~20s/doc).
+# Benchmarks in _SINGLE_DOC_BENCHMARKS auto-skip conditions whose mask_type is
+# None (i.e. would use the model's cross_doc_link default).
+
+_SINGLE_DOC_BENCHMARKS = frozenset({
+    "held_out_perplexity",
+    "hellaswag",
+    "wiki_qa",
+    "lambada",
+    "arc_easy",
+    "arc_challenge",
+})
 
 _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
     "baseline": {
@@ -91,7 +114,9 @@ _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
 
 _DEFAULTS: Dict[str, Any] = {
     "benchmarks": [
-        {"name": "held_out_perplexity", "conditions": ["experimental"]},
+        # held_out_perplexity uses doc_causal (baseline) only — single-doc scoring
+        # means cross_doc_link grants can never fire, so experimental == baseline.
+        {"name": "held_out_perplexity", "conditions": ["baseline", "experimental"]},
     ],
     "conditions": {},   # user-defined conditions merged with _BUILTIN_CONDITIONS
     "max_docs": 500,
@@ -212,6 +237,22 @@ def run_benchmarks_on_model(
                 )
                 continue
 
+            # Skip the experimental condition on single-doc benchmarks when the
+            # model is cross_doc_link. Each document is scored in isolation so
+            # cross-doc grants can never fire — the result is identical to
+            # baseline/doc_causal but pays full BIM construction cost per doc.
+            if (
+                bname in _SINGLE_DOC_BENCHMARKS
+                and cond.get("mask_type") is None
+                and model.mask_type == "cross_doc_link"
+            ):
+                logger.info(
+                    "Skipping condition %r for %s: single-doc benchmark, "
+                    "cross_doc_link mask has no effect (identical to baseline).",
+                    cname, bname,
+                )
+                continue
+
             mask_type = cond.get("mask_type")    # None → model default
             layout    = _resolve_layout_policy(cond.get("layout_policy"), model)
             key       = f"{bname}/{cname}"
@@ -231,9 +272,34 @@ def run_benchmarks_on_model(
                 )
 
             elif bname == "hellaswag":
-                from eval.hellaswag import run_hellaswag
+                from eval.nlp_benchmarks import run_hellaswag
                 results[key] = run_hellaswag(
                     model=model,
+                    max_examples=max_docs,
+                    device=device,
+                )
+
+            elif bname == "wiki_qa":
+                from eval.nlp_benchmarks import run_wiki_qa
+                results[key] = run_wiki_qa(
+                    model=model,
+                    max_examples=max_docs,
+                    device=device,
+                )
+
+            elif bname == "lambada":
+                from eval.nlp_benchmarks import run_lambada
+                results[key] = run_lambada(
+                    model=model,
+                    max_examples=max_docs,
+                    device=device,
+                )
+
+            elif bname in ("arc_easy", "arc_challenge"):
+                from eval.nlp_benchmarks import run_arc
+                results[key] = run_arc(
+                    model=model,
+                    config="easy" if bname == "arc_easy" else "challenge",
                     max_examples=max_docs,
                     device=device,
                 )
@@ -300,12 +366,16 @@ def _log_summary(results: Dict[str, Any]) -> None:
     logger.info("─── Benchmark results ───────────────────────────────")
     for name, res in results.items():
         if isinstance(res, dict) and "perplexity" in res:
+            # held_out_perplexity uses "mean_nll"/"num_docs";
+            # lambada (FillInTheBlank) uses "average_nll"/"total_examples".
+            nll = res.get("mean_nll") or res.get("average_nll", float("nan"))
+            n   = res.get("num_docs") or res.get("total_examples", 0)
             logger.info(
-                "  %-40s  ppl=%.3f  mean_nll=%.4f  n=%d",
+                "  %-40s  ppl=%.3f  nll=%.4f  n=%d",
                 name,
                 res.get("perplexity", float("nan")),
-                res.get("mean_nll", float("nan")),
-                res.get("num_docs", 0),
+                nll,
+                n,
             )
         elif isinstance(res, dict) and "accuracy" in res:
             logger.info(

@@ -229,21 +229,14 @@ def load_inference_model(
     )
     inference_model.to(torch.device(device), torch.bfloat16)
 
-    # Patch flex_attention with a compiled version for generation and eval.
-    # dynamic=True compiles a single kernel that handles all sequence lengths.
+    # Set a stable per-project inductor cache so compiled kernels survive between runs.
+    # flex_attention is compiled at module load in attention.py and flex_self_attention.py.
     if torch.cuda.is_available():
-        import tunalab.modules.sequence_mixing.flex_self_attention as _fa_mod
-        from torch.nn.attention.flex_attention import flex_attention as _raw_fa
-
-        # Stable per-project cache so compiled kernels survive between runs.
-        # Can be overridden by setting TORCHINDUCTOR_CACHE_DIR in the environment.
         _cache_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), ".torch_compile_cache"
         )
         os.makedirs(_cache_dir, exist_ok=True)
         os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", _cache_dir)
-
-        _fa_mod.flex_attention = torch.compile(_raw_fa, dynamic=True, mode="default")
 
     return inference_model, hp
 

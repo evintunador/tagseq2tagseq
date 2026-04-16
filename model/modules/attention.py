@@ -19,9 +19,14 @@ convention and decoupling us from tunalab's internal API changes.
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from torch.nn.attention.flex_attention import flex_attention as _flex_attention_raw
 
 from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
 from model.graph_traversal.cross_doc_mask import TritonMaskInputs, DocCausalTritonMaskInputs
+
+# Compile once at module load. dynamic=True handles all sequence lengths without
+# recompilation — avoids per-length Triton JIT cost during eval (~20s/unique length).
+_flex_attention = torch.compile(_flex_attention_raw, dynamic=True, mode="default")
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +84,6 @@ class TS2TSAttention(FlexSelfAttention):
         q, k = self.rotary(q), self.rotary(k)
 
         if self.backend == 'flex':
-            from torch.nn.attention.flex_attention import flex_attention as _flex_attention
             y = _flex_attention(
                 q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
                 block_mask=block_mask,
