@@ -1,7 +1,7 @@
 """
 eval/scoring.py — primitive scoring utilities for TS2TS models.
 
-Provides three entry points:
+Provides four entry points:
 
   score_doc(model, tokens, layout_policy, raw_identifier, normed_identifier, device)
       -> {"mean_nll": float, "num_tokens": int}
@@ -24,6 +24,14 @@ Provides three entry points:
           Hook for the future link-injection feature — if provided, it is
           called on context_tokens before packing, allowing a pre-processor
           to annotate the context with generated aux-doc links.
+
+  score_completions_batched(model, context_tokens, completion_token_lists, device)
+      -> List[float]  (mean NLL per completion)
+
+      Vectorised multiple-choice scoring: packs K (context + choice_k) sequences
+      as K DocSpans into a single forward_inference call (~K× faster than K
+      individual score_completion calls). doc_causal masking isolates each span
+      so results are identical to calling score_completion K times.
 
   score_doc_with_context(model, batch, layout_policy, device, mask_type)
       -> {"mean_nll": float, "num_tokens": int}
@@ -215,6 +223,90 @@ def score_completion(
     nll_per_tok = -lp_slice[torch.arange(len(tgt), device=device), tgt]  # [C]
 
     return nll_per_tok.mean().item()
+
+
+def score_completions_batched(
+    model,
+    context_tokens: List[int],
+    completion_token_lists: List[List[int]],
+    device: Optional[str] = None,
+) -> List[float]:
+    """Score K completions against a shared context in a single forward pass.
+
+    Packs [ctx + choice_0 | ctx + choice_1 | ... | ctx + choice_{K-1}] as K
+    DocSpans into one forward_inference call. doc_causal masking isolates each
+    span, so results are identical to calling score_completion K times but
+    ~K× faster.
+
+    Args:
+        model: TS2TSModel in eval mode.
+        context_tokens: Shared prompt token IDs.
+        completion_token_lists: List of K completion token ID lists.
+        device: Device string. If None, inferred from model.backbone.parameters().
+
+    Returns:
+        List of K floats — mean NLL over each completion's tokens.
+        An empty completion yields 0.0.
+    """
+    K = len(completion_token_lists)
+    if K == 0:
+        return []
+
+    if device is None:
+        device = next(model.backbone.parameters()).device
+
+    all_tokens: List[int] = []
+    spans: List[DocSpan] = []
+    ctx_lengths: List[int] = []
+    choice_lengths: List[int] = []
+    offset = 0
+
+    for i, choice_toks in enumerate(completion_token_lists):
+        seq = context_tokens + choice_toks
+        spans.append(DocSpan(
+            doc_id=i,
+            normed_identifier="",
+            raw_identifier="",
+            start=offset,
+            end=offset + len(seq),
+            truncated=False,
+            outgoing_identifiers=[],
+        ))
+        all_tokens.extend(seq)
+        ctx_lengths.append(len(context_tokens))
+        choice_lengths.append(len(choice_toks))
+        offset += len(seq)
+
+    tokens_tensor = torch.tensor(all_tokens, dtype=torch.long, device=device).unsqueeze(0)
+    # MC eval always uses doc_causal: external benchmarks have no cross-doc link structure,
+    # and doc_causal isolation ensures each span is scored independently.
+    logits = model.forward_inference(tokens_tensor, spans, mask_type='doc_causal')  # [1, total_T, V]
+    log_probs = F.log_softmax(logits[0].float(), dim=-1)  # [total_T, V]
+
+    nlls: List[float] = []
+    abs_offset = 0
+    for i in range(K):
+        ctx_len = ctx_lengths[i]
+        choice_len = choice_lengths[i]
+
+        if choice_len == 0:
+            nlls.append(0.0)
+            abs_offset += ctx_len
+            continue
+
+        # Logit at (abs_offset + ctx_len - 1) predicts the first completion token.
+        logit_start = abs_offset + ctx_len - 1
+        logit_end   = logit_start + choice_len
+        tgt_start   = abs_offset + ctx_len
+        tgt_end     = tgt_start + choice_len
+
+        lp  = log_probs[logit_start:logit_end, :]                         # [C, V]
+        tgt = tokens_tensor[0, tgt_start:tgt_end]                         # [C]
+        nll = -lp[torch.arange(choice_len, device=device), tgt].mean().item()
+        nlls.append(nll)
+        abs_offset += ctx_len + choice_len
+
+    return nlls
 
 
 def score_doc_with_context(

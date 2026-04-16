@@ -13,7 +13,7 @@ import torch.nn as nn
 
 from data.collate import DocSpan
 from data.layout import EOSLayoutPolicy, NullLayoutPolicy
-from eval.scoring import score_completion, score_doc, score_doc_with_context
+from eval.scoring import score_completion, score_completions_batched, score_doc, score_doc_with_context
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -254,3 +254,90 @@ def test_score_doc_with_context_passes_mask_type_to_forward():
     )
     call_kwargs = model.forward_inference.call_args[1]
     assert call_kwargs.get("mask_type") == "doc_causal"
+
+
+# ─── score_completions_batched tests ─────────────────────────────────────────
+
+CONTEXT = [1, 2, 3]
+CHOICES = [[4, 5], [6, 7, 8], [9]]
+
+
+def test_score_completions_batched_returns_list_of_floats():
+    model = _make_mock_model()
+    result = score_completions_batched(model, CONTEXT, CHOICES, device="cpu")
+    assert isinstance(result, list)
+    assert len(result) == len(CHOICES)
+    assert all(isinstance(v, float) for v in result)
+
+
+def test_score_completions_batched_uniform_logits_approx_log_V():
+    model = _make_mock_model()
+    result = score_completions_batched(model, CONTEXT, CHOICES, device="cpu")
+    expected = math.log(VOCAB_SIZE)
+    for nll in result:
+        assert abs(nll - expected) < 1e-4
+
+
+def test_score_completions_batched_empty_completion_returns_zero():
+    model = _make_mock_model()
+    result = score_completions_batched(model, CONTEXT, [[], [4, 5]], device="cpu")
+    assert result[0] == 0.0
+    assert abs(result[1] - math.log(VOCAB_SIZE)) < 1e-4
+
+
+def test_score_completions_batched_empty_list_returns_empty():
+    model = _make_mock_model()
+    result = score_completions_batched(model, CONTEXT, [], device="cpu")
+    assert result == []
+    assert model.forward_inference.call_count == 0
+
+
+def test_score_completions_batched_single_forward_call():
+    model = _make_mock_model()
+    score_completions_batched(model, CONTEXT, CHOICES, device="cpu")
+    assert model.forward_inference.call_count == 1
+
+
+def test_score_completions_batched_matches_individual_score_completion():
+    """Batched NLL must equal individual score_completion for each choice.
+
+    Uses position-dependent logits so results are non-trivially dependent on
+    token positions — confirming correct slice indexing, not just log(V).
+    """
+    # Logits are position-index values broadcast across vocab:
+    # logit[t, v] = t  →  log_softmax peaks at the last vocab position
+    # but crucially NLL varies across token positions in a deterministic way.
+    def _pos_dependent_forward(tokens, doc_spans, **kwargs):
+        T = tokens.shape[1]
+        # Shape [1, T, V]: each position t has logits = t for all vocab entries.
+        # log_softmax of uniform-per-position → still uniform, but NLL = log(V).
+        # To make results non-trivial, use arange across vocab dim instead:
+        #   logits[0, t, v] = v  → softmax is always the same, so NLL is log(V).
+        # Instead: logits[0, t, v] = t + v makes each (t, token_id) unique.
+        t_idx = torch.arange(T, dtype=torch.float32).unsqueeze(1)   # [T, 1]
+        v_idx = torch.arange(VOCAB_SIZE, dtype=torch.float32).unsqueeze(0)  # [1, V]
+        logits = (t_idx + v_idx).unsqueeze(0)  # [1, T, V]
+        return logits
+
+    def _make_pos_model():
+        model = MagicMock()
+        model.forward_inference.side_effect = _pos_dependent_forward
+        model.active_layout_policy = NullLayoutPolicy()
+        dummy_param = nn.Parameter(torch.zeros(1))
+        model.backbone.parameters.return_value = iter([dummy_param])
+        return model
+
+    ctx = [10, 20, 30]
+    choices = [[40, 50], [60], [70, 80, 90]]
+
+    # Batched call — single forward pass over the packed sequence.
+    batched_model = _make_pos_model()
+    batched_nlls = score_completions_batched(batched_model, ctx, choices, device="cpu")
+
+    # Individual calls — each gets its own fresh forward pass.
+    for i, (choice, batched_nll) in enumerate(zip(choices, batched_nlls)):
+        indiv_model = _make_pos_model()
+        indiv_nll = score_completion(indiv_model, ctx, choice, device="cpu")
+        assert abs(batched_nll - indiv_nll) < 1e-4, (
+            f"Choice {i}: batched={batched_nll:.6f} vs individual={indiv_nll:.6f}"
+        )
