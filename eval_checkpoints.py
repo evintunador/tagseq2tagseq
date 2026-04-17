@@ -63,11 +63,24 @@ logger = logging.getLogger(__name__)
 
 _KNOWN_BENCHMARKS = (
     "held_out_perplexity",
+    # NLP — commonsense / general
     "hellaswag",
-    "wiki_qa",
-    "lambada",
+    "winogrande",
+    "piqa",
+    "boolq",
+    "commonsense_qa",
+    "copa",
+    # NLP — science
     "arc_easy",
     "arc_challenge",
+    "openbookqa",
+    "sciq",
+    # NLP — language modeling
+    "wiki_qa",
+    "lambada",
+    # Code
+    "codexglue_line_completion",
+    # Graph-structured
     "pack_contrastive_perplexity",
 )
 
@@ -94,10 +107,18 @@ _KNOWN_BENCHMARKS = (
 _SINGLE_DOC_BENCHMARKS = frozenset({
     "held_out_perplexity",
     "hellaswag",
+    "winogrande",
+    "piqa",
+    "boolq",
+    "commonsense_qa",
+    "copa",
     "wiki_qa",
     "lambada",
     "arc_easy",
     "arc_challenge",
+    "openbookqa",
+    "sciq",
+    "codexglue_line_completion",
 })
 
 _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
@@ -302,6 +323,54 @@ def run_benchmarks_on_model(
                     config="easy" if bname == "arc_easy" else "challenge",
                     max_examples=max_docs,
                     device=device,
+                )
+
+            elif bname == "winogrande":
+                from eval.nlp_benchmarks import run_winogrande
+                results[key] = run_winogrande(
+                    model=model, max_examples=max_docs, device=device,
+                )
+
+            elif bname == "piqa":
+                from eval.nlp_benchmarks import run_piqa
+                results[key] = run_piqa(
+                    model=model, max_examples=max_docs, device=device,
+                )
+
+            elif bname == "boolq":
+                from eval.nlp_benchmarks import run_boolq
+                results[key] = run_boolq(
+                    model=model, max_examples=max_docs, device=device,
+                )
+
+            elif bname == "commonsense_qa":
+                from eval.nlp_benchmarks import run_commonsense_qa
+                results[key] = run_commonsense_qa(
+                    model=model, max_examples=max_docs, device=device,
+                )
+
+            elif bname == "copa":
+                from eval.nlp_benchmarks import run_copa
+                results[key] = run_copa(
+                    model=model, max_examples=max_docs, device=device,
+                )
+
+            elif bname == "openbookqa":
+                from eval.nlp_benchmarks import run_openbookqa
+                results[key] = run_openbookqa(
+                    model=model, max_examples=max_docs, device=device,
+                )
+
+            elif bname == "sciq":
+                from eval.nlp_benchmarks import run_sciq
+                results[key] = run_sciq(
+                    model=model, max_examples=max_docs, device=device,
+                )
+
+            elif bname == "codexglue_line_completion":
+                from eval.nlp_benchmarks import run_codexglue_line_completion
+                results[key] = run_codexglue_line_completion(
+                    model=model, max_examples=max_docs, device=device,
                 )
 
             elif bname == "pack_contrastive_perplexity":
@@ -564,7 +633,12 @@ def main() -> None:
     parser.add_argument(
         "--benchmarks", nargs="+", default=["held_out_perplexity"],
         choices=list(_KNOWN_BENCHMARKS),
-        help="Benchmarks to run.",
+        help=(
+            "Benchmarks to run. NLP commonsense: hellaswag, winogrande, piqa, boolq, "
+            "commonsense_qa, copa. NLP science: arc_easy, arc_challenge, openbookqa, sciq. "
+            "NLP language: wiki_qa, lambada. Code: codexglue_line_completion. "
+            "Graph: pack_contrastive_perplexity."
+        ),
     )
     parser.add_argument(
         "--conditions", nargs="+", default=["experimental"],

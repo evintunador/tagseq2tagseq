@@ -1,7 +1,9 @@
 """
 tests/eval/test_nlp_benchmarks.py — unit tests for eval.nlp_benchmarks.
 
-Covers run_hellaswag, run_wiki_qa, run_arc, run_lambada.
+Covers run_hellaswag, run_wiki_qa, run_arc, run_lambada,
+run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
+run_openbookqa, run_sciq, run_codexglue_line_completion.
 All tests run on CPU with mock models and synthetic data — no HuggingFace
 network access required.
 """
@@ -12,7 +14,11 @@ from typing import List
 from unittest.mock import MagicMock
 
 import eval.nlp_benchmarks as _bench
-from eval.nlp_benchmarks import run_hellaswag, run_wiki_qa, run_arc, run_lambada
+from eval.nlp_benchmarks import (
+    run_hellaswag, run_wiki_qa, run_arc, run_lambada,
+    run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
+    run_openbookqa, run_sciq, run_codexglue_line_completion,
+)
 
 VOCAB_SIZE = 256
 
@@ -71,10 +77,18 @@ def _patch_fitb_dataset(monkeypatch, dataset_class_path, items):
 # ─── Tokenizer guards ─────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("fn,kwargs", [
-    (run_hellaswag, {}),
-    (run_wiki_qa,   {}),
-    (run_arc,       {"config": "easy"}),
-    (run_lambada,   {}),
+    (run_hellaswag,             {}),
+    (run_wiki_qa,               {}),
+    (run_arc,                   {"config": "easy"}),
+    (run_lambada,               {}),
+    (run_winogrande,            {}),
+    (run_piqa,                  {}),
+    (run_boolq,                 {}),
+    (run_commonsense_qa,        {}),
+    (run_copa,                  {}),
+    (run_openbookqa,            {}),
+    (run_sciq,                  {}),
+    (run_codexglue_line_completion, {}),
 ])
 def test_requires_tokenizer(fn, kwargs):
     model = _make_mock_model(tokenizer=False)
@@ -225,3 +239,209 @@ def test_lambada_prepends_space_to_answer(monkeypatch):
     monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
     run_lambada(model=model, max_examples=1, device="cpu")
     assert any(c.startswith(" ") for c in encoded_calls)
+
+
+# ─── WinoGrande ───────────────────────────────────────────────────────────────
+
+_WINOGRANDE_DS = "tunalab.data_sources.evaluations.multiple_choice.winogrande.WinoGrandeDataset"
+
+
+def test_winogrande_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("Sarah was a better surgeon so _ got the easy cases.",
+                      ["Sarah got the easy cases.", "Maria got the easy cases."], label=0)]
+    _patch_mc_dataset(monkeypatch, _WINOGRANDE_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched", lambda *a, **kw: [0.3, 0.9])
+    result = run_winogrande(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+    assert result["total_examples"] == 1
+
+
+def test_winogrande_two_choices(monkeypatch):
+    items = [_mc_item("ctx", ["A", "B"], 1)] * 3
+    _patch_mc_dataset(monkeypatch, _WINOGRANDE_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)), [float(i) for i in range(len(choices))])[1])
+    run_winogrande(model=_make_mock_model(), max_examples=3, device="cpu")
+    assert all(c == 2 for c in counts)
+
+
+# ─── PIQA ─────────────────────────────────────────────────────────────────────
+
+_PIQA_DS = "tunalab.data_sources.evaluations.multiple_choice.piqa.PIQADataset"
+
+
+def test_piqa_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("How do you soften butter?",
+                      ["Leave it at room temperature.", "Freeze it overnight."], label=0)]
+    _patch_mc_dataset(monkeypatch, _PIQA_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched", lambda *a, **kw: [0.2, 1.5])
+    result = run_piqa(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+
+
+def test_piqa_two_choices(monkeypatch):
+    items = [_mc_item("goal", ["s1", "s2"], 0)] * 2
+    _patch_mc_dataset(monkeypatch, _PIQA_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)), [0.0] * len(choices))[1])
+    run_piqa(model=_make_mock_model(), max_examples=2, device="cpu")
+    assert all(c == 2 for c in counts)
+
+
+# ─── BoolQ ────────────────────────────────────────────────────────────────────
+
+_BOOLQ_DS = "tunalab.data_sources.evaluations.multiple_choice.boolq.BoolQDataset"
+
+
+def test_boolq_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("Water is H2O.\n\nQuestion: is water made of hydrogen?",
+                      ["Yes", "No"], label=0)]
+    _patch_mc_dataset(monkeypatch, _BOOLQ_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched", lambda *a, **kw: [0.1, 2.0])
+    result = run_boolq(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+
+
+def test_boolq_two_choices(monkeypatch):
+    items = [_mc_item("ctx", ["Yes", "No"], 1)] * 4
+    _patch_mc_dataset(monkeypatch, _BOOLQ_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)), [1.0, 0.0])[1])
+    run_boolq(model=_make_mock_model(), max_examples=4, device="cpu")
+    assert all(c == 2 for c in counts)
+
+
+# ─── CommonsenseQA ────────────────────────────────────────────────────────────
+
+_CSQA_DS = "tunalab.data_sources.evaluations.multiple_choice.commonsense_qa.CommonsenseQADataset"
+
+
+def test_commonsense_qa_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("Where would you find a revolving door?",
+                      ["bank", "library", "park", "forest", "ocean"], label=0)]
+    _patch_mc_dataset(monkeypatch, _CSQA_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda *a, **kw: [0.1, 0.9, 1.0, 1.1, 1.2])
+    result = run_commonsense_qa(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+
+
+def test_commonsense_qa_five_choices(monkeypatch):
+    items = [_mc_item("Q?", ["a", "b", "c", "d", "e"], 2)] * 2
+    _patch_mc_dataset(monkeypatch, _CSQA_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)), [float(i) for i in range(len(choices))])[1])
+    run_commonsense_qa(model=_make_mock_model(), max_examples=2, device="cpu")
+    assert all(c == 5 for c in counts)
+
+
+# ─── COPA ─────────────────────────────────────────────────────────────────────
+
+_COPA_DS = "tunalab.data_sources.evaluations.multiple_choice.copa.COPADataset"
+
+
+def test_copa_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("The man turned on the faucet. What happened as a result?",
+                      ["The toilet filled with water.", "Water flowed from the spout."], label=1)]
+    _patch_mc_dataset(monkeypatch, _COPA_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched", lambda *a, **kw: [1.5, 0.2])
+    result = run_copa(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+
+
+def test_copa_two_choices(monkeypatch):
+    items = [_mc_item("ctx", ["c1", "c2"], 0)] * 3
+    _patch_mc_dataset(monkeypatch, _COPA_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)), [0.0, 1.0])[1])
+    run_copa(model=_make_mock_model(), max_examples=3, device="cpu")
+    assert all(c == 2 for c in counts)
+
+
+# ─── OpenBookQA ───────────────────────────────────────────────────────────────
+
+_OBQA_DS = "tunalab.data_sources.evaluations.multiple_choice.openbookqa.OpenBookQADataset"
+
+
+def test_openbookqa_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("Frilled sharks live far beneath the surface, known as",
+                      ["deep sea animals", "fish", "Long Sea Fish", "Far Sea Animals"], label=0)]
+    _patch_mc_dataset(monkeypatch, _OBQA_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda *a, **kw: [0.1, 0.8, 0.9, 1.0])
+    result = run_openbookqa(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+
+
+# ─── SciQ ─────────────────────────────────────────────────────────────────────
+
+_SCIQ_DS = "tunalab.data_sources.evaluations.multiple_choice.sciq.SciQDataset"
+
+
+def test_sciq_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("Who proposed natural selection?",
+                      ["Linnaeus", "Scopes", "Shaw", "Darwin"], label=3)]
+    _patch_mc_dataset(monkeypatch, _SCIQ_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda *a, **kw: [1.0, 0.9, 0.8, 0.1])
+    result = run_sciq(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+
+
+def test_sciq_four_choices(monkeypatch):
+    items = [_mc_item("Q?", ["a", "b", "c", "d"], 0)] * 2
+    _patch_mc_dataset(monkeypatch, _SCIQ_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)), [float(i) for i in range(len(choices))])[1])
+    run_sciq(model=_make_mock_model(), max_examples=2, device="cpu")
+    assert all(c == 4 for c in counts)
+
+
+# ─── CodeXGLUE line completion ────────────────────────────────────────────────
+
+_CODEXGLUE_DS = (
+    "tunalab.data_sources.evaluations.fill_in_the_blank"
+    ".codexglue_line_completion.CodeXGLUELineCompletionDataset"
+)
+
+
+def test_codexglue_calls_score_completion_once_per_item(monkeypatch):
+    items = [
+        _fitb_item("import os\nfrom pathlib import Path", "result = os.path.join(base, name)"),
+        _fitb_item("def greet(name):", "    return f'Hello, {name}'"),
+    ]
+    _patch_fitb_dataset(monkeypatch, _CODEXGLUE_DS, items)
+    call_count = {"n": 0}
+    def _fake(m, ctx, completion, **kw):
+        call_count["n"] += 1
+        return 1.0
+    monkeypatch.setattr(_bench, "score_completion", _fake)
+    run_codexglue_line_completion(model=_make_mock_model(), max_examples=2, device="cpu")
+    assert call_count["n"] == 2
+
+
+def test_codexglue_returns_perplexity_key(monkeypatch):
+    items = [_fitb_item("x = 1\ny = 2", "z = x + y")]
+    _patch_fitb_dataset(monkeypatch, _CODEXGLUE_DS, items)
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 2.0)
+    result = run_codexglue_line_completion(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert "perplexity" in result
+    assert result["total_examples"] == 1
+
+
+def test_codexglue_prepends_newline_to_answer(monkeypatch):
+    items = [_fitb_item("x = 1", "    return x")]
+    _patch_fitb_dataset(monkeypatch, _CODEXGLUE_DS, items)
+    encoded_calls = []
+    model = _make_mock_model()
+    orig = model.tokenizer.encode.side_effect
+    model.tokenizer.encode.side_effect = lambda s: (encoded_calls.append(s), orig(s))[1]
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
+    run_codexglue_line_completion(model=model, max_examples=1, device="cpu")
+    assert any(c.startswith("\n") for c in encoded_calls)
