@@ -10,7 +10,7 @@ dependencies = [
     "numpy",
     "tunalab>=0.1.4",
     "tunalab-common>=0.1.1",
-    "tunalab-nlp>=0.4.0",
+    "tunalab-nlp>=0.5.0",
 ]
 
 [project.optional-dependencies]

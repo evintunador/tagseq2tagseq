@@ -56,6 +56,14 @@ from typing import Any, Dict, List, Optional, Union
 import torch
 
 from generate import load_inference_model
+from eval.perplexity import run_held_out_perplexity, run_pack_contrastive_perplexity
+from eval.nlp_benchmarks import (
+    run_hellaswag, run_wiki_qa, run_arc, run_lambada,
+    run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
+    run_openbookqa, run_sciq, run_codexglue_line_completion,
+    run_mmlu, run_mathqa, run_math,
+    run_codexglue_code_to_text, run_repobench, run_humaneval_buggy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,31 +86,70 @@ _KNOWN_BENCHMARKS = (
     # NLP — language modeling
     "wiki_qa",
     "lambada",
-    # Code
+    # STEM / math (HF-direct)
+    "mmlu",               # requires --mmlu-subject
+    "mathqa",
+    "math",               # requires --math-subject
+    # Code (tunalab-backed)
     "codexglue_line_completion",
+    # Code (HF-direct)
+    "codexglue_code_to_text",
+    "repobench",          # requires --repobench-split
+    "humaneval_buggy",    # requires --humaneval-language
     # Graph-structured
     "pack_contrastive_perplexity",
 )
 
 # ─── Condition registry ───────────────────────────────────────────────────────
-# Condition dicts specify per-call overrides for forward_inference.
-# Special layout_policy string values:
-#   'eos'       → EOS-suffix-only layout (no identifier prefix, EOS suffix only).
-#   'inference' → model.inference_layout_policy
-#   'training'  → model.training_layout_policy
-#   'null'      → NullLayoutPolicy()
-# mask_type None means "use model default" (self.mask_type).
+# Conditions specify forward_inference overrides applied per benchmark run.
 #
-# requires_cross_doc_link: True → condition is silently skipped when the model's
-#   mask_type is 'doc_causal'. Doc-causal models ARE the baseline; running the
-#   baseline condition on them produces identical results to experimental and
-#   adds no information.
+# layout_policy string values:
+#   'eos'       → EOSLayoutPolicy (no identifier prefix, EOS suffix only).
+#                 Always in-distribution: training always appends EOS.
+#   'inference' → model.inference_layout_policy (set at checkpoint load time).
+#   'training'  → model.training_layout_policy.
+#   'null'      → NullLayoutPolicy() — no decoration.
+# mask_type None → use model's trained mask_type unchanged.
 #
-# Single-doc benchmarks score each document in isolation — cross-doc grants
-# can never fire regardless of mask_type, so 'experimental' on a cross_doc_link
-# model is identical to 'baseline' but pays full BIM construction cost (~20s/doc).
-# Benchmarks in _SINGLE_DOC_BENCHMARKS auto-skip conditions whose mask_type is
-# None (i.e. would use the model's cross_doc_link default).
+# Built-in conditions and their intended use:
+#
+#   'doceval'     — doc_causal + eos layout, runs on ALL models.
+#                   Use for head-to-head comparison tables where every model
+#                   fills one column per benchmark. This is the standard
+#                   condition for cross-model comparisons (e.g. the 2×4 grid).
+#
+#   'baseline'    — doc_causal + eos layout, cross_doc_link models ONLY
+#                   (requires_cross_doc_link=True skips doc_causal models).
+#                   Use to measure the doc_causal floor for a cross_doc_link
+#                   model, isolating the benefit of cross-doc attention.
+#
+#   'experimental'— model's own trained mask_type + inference layout.
+#                   Skipped automatically on single-doc benchmarks for
+#                   cross_doc_link models (grants can never fire on isolated
+#                   docs, result is identical to baseline but wastes BIM cost).
+#                   Use for graph-structured benchmarks (pack_contrastive_perplexity)
+#                   or to measure a cross_doc_link model's native behaviour.
+#
+# Validated checkpoint grid (as of 2026-04-17):
+#   20260308_012514  doc_causal      simplewiki  36L/1280D  dfs  → use doceval
+#   20260308_012516  cross_doc_link  simplewiki  36L/1280D  dfs  → use doceval / baseline+experimental
+#   20260308_012518  doc_causal      stack_10m   36L/1280D  dfs  → use doceval
+#   20260308_012521  cross_doc_link  stack_10m   36L/1280D  dfs  → use doceval / baseline+experimental
+#   run_20260311_184203_685319  cross_doc_link  stack_100m  24L/1024D  bfs  step=3000  → early ckpt
+#   run_20260313_183004_686307  cross_doc_link  stack_100m  24L/1024D  bfs  step=900   → early ckpt
+#
+# CHECKLIST FOR NEW BENCHMARKS:
+#   1. Add name to _KNOWN_BENCHMARKS (with category comment).
+#   2. Add to _SINGLE_DOC_BENCHMARKS if it scores documents in isolation.
+#   3. Add a dispatch case in run_benchmarks_on_model.
+#   4. Add to _SINGLE_DOC_BENCHMARKS tests in tests/test_eval_checkpoints.py.
+#   5. Consider which conditions make sense: doceval for standard comparison;
+#      baseline+experimental if the benchmark can benefit from cross-doc attention
+#      (i.e. it is NOT in _SINGLE_DOC_BENCHMARKS).
+#
+# Single-doc benchmarks auto-skip 'experimental' on cross_doc_link models:
+# each item is scored in isolation so cross-doc grants can never fire —
+# the result is identical to 'baseline' but pays full BIM construction cost.
 
 _SINGLE_DOC_BENCHMARKS = frozenset({
     "held_out_perplexity",
@@ -118,31 +165,41 @@ _SINGLE_DOC_BENCHMARKS = frozenset({
     "arc_challenge",
     "openbookqa",
     "sciq",
+    # STEM / math
+    "mmlu",
+    "mathqa",
+    "math",
+    # Code
     "codexglue_line_completion",
+    "codexglue_code_to_text",
+    "repobench",
+    "humaneval_buggy",
 })
 
 _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
     "baseline": {
-        "mask_type":              "doc_causal",
-        "layout_policy":          "eos",
-        "requires_cross_doc_link": True,   # meaningless on doc_causal models
+        "mask_type":               "doc_causal",
+        "layout_policy":           "eos",
+        "requires_cross_doc_link": True,
     },
     "experimental": {
-        "mask_type":    None,        # use model's trained mask_type
+        "mask_type":    None,
         "layout_policy": "inference",
+    },
+    "doceval": {
+        "mask_type":    "doc_causal",
+        "layout_policy": "eos",
     },
 }
 
 _DEFAULTS: Dict[str, Any] = {
     "benchmarks": [
-        # held_out_perplexity uses doc_causal (baseline) only — single-doc scoring
-        # means cross_doc_link grants can never fire, so experimental == baseline.
         {"name": "held_out_perplexity", "conditions": ["baseline", "experimental"]},
     ],
-    "conditions": {},   # user-defined conditions merged with _BUILTIN_CONDITIONS
+    "conditions": {},
     "max_docs": 500,
     "split": "all",
-    "epoch_dirs": [],   # pre-computed epoch dirs for pack_contrastive_perplexity
+    "epoch_dirs": [],
 }
 
 
@@ -280,122 +337,152 @@ def run_benchmarks_on_model(
 
             logger.info("Running %s (condition=%s)", bname, cname)
 
-            if bname == "held_out_perplexity":
-                from eval.perplexity import run_held_out_perplexity
-                results[key] = run_held_out_perplexity(
-                    model=model,
-                    dataset_dir=dataset_dir,
-                    layout_policy=layout,
-                    split=split,
-                    max_docs=max_docs,
-                    device=device,
-                    mask_type_override=mask_type,
-                )
-
-            elif bname == "hellaswag":
-                from eval.nlp_benchmarks import run_hellaswag
-                results[key] = run_hellaswag(
-                    model=model,
-                    max_examples=max_docs,
-                    device=device,
-                )
-
-            elif bname == "wiki_qa":
-                from eval.nlp_benchmarks import run_wiki_qa
-                results[key] = run_wiki_qa(
-                    model=model,
-                    max_examples=max_docs,
-                    device=device,
-                )
-
-            elif bname == "lambada":
-                from eval.nlp_benchmarks import run_lambada
-                results[key] = run_lambada(
-                    model=model,
-                    max_examples=max_docs,
-                    device=device,
-                )
-
-            elif bname in ("arc_easy", "arc_challenge"):
-                from eval.nlp_benchmarks import run_arc
-                results[key] = run_arc(
-                    model=model,
-                    config="easy" if bname == "arc_easy" else "challenge",
-                    max_examples=max_docs,
-                    device=device,
-                )
-
-            elif bname == "winogrande":
-                from eval.nlp_benchmarks import run_winogrande
-                results[key] = run_winogrande(
-                    model=model, max_examples=max_docs, device=device,
-                )
-
-            elif bname == "piqa":
-                from eval.nlp_benchmarks import run_piqa
-                results[key] = run_piqa(
-                    model=model, max_examples=max_docs, device=device,
-                )
-
-            elif bname == "boolq":
-                from eval.nlp_benchmarks import run_boolq
-                results[key] = run_boolq(
-                    model=model, max_examples=max_docs, device=device,
-                )
-
-            elif bname == "commonsense_qa":
-                from eval.nlp_benchmarks import run_commonsense_qa
-                results[key] = run_commonsense_qa(
-                    model=model, max_examples=max_docs, device=device,
-                )
-
-            elif bname == "copa":
-                from eval.nlp_benchmarks import run_copa
-                results[key] = run_copa(
-                    model=model, max_examples=max_docs, device=device,
-                )
-
-            elif bname == "openbookqa":
-                from eval.nlp_benchmarks import run_openbookqa
-                results[key] = run_openbookqa(
-                    model=model, max_examples=max_docs, device=device,
-                )
-
-            elif bname == "sciq":
-                from eval.nlp_benchmarks import run_sciq
-                results[key] = run_sciq(
-                    model=model, max_examples=max_docs, device=device,
-                )
-
-            elif bname == "codexglue_line_completion":
-                from eval.nlp_benchmarks import run_codexglue_line_completion
-                results[key] = run_codexglue_line_completion(
-                    model=model, max_examples=max_docs, device=device,
-                )
-
-            elif bname == "pack_contrastive_perplexity":
-                if model.mask_type != "cross_doc_link":
-                    logger.info(
-                        "Skipping pack_contrastive_perplexity: "
-                        "model.mask_type=%r (requires cross_doc_link)",
-                        model.mask_type,
+            try:
+                if bname == "held_out_perplexity":
+                    results[key] = run_held_out_perplexity(
+                        model=model,
+                        dataset_dir=dataset_dir,
+                        layout_policy=layout,
+                        split=split,
+                        max_docs=max_docs,
+                        device=device,
+                        mask_type_override=mask_type,
                     )
-                    continue
-                if not epoch_dirs:
-                    logger.warning(
-                        "Skipping pack_contrastive_perplexity: "
-                        "no epoch_dirs configured (set eval.epoch_dirs in config)."
+
+                elif bname == "hellaswag":
+                    results[key] = run_hellaswag(
+                        model=model, max_examples=max_docs, device=device,
                     )
-                    continue
-                from eval.perplexity import run_pack_contrastive_perplexity
-                results[key] = run_pack_contrastive_perplexity(
-                    model=model,
-                    epoch_dirs=epoch_dirs,
-                    dataset_dir=dataset_dir,
-                    layout_policy=layout,
-                    max_packs=max_docs,
-                    device=device,
+
+                elif bname == "wiki_qa":
+                    results[key] = run_wiki_qa(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "lambada":
+                    results[key] = run_lambada(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname in ("arc_easy", "arc_challenge"):
+                    results[key] = run_arc(
+                        model=model,
+                        config="easy" if bname == "arc_easy" else "challenge",
+                        max_examples=max_docs,
+                        device=device,
+                    )
+
+                elif bname == "winogrande":
+                    results[key] = run_winogrande(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "piqa":
+                    results[key] = run_piqa(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "boolq":
+                    results[key] = run_boolq(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "commonsense_qa":
+                    results[key] = run_commonsense_qa(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "copa":
+                    results[key] = run_copa(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "openbookqa":
+                    results[key] = run_openbookqa(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "sciq":
+                    results[key] = run_sciq(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "codexglue_line_completion":
+                    results[key] = run_codexglue_line_completion(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "mmlu":
+                    results[key] = run_mmlu(
+                        model=model,
+                        subject=spec.get("subject", "college_mathematics"),
+                        max_examples=max_docs,
+                        device=device,
+                    )
+
+                elif bname == "mathqa":
+                    results[key] = run_mathqa(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "math":
+                    results[key] = run_math(
+                        model=model,
+                        subject=spec.get("subject", "algebra"),
+                        max_examples=max_docs,
+                        device=device,
+                    )
+
+                elif bname == "codexglue_code_to_text":
+                    results[key] = run_codexglue_code_to_text(
+                        model=model, max_examples=max_docs, device=device,
+                    )
+
+                elif bname == "repobench":
+                    results[key] = run_repobench(
+                        model=model,
+                        split=spec.get("split", "cross_file_first"),
+                        max_examples=max_docs,
+                        device=device,
+                    )
+
+                elif bname == "humaneval_buggy":
+                    results[key] = run_humaneval_buggy(
+                        model=model,
+                        language=spec.get("language", "python"),
+                        max_examples=max_docs,
+                        device=device,
+                    )
+
+                elif bname == "pack_contrastive_perplexity":
+                    if model.mask_type != "cross_doc_link":
+                        logger.info(
+                            "Skipping pack_contrastive_perplexity: "
+                            "model.mask_type=%r (requires cross_doc_link)",
+                            model.mask_type,
+                        )
+                        continue
+                    if not epoch_dirs:
+                        logger.warning(
+                            "Skipping pack_contrastive_perplexity: "
+                            "no epoch_dirs configured (set eval.epoch_dirs in config)."
+                        )
+                        continue
+                    results[key] = run_pack_contrastive_perplexity(
+                        model=model,
+                        epoch_dirs=epoch_dirs,
+                        dataset_dir=dataset_dir,
+                        layout_policy=layout,
+                        max_packs=max_docs,
+                        device=device,
+                    )
+
+            except Exception as _exc:
+                logger.error(
+                    "Benchmark %s (condition=%s) failed and will be skipped: %s: %s",
+                    bname, cname, type(_exc).__name__, _exc,
                 )
+                results[key] = {"error": str(_exc)}
 
     _log_summary(results)
     return results
@@ -634,11 +721,38 @@ def main() -> None:
         "--benchmarks", nargs="+", default=["held_out_perplexity"],
         choices=list(_KNOWN_BENCHMARKS),
         help=(
-            "Benchmarks to run. NLP commonsense: hellaswag, winogrande, piqa, boolq, "
-            "commonsense_qa, copa. NLP science: arc_easy, arc_challenge, openbookqa, sciq. "
-            "NLP language: wiki_qa, lambada. Code: codexglue_line_completion. "
+            "Benchmarks to run. "
+            "NLP commonsense: hellaswag, winogrande, piqa, boolq, commonsense_qa, copa. "
+            "NLP science: arc_easy, arc_challenge, openbookqa, sciq. "
+            "NLP language: wiki_qa, lambada. "
+            "STEM/math: mmlu (see --mmlu-subject), mathqa, math (see --math-subject). "
+            "Code: codexglue_line_completion, codexglue_code_to_text, "
+            "repobench (see --repobench-split), humaneval_buggy (see --humaneval-language). "
             "Graph: pack_contrastive_perplexity."
         ),
+    )
+    parser.add_argument(
+        "--mmlu-subject", default="college_mathematics",
+        help="MMLU subject to evaluate (used when 'mmlu' is in --benchmarks). "
+             "Examples: college_mathematics, high_school_physics, machine_learning, "
+             "college_computer_science. See eval.nlp_benchmarks.MMLU_STEM_SUBJECTS.",
+    )
+    parser.add_argument(
+        "--math-subject", default="algebra",
+        help="MATH dataset subject (used when 'math' is in --benchmarks). "
+             "One of: algebra, counting_and_probability, geometry, "
+             "intermediate_algebra, number_theory, prealgebra, precalculus.",
+    )
+    parser.add_argument(
+        "--repobench-split", default="cross_file_first",
+        choices=["cross_file_first", "cross_file_random", "in_file"],
+        help="RepoBench-C split (used when 'repobench' is in --benchmarks). "
+             "cross_file_first is most relevant for cross_doc_link models.",
+    )
+    parser.add_argument(
+        "--humaneval-language", default="python",
+        choices=["python", "cpp", "go", "java", "js", "rust"],
+        help="HumanEvalPack language (used when 'humaneval_buggy' is in --benchmarks).",
     )
     parser.add_argument(
         "--conditions", nargs="+", default=["experimental"],
@@ -678,9 +792,17 @@ def main() -> None:
             "results are written to each checkpoint's run dir."
         )
 
+    # Per-benchmark extra params from CLI — folded into each spec dict.
+    _bench_extras: Dict[str, Dict[str, Any]] = {
+        "mmlu":            {"subject": args.mmlu_subject},
+        "math":            {"subject": args.math_subject},
+        "repobench":       {"split": args.repobench_split},
+        "humaneval_buggy": {"language": args.humaneval_language},
+    }
+
     eval_cfg = {
         "benchmarks": [
-            {"name": b, "conditions": args.conditions}
+            {"name": b, "conditions": args.conditions, **_bench_extras.get(b, {})}
             for b in args.benchmarks
         ],
         "split": args.split,

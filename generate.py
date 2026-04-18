@@ -84,7 +84,8 @@ def _build_layout_policy(name: str, enc):
         return EOSLayoutPolicy(eos_token_id=50256)
     elif name == "identifier_prefix":
         return IdentifierPrefixLayoutPolicy(encode_fn=enc.encode_ordinary)
-    elif name == "identifier_prefix_eos":
+    elif name in ("identifier_prefix_eos", "identifier_prefix_bos_eos"):
+        # 'identifier_prefix_bos_eos' is a legacy alias from before BOS was removed.
         return IdentifierPrefixEOSLayoutPolicy(
             encode_fn=enc.encode_ordinary, eos_token_id=50256
         )

@@ -3,7 +3,9 @@ tests/eval/test_nlp_benchmarks.py — unit tests for eval.nlp_benchmarks.
 
 Covers run_hellaswag, run_wiki_qa, run_arc, run_lambada,
 run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
-run_openbookqa, run_sciq, run_codexglue_line_completion.
+run_openbookqa, run_sciq, run_codexglue_line_completion,
+run_mmlu, run_mathqa, run_math, run_codexglue_code_to_text,
+run_repobench, run_humaneval_buggy.
 All tests run on CPU with mock models and synthetic data — no HuggingFace
 network access required.
 """
@@ -18,6 +20,8 @@ from eval.nlp_benchmarks import (
     run_hellaswag, run_wiki_qa, run_arc, run_lambada,
     run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
     run_openbookqa, run_sciq, run_codexglue_line_completion,
+    run_mmlu, run_mathqa, run_math,
+    run_codexglue_code_to_text, run_repobench, run_humaneval_buggy,
 )
 
 VOCAB_SIZE = 256
@@ -89,6 +93,12 @@ def _patch_fitb_dataset(monkeypatch, dataset_class_path, items):
     (run_openbookqa,            {}),
     (run_sciq,                  {}),
     (run_codexglue_line_completion, {}),
+    (run_mmlu,                  {}),
+    (run_mathqa,                {}),
+    (run_math,                  {}),
+    (run_codexglue_code_to_text, {}),
+    (run_repobench,             {}),
+    (run_humaneval_buggy,       {}),
 ])
 def test_requires_tokenizer(fn, kwargs):
     model = _make_mock_model(tokenizer=False)
@@ -445,3 +455,206 @@ def test_codexglue_prepends_newline_to_answer(monkeypatch):
     monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
     run_codexglue_line_completion(model=model, max_examples=1, device="cpu")
     assert any(c.startswith("\n") for c in encoded_calls)
+
+
+_MMLU_DS      = "tunalab.data_sources.evaluations.multiple_choice.mmlu.MMLUDataset"
+_MATHQA_DS    = "tunalab.data_sources.evaluations.multiple_choice.mathqa.MathQADataset"
+_HUMANEVAL_DS = "tunalab.data_sources.evaluations.multiple_choice.humaneval_buggy.HumanEvalBuggyDataset"
+_MATH_DS      = "tunalab.data_sources.evaluations.fill_in_the_blank.math_competition.MATHDataset"
+_CODE2TXT_DS  = "tunalab.data_sources.evaluations.fill_in_the_blank.codexglue_code_to_text.CodeXGLUECodeToTextDataset"
+_REPOBENCH_DS = "tunalab.data_sources.evaluations.fill_in_the_blank.repobench.RepoBenchDataset"
+
+
+# ─── MMLU ─────────────────────────────────────────────────────────────────────
+
+def test_mmlu_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("What is 2+2?", ["3", "4", "5", "6"], 1)]
+    _patch_mc_dataset(monkeypatch, _MMLU_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched", lambda *a, **kw: [1.0, 0.1, 0.9, 0.8])
+    result = run_mmlu(model=_make_mock_model(), subject="college_mathematics",
+                      max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+    assert result["total_examples"] == 1
+
+
+def test_mmlu_four_choices(monkeypatch):
+    items = [_mc_item("Q?", ["A", "B", "C", "D"], 0)] * 3
+    _patch_mc_dataset(monkeypatch, _MMLU_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)),
+                                              [float(i) for i in range(len(choices))])[1])
+    run_mmlu(model=_make_mock_model(), max_examples=3, device="cpu")
+    assert all(c == 4 for c in counts)
+
+
+def test_mmlu_wrong_answer(monkeypatch):
+    items = [_mc_item("Q?", ["A", "B", "C", "D"], 2)]
+    _patch_mc_dataset(monkeypatch, _MMLU_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched", lambda *a, **kw: [0.1, 0.2, 0.9, 0.3])
+    result = run_mmlu(model=_make_mock_model(), device="cpu")
+    assert result["accuracy"] == pytest.approx(0.0)
+
+
+# ─── MathQA ───────────────────────────────────────────────────────────────────
+
+def test_mathqa_picks_lowest_nll(monkeypatch):
+    items = [_mc_item("How many ways to arrange 3 items?", ["3", "6", "9", "12", "24"], 1)]
+    _patch_mc_dataset(monkeypatch, _MATHQA_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched",
+                        lambda *a, **kw: [1.0, 0.2, 0.8, 0.9, 1.1])
+    result = run_mathqa(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+    assert result["total_examples"] == 1
+
+
+def test_mathqa_five_choices(monkeypatch):
+    items = [_mc_item("Q?", ["1", "2", "3", "4", "5"], 0)] * 2
+    _patch_mc_dataset(monkeypatch, _MATHQA_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)),
+                                              [float(i) for i in range(len(choices))])[1])
+    run_mathqa(model=_make_mock_model(), max_examples=2, device="cpu")
+    assert all(c == 5 for c in counts)
+
+
+def test_mathqa_loads_from_local_file(tmp_path):
+    import json
+    rows = [
+        {"Problem": "Q1", "options": "a ) 1 , b ) 2 , c ) 3 , d ) 4 , e ) 5", "correct": "a"},
+        {"Problem": "Q2", "options": "a ) 6 , b ) 7 , c ) 8 , d ) 9 , e ) 10", "correct": "b"},
+    ]
+    (tmp_path / "test.json").write_text(json.dumps(rows))
+    call_count = {"n": 0}
+    def _fake_batched(m, ctx, choices, device=None):
+        call_count["n"] += 1
+        return [float(i) for i in range(len(choices))]
+    monkeypatch_obj = type("MP", (), {"setattr": staticmethod(lambda *a: None)})()
+    import eval.nlp_benchmarks as _b
+    orig = _b.score_completions_batched
+    _b.score_completions_batched = _fake_batched
+    try:
+        result = run_mathqa(model=_make_mock_model(), max_examples=2,
+                            data_dir=str(tmp_path), device="cpu")
+    finally:
+        _b.score_completions_batched = orig
+    assert result["total_examples"] == 2
+    assert call_count["n"] == 2
+
+
+# ─── MATH competition ─────────────────────────────────────────────────────────
+
+def test_math_returns_perplexity(monkeypatch):
+    items = [_fitb_item("Find $x$ if $x^2=4$.", "\n$x=2$.")]
+    _patch_fitb_dataset(monkeypatch, _MATH_DS, items)
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 2.0)
+    result = run_math(model=_make_mock_model(), subject="algebra", max_examples=1, device="cpu")
+    assert "perplexity" in result
+    assert result["total_examples"] == 1
+
+
+def test_math_calls_score_completion_once_per_item(monkeypatch):
+    items = [_fitb_item("P1", "\nS1"), _fitb_item("P2", "\nS2")]
+    _patch_fitb_dataset(monkeypatch, _MATH_DS, items)
+    call_count = {"n": 0}
+    def _fake(m, ctx, completion, **kw):
+        call_count["n"] += 1
+        return 1.5
+    monkeypatch.setattr(_bench, "score_completion", _fake)
+    run_math(model=_make_mock_model(), max_examples=2, device="cpu")
+    assert call_count["n"] == 2
+
+
+# ─── CodeXGLUE code-to-text ───────────────────────────────────────────────────
+
+def test_codexglue_code_to_text_returns_perplexity(monkeypatch):
+    items = [_fitb_item("def add(a, b):\n    return a + b", "\nAdd two numbers.")]
+    _patch_fitb_dataset(monkeypatch, _CODE2TXT_DS, items)
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.5)
+    result = run_codexglue_code_to_text(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert "perplexity" in result
+    assert result["total_examples"] == 1
+
+
+def test_codexglue_code_to_text_calls_once_per_item(monkeypatch):
+    items = [_fitb_item("def f(): pass", "\nDoes nothing."),
+             _fitb_item("def g(x): return x", "\nIdentity.")]
+    _patch_fitb_dataset(monkeypatch, _CODE2TXT_DS, items)
+    call_count = {"n": 0}
+    def _fake(m, ctx, completion, **kw):
+        call_count["n"] += 1
+        return 1.0
+    monkeypatch.setattr(_bench, "score_completion", _fake)
+    run_codexglue_code_to_text(model=_make_mock_model(), max_examples=2, device="cpu")
+    assert call_count["n"] == 2
+
+
+# ─── RepoBench ────────────────────────────────────────────────────────────────
+
+def test_repobench_invalid_split_raises():
+    with pytest.raises(ValueError, match="split must be one of"):
+        run_repobench(model=_make_mock_model(), split="bad_split", device="cpu")
+
+
+def test_repobench_returns_perplexity(monkeypatch):
+    items = [_fitb_item("import os\n\ndef main():\n    x = os.path.join", "\n    return x")]
+    _patch_fitb_dataset(monkeypatch, _REPOBENCH_DS, items)
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.2)
+    result = run_repobench(model=_make_mock_model(), split="cross_file_first",
+                           max_examples=1, device="cpu")
+    assert "perplexity" in result
+    assert result["total_examples"] == 1
+
+
+def test_repobench_calls_once_per_item(monkeypatch):
+    items = [_fitb_item("ctx1\n\nf1", "\nline1"),
+             _fitb_item("f2", "\nline2")]
+    _patch_fitb_dataset(monkeypatch, _REPOBENCH_DS, items)
+    call_count = {"n": 0}
+    def _fake(m, ctx, comp, **kw):
+        call_count["n"] += 1
+        return 1.0
+    monkeypatch.setattr(_bench, "score_completion", _fake)
+    run_repobench(model=_make_mock_model(), split="cross_file_random",
+                  max_examples=2, device="cpu")
+    assert call_count["n"] == 2
+
+
+# ─── HumanEvalPack canonical-vs-buggy ─────────────────────────────────────────
+
+def test_humaneval_buggy_invalid_language_raises():
+    with pytest.raises(ValueError, match="language must be one of"):
+        run_humaneval_buggy(model=_make_mock_model(), language="brainfuck", device="cpu")
+
+
+def test_humaneval_buggy_picks_canonical(monkeypatch):
+    items = [_mc_item("def add(a, b):\n    \"\"\"Add.\"\"\"\n",
+                      ["    return a + b\n", "    return a - b\n"], 0)]
+    _patch_mc_dataset(monkeypatch, _HUMANEVAL_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched", lambda *a, **kw: [0.5, 1.5])
+    result = run_humaneval_buggy(model=_make_mock_model(), language="python",
+                                 max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(1.0)
+    assert result["total_examples"] == 1
+
+
+def test_humaneval_buggy_fails_on_buggy_preferred(monkeypatch):
+    items = [_mc_item("def f():\n    pass\n",
+                      ["    return 1\n", "    return 2\n"], 0)]
+    _patch_mc_dataset(monkeypatch, _HUMANEVAL_DS, items)
+    monkeypatch.setattr(_bench, "score_completions_batched", lambda *a, **kw: [1.5, 0.3])
+    result = run_humaneval_buggy(model=_make_mock_model(), language="python",
+                                 max_examples=1, device="cpu")
+    assert result["accuracy"] == pytest.approx(0.0)
+
+
+def test_humaneval_buggy_two_choices(monkeypatch):
+    items = [_mc_item("p1", ["c1", "b1"], 0),
+             _mc_item("p2", ["c2", "b2"], 0)]
+    _patch_mc_dataset(monkeypatch, _HUMANEVAL_DS, items)
+    counts = []
+    monkeypatch.setattr(_bench, "score_completions_batched",
+        lambda m, ctx, choices, device=None: (counts.append(len(choices)), [0.0, 1.0])[1])
+    run_humaneval_buggy(model=_make_mock_model(), max_examples=2, device="cpu")
+    assert all(c == 2 for c in counts)

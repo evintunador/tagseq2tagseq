@@ -41,10 +41,28 @@ Blocked on Wikipedia/fineweb data being online. Once data exists:
 - Add LAMBADA adapter (fill-in-the-blank last-word prediction)
 - Consider ARC-Easy/Challenge and WinoGrande
 
-### Code benchmarks (no execution infra)
-For stack-trained models, are there code-specific MC or fill-in-the-blank
-benchmarks that don't require running code? Worth a literature search.
-HumanEval/MBPP are out until execution infra exists.
+### STEM / math benchmarks — DONE
+Added to `eval/nlp_benchmarks.py` (HF-direct, no tunalab adapter needed):
+- `run_mmlu(subject)` — 4-way MC, 13 STEM subjects available (college_mathematics,
+  high_school_physics, machine_learning, etc.). Same structure as ARC.
+- `run_mathqa()` — 5-way MC, 2985 test items, math word problems.
+- `run_math(subject)` — LaTeX fill-in-blank, competition math (Hendrycks MATH dataset),
+  7 subjects. Perplexity over full solution tokens. Relevant for future ArXiv models;
+  useful now as a diagnostic for mathematical LaTeX fluency.
+
+### Code benchmarks — DONE
+Added to `eval/nlp_benchmarks.py` (HF-direct):
+- `run_codexglue_code_to_text()` — Python function → docstring, 14918 test items.
+  Cleaner signal than line completion (semantically rich targets).
+- `run_repobench(split)` — cross-file next-line prediction with explicit repo context.
+  3 splits: cross_file_first (most interesting for cross_doc_link), cross_file_random,
+  in_file (control). The cross_file_first split is a natural controlled experiment for
+  whether cross-doc attention benefits code with import dependencies.
+- `run_humaneval_buggy(language)` — canonical vs buggy 2-way MC, 164 items per language
+  (python/cpp/go/java/js/rust). No execution needed; unique contrastive angle.
+
+All wired into `eval_checkpoints.py` dispatcher and CLI with flags:
+  --mmlu-subject, --math-subject, --repobench-split, --humaneval-language
 
 ### Link injection eval
 The `prompt_preprocessor` hook in `score_completion` is the slot for this.
