@@ -62,7 +62,8 @@ from eval.nlp_benchmarks import (
     run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
     run_openbookqa, run_sciq, run_codexglue_line_completion,
     run_mmlu, run_mathqa, run_math,
-    run_codexglue_code_to_text, run_repobench, run_humaneval_buggy,
+    run_codexglue_code_to_text, run_repobench, run_repobench_cross_doc,
+    run_humaneval_buggy,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ _KNOWN_BENCHMARKS = (
     # Code (HF-direct)
     "codexglue_code_to_text",
     "repobench",          # requires --repobench-split
+    "repobench_cross_doc",
     "humaneval_buggy",    # requires --humaneval-language
     # Graph-structured
     "pack_contrastive_perplexity",
@@ -446,6 +448,20 @@ def run_benchmarks_on_model(
                         device=device,
                     )
 
+                elif bname == "repobench_cross_doc":
+                    if model.mask_type != "cross_doc_link":
+                        logger.info(
+                            "Skipping repobench_cross_doc: requires cross_doc_link model "
+                            "(model.mask_type=%r).",
+                            model.mask_type,
+                        )
+                        continue
+                    results[key] = run_repobench_cross_doc(
+                        model=model,
+                        max_examples=max_docs,
+                        device=device,
+                    )
+
                 elif bname == "humaneval_buggy":
                     results[key] = run_humaneval_buggy(
                         model=model,
@@ -540,6 +556,19 @@ def _log_summary(results: Dict[str, Any]) -> None:
                 res.get("accuracy", float("nan")),
                 res.get("total_examples", 0),
             )
+        elif isinstance(res, dict) and "perplexity_cross_doc_only" in res:
+            # repobench_cross_doc: two perplexity figures + coverage info
+            logger.info(
+                "  %-40s  ppl_cross=%.3f (n=%d)  ppl_all=%.3f (n=%d)  "
+                "link_found=%d/%d",
+                name,
+                res.get("perplexity_cross_doc_only", float("nan")),
+                res.get("n_cross_doc", 0),
+                res.get("perplexity_with_fallback", float("nan")),
+                res.get("total_examples", 0),
+                res.get("n_link_found", 0),
+                res.get("total_examples", 0),
+            )
         elif isinstance(res, dict) and any(
             isinstance(v, dict) and "mean_delta" in v for v in res.values()
         ):
@@ -619,7 +648,12 @@ def _headline_metric(key: str, result: Any) -> str:
     if not isinstance(result, dict):
         return "—"
 
-    # held_out_perplexity → show perplexity
+    # repobench_cross_doc → show cross-doc-only perplexity
+    if "perplexity_cross_doc_only" in result:
+        v = result.get("perplexity_cross_doc_only", nan)
+        return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:.2f}"
+
+    # held_out_perplexity / fill-in-the-blank → show perplexity
     if "perplexity" in result:
         v = result.get("perplexity", nan)
         return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:.2f}"

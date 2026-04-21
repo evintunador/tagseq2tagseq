@@ -5,7 +5,7 @@ Covers run_hellaswag, run_wiki_qa, run_arc, run_lambada,
 run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
 run_openbookqa, run_sciq, run_codexglue_line_completion,
 run_mmlu, run_mathqa, run_math, run_codexglue_code_to_text,
-run_repobench, run_humaneval_buggy.
+run_repobench, run_repobench_cross_doc, run_humaneval_buggy.
 All tests run on CPU with mock models and synthetic data — no HuggingFace
 network access required.
 """
@@ -13,7 +13,7 @@ import pytest
 import torch
 import torch.nn as nn
 from typing import List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import eval.nlp_benchmarks as _bench
 from eval.nlp_benchmarks import (
@@ -21,7 +21,8 @@ from eval.nlp_benchmarks import (
     run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
     run_openbookqa, run_sciq, run_codexglue_line_completion,
     run_mmlu, run_mathqa, run_math,
-    run_codexglue_code_to_text, run_repobench, run_humaneval_buggy,
+    run_codexglue_code_to_text, run_repobench, run_repobench_cross_doc,
+    run_humaneval_buggy,
 )
 
 VOCAB_SIZE = 256
@@ -98,6 +99,7 @@ def _patch_fitb_dataset(monkeypatch, dataset_class_path, items):
     (run_math,                  {}),
     (run_codexglue_code_to_text, {}),
     (run_repobench,             {}),
+    (run_repobench_cross_doc,   {}),
     (run_humaneval_buggy,       {}),
 ])
 def test_requires_tokenizer(fn, kwargs):
@@ -619,6 +621,135 @@ def test_repobench_calls_once_per_item(monkeypatch):
     run_repobench(model=_make_mock_model(), split="cross_file_random",
                   max_examples=2, device="cpu")
     assert call_count["n"] == 2
+
+
+# ─── RepoBench cross-doc-link variant ─────────────────────────────────────────
+
+def _make_cross_doc_model():
+    """Mock cross_doc_link model with PythonImportDetector stub and tokenizer."""
+    from model.graph_traversal.python_import_detector import PythonImportDetector
+    model = _make_mock_model(tokenizer=True)
+    model.mask_type = "cross_doc_link"
+    # Use a real PythonImportDetector so the isinstance guard in
+    # run_repobench_cross_doc passes; encode/decode functions don't matter for
+    # tests that patch score_completion_with_context_docs anyway.
+    model.link_detector = PythonImportDetector(decode_fn=lambda toks: "")
+    return model
+
+
+def _raw_repobench_examples():
+    """Minimal fake HF dataset rows for repobench_cross_doc tests."""
+    return [
+        {
+            "next_line": "    return result",
+            "cross_file_context": ["def helper():\n    pass\n"],
+            "file_context": "import helper\n\ndef main():\n    result = helper()\n",
+        },
+        {
+            "next_line": "    pass",
+            "cross_file_context": [],
+            "file_context": "def noop():\n",
+        },
+        {
+            "next_line": "",   # empty — should be skipped
+            "cross_file_context": [],
+            "file_context": "x = 1\n",
+        },
+    ]
+
+
+def test_repobench_cross_doc_requires_cross_doc_link_model():
+    model = _make_mock_model()
+    model.mask_type = "doc_causal"
+    model.link_detector = MagicMock()
+    with pytest.raises(ValueError, match="cross_doc_link"):
+        run_repobench_cross_doc(model=model, device="cpu")
+
+
+def test_repobench_cross_doc_requires_link_detector():
+    model = _make_mock_model()
+    model.mask_type = "cross_doc_link"
+    model.link_detector = None
+    with pytest.raises(ValueError, match="link_detector"):
+        run_repobench_cross_doc(model=model, device="cpu")
+
+
+def test_repobench_cross_doc_link_found_increments_n_link_found(monkeypatch):
+    model = _make_cross_doc_model()
+    examples = _raw_repobench_examples()[:2]  # 2 valid examples
+
+    with patch("datasets.load_dataset", return_value=_FakeHFDataset(examples)), \
+         patch.object(_bench, "score_completion_with_context_docs", return_value=1.5), \
+         patch.object(_bench, "score_completion", return_value=2.0):
+        result = run_repobench_cross_doc(model=model, max_examples=2, device="cpu")
+
+    assert result["n_link_found"] == 2
+    assert result["n_link_not_found"] == 0
+    assert result["total_examples"] == 2
+
+
+def test_repobench_cross_doc_no_link_falls_back_to_flat(monkeypatch):
+    model = _make_cross_doc_model()
+    examples = _raw_repobench_examples()[:1]
+
+    flat_called = {"n": 0}
+
+    def _fake_flat(m, ctx, comp, **kw):
+        flat_called["n"] += 1
+        return 2.0
+
+    with patch("datasets.load_dataset", return_value=_FakeHFDataset(examples)), \
+         patch.object(_bench, "score_completion_with_context_docs", return_value=None), \
+         patch.object(_bench, "score_completion", side_effect=_fake_flat):
+        result = run_repobench_cross_doc(model=model, max_examples=1, device="cpu")
+
+    assert result["n_link_not_found"] == 1
+    assert result["n_link_found"] == 0
+    assert flat_called["n"] == 1
+
+
+def test_repobench_cross_doc_reports_both_metric_keys(monkeypatch):
+    model = _make_cross_doc_model()
+    examples = _raw_repobench_examples()[:2]
+
+    with patch("datasets.load_dataset", return_value=_FakeHFDataset(examples)), \
+         patch.object(_bench, "score_completion_with_context_docs", return_value=1.0), \
+         patch.object(_bench, "score_completion", return_value=2.0):
+        result = run_repobench_cross_doc(model=model, max_examples=2, device="cpu")
+
+    for key in ("perplexity_cross_doc_only", "perplexity_with_fallback",
+                "average_nll_cross_doc_only", "average_nll_with_fallback",
+                "n_cross_doc", "total_examples", "n_link_found", "n_link_not_found"):
+        assert key in result, f"Missing key: {key}"
+
+
+def test_repobench_cross_doc_skips_empty_next_line(monkeypatch):
+    model = _make_cross_doc_model()
+    # Only the empty-next_line example
+    examples = [_raw_repobench_examples()[2]]
+
+    with patch("datasets.load_dataset", return_value=_FakeHFDataset(examples)), \
+         patch.object(_bench, "score_completion_with_context_docs", return_value=1.0), \
+         patch.object(_bench, "score_completion", return_value=2.0):
+        result = run_repobench_cross_doc(model=model, max_examples=1, device="cpu")
+
+    assert result["total_examples"] == 0
+
+
+class _FakeHFDataset:
+    """Minimal fake HuggingFace dataset that supports len() and select()."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __len__(self):
+        return len(self._rows)
+
+    def select(self, indices):
+        return [self._rows[i] for i in indices]
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 # ─── HumanEvalPack canonical-vs-buggy ─────────────────────────────────────────

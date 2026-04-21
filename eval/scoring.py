@@ -1,7 +1,7 @@
 """
 eval/scoring.py — primitive scoring utilities for TS2TS models.
 
-Provides four entry points:
+Provides five entry points:
 
   score_doc(model, tokens, layout_policy, raw_identifier, normed_identifier, device)
       -> {"mean_nll": float, "num_tokens": int}
@@ -21,9 +21,9 @@ Provides four entry points:
       presented as raw text).
 
       prompt_preprocessor: Optional[Callable[[List[int]], List[int]]]
-          Hook for the future link-injection feature — if provided, it is
-          called on context_tokens before packing, allowing a pre-processor
-          to annotate the context with generated aux-doc links.
+          Hook for the deferred link-injection eval feature — if provided,
+          it is called on context_tokens before packing so a pre-processor
+          can augment the context with generated aux-doc links.
 
   score_completions_batched(model, context_tokens, completion_token_lists, device)
       -> List[float]  (mean NLL per completion)
@@ -32,6 +32,18 @@ Provides four entry points:
       as K DocSpans into a single forward_inference call (~K× faster than K
       individual score_completion calls). doc_causal masking isolates each span
       so results are identical to calling score_completion K times.
+
+  score_completion_with_context_docs(
+      model, aux_token_lists, context_tokens, completion_tokens,
+      link_detector, aux_raw_identifiers, device)
+      -> Optional[float]  (mean NLL over completion tokens, or None)
+
+      Cross-doc-link variant: packs aux snippets as earlier DocSpans and the
+      primary (context+completion) doc last. Two modes: precise (pass
+      aux_raw_identifiers so the detector matches each import to its specific
+      snippet via path) or coarse (no identifiers: last import grants access
+      to all aux spans). Returns None when no import is detected or no grants
+      fire (caller decides: skip or fall back).
 
   score_doc_with_context(model, batch, layout_policy, device, mask_type)
       -> {"mean_nll": float, "num_tokens": int}
@@ -174,9 +186,9 @@ def score_completion(
             benchmarks present bare text without layout decoration).
             Parameter kept for potential future use.
         prompt_preprocessor: Optional callable applied to context_tokens
-            before packing. This is the hook for the deferred link-injection
-            feature: a preprocessor can annotate the context with links and
-            insert aux-doc tokens before scoring.
+            before packing. Hook for the deferred link-injection eval feature
+            (see NOTES.md): a preprocessor can augment the context with
+            link-annotated aux-doc tokens before scoring.
         device: Device string (e.g. "cuda", "cpu"). If None, inferred from
             model.backbone.parameters().
 
@@ -302,6 +314,213 @@ def score_completions_batched(
         abs_offset += ctx_len + choice_len
 
     return nlls
+
+
+def score_completion_with_context_docs(
+    model,
+    aux_token_lists: List[List[int]],
+    context_tokens: List[int],
+    completion_tokens: List[int],
+    link_detector,
+    aux_raw_identifiers: Optional[List[str]] = None,
+    source_file_path: Optional[str] = None,
+    device: Optional[str] = None,
+) -> Optional[float]:
+    """Score a completion with cross-doc attention to auxiliary snippet documents.
+
+    Packs aux snippets as earlier DocSpans (required by the DAG constraint:
+    target docs must precede the link position) and the primary doc last.
+    Runs link_detector on the full flat sequence to find import positions
+    inside the primary doc, then builds link_to_target explicitly and passes
+    it to forward_inference (bypassing CrossDocLinkMaskCreator's internal
+    name-matching, which would re-detect on the full sequence anyway).
+
+    Two matching modes:
+      - Precise (aux_raw_identifiers provided): absolute imports matched via
+        PythonImportDetector candidate paths; relative imports resolved using
+        source_file_path when provided (eval-only — training pipeline unchanged).
+        Each grant fires only for the specific snippet that import refers to.
+      - Coarse (aux_raw_identifiers=None): last detected import in primary doc
+        grants access to ALL aux spans simultaneously. Used when snippet paths
+        are unavailable.
+
+    Returns None when no grants can be established:
+      - No non-empty aux snippets.
+      - context_tokens is empty (no logit for first completion token).
+      - No imports detected in the primary doc region.
+      - Precise mode: no detected import matched any aux span.
+
+    Args:
+        model: TS2TSModel in eval mode with mask_type='cross_doc_link'.
+        aux_token_lists: Pre-tokenized auxiliary snippet token lists, packed in
+            order (aux_0 first). Empty lists are skipped.
+        context_tokens: Primary-doc prefix token IDs.
+        completion_tokens: Token IDs to score NLL over.
+        link_detector: LinkDetector instance (e.g. PythonImportDetector).
+        aux_raw_identifiers: Optional list of raw_identifier strings parallel
+            to aux_token_lists (including empty-list entries). Format:
+            "repo:path/to/file.py" — PythonImportDetector.index_doc_span
+            strips the repo prefix. Enables precise per-import matching.
+        source_file_path: Path of the primary doc within its repo (e.g.
+            "pkg/subpkg/module.py"). Used to resolve relative imports
+            (from . import X → pkg/subpkg/X.py) in precise mode. Ignored
+            in coarse mode or when aux_raw_identifiers is None.
+        device: Device string. If None, inferred from model.backbone.parameters().
+
+    Returns:
+        Mean NLL over completion_tokens as a float, or None.
+    """
+    if not completion_tokens:
+        return 0.0
+
+    if not context_tokens:
+        return None
+
+    if device is None:
+        device = next(model.backbone.parameters()).device
+
+    # Build flat sequence: non-empty aux docs first, primary doc last.
+    all_tokens: List[int] = []
+    aux_spans: List[DocSpan] = []
+    offset = 0
+    aux_idx = 0
+    for i, aux_toks in enumerate(aux_token_lists):
+        if not aux_toks:
+            continue
+        raw_id = (
+            aux_raw_identifiers[i]
+            if aux_raw_identifiers is not None and i < len(aux_raw_identifiers)
+            else f"xfile_{aux_idx}"
+        )
+        aux_spans.append(DocSpan(
+            doc_id=aux_idx,
+            normed_identifier="",
+            raw_identifier=raw_id,
+            start=offset,
+            end=offset + len(aux_toks),
+            truncated=False,
+            outgoing_identifiers=[],
+        ))
+        all_tokens.extend(aux_toks)
+        offset += len(aux_toks)
+        aux_idx += 1
+
+    if not aux_spans:
+        return None
+
+    primary_start = offset
+    primary_tokens = context_tokens + completion_tokens
+    primary_doc_id = aux_idx
+    primary_span = DocSpan(
+        doc_id=primary_doc_id,
+        normed_identifier="",
+        raw_identifier="",
+        start=primary_start,
+        end=primary_start + len(primary_tokens),
+        truncated=False,
+        outgoing_identifiers=[],
+    )
+    all_tokens.extend(primary_tokens)
+    all_spans = aux_spans + [primary_span]
+
+    tokens_tensor = torch.tensor(all_tokens, dtype=torch.long, device=device).unsqueeze(0)
+    primary_end = primary_start + len(primary_tokens)
+
+    # Detect links; keep only those whose link_end_pos falls within the primary doc.
+    raw_links = link_detector.detect_links(tokens_tensor[0])
+    primary_links = [lk for lk in raw_links if primary_start <= lk.link_end_pos <= primary_end]
+
+    if not primary_links:
+        return None
+
+    if aux_raw_identifiers is not None:
+        # Precise mode: match each detected import to its specific aux span.
+        # Build a path → doc_id lookup using index_doc_span (strips repo prefix).
+        path_to_doc_id: dict = {}
+        for span in aux_spans:
+            key = link_detector.index_doc_span(span)
+            path_to_doc_id[key] = span.doc_id
+
+        # Also handle relative imports using source_file_path.
+        # The detector silently skips relative imports; we resolve them here
+        # for eval purposes only (training pipeline unchanged).
+        rel_grants: dict = {}  # link_end_pos → [doc_id, ...]
+        if source_file_path:
+            import re as _re
+            # Decode the primary doc tokens to text for relative import parsing.
+            primary_ids = tokens_tensor[0, primary_start:primary_end].tolist()
+            try:
+                primary_text = link_detector.decode_fn(primary_ids)
+            except Exception:
+                primary_text = ""
+            src_parts = source_file_path.replace("\\", "/").split("/")
+            for m in _re.finditer(
+                r"^\s*from\s+(\.+)([\w.]*)\s+import\s+([^\n;(#]+)",
+                primary_text, _re.MULTILINE,
+            ):
+                dots = len(m.group(1))
+                rest = m.group(2).strip(".")
+                names_str = m.group(3)
+                names = [n.strip().split()[0] for n in names_str.split(",") if n.strip()]
+                # Resolve base: go up `dots` dirs from source file's directory.
+                base_parts = src_parts[:-dots] if dots <= len(src_parts) else []
+                if rest:
+                    base_parts = base_parts + rest.split(".")
+                base = "/".join(base_parts)
+                # Map char offset back to token position.
+                char_end = m.end()
+                cumulative = link_detector._build_char_to_token_index(primary_ids)
+                link_end_pos = (primary_start +
+                                link_detector._char_pos_to_token_pos(cumulative, char_end))
+                for name in names if names else [""]:
+                    candidates = (
+                        [f"{base}/{name}.py", f"{base}/{name}/__init__.py", f"{base}.py"]
+                        if name else [f"{base}.py", f"{base}/__init__.py"]
+                    )
+                    for cand in candidates:
+                        if cand in path_to_doc_id:
+                            rel_grants.setdefault(link_end_pos, [])
+                            doc_id = path_to_doc_id[cand]
+                            if doc_id not in rel_grants[link_end_pos]:
+                                rel_grants[link_end_pos].append(doc_id)
+
+        # Build link_to_target from absolute matches + relative matches.
+        link_to_target: dict = {}
+        for lk in primary_links:
+            doc_id = path_to_doc_id.get(lk.target_str)
+            if doc_id is not None:
+                link_to_target.setdefault(lk.link_end_pos, [])
+                if doc_id not in link_to_target[lk.link_end_pos]:
+                    link_to_target[lk.link_end_pos].append(doc_id)
+        for pos, doc_ids in rel_grants.items():
+            link_to_target.setdefault(pos, [])
+            for doc_id in doc_ids:
+                if doc_id not in link_to_target[pos]:
+                    link_to_target[pos].append(doc_id)
+
+        if not link_to_target:
+            return None
+    else:
+        # Coarse mode: last import grants access to all aux spans.
+        last_link_end_pos = max(lk.link_end_pos for lk in primary_links)
+        link_to_target = {last_link_end_pos: [span.doc_id for span in aux_spans]}
+
+    logits = model.forward_inference(
+        tokens_tensor, all_spans,
+        mask_type='cross_doc_link',
+        link_to_target=link_to_target,
+    )  # [1, T, V]
+    log_probs = F.log_softmax(logits[0].float(), dim=-1)  # [T, V]
+
+    ctx_len = len(context_tokens)
+    comp_len = len(completion_tokens)
+    logit_start = primary_start + ctx_len - 1   # logit predicting completion_tokens[0]
+    tgt_start   = primary_start + ctx_len
+
+    lp  = log_probs[logit_start : logit_start + comp_len, :]  # [C, V]
+    tgt = tokens_tensor[0, tgt_start : tgt_start + comp_len]  # [C]
+    nll = -lp[torch.arange(comp_len, device=device), tgt].mean().item()
+    return nll
 
 
 def score_doc_with_context(

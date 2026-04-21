@@ -20,10 +20,9 @@ and are excluded to keep the signal clean. `score_doc_with_context` in
 `eval/scoring.py` is the primitive; the full forward pass runs over the entire
 packed sequence so cross-doc grants can fire normally.
 
-### Batched MC scoring
-Add `score_completions_batched` to `eval/scoring.py` — packs K (context + choice)
-sequences as K DocSpans in one forward pass (~K× faster). Required before HellaSwag,
-ARC, WinoGrande, etc. are practical. See TODO comment in scoring.py.
+### Batched MC scoring — DONE
+`score_completions_batched` in `eval/scoring.py` packs K (context + choice) sequences
+as K DocSpans in one forward pass (~K× faster than K individual calls).
 
 ### Split annotations
 The existing datasets have no `split` field in `tokenized_graph.jsonl`, so
@@ -33,13 +32,10 @@ eval, the pretokenization scripts need to assign `"train"` / `"val_community"` /
 held out, community split vs random split semantics, whether existing checkpoints
 can be retroactively evaluated against a newly annotated graph.
 
-### NL benchmarks (HellaSwag, WikiQA, LAMBADA, WinoGrande, ARC)
-`eval/hellaswag.py` has the full commented implementation ready to activate.
-Blocked on Wikipedia/fineweb data being online. Once data exists:
-- Activate HellaSwag (uncomment implementation)
-- Add WikiQA adapter (already in tunalab)
-- Add LAMBADA adapter (fill-in-the-blank last-word prediction)
-- Consider ARC-Easy/Challenge and WinoGrande
+### NL benchmarks — DONE
+All NLP benchmarks active in `eval/nlp_benchmarks.py`:
+HellaSwag, WikiQA, LAMBADA, WinoGrande, ARC (easy/challenge), PIQA, BoolQ,
+CommonsenseQA, COPA, OpenBookQA, SciQ — all via tunalab NLP catalog.
 
 ### STEM / math benchmarks — DONE
 Added to `eval/nlp_benchmarks.py` (HF-direct, no tunalab adapter needed):
@@ -64,15 +60,45 @@ Added to `eval/nlp_benchmarks.py` (HF-direct):
 All wired into `eval_checkpoints.py` dispatcher and CLI with flags:
   --mmlu-subject, --math-subject, --repobench-split, --humaneval-language
 
-### Link injection eval
-The `prompt_preprocessor` hook in `score_completion` is the slot for this.
-Needs `eval/link_annotator.py` implementing `annotate_prompt_with_links(model,
-prompt_tokens, threshold)`:
-- Single forward pass over prompt
-- Find positions where the link-opener token (e.g. ` [` for markdown) has
-  logit probability above threshold
-- Insert link + generate target + fetch/generate aux doc
-- Return augmented prompt tokens
+### RepoBench cross-doc-link mode — DONE
+`run_repobench_cross_doc` in `eval/nlp_benchmarks.py` packs each example's cross-file
+snippets as proper aux DocSpans and scores with cross_doc_link attention. Uses precise
+per-import matching: each snippet carries `raw_identifier="repo:path/to/file.py"` so
+PythonImportDetector can match each import statement to its specific snippet.
+
+HF dataset: `tianyang/repobench_python_v1.1` (moved from `Leolty/repobench-python-v1.1`).
+Schema: `context` is list of `{identifier, path, snippet}` dicts; `cropped_code` is the
+file body; `import_statement` is prepended so the detector finds the relevant imports.
+
+New scoring primitive: `score_completion_with_context_docs` in `eval/scoring.py`.
+Accepts `source_file_path` and resolves relative imports (`from . import X`) at eval
+time using the file's known path — brings effective cross-file match rate from ~67% → ~97%.
+Reports both `perplexity_cross_doc_only` (samples with detected imports) and
+`perplexity_with_fallback` (all samples; no-link cases fall back to flat scoring).
+
+Only runs on `cross_doc_link` models with a `PythonImportDetector`. For future languages,
+split by language and match each to its `<Language>ImportDetector`.
+
+Validated result on stack_10m: cross_doc ppl=31 vs flat doc_causal ppl=62 (~2× improvement).
+
+### PythonImportDetector: relative imports in training — TODO (discuss separately)
+At eval time, relative imports are now resolved via `source_file_path` in
+`score_completion_with_context_docs`. The training pipeline question is separate:
+the epoch precompute fast-path uses pre-built `link_to_target` from graph edges (which
+ARE built with relative imports resolved by `data/github_graph_extractor/extract.py:80`),
+so training may already handle this correctly. Needs verification before any changes to
+`PythonImportDetector.detect_links` or the training collation path.
+
+### Link injection eval for other external benchmarks
+For all external benchmarks OTHER than RepoBench, the path to cross-doc-link
+evaluation is via prompt preprocessing (link injection), not direct structural
+reformatting. This requires `eval/link_annotator.py`:
+  `annotate_prompt_with_links(model, prompt_tokens, threshold)`:
+  - Single forward pass over prompt
+  - Find positions where the link-opener token (e.g. ` [` for markdown) has
+    logit probability above threshold
+  - Insert link + generate target + fetch/generate aux doc
+  - Return augmented prompt tokens
 Then the eval comparison: score benchmark items with bare prompt vs
 link-annotated prompt, report delta. Interesting science but needs a model
 smart enough for meaningful link placement — probably defer until larger scale.

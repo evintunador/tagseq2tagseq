@@ -13,7 +13,10 @@ import torch.nn as nn
 
 from data.collate import DocSpan
 from data.layout import EOSLayoutPolicy, NullLayoutPolicy
-from eval.scoring import score_completion, score_completions_batched, score_doc, score_doc_with_context
+from eval.scoring import (
+    score_completion, score_completions_batched, score_completion_with_context_docs,
+    score_doc, score_doc_with_context,
+)
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -341,3 +344,181 @@ def test_score_completions_batched_matches_individual_score_completion():
         assert abs(batched_nll - indiv_nll) < 1e-4, (
             f"Choice {i}: batched={batched_nll:.6f} vs individual={indiv_nll:.6f}"
         )
+
+
+# ─── score_completion_with_context_docs tests ─────────────────────────────────
+
+from model.graph_traversal.link_detector import LinkInfo
+
+
+def _make_cross_doc_model(vocab_size: int = VOCAB_SIZE):
+    """Mock model that accepts link_to_target kwarg (cross_doc_link path)."""
+    model = MagicMock()
+
+    def _forward(tokens, doc_spans, **kwargs):
+        T = tokens.shape[1]
+        return torch.zeros(1, T, vocab_size)
+
+    model.forward_inference.side_effect = _forward
+    model.mask_type = "cross_doc_link"
+    dummy_param = nn.Parameter(torch.zeros(1))
+    model.backbone.parameters.return_value = iter([dummy_param])
+    return model
+
+
+def _make_detector(link_end_positions):
+    """Mock LinkDetector reporting links at given absolute token positions."""
+    detector = MagicMock()
+    detector.detect_links.return_value = [
+        LinkInfo(link_end_pos=p, target_str="xfile_0")
+        for p in link_end_positions
+    ]
+    return detector
+
+
+AUX_TOKS   = [1, 2, 3, 4, 5]        # 5 aux tokens
+CTX_TOKS   = [10, 20, 30]            # 3 context tokens
+COMP_TOKS  = [40, 50]                # 2 completion tokens
+
+
+def test_cdoc_returns_float_when_link_in_primary():
+    model    = _make_cross_doc_model()
+    # Primary doc starts at position 5 (after aux); put link inside it.
+    detector = _make_detector([len(AUX_TOKS) + 1])
+    result   = score_completion_with_context_docs(
+        model, [AUX_TOKS], CTX_TOKS, COMP_TOKS, detector, device="cpu"
+    )
+    assert isinstance(result, float)
+
+
+def test_cdoc_returns_none_when_no_links():
+    model    = _make_cross_doc_model()
+    detector = _make_detector([])
+    result   = score_completion_with_context_docs(
+        model, [AUX_TOKS], CTX_TOKS, COMP_TOKS, detector, device="cpu"
+    )
+    assert result is None
+
+
+def test_cdoc_returns_none_when_links_only_in_aux():
+    model    = _make_cross_doc_model()
+    # Link at position 1 — inside the aux span, not the primary doc.
+    detector = _make_detector([1])
+    result   = score_completion_with_context_docs(
+        model, [AUX_TOKS], CTX_TOKS, COMP_TOKS, detector, device="cpu"
+    )
+    assert result is None
+
+
+def test_cdoc_returns_none_when_no_aux():
+    model    = _make_cross_doc_model()
+    detector = _make_detector([1])
+    result   = score_completion_with_context_docs(
+        model, [], CTX_TOKS, COMP_TOKS, detector, device="cpu"
+    )
+    assert result is None
+
+
+def test_cdoc_returns_none_when_context_empty():
+    model    = _make_cross_doc_model()
+    detector = _make_detector([len(AUX_TOKS) + 1])
+    result   = score_completion_with_context_docs(
+        model, [AUX_TOKS], [], COMP_TOKS, detector, device="cpu"
+    )
+    assert result is None
+
+
+def test_cdoc_passes_link_to_target_to_forward():
+    model    = _make_cross_doc_model()
+    link_pos = len(AUX_TOKS) + 1
+    detector = _make_detector([link_pos])
+
+    captured_kwargs = {}
+
+    def _forward_capture(tokens, doc_spans, **kwargs):
+        captured_kwargs.update(kwargs)
+        return torch.zeros(1, tokens.shape[1], VOCAB_SIZE)
+
+    model.forward_inference.side_effect = _forward_capture
+
+    score_completion_with_context_docs(
+        model, [AUX_TOKS], CTX_TOKS, COMP_TOKS, detector, device="cpu"
+    )
+    assert "link_to_target" in captured_kwargs
+    ltt = captured_kwargs["link_to_target"]
+    assert link_pos in ltt
+    # Aux doc_id 0 should be in the grant list.
+    assert 0 in ltt[link_pos]
+
+
+def test_cdoc_aux_spans_precede_primary():
+    model    = _make_cross_doc_model()
+    link_pos = len(AUX_TOKS) + 1
+    detector = _make_detector([link_pos])
+
+    captured_spans = {}
+
+    def _forward_capture(tokens, doc_spans, **kwargs):
+        captured_spans["spans"] = doc_spans
+        return torch.zeros(1, tokens.shape[1], VOCAB_SIZE)
+
+    model.forward_inference.side_effect = _forward_capture
+
+    score_completion_with_context_docs(
+        model, [AUX_TOKS], CTX_TOKS, COMP_TOKS, detector, device="cpu"
+    )
+    spans = captured_spans["spans"]
+    primary = spans[-1]
+    for aux_span in spans[:-1]:
+        assert aux_span.end <= primary.start, (
+            f"Aux span end={aux_span.end} must be <= primary start={primary.start}"
+        )
+
+
+def test_cdoc_uses_cross_doc_link_mask():
+    model    = _make_cross_doc_model()
+    link_pos = len(AUX_TOKS) + 1
+    detector = _make_detector([link_pos])
+
+    captured_kwargs = {}
+
+    def _forward_capture(tokens, doc_spans, **kwargs):
+        captured_kwargs.update(kwargs)
+        return torch.zeros(1, tokens.shape[1], VOCAB_SIZE)
+
+    model.forward_inference.side_effect = _forward_capture
+
+    score_completion_with_context_docs(
+        model, [AUX_TOKS], CTX_TOKS, COMP_TOKS, detector, device="cpu"
+    )
+    assert captured_kwargs.get("mask_type") == "cross_doc_link"
+
+
+def test_cdoc_uses_last_link_position_when_multiple():
+    """With multiple import links, the grant should use the LAST link_end_pos."""
+    model    = _make_cross_doc_model()
+    primary_start = len(AUX_TOKS)
+    link_pos_early = primary_start + 1
+    link_pos_late  = primary_start + 2
+
+    detector = MagicMock()
+    detector.detect_links.return_value = [
+        LinkInfo(link_end_pos=link_pos_early, target_str="a"),
+        LinkInfo(link_end_pos=link_pos_late,  target_str="b"),
+    ]
+
+    captured_kwargs = {}
+
+    def _forward_capture(tokens, doc_spans, **kwargs):
+        captured_kwargs.update(kwargs)
+        return torch.zeros(1, tokens.shape[1], VOCAB_SIZE)
+
+    model.forward_inference.side_effect = _forward_capture
+
+    score_completion_with_context_docs(
+        model, [AUX_TOKS], CTX_TOKS, COMP_TOKS, detector, device="cpu"
+    )
+    ltt = captured_kwargs["link_to_target"]
+    # Only the last position should be the key.
+    assert link_pos_late in ltt
+    assert link_pos_early not in ltt

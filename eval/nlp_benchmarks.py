@@ -23,6 +23,7 @@ Entry points (code):
   run_codexglue_line_completion(model, max_examples, cache_dir, device) -> Dict[str, Any]
   run_codexglue_code_to_text(model, max_examples, cache_dir, device)    -> Dict[str, Any]
   run_repobench(model, split, max_examples, cache_dir, device)          -> Dict[str, Any]
+  run_repobench_cross_doc(model, max_examples, cache_dir, device)       -> Dict[str, Any]
   run_humaneval_buggy(model, language, max_examples, cache_dir, device) -> Dict[str, Any]
 
 All adapters share the same design:
@@ -43,10 +44,10 @@ Fill-in-the-blank benchmarks (lambada, codexglue_*, repobench, math):
   - Returns: {"perplexity": float, "average_nll": float, "total_examples": int, ...}
   - exact_match_accuracy is always ~0.0 and should be ignored.
 
-Tunalab-backed benchmarks (hellaswag … codexglue_line_completion) use the
-tunalab NLP catalog. The newer HF-direct benchmarks (mmlu, mathqa, math,
-codexglue_code_to_text, repobench, humaneval_buggy) load via the `datasets`
-library directly and do not require tunalab adapters.
+Benchmarks backed by tunalab catalog adapters (hellaswag … codexglue_line_completion)
+and benchmarks that load directly via the `datasets` library (mmlu, mathqa, math,
+codexglue_code_to_text, repobench, repobench_cross_doc, humaneval_buggy) are all
+imported from tunalab at module load time.
 """
 
 from typing import Any, Dict, List, Literal, Optional
@@ -105,7 +106,7 @@ except ImportError as _e:
         "(catalogs/nlp, editable install)."
     ) from _e
 
-from eval.scoring import score_completions_batched, score_completion
+from eval.scoring import score_completions_batched, score_completion, score_completion_with_context_docs
 
 
 def _require_tokenizer(model, benchmark: str) -> None:
@@ -848,11 +849,11 @@ def run_repobench(
     cache_dir: Optional[str] = None,
     device: str = "cuda",
 ) -> Dict[str, Any]:
-    """Evaluate on RepoBench-C Python cross-file next-line completion.
+    """Evaluate on RepoBench-C Python cross-file next-line completion (flat baseline).
 
-    The ``cross_file_first`` split is the most scientifically interesting for
-    cross_doc_link vs doc_causal comparison: cross-file context is directly
-    analogous to auxiliary documents in cross_doc_link attention.
+    All cross-file snippets are text-concatenated before the primary file prefix
+    under doc_causal masking. For the cross_doc_link-aware variant that packs
+    snippets as proper aux DocSpans, use run_repobench_cross_doc instead.
 
     Args:
         model: TS2TSModel in eval mode. Must have model.tokenizer set.
@@ -884,6 +885,155 @@ def run_repobench(
         limit=max_examples,
     )
     return FillInTheBlankEvaluation(_Adapter()).run(dataset, batch_size=1, limit=max_examples)
+
+
+# ─── RepoBench-C cross-doc-link variant ──────────────────────────────────────
+
+def run_repobench_cross_doc(
+    model,
+    max_examples: Optional[int] = None,
+    cache_dir: Optional[str] = None,
+    device: str = "cuda",
+) -> Dict[str, Any]:
+    """RepoBench-C cross_file_first scored with cross-doc-link attention.
+
+    Packs each example's cross-file snippets as aux DocSpans preceding the
+    primary file context. Uses PythonImportDetector to match each import
+    statement in the primary doc to its specific snippet via the snippet's
+    file path (precise matching — each import grants attention only to the
+    snippet it actually imports). Requires a cross_doc_link model with a
+    link_detector set.
+
+    Reports two perplexity figures for transparency:
+      - ``cross_doc_only``: only examples where an import link was detected
+        (true cross-doc evaluation).
+      - ``with_fallback``: all examples; those without a detected import fall
+        back to flat doc_causal scoring (same as run_repobench).
+
+    Args:
+        model: TS2TSModel in eval mode. Must have mask_type='cross_doc_link'
+            and link_detector set. Must have model.tokenizer set.
+        max_examples: Limit number of examples (None = full split).
+        cache_dir: HuggingFace cache directory.
+        device: Device for token tensors.
+
+    Returns:
+        {
+            "perplexity_cross_doc_only":  float,
+            "average_nll_cross_doc_only": float,
+            "n_cross_doc":                int,
+            "perplexity_with_fallback":   float,
+            "average_nll_with_fallback":  float,
+            "total_examples":             int,
+            "n_link_found":               int,
+            "n_link_not_found":           int,
+        }
+    """
+    _require_tokenizer(model, "RepoBench/cross_file_first (cross-doc)")
+    if not hasattr(model, "mask_type") or model.mask_type != "cross_doc_link":
+        raise ValueError(
+            "run_repobench_cross_doc requires a cross_doc_link model. "
+            f"Got mask_type={getattr(model, 'mask_type', None)!r}."
+        )
+    if not hasattr(model, "link_detector") or model.link_detector is None:
+        raise ValueError(
+            "run_repobench_cross_doc requires model.link_detector to be set. "
+            "Use to_inference_model(link_detector=...) or TS2TSModel.__init__."
+        )
+    from model.graph_traversal.python_import_detector import PythonImportDetector
+    if not isinstance(model.link_detector, PythonImportDetector):
+        raise ValueError(
+            f"run_repobench_cross_doc requires a PythonImportDetector "
+            f"(got {type(model.link_detector).__name__!r}). "
+            "RepoBench is a Python dataset; other link detectors cannot match "
+            "Python import statements to cross-file snippets. When support for "
+            "additional programming languages is added, consider splitting this "
+            "benchmark by language and matching each to its <Language>ImportDetector."
+        )
+
+    from datasets import load_dataset as _load_dataset
+    raw = _load_dataset(
+        "tianyang/repobench_python_v1.1",
+        split="cross_file_first",
+        cache_dir=cache_dir or "data/.cache/repobench",
+    )
+
+    enc = model.tokenizer.encode
+    link_detector = model.link_detector
+    repo_name = None  # populated per-example below
+
+    cross_doc_nlls: List[float] = []
+    all_nlls: List[float] = []
+    n_link_found = 0
+    n_link_not_found = 0
+
+    limit = max_examples if max_examples is not None else len(raw)
+    for ex in raw.select(range(min(limit, len(raw)))):
+        next_line = ex.get("next_line", "")
+        if not next_line.strip():
+            continue
+
+        # context is list of {'identifier', 'path', 'snippet'} dicts.
+        context_items = ex.get("context", [])
+        repo = ex.get("repo_name", "repo")
+
+        # raw_identifier "repo:path/to/file.py" — PythonImportDetector.index_doc_span
+        # strips the repo prefix, so candidate paths produced by the import detector
+        # (e.g. "pkg/module.py") match the path component of the identifier.
+        aux_token_lists: List[List[int]] = []
+        aux_raw_identifiers: List[str] = []
+        for item in context_items:
+            snippet = item.get("snippet", "")
+            path    = item.get("path", "")
+            if not snippet.strip():
+                continue
+            aux_token_lists.append(enc(snippet))
+            aux_raw_identifiers.append(f"{repo}:{path}")
+
+        # import_statement contains the imports that reference the cross-file snippets;
+        # cropped_code is the file body starting after those imports. Concatenate so
+        # PythonImportDetector can detect the relevant import positions in the sequence.
+        import_stmt    = ex.get("import_statement", "")
+        context_tokens = enc(import_stmt + "\n" + ex.get("cropped_code", ""))
+        completion_tokens = enc("\n" + next_line)
+
+        nll = score_completion_with_context_docs(
+            model,
+            aux_token_lists=aux_token_lists,
+            context_tokens=context_tokens,
+            completion_tokens=completion_tokens,
+            link_detector=link_detector,
+            aux_raw_identifiers=aux_raw_identifiers,
+            source_file_path=ex.get("file_path", ""),
+            device=device,
+        )
+
+        if nll is not None:
+            cross_doc_nlls.append(nll)
+            all_nlls.append(nll)
+            n_link_found += 1
+        else:
+            flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
+            all_nlls.append(flat_nll)
+            n_link_not_found += 1
+
+    def _ppl(nlls: List[float]) -> float:
+        import math as _math
+        return _math.exp(sum(nlls) / len(nlls)) if nlls else float("nan")
+
+    def _mean(nlls: List[float]) -> float:
+        return sum(nlls) / len(nlls) if nlls else float("nan")
+
+    return {
+        "perplexity_cross_doc_only":  _ppl(cross_doc_nlls),
+        "average_nll_cross_doc_only": _mean(cross_doc_nlls),
+        "n_cross_doc":                len(cross_doc_nlls),
+        "perplexity_with_fallback":   _ppl(all_nlls),
+        "average_nll_with_fallback":  _mean(all_nlls),
+        "total_examples":             len(all_nlls),
+        "n_link_found":               n_link_found,
+        "n_link_not_found":           n_link_not_found,
+    }
 
 
 # ─── HumanEvalPack canonical-vs-buggy (2-way MC, no execution) ────────────────

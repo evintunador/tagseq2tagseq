@@ -342,3 +342,45 @@ def test_string_shorthand_uses_experimental_condition():
         results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
     mock_fn.assert_called_once()
     assert "piqa/experimental" in results
+
+
+# ─── repobench_cross_doc registry + dispatch ─────────────────────────────────
+
+def test_repobench_cross_doc_in_known_benchmarks():
+    assert "repobench_cross_doc" in _KNOWN_BENCHMARKS
+
+
+def test_repobench_cross_doc_not_in_single_doc_benchmarks():
+    assert "repobench_cross_doc" not in _SINGLE_DOC_BENCHMARKS
+
+
+def test_repobench_cross_doc_dispatch_calls_correct_function():
+    model = _make_model(mask_type="cross_doc_link")
+    ret = {
+        "perplexity_cross_doc_only": 10.0, "average_nll_cross_doc_only": 2.3,
+        "n_cross_doc": 5, "perplexity_with_fallback": 11.0,
+        "average_nll_with_fallback": 2.4, "total_examples": 8,
+        "n_link_found": 5, "n_link_not_found": 3,
+    }
+    cfg = {
+        "benchmarks": [{"name": "repobench_cross_doc", "conditions": ["experimental"]}],
+        "max_docs": 10,
+    }
+    with patch.object(ec, "run_repobench_cross_doc", return_value=ret) as mock_fn, \
+         patch.object(ec, "_resolve_layout_policy", return_value=MagicMock()):
+        results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
+    mock_fn.assert_called_once()
+    assert "repobench_cross_doc/experimental" in results
+
+
+def test_repobench_cross_doc_skipped_for_doc_causal_model():
+    model = _make_model(mask_type="doc_causal")
+    cfg = {
+        "benchmarks": [{"name": "repobench_cross_doc", "conditions": ["experimental"]}],
+        "max_docs": 10,
+    }
+    with patch.object(ec, "run_repobench_cross_doc") as mock_fn, \
+         patch.object(ec, "_resolve_layout_policy", return_value=MagicMock()):
+        results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
+    mock_fn.assert_not_called()
+    assert "repobench_cross_doc/experimental" not in results
