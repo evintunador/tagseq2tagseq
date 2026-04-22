@@ -64,6 +64,7 @@ from eval.nlp_benchmarks import (
     run_mmlu, run_mathqa, run_math,
     run_codexglue_code_to_text, run_repobench, run_repobench_cross_doc,
     run_humaneval_buggy,
+    MMLU_STEM_SUBJECTS, MATH_SUBJECTS,
 )
 
 logger = logging.getLogger(__name__)
@@ -415,12 +416,22 @@ def run_benchmarks_on_model(
                     )
 
                 elif bname == "mmlu":
-                    results[key] = run_mmlu(
-                        model=model,
-                        subject=spec.get("subject", "college_mathematics"),
-                        max_examples=max_docs,
-                        device=device,
-                    )
+                    for subject in MMLU_STEM_SUBJECTS:
+                        subj_key = f"mmlu/{subject}/{cname}"
+                        try:
+                            results[subj_key] = run_mmlu(
+                                model=model,
+                                subject=subject,
+                                max_examples=max_docs,
+                                device=device,
+                            )
+                        except Exception as _exc:
+                            logger.error(
+                                "Benchmark mmlu/%s (condition=%s) failed: %s: %s",
+                                subject, cname, type(_exc).__name__, _exc,
+                            )
+                            results[subj_key] = {"error": str(_exc)}
+                    continue  # skip the generic results[key] assignment below
 
                 elif bname == "mathqa":
                     results[key] = run_mathqa(
@@ -428,12 +439,22 @@ def run_benchmarks_on_model(
                     )
 
                 elif bname == "math":
-                    results[key] = run_math(
-                        model=model,
-                        subject=spec.get("subject", "algebra"),
-                        max_examples=max_docs,
-                        device=device,
-                    )
+                    for subject in MATH_SUBJECTS:
+                        subj_key = f"math/{subject}/{cname}"
+                        try:
+                            results[subj_key] = run_math(
+                                model=model,
+                                subject=subject,
+                                max_examples=max_docs,
+                                device=device,
+                            )
+                        except Exception as _exc:
+                            logger.error(
+                                "Benchmark math/%s (condition=%s) failed: %s: %s",
+                                subject, cname, type(_exc).__name__, _exc,
+                            )
+                            results[subj_key] = {"error": str(_exc)}
+                    continue  # skip the generic results[key] assignment below
 
                 elif bname == "codexglue_code_to_text":
                     results[key] = run_codexglue_code_to_text(
@@ -759,23 +780,12 @@ def main() -> None:
             "NLP commonsense: hellaswag, winogrande, piqa, boolq, commonsense_qa, copa. "
             "NLP science: arc_easy, arc_challenge, openbookqa, sciq. "
             "NLP language: wiki_qa, lambada. "
-            "STEM/math: mmlu (see --mmlu-subject), mathqa, math (see --math-subject). "
+            "STEM/math: mmlu (all %d STEM subjects run automatically), mathqa, "
+            "math (all %d subjects run automatically). "
             "Code: codexglue_line_completion, codexglue_code_to_text, "
             "repobench (see --repobench-split), humaneval_buggy (see --humaneval-language). "
-            "Graph: pack_contrastive_perplexity."
+            "Graph: pack_contrastive_perplexity." % (len(MMLU_STEM_SUBJECTS), len(MATH_SUBJECTS))
         ),
-    )
-    parser.add_argument(
-        "--mmlu-subject", default="college_mathematics",
-        help="MMLU subject to evaluate (used when 'mmlu' is in --benchmarks). "
-             "Examples: college_mathematics, high_school_physics, machine_learning, "
-             "college_computer_science. See eval.nlp_benchmarks.MMLU_STEM_SUBJECTS.",
-    )
-    parser.add_argument(
-        "--math-subject", default="algebra",
-        help="MATH dataset subject (used when 'math' is in --benchmarks). "
-             "One of: algebra, counting_and_probability, geometry, "
-             "intermediate_algebra, number_theory, prealgebra, precalculus.",
     )
     parser.add_argument(
         "--repobench-split", default="cross_file_first",
@@ -828,8 +838,6 @@ def main() -> None:
 
     # Per-benchmark extra params from CLI — folded into each spec dict.
     _bench_extras: Dict[str, Dict[str, Any]] = {
-        "mmlu":            {"subject": args.mmlu_subject},
-        "math":            {"subject": args.math_subject},
         "repobench":       {"split": args.repobench_split},
         "humaneval_buggy": {"language": args.humaneval_language},
     }

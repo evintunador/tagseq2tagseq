@@ -109,6 +109,15 @@ except ImportError as _e:
 from eval.scoring import score_completions_batched, score_completion, score_completion_with_context_docs
 
 
+def _make_encoder(tokenizer):
+    """Return an encode fn that treats special-token strings as literal text.
+
+    Code datasets (RepoBench, CodeXGLUE) frequently contain literal
+    '<|endoftext|>' in source snippets; tiktoken raises by default.
+    """
+    return lambda text: tokenizer.encode(text, disallowed_special=())
+
+
 def _require_tokenizer(model, benchmark: str) -> None:
     if not hasattr(model, "tokenizer") or model.tokenizer is None:
         raise ValueError(
@@ -138,7 +147,7 @@ def run_hellaswag(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "HellaSwag")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -182,7 +191,7 @@ def run_wiki_qa(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "WikiQA")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -226,7 +235,7 @@ def run_arc(
     if config not in ("easy", "challenge"):
         raise ValueError(f"config must be 'easy' or 'challenge', got {config!r}")
     _require_tokenizer(model, "ARC")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
     arc_config = ARCConfig.EASY if config == "easy" else ARCConfig.CHALLENGE
 
     class _Adapter:
@@ -271,7 +280,7 @@ def run_lambada(
          "exact_match_accuracy": float, "perplexity_ci": ..., ...}
     """
     _require_tokenizer(model, "LAMBADA")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("fill_in_the_blank")
@@ -310,7 +319,7 @@ def run_winogrande(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "WinoGrande")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -357,7 +366,7 @@ def run_piqa(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "PIQA")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -398,7 +407,7 @@ def run_boolq(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "BoolQ")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -437,7 +446,7 @@ def run_commonsense_qa(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "CommonsenseQA")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -480,7 +489,7 @@ def run_copa(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "COPA")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -519,7 +528,7 @@ def run_openbookqa(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "OpenBookQA")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -563,7 +572,7 @@ def run_sciq(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "SciQ")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -610,7 +619,7 @@ def run_codexglue_line_completion(
          "exact_match_accuracy": float, "perplexity_ci": ..., ...}
     """
     _require_tokenizer(model, "CodeXGLUE line completion")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("fill_in_the_blank")
@@ -674,7 +683,7 @@ def run_mmlu(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, f"MMLU/{subject}")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -722,7 +731,7 @@ def run_mathqa(
         {"accuracy": float, "accuracy_ci": (float, float), "total_examples": int}
     """
     _require_tokenizer(model, "MathQA")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")
@@ -771,7 +780,7 @@ def run_math(
         {"perplexity": float, "average_nll": float, "total_examples": int, ...}
     """
     _require_tokenizer(model, f"MATH/{subject}")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("fill_in_the_blank")
@@ -816,7 +825,7 @@ def run_codexglue_code_to_text(
         {"perplexity": float, "average_nll": float, "total_examples": int, ...}
     """
     _require_tokenizer(model, "CodeXGLUE code-to-text")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("fill_in_the_blank")
@@ -868,7 +877,7 @@ def run_repobench(
     if split not in REPOBENCH_SPLITS:
         raise ValueError(f"split must be one of {REPOBENCH_SPLITS}, got {split!r}")
     _require_tokenizer(model, f"RepoBench/{split}")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("fill_in_the_blank")
@@ -958,7 +967,7 @@ def run_repobench_cross_doc(
         cache_dir=cache_dir or "data/.cache/repobench",
     )
 
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
     link_detector = model.link_detector
     repo_name = None  # populated per-example below
 
@@ -1069,7 +1078,7 @@ def run_humaneval_buggy(
             f"language must be one of {HUMANEVAL_LANGUAGES}, got {language!r}"
         )
     _require_tokenizer(model, f"HumanEvalPack/{language}")
-    enc = model.tokenizer.encode
+    enc = _make_encoder(model.tokenizer)
 
     class _Adapter:
         @register_handler("multiple_choice")

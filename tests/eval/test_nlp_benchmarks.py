@@ -40,7 +40,7 @@ def _make_mock_model(tokenizer=True):
     model.backbone.parameters.return_value = iter([nn.Parameter(torch.zeros(1))])
     if tokenizer:
         model.tokenizer = MagicMock()
-        model.tokenizer.encode.side_effect = lambda s: [ord(c) % 256 for c in s]
+        model.tokenizer.encode.side_effect = lambda s, **kw: [ord(c) % 256 for c in s]
     else:
         model.tokenizer = None
     return model
@@ -247,7 +247,7 @@ def test_lambada_prepends_space_to_answer(monkeypatch):
     encoded_calls = []
     model = _make_mock_model()
     orig = model.tokenizer.encode.side_effect
-    model.tokenizer.encode.side_effect = lambda s: (encoded_calls.append(s), orig(s))[1]
+    model.tokenizer.encode.side_effect = lambda s, **kw: (encoded_calls.append(s), orig(s))[1]
     monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
     run_lambada(model=model, max_examples=1, device="cpu")
     assert any(c.startswith(" ") for c in encoded_calls)
@@ -453,7 +453,7 @@ def test_codexglue_prepends_newline_to_answer(monkeypatch):
     encoded_calls = []
     model = _make_mock_model()
     orig = model.tokenizer.encode.side_effect
-    model.tokenizer.encode.side_effect = lambda s: (encoded_calls.append(s), orig(s))[1]
+    model.tokenizer.encode.side_effect = lambda s, **kw: (encoded_calls.append(s), orig(s))[1]
     monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
     run_codexglue_line_completion(model=model, max_examples=1, device="cpu")
     assert any(c.startswith("\n") for c in encoded_calls)

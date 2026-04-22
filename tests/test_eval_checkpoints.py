@@ -25,6 +25,7 @@ from eval_checkpoints import (
     _BUILTIN_CONDITIONS,
     run_benchmarks_on_model,
 )
+from eval.nlp_benchmarks import MMLU_STEM_SUBJECTS, MATH_SUBJECTS
 
 
 # ─── Mock model helpers ───────────────────────────────────────────────────────
@@ -168,9 +169,7 @@ def test_doceval_uses_doc_causal_mask():
     ("openbookqa",             "run_openbookqa",             {}),
     ("sciq",                   "run_sciq",                   {}),
     ("codexglue_line_completion", "run_codexglue_line_completion", {}),
-    ("mmlu",                   "run_mmlu",                   {"subject": "high_school_physics"}),
     ("mathqa",                 "run_mathqa",                 {}),
-    ("math",                   "run_math",                   {"subject": "geometry"}),
     ("codexglue_code_to_text", "run_codexglue_code_to_text", {}),
     ("humaneval_buggy",        "run_humaneval_buggy",        {"language": "go"}),
 ])
@@ -208,27 +207,77 @@ def test_arc_challenge_passes_config_challenge():
     assert kwargs["config"] == "challenge"
 
 
-def test_mmlu_forwards_subject_from_spec():
-    model = _make_model(mask_type="doc_causal")
-    ret = {"accuracy": 0.3, "accuracy_ci": (0.1, 0.5), "total_examples": 5}
-    spec = {"name": "mmlu", "conditions": ["doceval"], "subject": "machine_learning"}
-    cfg = {"benchmarks": [spec], "max_docs": 5}
-    with patch.object(ec, "run_mmlu", return_value=ret) as mock_fn, \
-         patch.object(ec, "_resolve_layout_policy", return_value=MagicMock()):
-        run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
-    _, kwargs = mock_fn.call_args
-    assert kwargs["subject"] == "machine_learning"
-
-
-def test_mmlu_default_subject_is_college_mathematics():
+def test_mmlu_runs_all_stem_subjects():
     model = _make_model(mask_type="doc_causal")
     ret = {"accuracy": 0.3, "accuracy_ci": (0.1, 0.5), "total_examples": 5}
     cfg = {"benchmarks": [{"name": "mmlu", "conditions": ["doceval"]}], "max_docs": 5}
     with patch.object(ec, "run_mmlu", return_value=ret) as mock_fn, \
          patch.object(ec, "_resolve_layout_policy", return_value=MagicMock()):
-        run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
-    _, kwargs = mock_fn.call_args
-    assert kwargs["subject"] == "college_mathematics"
+        results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
+    assert mock_fn.call_count == len(MMLU_STEM_SUBJECTS)
+    called_subjects = {kw["subject"] for _, kw in mock_fn.call_args_list}
+    assert called_subjects == set(MMLU_STEM_SUBJECTS)
+    for subject in MMLU_STEM_SUBJECTS:
+        assert f"mmlu/{subject}/doceval" in results
+
+
+def test_mmlu_emits_per_subject_keys_not_flat_key():
+    model = _make_model(mask_type="doc_causal")
+    ret = {"accuracy": 0.3, "accuracy_ci": (0.1, 0.5), "total_examples": 5}
+    cfg = {"benchmarks": [{"name": "mmlu", "conditions": ["doceval"]}], "max_docs": 5}
+    with patch.object(ec, "run_mmlu", return_value=ret), \
+         patch.object(ec, "_resolve_layout_policy", return_value=MagicMock()):
+        results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
+    assert "mmlu/doceval" not in results
+
+
+def test_mmlu_subject_failure_isolated():
+    model = _make_model(mask_type="doc_causal")
+    good = {"accuracy": 0.5, "accuracy_ci": (0.3, 0.7), "total_examples": 5}
+    call_count = 0
+
+    def _side_effect(model, subject, max_examples, device):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("dataset unavailable")
+        return good
+
+    cfg = {"benchmarks": [{"name": "mmlu", "conditions": ["doceval"]}], "max_docs": 5}
+    with patch.object(ec, "run_mmlu", side_effect=_side_effect), \
+         patch.object(ec, "_resolve_layout_policy", return_value=MagicMock()):
+        results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
+    failed_key = f"mmlu/{MMLU_STEM_SUBJECTS[0]}/doceval"
+    assert "error" in results[failed_key]
+    assert results[f"mmlu/{MMLU_STEM_SUBJECTS[1]}/doceval"]["accuracy"] == pytest.approx(0.5)
+
+
+def test_math_runs_all_subjects():
+    model = _make_model(mask_type="doc_causal")
+    ret = {"perplexity": 10.0, "average_nll": 2.3, "total_examples": 5,
+           "exact_match_accuracy": 0.0, "perplexity_ci_low": 8.0, "perplexity_ci_high": 12.0,
+           "nll_ci_low": 2.0, "nll_ci_high": 2.6}
+    cfg = {"benchmarks": [{"name": "math", "conditions": ["doceval"]}], "max_docs": 5}
+    with patch.object(ec, "run_math", return_value=ret) as mock_fn, \
+         patch.object(ec, "_resolve_layout_policy", return_value=MagicMock()):
+        results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
+    assert mock_fn.call_count == len(MATH_SUBJECTS)
+    called_subjects = {kw["subject"] for _, kw in mock_fn.call_args_list}
+    assert called_subjects == set(MATH_SUBJECTS)
+    for subject in MATH_SUBJECTS:
+        assert f"math/{subject}/doceval" in results
+
+
+def test_math_emits_per_subject_keys_not_flat_key():
+    model = _make_model(mask_type="doc_causal")
+    ret = {"perplexity": 10.0, "average_nll": 2.3, "total_examples": 5,
+           "exact_match_accuracy": 0.0, "perplexity_ci_low": 8.0, "perplexity_ci_high": 12.0,
+           "nll_ci_low": 2.0, "nll_ci_high": 2.6}
+    cfg = {"benchmarks": [{"name": "math", "conditions": ["doceval"]}], "max_docs": 5}
+    with patch.object(ec, "run_math", return_value=ret), \
+         patch.object(ec, "_resolve_layout_policy", return_value=MagicMock()):
+        results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
+    assert "math/doceval" not in results
 
 
 def test_repobench_forwards_split_from_spec():
