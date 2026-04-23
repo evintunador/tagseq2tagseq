@@ -24,13 +24,44 @@ packed sequence so cross-doc grants can fire normally.
 `score_completions_batched` in `eval/scoring.py` packs K (context + choice) sequences
 as K DocSpans in one forward pass (~K× faster than K individual calls).
 
-### Split annotations
-The existing datasets have no `split` field in `tokenized_graph.jsonl`, so
-`split="all"` just random-samples from the whole corpus. For real held-out
-eval, the pretokenization scripts need to assign `"train"` / `"val_community"` /
-`"val_random"` labels at graph-construction time. Needs design: what fraction
-held out, community split vs random split semantics, whether existing checkpoints
-can be retroactively evaluated against a newly annotated graph.
+### Split annotations — DONE
+`data/split_graph.py` writes five self-contained dataset subdirs under
+`dataset_dir/splits/{train,val_community,val_random,test_community,test_random}/`.
+Each subdir is a complete `GraphIndex`-compatible directory (filtered
+`tokenized_graph.jsonl` + `metadata.json` with absolute shard paths). Cross-split
+edges are dropped so each split has no knowledge of the others.
+
+Split design: 2.5% each for val/test community + random (~90% train).
+- `val_community` / `test_community` — BFS-identified subgraphs; internal link
+  structure intact. Used for `community_pack_perplexity` and periodic val loss.
+- `val_random` / `test_random` — uniform random scattered nodes. Used for
+  `held_out_perplexity`. Neighbors remain in train, so this is softer held-out.
+
+All four production datasets have been split:
+- `simplewiki`: 246k train / 7.5k val_community / 6.9k val_random / …
+- `stack_10m`: 2.14M train / 59.5k val_community / 59.5k val_random / …
+- `stack_100m`: 3.2M train / 89k val_community / 89k val_random / …
+
+Training pipeline integration:
+- `main.py` reads `data.train_dir`, `data.val_dirs`, `data.test_dirs` from config
+  (explicit, no auto-detect). Falls back to full `dataset_dir` if unset.
+- `data.val_epoch_dirs` — optional precomputed val packs (same format as
+  `epoch_dirs`); key must match a corresponding `val_dirs` entry.
+- `multi_val.py` atomic feature: evaluates each named val loader independently
+  every `val_interval` steps, saves checkpoint on best mean val loss.
+- Post-training eval automatically runs `community_pack_perplexity` on all
+  `val_dirs`/`test_dirs` community entries and `held_out_perplexity` on random
+  entries, under doceval (doc_causal) or baseline+experimental (cross_doc_link).
+
+Config matrix (all fully self-contained with split dirs):
+- `configs/simplewiki_doc_causal.yaml`
+- `configs/simplewiki_cross_doc.yaml`
+- `configs/stack_100m_doc_causal.yaml`
+- `configs/stack_100m_cross_doc.yaml`
+
+Caveat for existing checkpoints (20260308_*): trained before splits existed, so
+all val/test nodes were in training data. Numbers are diagnostic baselines only.
+Future checkpoints using the new configs will have genuine held-out eval.
 
 ### NL benchmarks — DONE
 All NLP benchmarks active in `eval/nlp_benchmarks.py`:
@@ -59,6 +90,17 @@ Added to `eval/nlp_benchmarks.py` (HF-direct):
 
 All wired into `eval_checkpoints.py` dispatcher and CLI with flags:
   --mmlu-subject, --math-subject, --repobench-split, --humaneval-language
+
+### Wikipedia cross-doc benchmark — TODO
+Wikipedia-trained models have no equivalent of `repobench_cross_doc`. Candidates:
+- HotpotQA / 2WikiMultihopQA: multi-hop QA where the answer requires two linked
+  Wikipedia articles. Pack both supporting docs as aux DocSpans (analogous to
+  repobench_cross_doc), score the answer under cross_doc_link vs doc_causal mask.
+  This would be the clearest "smoking gun" for Wikipedia cross-doc attention.
+- Strategy: implement `run_hotpotqa_cross_doc` in `eval/nlp_benchmarks.py` on
+  the same pattern as `run_repobench_cross_doc` — fetch both gold supporting
+  passages from the corpus by their Wikipedia page name, pack as aux DocSpans,
+  score answer NLL under both conditions.
 
 ### RepoBench cross-doc-link mode — DONE
 `run_repobench_cross_doc` in `eval/nlp_benchmarks.py` packs each example's cross-file
@@ -89,7 +131,7 @@ ARE built with relative imports resolved by `data/github_graph_extractor/extract
 so training may already handle this correctly. Needs verification before any changes to
 `PythonImportDetector.detect_links` or the training collation path.
 
-### Link injection eval for other external benchmarks
+### Link injection eval for other external benchmarks — TODO
 For all external benchmarks OTHER than RepoBench, the path to cross-doc-link
 evaluation is via prompt preprocessing (link injection), not direct structural
 reformatting. This requires `eval/link_annotator.py`:
@@ -100,13 +142,11 @@ reformatting. This requires `eval/link_annotator.py`:
   - Insert link + generate target + fetch/generate aux doc
   - Return augmented prompt tokens
 Then the eval comparison: score benchmark items with bare prompt vs
-link-annotated prompt, report delta. Interesting science but needs a model
-smart enough for meaningful link placement — probably defer until larger scale.
+link-annotated prompt, report delta.
 
-### Parallelized eval in main.py
+### Parallelized eval in main.py — TODO
 Currently the post-training eval runs serially. If multiple benchmarks are
 configured, they could run in parallel threads/processes after training.
-Low priority but worth doing before the pipeline gets heavy.
 
 ---
 
@@ -159,8 +199,8 @@ external benchmarks vs. fixed eos layout?
   (both fully implemented; no stubs remain)
 - `link_retrieval_mode` in `GenerationConfig` — **DONE**
   (`corpus_only`, `generate_only`, `corpus_then_generate`, `link_but_skip`, `full_skip`)
-- `process_prompt_links` (scan completed prompt for links before generation) — still deferred
-- `GenerationTrace` completion — still deferred
+- `process_prompt_links` (scan completed prompt for links before generation) — TODO
+- `GenerationTrace` completion — TODO
 
 ---
 
@@ -185,7 +225,7 @@ for doc_causal models. Conditions configurable via `eval.conditions` in YAML.
 not `__class__` reassignment. Flex path calls `flex_attention` directly, not via
 tunalab's FlexSelfAttention.forward.
 
-### `smart_train` compiled loop for checkpoint saving
+### `smart_train` compiled loop for checkpoint saving — DONE
 `tunalab/smart_train.py` now validates `__atomic_features__` on cache load and
 recompiles if there's a mismatch. The stale `device-grad_accum-logging-multi_epoch-tqdm`
 file has been deleted; the correct loop (with `checkpoint_best_model`) will be

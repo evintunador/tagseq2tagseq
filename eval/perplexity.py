@@ -21,6 +21,16 @@ Provides two entry points:
       and reports the mean NLL delta per traversal strategy. epoch_dirs is
       a list of pre-computed epoch directories (one per strategy); the
       strategy name is read from each directory's metadata.json.
+
+  run_community_pack_perplexity(model, dataset_dir, layout_policy,
+                                 split, max_packs, device)
+      -> Dict[str, float]
+
+      Like run_pack_contrastive_perplexity but builds packs live from a
+      held-out community split rather than pre-computed epoch directories.
+      Uses PackBatchSampler(allowed_ids=community_ids) with BFS so the
+      packs respect the community's internal link structure.
+      Only meaningful for cross_doc_link models — caller should guard.
 """
 
 import itertools
@@ -39,6 +49,9 @@ from tunalab.stats_funcs import calculate_bootstrap_ci
 from data.bucketed_pack_dataset import BucketedPackDataset
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.layout import DocLayoutPolicy
+from data.pack_sampler import PackBatchSampler
+from data.packed_dataset import PackedSequenceDataset
+from data.traversal import BFSStrategy
 from eval.scoring import score_doc, score_doc_with_context
 
 logger = logging.getLogger(__name__)
@@ -351,3 +364,151 @@ def _empty_contrastive_result(strategy: str) -> Dict[str, Any]:
         "baseline_ci_low": nan,
         "baseline_ci_high": nan,
     }
+
+
+def run_community_pack_perplexity(
+    model,
+    dataset_dir: Union[str, Path],
+    layout_policy: Optional[DocLayoutPolicy] = None,
+    split: str = "val_community",
+    max_packs: int = 500,
+    device: str = "cuda",
+) -> Dict[str, Any]:
+    """Score cross-doc attention on live-packed held-out community nodes.
+
+    Builds packs on-the-fly from the community split using BFS with
+    ``PackBatchSampler(allowed_ids=community_ids)``, then scores each pack
+    under cross_doc_link and doc_causal masks — identical reporting to
+    ``run_pack_contrastive_perplexity`` but without pre-computed epoch dirs.
+
+    Only meaningful for cross_doc_link models. The caller (eval_checkpoints)
+    is responsible for skipping this benchmark on doc_causal models.
+
+    Args:
+        model: TS2TSModel in eval mode (must be cross_doc_link).
+        dataset_dir: Path to pretokenized dataset directory.
+        layout_policy: Layout policy for prefix/suffix decoration.
+        split: Split name to use. Should be ``"val_community"`` or
+            ``"test_community"`` — the point is that it's a BFS-identified
+            subgraph whose internal link structure is intact.
+        max_packs: Maximum number of packs to score.
+        device: Device for token tensors.
+
+    Returns:
+        Dict with the same keys as ``run_pack_contrastive_perplexity``:
+        strategy, n_packs, mean_nll_cross_doc, mean_nll_baseline,
+        mean_delta, delta_ci_low, delta_ci_high, cross_doc_ci_low,
+        cross_doc_ci_high, baseline_ci_low, baseline_ci_high.
+        Also includes ``split`` key.
+    """
+    dataset_dir = Path(dataset_dir)
+    split_dir = dataset_dir / "splits" / split
+
+    if not split_dir.is_dir():
+        logger.warning(
+            "Split directory not found: %s — run data/split_graph.py first. "
+            "Returning empty result.",
+            split_dir,
+        )
+        result = _empty_contrastive_result(split)
+        result["split"] = split
+        return result
+
+    with _open_dataset(split_dir) as (graph, backend):
+        if layout_policy is None:
+            layout_policy = model.active_layout_policy
+
+        if len(graph) == 0:
+            logger.warning("Split %r is empty; returning empty result.", split)
+            result = _empty_contrastive_result(split)
+            result["split"] = split
+            return result
+
+        logger.info(
+            "Building community packs: split=%r, n_nodes=%d, max_packs=%d",
+            split, len(graph), max_packs,
+        )
+
+        token_budget = getattr(model, "max_seq_len", None)
+        if token_budget is None:
+            try:
+                token_budget = model.backbone.config.max_position_embeddings
+            except AttributeError:
+                token_budget = 2048
+
+        sampler = PackBatchSampler(
+            graph=graph,
+            strategy_factory=lambda: BFSStrategy(edge_mode="outgoing"),
+            token_budget=token_budget,
+            overflow_policy="truncate",
+            doc_level_trim_side="tail",
+            pack_level_trim_side="head",
+            max_candidates_per_component=1000,
+            seed=42,
+            order_mode="prefer_targets_first",
+            layout_policy=layout_policy,
+        )
+        dataset = PackedSequenceDataset(
+            graph=graph,
+            backend=backend,
+            pack_sampler=sampler,
+            layout_policy=layout_policy,
+            as_2d=True,
+        )
+
+        cross_nlls: List[float] = []
+        base_nlls: List[float] = []
+        skipped = 0
+
+        for batch in itertools.islice(dataset, max_packs):
+            result_cross = score_doc_with_context(
+                model, batch, layout_policy, device, mask_type=None,
+            )
+            result_base = score_doc_with_context(
+                model, batch, layout_policy, device, mask_type="doc_causal",
+            )
+
+            if result_cross["num_tokens"] == 0 or result_base["num_tokens"] == 0:
+                skipped += 1
+                continue
+
+            cross_nlls.append(result_cross["mean_nll"])
+            base_nlls.append(result_base["mean_nll"])
+
+        if skipped:
+            logger.info("  Skipped %d packs with no scoreable tokens.", skipped)
+
+        n = len(cross_nlls)
+        if n == 0:
+            logger.warning("No packs could be scored for split=%r.", split)
+            result = _empty_contrastive_result(split)
+            result["split"] = split
+            return result
+
+        delta_list = [b - c for c, b in zip(cross_nlls, base_nlls)]
+        mean_cross = float(np.mean(cross_nlls))
+        mean_base  = float(np.mean(base_nlls))
+        mean_delta = float(np.mean(delta_list))
+
+        delta_ci = calculate_bootstrap_ci(delta_list)
+        cross_ci = calculate_bootstrap_ci(cross_nlls)
+        base_ci  = calculate_bootstrap_ci(base_nlls)
+
+        logger.info(
+            "split=%r  n=%d  delta=%.4f [%.4f, %.4f]  cross=%.4f  base=%.4f",
+            split, n, mean_delta, delta_ci[0], delta_ci[1], mean_cross, mean_base,
+        )
+
+        return {
+            "split":               split,
+            "n_packs":             n,
+            "mean_nll_cross_doc":  mean_cross,
+            "mean_nll_baseline":   mean_base,
+            "mean_delta":          mean_delta,
+            "delta_ci_low":        float(delta_ci[0]),
+            "delta_ci_high":       float(delta_ci[1]),
+            "cross_doc_ci_low":    float(cross_ci[0]),
+            "cross_doc_ci_high":   float(cross_ci[1]),
+            "baseline_ci_low":     float(base_ci[0]),
+            "baseline_ci_high":    float(base_ci[1]),
+        }

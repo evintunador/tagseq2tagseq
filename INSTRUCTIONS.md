@@ -34,6 +34,8 @@ Four pretokenized datasets are ready to use on `/fss`:
 
 SimpleWiki and EnWikiSource use `--model.link_detector markdown`; both Stack datasets use `--model.link_detector python`.
 
+All four datasets have been split into train/val/test subdirectories (see [Graph Splitting](#graph-splitting) below). Training automatically uses `splits/train/` and `splits/val_community/` when they exist.
+
 Raw dumps and JSONL source files:
 
 | Dataset | Raw source |
@@ -187,6 +189,110 @@ python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/st
 Available mask types: `doc_causal`, `causal`, `full`, `doc_bidirectional`, `cross_doc_link`.
 Available strategies: `dfs`, `bfs`, `random_walk`, `random`.
 `--link-detector` is only used with `cross_doc_link`: `markdown` for Wikipedia, `python` for TheStack.
+
+---
+
+---
+
+## Graph Splitting
+
+Before training, split each dataset into five disjoint subdirectories. Each subdir is a
+self-contained dataset (its own `tokenized_graph.jsonl` + `metadata.json` sharing the parent's
+binary shards by absolute path). Cross-split edges are dropped so each split has no knowledge
+of the others.
+
+| Split | Fraction | Purpose |
+|-------|----------|---------|
+| `train` | ~90% | Training data |
+| `val_community` | 2.5% | BFS-identified subgraphs; link structure intact. Periodic val loss during training; post-training `community_pack_perplexity`. |
+| `val_random` | 2.5% | Uniformly sampled isolated nodes. Post-training `held_out_perplexity`. |
+| `test_community` | 2.5% | Same structure as val_community; held back until paper submission. |
+| `test_random` | 2.5% | Same structure as val_random; held back until paper submission. |
+
+`val_community` is the periodic validation loss shown on the training loss curve.
+`val_random` provides a complementary perplexity measure on structurally isolated documents.
+
+```bash
+# Split simplewiki (275k nodes, ~3 s)
+python data/split_graph.py \
+    --dataset-dir data/pretokenized_datasets/simplewiki
+
+# Split stack_10m (2.38M nodes, ~40 s)
+python data/split_graph.py \
+    --dataset-dir data/pretokenized_datasets/stack_10m
+
+# Split stack_100m (3.56M nodes, ~60 s)
+python data/split_graph.py \
+    --dataset-dir data/pretokenized_datasets/stack_100m
+
+# Dry-run to preview split counts without writing
+python data/split_graph.py \
+    --dataset-dir data/pretokenized_datasets/simplewiki \
+    --dry-run
+```
+
+Output is written to `dataset_dir/splits/{train,val_community,val_random,test_community,test_random}/`.
+Re-running is safe — it overwrites in place.
+
+**Key flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--val-frac` | 0.025 | Fraction of nodes for each val split (community + random each). |
+| `--test-frac` | 0.025 | Fraction of nodes for each test split (community + random each). |
+| `--community-size-min` | 50 | Discard BFS communities smaller than this (isolates go to train). |
+| `--community-size-max` | 5000 | Cap BFS expansion per community at this many nodes. |
+| `--seed` | 42 | RNG seed for reproducibility. |
+
+Once splits exist, point the training config at them explicitly. The split key names must
+match the filesystem directory names (they're used as subdirectory names by
+`community_pack_perplexity` and as loader labels in the training loss log):
+
+```yaml
+# In your training config (e.g. configs/large_32k.yaml):
+data:
+  dataset_dir: data/pretokenized_datasets/stack_10m   # full graph for generation/eval
+  train_dir:   data/pretokenized_datasets/stack_10m/splits/train
+  val_dirs:
+    val_community: data/pretokenized_datasets/stack_10m/splits/val_community
+    val_random:    data/pretokenized_datasets/stack_10m/splits/val_random
+  test_dirs:
+    test_community: data/pretokenized_datasets/stack_10m/splits/test_community
+    test_random:    data/pretokenized_datasets/stack_10m/splits/test_random
+```
+
+`train_dir` drives the training `GraphIndex`. If absent, falls back to `dataset_dir` (full
+graph — no split exclusion). `val_dirs` builds one live `PackedSequenceDataset` loader per
+entry, evaluated every `val_interval` steps. `test_dirs` are evaluated only at the end of
+training. `val_dirs` and `test_dirs` absent → val uses train graph with offset seed (old
+behaviour, fine for quick experiments).
+
+### Precomputed val packs (optional)
+
+For large datasets you can pre-compute val packs just like train packs, getting a deterministic,
+reproducible pack sequence for fair cross-checkpoint comparison:
+
+```bash
+# Pre-compute val_community packs (--n-buckets 1: no density sorting needed for eval)
+CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
+    --dataset-dir data/pretokenized_datasets/stack_10m/splits/val_community \
+    --output-dir  schedules/stack10m_val_community \
+    --n-epochs 1 --strategy bfs --local-seq-len 32768 \
+    --n-buckets 1 --n-workers 4 --seed 42 \
+    --link-detector python --layout-policy stochastic_identifier_prefix
+```
+
+Then in the config:
+```yaml
+data:
+  val_dirs:
+    val_community: data/pretokenized_datasets/stack_10m/splits/val_community
+  val_epoch_dirs:
+    val_community: [schedules/stack10m_val_community/epoch_0]
+```
+
+When `val_epoch_dirs[name]` is set it takes precedence over `val_dirs[name]` for the loader,
+but `val_dirs[name]` is still used as the `GraphIndex` source for the precomputed dataset.
 
 ---
 

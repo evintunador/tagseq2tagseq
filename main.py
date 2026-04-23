@@ -282,8 +282,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         logger.error("Dataset directory not found: %s", dataset_dir)
         return
 
-    logger.info("Initializing GraphIndex from %s", dataset_dir)
-    graph_index = GraphIndex(dataset_dir)
+    # data.train_dir — explicit path to the training graph (typically splits/train/).
+    # If absent, falls back to dataset_dir (full graph, no split exclusion).
+    train_dir_str = cfg.get('data', {}).get('train_dir')
+    train_graph_dir = Path(train_dir_str) if train_dir_str else dataset_dir
+    if not train_graph_dir.is_dir():
+        logger.error("train_dir not found: %s", train_graph_dir)
+        return
+    logger.info("Initializing GraphIndex from %s", train_graph_dir)
+    graph_index = GraphIndex(train_graph_dir)
 
     # The backend handles memory-mapping of token shards
     backend = PretokShardedBackend(graph_index)
@@ -410,46 +417,86 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         accum_steps = cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1)
         train_loader = LimitedDataLoader(train_loader, max_batches=max_optimizer_steps * accum_steps)
 
-    # Validation loader — same dataset/graph but with a different seed so the
-    # sampler draws different packs.  We cap it at val_steps batches per pass
-    # since PackedSequenceDataset is an infinite iterable.
-    #
-    # TODO(@jamesljr): Replace this stopgap with proper held-out validation splits per dataset.
-    # The right strategy differs by dataset type:
-    #   - Stack (code repos): hold out some % of repositories entirely — clean since
-    #     repos are largely self-contained subgraphs with minimal cross-repo links.
-    #   - Wikipedia/SimpleWiki: random article splits are problematic because the
-    #     hyperlink graph is dense and nearly every article links to something in
-    #     train. Need to identify a densely-connected sub-graph (e.g., a topical
-    #     cluster) to use as val, so val packs contain enough internal links to be
-    #     representative of the training distribution.
-    # Until then, val is drawn from the same graph with a different RNG seed, which
-    # leaks data but is fine for loss tracking during initial development.
-    val_pack_sampler = PackBatchSampler(
-        graph=graph_index,
-        strategy_factory=strategy_factory,
-        token_budget=cfg.get('model', {}).get('max_seq_len', 2048),
-        doc_budget=cfg.get('data', {}).get('doc_budget'),
-        overflow_policy="truncate",
-        doc_level_trim_side="tail",
-        pack_level_trim_side="head",
-        max_candidates_per_component=1000,
-        seed=rank_seed + 1,
-        order_mode=cfg.get('data', {}).get('order_mode', 'prefer_targets_first'),
-        layout_policy=layout_policy,
-    )
-    val_dataset = PackedSequenceDataset(
-        graph=graph_index,
-        backend=backend,
-        pack_sampler=val_pack_sampler,
-        layout_policy=layout_policy,
-        as_2d=True,
-    )
-    val_steps = cfg.get('train_loop', {}).get('val_steps', 10)
-    val_loader = LimitedDataLoader(
-        DataLoader(val_dataset, batch_size=None, num_workers=0),
-        max_batches=val_steps,
-    )
+    # ── Validation loaders ────────────────────────────────────────────────────
+    # data.val_dirs  — dict of {name: path} for live-packed val loaders.
+    # data.val_epoch_dirs — dict of {name: [epoch_dir, ...]} for precomputed val.
+    # If neither is set, falls back to a single live loader over the train graph
+    # with an offset seed (no split exclusion — for backward compat / pre-split use).
+    val_steps   = cfg.get('train_loop', {}).get('val_steps', 10)
+    _seq_len    = cfg.get('model', {}).get('max_seq_len', 2048)
+    _doc_budget = cfg.get('data', {}).get('doc_budget')
+    _order_mode = cfg.get('data', {}).get('order_mode', 'prefer_targets_first')
+
+    _extra_backends: list = []  # separately-opened backends; closed at cleanup
+
+    def _make_live_val_loader(graph_idx, bknd, seed_offset):
+        sampler = PackBatchSampler(
+            graph=graph_idx,
+            strategy_factory=strategy_factory,
+            token_budget=_seq_len,
+            doc_budget=_doc_budget,
+            overflow_policy="truncate",
+            doc_level_trim_side="tail",
+            pack_level_trim_side="head",
+            max_candidates_per_component=1000,
+            seed=rank_seed + seed_offset,
+            order_mode=_order_mode,
+            layout_policy=layout_policy,
+        )
+        ds = PackedSequenceDataset(
+            graph=graph_idx, backend=bknd,
+            pack_sampler=sampler, layout_policy=layout_policy, as_2d=True,
+        )
+        return LimitedDataLoader(DataLoader(ds, batch_size=None, num_workers=0),
+                                 max_batches=val_steps)
+
+    def _make_precomputed_val_loader(epoch_dirs_list, graph_dir: Path):
+        _dirs = epoch_dirs_list
+        if isinstance(_dirs, str):
+            _dirs = [p.strip() for p in _dirs.strip('[]').split(',') if p.strip()]
+        _g = GraphIndex(graph_dir)
+        _b = PretokShardedBackend(_g)
+        _extra_backends.append(_b)
+        _ds = BucketedPackDataset(
+            epoch_dirs=_dirs,
+            graph=_g,
+            backend=_b,
+            layout=layout_policy,
+            rank=0,
+            world_size=1,
+        )
+        return LimitedDataLoader(DataLoader(_ds, batch_size=None, num_workers=0),
+                                 max_batches=val_steps)
+
+    cfg_val_dirs       = cfg.get('data', {}).get('val_dirs', {})       # {name: path}
+    cfg_val_epoch_dirs = cfg.get('data', {}).get('val_epoch_dirs', {}) # {name: [dir,...]}
+
+    val_loaders: Dict[str, Any] = {}
+    seed_counter = 1
+
+    for name, path in cfg_val_dirs.items():
+        p = Path(path)
+        if not p.is_dir():
+            logger.warning("val_dirs[%r] not found: %s — skipping", name, p)
+            continue
+        _g = GraphIndex(p)
+        _b = PretokShardedBackend(_g)
+        _extra_backends.extend([_b])
+        val_loaders[name] = _make_live_val_loader(_g, _b, seed_offset=seed_counter)
+        seed_counter += 1
+
+    for name, epoch_dirs_list in cfg_val_epoch_dirs.items():
+        # Graph dir for precomputed val: must be in val_dirs[name] or fall back to train_graph_dir.
+        _graph_dir = Path(cfg_val_dirs[name]) if name in cfg_val_dirs else train_graph_dir
+        try:
+            val_loaders[name] = _make_precomputed_val_loader(epoch_dirs_list, _graph_dir)
+        except Exception as _exc:
+            logger.warning("val_epoch_dirs[%r] failed to load: %s — skipping", name, _exc)
+
+    if not val_loaders:
+        # No splits configured — fall back to live loader over train graph.
+        logger.info("No val_dirs/val_epoch_dirs configured — val uses train graph with offset seed")
+        val_loaders["train_dist"] = _make_live_val_loader(graph_index, backend, seed_offset=1)
 
     # -------------------------------------------------------------------------
     # 3. Model & Optimizer Setup
@@ -646,7 +693,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     atomic_feature_kwargs.update({
         'enable_logging': True,
         'save_best_model': True,
-        'val_loader': val_loader,
+        'val_loaders': val_loaders,
         'val_interval': cfg['train_loop'].get('val_interval', 50),
         'output_dir': rep.output_dir,
         'device': str(dist.device),
@@ -696,6 +743,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     # -------------------------------------------------------------------------
     # 6. Post-training benchmark evaluation (main process only)
+    #
+    # Runs community_pack_perplexity and held_out_perplexity on all four
+    # val/test splits when splits exist, plus any additional benchmarks
+    # configured under eval.benchmarks in the YAML.
     # -------------------------------------------------------------------------
     if dist.is_main_process:
         eval_cfg = cfg.get("eval", {})
@@ -705,12 +756,70 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 from eval_checkpoints import run_benchmarks_on_model
                 logger.info("Running post-training benchmark evaluation...")
                 _flex_inference_model.eval()
+
+                # data.val_dirs / data.test_dirs drive the post-training split evals.
+                # community dirs  → community_pack_perplexity
+                # random dirs     → held_out_perplexity (split="all" since dir is already filtered)
+                _conditions = ["doceval"]
+                if mask_type == "cross_doc_link":
+                    _conditions = ["baseline", "experimental"]
+
+                _split_results: Dict[str, Any] = {}
+
+                def _run_split_eval(split_name: str, split_path: str, bench: str) -> None:
+                    """Run one post-training benchmark on a split directory.
+
+                    community_pack_perplexity navigates dataset_dir/splits/{split}/
+                    internally, so it receives the parent dataset_dir.
+                    held_out_perplexity scores all docs in its dataset_dir directly,
+                    so it receives the split path and uses split='all'.
+                    """
+                    logger.info("Post-training eval: %s on %s", bench, split_name)
+                    try:
+                        if bench == "community_pack_perplexity":
+                            # Function appends splits/{split_name}/ itself.
+                            _ddir = dataset_dir_str
+                            _eval_split = split_name
+                        else:
+                            # held_out_perplexity: score all docs in the split dir.
+                            _ddir = split_path
+                            _eval_split = "all"
+                        _scfg = {
+                            "benchmarks": [{"name": bench, "conditions": _conditions,
+                                            "split": _eval_split}],
+                            "split": _eval_split,
+                            "max_docs": eval_cfg.get("max_docs", 500),
+                        }
+                        _r = run_benchmarks_on_model(
+                            model=_flex_inference_model,
+                            dataset_dir=_ddir,
+                            eval_cfg=_scfg,
+                            device=str(dist.device),
+                        )
+                        _split_results.update({f"{k}__{split_name}": v for k, v in _r.items()})
+                    except Exception as _exc:
+                        logger.error("Split eval %s/%s failed: %s", bench, split_name, _exc)
+                        _split_results[f"{bench}/{split_name}"] = {"error": str(_exc)}
+
+                # val splits
+                for _name, _path in cfg.get('data', {}).get('val_dirs', {}).items():
+                    _bench = "community_pack_perplexity" if "community" in _name else "held_out_perplexity"
+                    _run_split_eval(_name, _path, _bench)
+
+                # test splits
+                for _name, _path in cfg.get('data', {}).get('test_dirs', {}).items():
+                    _bench = "community_pack_perplexity" if "community" in _name else "held_out_perplexity"
+                    _run_split_eval(_name, _path, _bench)
+
+                # Additional benchmarks from eval.benchmarks in YAML.
                 eval_results = run_benchmarks_on_model(
                     model=_flex_inference_model,
                     dataset_dir=dataset_dir_str,
                     eval_cfg=eval_cfg,
                     device=str(dist.device),
                 )
+                eval_results.update(_split_results)
+
                 eval_path = os.path.join(rep.output_dir, "eval_results.json")
                 with open(eval_path, "w", encoding="utf-8") as f:
                     json.dump(eval_results, f, ensure_ascii=False, indent=2)
@@ -723,6 +832,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
 
     # Cleanup
     backend.close()
+    for _b in _extra_backends:
+        _b.close()
 
 
 if __name__ == "__main__":

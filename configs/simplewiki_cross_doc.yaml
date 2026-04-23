@@ -1,0 +1,60 @@
+data:
+  dataset_dir: data/pretokenized_datasets/simplewiki
+  strategy: 'bfs'
+  layout_policy: 'stochastic_identifier_prefix'
+  inference_layout_policy: 'identifier_prefix_eos'
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+  train_dir:   data/pretokenized_datasets/simplewiki/splits/train
+  val_dirs:
+    val_community: data/pretokenized_datasets/simplewiki/splits/val_community
+    val_random:    data/pretokenized_datasets/simplewiki/splits/val_random
+  test_dirs:
+    test_community: data/pretokenized_datasets/simplewiki/splits/test_community
+    test_random:    data/pretokenized_datasets/simplewiki/splits/test_random
+
+model:
+  compile: true
+  compile_mode: 'default'
+  attention_backend: 'triton'
+  inference_attention_backend: 'flex'
+  mask_type: 'cross_doc_link'
+  link_detector: 'markdown'
+  max_grants: 256
+  # max_grants_start: 64         # cosine warmup start value
+  # max_grants_warmup_steps: 5000
+  activation_checkpointing: false
+  model_dim: 1024
+  num_layers: 24
+  num_heads: 16
+  max_seq_len: 32768
+  dropout: 0.1
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  ignore_index: -100
+  dtype: 'bfloat16'
+
+optimizer:
+  type: 'muon'
+  wd: 0.1
+  momentum: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.003
+  adamw_lr: 0.00004
+
+train_loop:
+  epochs: 1
+  max_optimizer_steps: null  # ~1 pass ≈ 1,400 steps (275k nodes / 12 docs/pack / 16 GPUs)
+  val_steps: 20
+  val_interval: 100
+  atomic_feature_kwargs:
+    accum_steps: 1
+
+seed: 42
+
+eval:
+  run_on_completion: false
+  benchmarks: [held_out_perplexity, community_pack_perplexity, wiki_qa, hellaswag]
+  max_docs: 500

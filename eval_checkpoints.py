@@ -56,7 +56,7 @@ from typing import Any, Dict, List, Optional, Union
 import torch
 
 from generate import load_inference_model
-from eval.perplexity import run_held_out_perplexity, run_pack_contrastive_perplexity
+from eval.perplexity import run_held_out_perplexity, run_pack_contrastive_perplexity, run_community_pack_perplexity
 from eval.nlp_benchmarks import (
     run_hellaswag, run_wiki_qa, run_arc, run_lambada,
     run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
@@ -99,8 +99,9 @@ _KNOWN_BENCHMARKS = (
     "repobench",          # requires --repobench-split
     "repobench_cross_doc",
     "humaneval_buggy",    # requires --humaneval-language
-    # Graph-structured
-    "pack_contrastive_perplexity",
+    # Graph-structured (multi-doc; experimental condition auto-applies)
+    "pack_contrastive_perplexity",  # cross_doc_link models only (requires precomputed epoch dirs)
+    "community_pack_perplexity",    # all models; cross_doc_link gets contrastive delta, doc_causal gets baseline
 )
 
 # ─── Condition registry ───────────────────────────────────────────────────────
@@ -514,6 +515,16 @@ def run_benchmarks_on_model(
                         device=device,
                     )
 
+                elif bname == "community_pack_perplexity":
+                    results[key] = run_community_pack_perplexity(
+                        model=model,
+                        dataset_dir=dataset_dir,
+                        layout_policy=layout,
+                        split=spec.get("split", "val_community"),
+                        max_packs=max_docs,
+                        device=device,
+                    )
+
             except Exception as _exc:
                 logger.error(
                     "Benchmark %s (condition=%s) failed and will be skipped: %s: %s",
@@ -589,6 +600,18 @@ def _log_summary(results: Dict[str, Any]) -> None:
                 res.get("total_examples", 0),
                 res.get("n_link_found", 0),
                 res.get("total_examples", 0),
+            )
+        elif isinstance(res, dict) and "mean_delta" in res:
+            # community_pack_perplexity: flat dict with mean_delta
+            logger.info(
+                "  %-40s  delta=%.4f [%.4f, %.4f]  cross=%.4f  base=%.4f  n=%d",
+                name,
+                res.get("mean_delta", float("nan")),
+                res.get("delta_ci_low", float("nan")),
+                res.get("delta_ci_high", float("nan")),
+                res.get("mean_nll_cross_doc", float("nan")),
+                res.get("mean_nll_baseline", float("nan")),
+                res.get("n_packs", 0),
             )
         elif isinstance(res, dict) and any(
             isinstance(v, dict) and "mean_delta" in v for v in res.values()
@@ -683,6 +706,11 @@ def _headline_metric(key: str, result: Any) -> str:
     if "accuracy" in result:
         v = result.get("accuracy", nan)
         return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:.4f}"
+
+    # community_pack_perplexity → flat dict with mean_delta
+    if "mean_delta" in result:
+        v = result.get("mean_delta", nan)
+        return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:+.4f}"
 
     # pack_contrastive_perplexity → dict of strategy → stats; show first strategy's delta
     for _strategy, stats in result.items():
@@ -807,8 +835,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--split", default="all",
-        help='Graph split to evaluate (held_out_perplexity only). '
-             'Use "all" to sample randomly from the full graph.',
+        help='Graph split to evaluate. For held_out_perplexity: use "all", '
+             '"val_random", "val_community", etc. For community_pack_perplexity: '
+             'use "val_community" (default) or "test_community".',
     )
     parser.add_argument(
         "--max-docs", type=int, default=500,
@@ -838,8 +867,9 @@ def main() -> None:
 
     # Per-benchmark extra params from CLI — folded into each spec dict.
     _bench_extras: Dict[str, Dict[str, Any]] = {
-        "repobench":       {"split": args.repobench_split},
-        "humaneval_buggy": {"language": args.humaneval_language},
+        "repobench":                {"split": args.repobench_split},
+        "humaneval_buggy":          {"language": args.humaneval_language},
+        "community_pack_perplexity": {"split": args.split},
     }
 
     eval_cfg = {
