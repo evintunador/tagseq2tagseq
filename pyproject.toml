@@ -9,7 +9,7 @@ dependencies = [
     "torch",
     "numpy",
     "tunalab>=0.1.4",
-    "tunalab-common>=0.1.1",
+    "tunalab-common>=0.1.2",
     "tunalab-nlp>=0.5.1",
 ]
 
