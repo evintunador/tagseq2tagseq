@@ -625,12 +625,17 @@ def _log_summary(results: Dict[str, Any]) -> None:
                 res.get("total_examples", 0),
             )
         elif isinstance(res, dict) and "perplexity_cross_doc_only" in res:
-            # repobench_cross_doc: two perplexity figures + coverage info
+            # repobench_cross_doc / hotpotqa_cross_doc: cross-doc + paired flat + delta
+            flat_nll  = res.get("average_nll_flat_linked_only", float("nan"))
+            cross_nll = res.get("average_nll_cross_doc_only", float("nan"))
+            delta = flat_nll - cross_nll  # positive = cross-doc helps
             logger.info(
-                "  %-40s  ppl_cross=%.3f (n=%d)  ppl_all=%.3f (n=%d)  "
-                "link_found=%d/%d",
+                "  %-40s  ppl_cross=%.3f  ppl_flat=%.3f  Δnll=%+.4f  "
+                "(n=%d)  ppl_all=%.3f (n=%d)  link_found=%d/%d",
                 name,
                 res.get("perplexity_cross_doc_only", float("nan")),
+                res.get("perplexity_flat_linked_only", float("nan")),
+                delta,
                 res.get("n_cross_doc", 0),
                 res.get("perplexity_with_fallback", float("nan")),
                 res.get("total_examples", 0),
@@ -728,10 +733,17 @@ def _headline_metric(key: str, result: Any) -> str:
     if not isinstance(result, dict):
         return "—"
 
-    # repobench_cross_doc → show cross-doc-only perplexity
+    # repobench_cross_doc / hotpotqa_cross_doc → cross-doc ppl + paired NLL delta
     if "perplexity_cross_doc_only" in result:
         v = result.get("perplexity_cross_doc_only", nan)
-        return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:.2f}"
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "—"
+        flat_nll  = result.get("average_nll_flat_linked_only", nan)
+        cross_nll = result.get("average_nll_cross_doc_only", nan)
+        if not (math.isnan(flat_nll) or math.isnan(cross_nll)):
+            delta = flat_nll - cross_nll  # positive = cross-doc improves NLL
+            return f"{v:.2f} (Δnll={delta:+.3f})"
+        return f"{v:.2f}"
 
     # held_out_perplexity / fill-in-the-blank → show perplexity
     if "perplexity" in result:

@@ -174,6 +174,29 @@ ARE built with relative imports resolved by `data/github_graph_extractor/extract
 so training may already handle this correctly. Needs verification before any changes to
 `PythonImportDetector.detect_links` or the training collation path.
 
+### Multi-hop QA beyond 2-hop — TODO
+HotpotQA is strictly 2-hop. Deeper graph traversal (BFS depth ≥ 3) is a core
+claim of the system but is untested by any current benchmark. Candidates to
+investigate:
+- **MuSiQue** (`datasets` id: `musique`) — up to 4-hop, ~20k items, English Wikipedia.
+  Structured supporting facts with explicit paragraph chains.
+- **2WikiMultiHopQA** (`datasets` id: `locuslab/2WikiMultiHopQA`) — up to 5-hop,
+  bridge + comparison + inference + compositional question types.
+Both have supporting paragraph annotations that map naturally to aux DocSpans.
+Before implementing, check whether the datasets are available on cluster and
+whether they overlap with our Wikipedia training data (leakage analysis needed).
+
+### Better cross-doc benchmark for Stack models — TODO
+RepoBench cross-doc shows only ~0.4% NLL improvement at early training — good
+signal-to-noise but a small headline number. Candidates:
+- **CodeSearchNet** with cross-file call graphs — look for a dataset that
+  provides explicit import/dependency chains, not just text retrieval.
+- **SWE-bench** style multi-file tasks — requires execution, probably too heavy.
+- Consider building a synthetic multi-file benchmark directly from The Stack:
+  take a file that imports another, score the imported function's body tokens
+  under both conditions. Controlled, no labelling needed, directly tests our
+  training setup. Design needed before implementing.
+
 ### Link injection eval for other external benchmarks — TODO
 For all external benchmarks OTHER than RepoBench, the path to cross-doc-link
 evaluation is via prompt preprocessing (link injection), not direct structural
