@@ -50,7 +50,10 @@ codexglue_code_to_text, repobench, repobench_cross_doc, humaneval_buggy) are all
 imported from tunalab at module load time.
 """
 
+import logging
 from typing import Any, Dict, List, Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     from tunalab.evaluations.multiple_choice import MultipleChoiceEvaluation, MultipleChoiceItem
@@ -972,6 +975,7 @@ def run_repobench_cross_doc(
     repo_name = None  # populated per-example below
 
     cross_doc_nlls: List[float] = []
+    paired_flat_nlls: List[float] = []
     all_nlls: List[float] = []
     n_link_found = 0
     n_link_not_found = 0
@@ -1021,6 +1025,8 @@ def run_repobench_cross_doc(
             cross_doc_nlls.append(nll)
             all_nlls.append(nll)
             n_link_found += 1
+            flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
+            paired_flat_nlls.append(flat_nll)
         else:
             flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
             all_nlls.append(flat_nll)
@@ -1034,14 +1040,522 @@ def run_repobench_cross_doc(
         return sum(nlls) / len(nlls) if nlls else float("nan")
 
     return {
-        "perplexity_cross_doc_only":  _ppl(cross_doc_nlls),
-        "average_nll_cross_doc_only": _mean(cross_doc_nlls),
-        "n_cross_doc":                len(cross_doc_nlls),
-        "perplexity_with_fallback":   _ppl(all_nlls),
-        "average_nll_with_fallback":  _mean(all_nlls),
-        "total_examples":             len(all_nlls),
-        "n_link_found":               n_link_found,
-        "n_link_not_found":           n_link_not_found,
+        "perplexity_cross_doc_only":    _ppl(cross_doc_nlls),
+        "average_nll_cross_doc_only":   _mean(cross_doc_nlls),
+        "perplexity_flat_linked_only":  _ppl(paired_flat_nlls),
+        "average_nll_flat_linked_only": _mean(paired_flat_nlls),
+        "n_cross_doc":                  len(cross_doc_nlls),
+        "perplexity_with_fallback":     _ppl(all_nlls),
+        "average_nll_with_fallback":    _mean(all_nlls),
+        "total_examples":               len(all_nlls),
+        "n_link_found":                 n_link_found,
+        "n_link_not_found":             n_link_not_found,
+    }
+
+
+# ─── HotpotQA bridge QA ──────────────────────────────────────────────────────
+
+_HOTPOTQA_CORPUS_URL_ABSTRACTS = (
+    "https://nlp.stanford.edu/projects/hotpotqa/"
+    "enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2"
+)
+_HOTPOTQA_CORPUS_URL_FULL = (
+    "https://nlp.stanford.edu/projects/hotpotqa/"
+    "enwiki-20171001-pages-meta-current-withlinks-processed.tar.bz2"
+)
+
+# Module-level cache so both run_hotpotqa and run_hotpotqa_cross_doc share
+# the same loaded dict within a single eval session.
+_HOTPOTQA_CORPUS_CACHE: Optional[dict] = None
+
+
+def _html_links_to_markdown(sentence: str) -> str:
+    """Convert HotpotQA inline HTML links to [text](Title) markdown.
+
+    HotpotQA corpus stores links as <a href="url%20encoded%20title">anchor</a>.
+    After conversion, MarkdownLinkDetector fires on the ]( bigram and extracts
+    the URL-decoded title as target_str — identical to how our wikitext pipeline
+    produces [text](Article Title) from [[Article Title]] during training.
+    """
+    import re as _re
+    import urllib.parse as _up
+    return _re.sub(
+        r'<a href="([^"]*)">(.*?)</a>',
+        lambda m: f'[{m.group(2)}]({_up.unquote(m.group(1))})',
+        sentence,
+    )
+
+
+def _strip_html_links(sentence: str) -> str:
+    """Strip HTML anchor tags, keeping only the anchor text."""
+    import re as _re
+    return _re.sub(r'<a href="[^"]*">(.*?)</a>', r'\1', sentence)
+
+
+def _load_hotpotqa_corpus(
+    cache_dir: Optional[str] = None,
+    use_full: bool = False,
+) -> dict:
+    """Return title.lower() -> List[str] of sentences with <a href> links intact.
+
+    Downloads the HotpotQA Wikipedia corpus on first call and caches a pickled
+    dict to data/.cache/hotpotqa/. Subsequent calls load from pickle.
+
+    The abstracts corpus (~1.55 GB) covers introductory paragraphs for all
+    English Wikipedia articles (2017 dump). Most HotpotQA supporting facts
+    come from intro paragraphs, so this is usually sufficient. If link match
+    rate is too low in practice, pass use_full=True to use the full corpus
+    (~7.4 GB).
+
+    Leakage note: the comparison is always contrastive (cross_doc vs doc_causal
+    on the same text), so memorisation cancels out. The 2017 HotpotQA dump
+    predates our 2025-2026 training dumps and covers the same Wikipedia articles
+    -- being in-distribution is a feature, not a confound.
+    """
+    global _HOTPOTQA_CORPUS_CACHE
+    if _HOTPOTQA_CORPUS_CACHE is not None:
+        return _HOTPOTQA_CORPUS_CACHE
+
+    import os as _os
+    import bz2 as _bz2
+    import json as _json
+    import pickle as _pickle
+    import tarfile as _tarfile
+    import urllib.request as _req
+
+    cache_root = cache_dir or "data/.cache/hotpotqa"
+    suffix = "full" if use_full else "abstracts"
+    pkl_path = _os.path.join(cache_root, f"corpus_{suffix}.pkl")
+
+    if _os.path.exists(pkl_path):
+        logger.info("Loading HotpotQA corpus from cache: %s", pkl_path)
+        with open(pkl_path, "rb") as f:
+            _HOTPOTQA_CORPUS_CACHE = _pickle.load(f)
+        return _HOTPOTQA_CORPUS_CACHE
+
+    url = _HOTPOTQA_CORPUS_URL_FULL if use_full else _HOTPOTQA_CORPUS_URL_ABSTRACTS
+    tar_path = _os.path.join(cache_root, _os.path.basename(url))
+    _os.makedirs(cache_root, exist_ok=True)
+
+    if not _os.path.exists(tar_path):
+        logger.info("Downloading HotpotQA corpus (~%.1f GB): %s",
+                    7.4 if use_full else 1.55, url)
+        try:
+            from tqdm.auto import tqdm as _tqdm
+
+            class _TqdmHook:
+                def __init__(self):
+                    self._t = None
+                def __call__(self, b, bsize, total):
+                    if self._t is None:
+                        self._t = _tqdm(total=total, unit="B", unit_scale=True,
+                                        desc="hotpotqa corpus")
+                    self._t.update(b * bsize - self._t.n)
+                def __del__(self):
+                    if self._t is not None:
+                        self._t.close()
+
+            _req.urlretrieve(url, tar_path, reporthook=_TqdmHook())
+        except Exception:
+            _req.urlretrieve(url, tar_path)
+
+    logger.info("Extracting HotpotQA corpus...")
+    corpus: dict = {}
+    with _tarfile.open(tar_path, "r:bz2") as tf:
+        for member in tf:   # streaming iteration — avoids building full member list
+            if not member.isfile():
+                continue
+            f = tf.extractfile(member)
+            if f is None:
+                continue
+            # Each member is itself bz2-compressed (double compression).
+            try:
+                raw = _bz2.decompress(f.read())
+            except Exception:
+                continue
+            for line in raw.split(b"\n"):
+                if not line.strip():
+                    continue
+                try:
+                    art = _json.loads(line)
+                except (_json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(art, dict):
+                    continue
+                title = art.get("title", "")
+                if not title:
+                    continue
+                # text_with_links is a flat List[str] (one sentence per element)
+                # covering the article's introductory paragraph, with inline
+                # <a href="url%20encoded%20title">anchor text</a> links.
+                # The full corpus uses text (same structure, also has <a href>).
+                sents_with_links = art.get("text_with_links") or art.get("text")
+                if not sents_with_links or not isinstance(sents_with_links, list):
+                    continue
+                corpus[title.lower()] = [
+                    s for s in sents_with_links if isinstance(s, str)
+                ]
+
+    logger.info("HotpotQA corpus loaded: %d articles", len(corpus))
+    with open(pkl_path, "wb") as f:
+        _pickle.dump(corpus, f, protocol=_pickle.HIGHEST_PROTOCOL)
+
+    _HOTPOTQA_CORPUS_CACHE = corpus
+    return corpus
+
+
+def _hotpotqa_examples(
+    max_examples: Optional[int],
+    cache_dir: Optional[str],
+    bridge_only: bool = False,
+) -> List[dict]:
+    """Load HotpotQA fullwiki validation split.
+
+    Args:
+        max_examples: Cap on number of returned examples (applied after
+            optional bridge filter).
+        cache_dir: HuggingFace cache directory.
+        bridge_only: If True, return only bridge-type questions (~5918/7405).
+            Bridge questions have a natural hyperlink from article A to article
+            B, which is required for cross-doc attention grants to fire.
+            For the flat benchmark (run_hotpotqa) this filter is not applied;
+            all 7405 validation examples are used for full benchmark coverage.
+    """
+    from datasets import load_dataset as _load_dataset
+    raw = _load_dataset(
+        "hotpotqa/hotpot_qa",
+        "fullwiki",
+        split="validation",
+        cache_dir=cache_dir or "data/.cache/hotpotqa",
+    )
+    examples = [ex for ex in raw if ex.get("type") == "bridge"] if bridge_only else list(raw)
+    if max_examples is not None:
+        examples = examples[:max_examples]
+    return examples
+
+
+# Keep old name as alias so monkeypatching in tests still works during transition.
+def _hotpotqa_bridge_examples(max_examples, cache_dir):
+    return _hotpotqa_examples(max_examples, cache_dir, bridge_only=True)
+
+
+def _hotpotqa_titles(ex: dict):
+    """Return (a_title, b_title) — the two distinct supporting article titles.
+
+    supporting_facts["title"] is a flat list of titles (one per supporting
+    sentence, so titles repeat when multiple sentences come from the same
+    article). We need the first two *distinct* titles in appearance order.
+    """
+    seen = []
+    for t in ex["supporting_facts"]["title"]:
+        if t not in seen:
+            seen.append(t)
+        if len(seen) == 2:
+            break
+    return (seen[0], seen[1]) if len(seen) == 2 else (None, None)
+
+
+def _hotpotqa_context_sents(ex: dict, title: str) -> List[str]:
+    """Return the plain-text context sentences for a given article title.
+
+    Uses ex["context"], which is a dict of parallel lists {"title": [...],
+    "sentences": [[sent, ...], ...]}. Returns the sentence list for the
+    matching title, or [] if not found.
+    """
+    ctx = ex.get("context", {})
+    titles = ctx.get("title", [])
+    sentences = ctx.get("sentences", [])
+    for i, t in enumerate(titles):
+        if t == title and i < len(sentences):
+            return list(sentences[i])
+    return []
+
+
+def _hotpotqa_supporting_sent_ids(ex: dict, title: str) -> List[int]:
+    """Return the sent_ids listed in supporting_facts for a given title."""
+    sf = ex.get("supporting_facts", {})
+    sf_titles = sf.get("title", [])
+    sf_sent_ids = sf.get("sent_id", [])
+    return [sf_sent_ids[i] for i, t in enumerate(sf_titles) if t == title]
+
+
+def run_hotpotqa(
+    model,
+    max_examples: Optional[int] = None,
+    cache_dir: Optional[str] = None,
+    device: str = "cuda",
+) -> Dict[str, Any]:
+    """Evaluate on HotpotQA (all question types, flat concat, doc_causal baseline).
+
+    Scores all validation examples (bridge + comparison, ~7405 total) using
+    the gold supporting sentences from the downloaded Wikipedia corpus as
+    plain-text context. This is the full-benchmark version for comparison
+    against other models and published numbers.
+
+    For the paired cross-doc comparison (bridge-only, same examples as
+    run_hotpotqa_cross_doc), see the ``average_nll_flat_linked_only`` key
+    returned by run_hotpotqa_cross_doc — that is the preferred metric for
+    measuring the benefit of cross-doc attention.
+
+    Args:
+        model: TS2TSModel in eval mode. Must have model.tokenizer set.
+        max_examples: Cap on examples evaluated (None = all ~7405).
+        cache_dir: Cache directory for HF dataset + corpus download.
+        device: Device for token tensors.
+
+    Returns:
+        {"perplexity": float, "average_nll": float, "total_examples": int,
+         "n_skipped_no_corpus": int, "n_bridge": int, "n_comparison": int}
+    """
+    import math as _math
+    _require_tokenizer(model, "HotpotQA")
+    enc = _make_encoder(model.tokenizer)
+
+    corpus = _load_hotpotqa_corpus(cache_dir=cache_dir)
+    examples = _hotpotqa_examples(max_examples, cache_dir, bridge_only=False)
+
+    nlls: List[float] = []
+    n_skipped_no_corpus = 0
+    n_bridge = 0
+    n_comparison = 0
+
+    for ex in examples:
+        a_title, b_title = _hotpotqa_titles(ex)
+        if a_title is None:
+            continue
+
+        a_sents_raw = corpus.get(a_title.lower())
+        b_sents_raw = corpus.get(b_title.lower())
+        if a_sents_raw is None or b_sents_raw is None:
+            n_skipped_no_corpus += 1
+            continue
+
+        a_ids = _hotpotqa_supporting_sent_ids(ex, a_title)
+        b_ids = _hotpotqa_supporting_sent_ids(ex, b_title)
+
+        def _pick_plain(sents, ids):
+            picked = [_strip_html_links(sents[i]) for i in ids if i < len(sents)]
+            return picked if picked else [_strip_html_links(sents[0])]
+
+        a_text = " ".join(_pick_plain(a_sents_raw, a_ids))
+        b_text = " ".join(_pick_plain(b_sents_raw, b_ids))
+        context = a_text + " " + b_text + "\nQuestion: " + ex["question"] + "\nAnswer: "
+
+        nll = score_completion(model, enc(context), enc(ex["answer"]), device=device)
+        nlls.append(nll)
+        if ex.get("type") == "bridge":
+            n_bridge += 1
+        else:
+            n_comparison += 1
+
+    mean_nll = sum(nlls) / len(nlls) if nlls else float("nan")
+    try:
+        ppl = _math.exp(mean_nll)
+    except OverflowError:
+        ppl = float("inf")
+
+    return {
+        "perplexity":            ppl,
+        "average_nll":           mean_nll,
+        "total_examples":        len(nlls),
+        "n_skipped_no_corpus":   n_skipped_no_corpus,
+        "n_bridge":              n_bridge,
+        "n_comparison":          n_comparison,
+    }
+
+
+def run_hotpotqa_cross_doc(
+    model,
+    max_examples: Optional[int] = None,
+    cache_dir: Optional[str] = None,
+    device: str = "cuda",
+) -> Dict[str, Any]:
+    """HotpotQA bridge questions scored with cross-doc-link attention.
+
+    Packs article B's supporting sentences as an aux DocSpan preceding article
+    A's supporting sentences (the primary doc). MarkdownLinkDetector fires on
+    the [text](B title) link that is naturally present in article A's text —
+    the same mechanism that fires during training on Wikipedia hyperlinks.
+    Requires a cross_doc_link model with a MarkdownLinkDetector.
+
+    Only bridge-type questions are used. Within those, examples are further
+    filtered to cases where at least one article A supporting sentence contains
+    a rendered [text](B title) markdown link after HTML-to-markdown conversion.
+    This ensures the grant fires naturally rather than being forced.
+
+    Leakage note: the comparison is always contrastive (cross_doc vs doc_causal
+    on the same text), so memorisation cancels out. The 2017 HotpotQA dump
+    predates our 2025-2026 training dumps and covers the same Wikipedia articles
+    -- being in-distribution is a feature, not a confound.
+
+    Reports three perplexity figures:
+      - ``cross_doc_only`` / ``flat_linked_only``: the primary paired comparison.
+        Same N examples (those where a grant actually fired), scored under
+        cross-doc attention vs plain doc_causal. This is the cleanest measure
+        of cross-doc benefit — identical questions, identical tokenizations,
+        differing only in whether grants are active. Use this for the headline
+        delta.
+      - ``with_fallback``: all examples with both articles in corpus; those
+        where the grant didn't fire (n_link_not_found) use flat scoring.
+
+    Note on ``n_link_not_found``: these are examples where the pre-check
+    found the marker text but MarkdownLinkDetector still didn't fire a matched
+    grant after tokenization. Two structural causes — both consistent with
+    training distribution and not fixable without changing the detector:
+      - Title contains parentheses, e.g. "Alien (film)": the detector stops at
+        the first ')' and extracts "Alien (film" instead of "Alien (film)".
+        During training [[Alien (film)]] produces the same mismatch, so these
+        links never fired grants on the training corpus either.
+      - Title is quoted in context, e.g. '"[Animorphs](Animorphs)"': the '"['
+        tokenizes differently from bare '[', so the backwards scan for the
+        link-open token fails.
+    These 26/200 fallbacks are correct; forcing grants would give the model
+    cross-doc attention it was never trained to use.
+
+    Args:
+        model: TS2TSModel in eval mode. Must have mask_type='cross_doc_link',
+            link_detector set to a MarkdownLinkDetector, and tokenizer set.
+        max_examples: Limit number of bridge examples checked (None = all ~5.9k).
+        cache_dir: Cache directory for HF dataset + corpus download.
+        device: Device for token tensors.
+
+    Returns:
+        {
+            "perplexity_cross_doc_only":   float,
+            "average_nll_cross_doc_only":  float,
+            "perplexity_flat_linked_only": float,   # paired baseline, same N
+            "average_nll_flat_linked_only": float,
+            "n_cross_doc":                 int,
+            "perplexity_with_fallback":    float,
+            "average_nll_with_fallback":   float,
+            "total_examples":              int,
+            "n_link_found":                int,
+            "n_link_not_found":            int,
+            "n_skipped_no_corpus":         int,
+            "n_skipped_no_link":           int,
+        }
+    """
+    import math as _math
+    _require_tokenizer(model, "HotpotQA (cross-doc)")
+    if not hasattr(model, "mask_type") or model.mask_type != "cross_doc_link":
+        raise ValueError(
+            "run_hotpotqa_cross_doc requires a cross_doc_link model. "
+            f"Got mask_type={getattr(model, 'mask_type', None)!r}."
+        )
+    if not hasattr(model, "link_detector") or model.link_detector is None:
+        raise ValueError(
+            "run_hotpotqa_cross_doc requires model.link_detector to be set. "
+            "Use to_inference_model(link_detector=...) or TS2TSModel.__init__."
+        )
+    from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+    if not isinstance(model.link_detector, MarkdownLinkDetector):
+        raise ValueError(
+            f"run_hotpotqa_cross_doc requires a MarkdownLinkDetector "
+            f"(got {type(model.link_detector).__name__!r}). "
+            "HotpotQA is a Wikipedia dataset; other link detectors cannot match "
+            "Wikipedia hyperlinks to supporting articles."
+        )
+
+    enc = _make_encoder(model.tokenizer)
+    link_detector = model.link_detector
+
+    corpus = _load_hotpotqa_corpus(cache_dir=cache_dir)
+    examples = _hotpotqa_bridge_examples(max_examples, cache_dir)
+
+    cross_doc_nlls: List[float] = []
+    paired_flat_nlls: List[float] = []   # doc_causal on same examples as cross_doc_nlls
+    all_nlls: List[float] = []
+    n_link_found = 0
+    n_link_not_found = 0
+    n_skipped_no_corpus = 0
+    n_skipped_no_link = 0
+
+    for ex in examples:
+        a_title, b_title = _hotpotqa_titles(ex)
+        if a_title is None:
+            continue
+        a_sent_ids = _hotpotqa_supporting_sent_ids(ex, a_title)
+        b_sent_ids = _hotpotqa_supporting_sent_ids(ex, b_title)
+
+        a_sents_raw = corpus.get(a_title.lower())
+        b_sents_raw = corpus.get(b_title.lower())
+        if a_sents_raw is None or b_sents_raw is None:
+            n_skipped_no_corpus += 1
+            continue
+
+        def _pick_raw(sents, ids):
+            picked = [sents[i] for i in ids if i < len(sents)]
+            return picked if picked else [sents[0]]
+
+        # Article A: convert HTML links to [text](Title) markdown so
+        # MarkdownLinkDetector fires on the ]( bigram naturally.
+        a_sents_md = [_html_links_to_markdown(s) for s in _pick_raw(a_sents_raw, a_sent_ids)]
+        # Article B: plain text as aux doc (no links needed in it).
+        b_sents_plain = [_strip_html_links(s) for s in _pick_raw(b_sents_raw, b_sent_ids)]
+
+        # Pre-filter: at least one A sentence must contain ](B_title) after
+        # conversion; otherwise the grant can never fire and the result would
+        # be identical to the flat baseline.
+        marker = f"]({b_title})"
+        if not any(marker in s for s in a_sents_md):
+            n_skipped_no_link += 1
+            continue
+
+        a_text_md = " ".join(a_sents_md)
+        b_text_plain = " ".join(b_sents_plain)
+
+        aux_tokens = enc(b_text_plain)
+        context_tokens = enc(a_text_md + "\nQuestion: " + ex["question"] + "\nAnswer: ")
+        completion_tokens = enc(ex["answer"])
+
+        nll = score_completion_with_context_docs(
+            model,
+            aux_token_lists=[aux_tokens],
+            context_tokens=context_tokens,
+            completion_tokens=completion_tokens,
+            link_detector=link_detector,
+            aux_raw_identifiers=[b_title],
+            device=device,
+        )
+
+        if nll is not None:
+            cross_doc_nlls.append(nll)
+            all_nlls.append(nll)
+            n_link_found += 1
+            # Paired flat baseline: same example, same tokenization, doc_causal only.
+            # Computed here so both scores share identical context_tokens /
+            # completion_tokens — no re-running of link detection or filtering.
+            flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
+            paired_flat_nlls.append(flat_nll)
+        else:
+            flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
+            all_nlls.append(flat_nll)
+            n_link_not_found += 1
+
+    def _ppl(nlls: List[float]) -> float:
+        if not nlls:
+            return float("nan")
+        try:
+            return _math.exp(sum(nlls) / len(nlls))
+        except OverflowError:
+            return float("inf")
+
+    def _mean(nlls: List[float]) -> float:
+        return sum(nlls) / len(nlls) if nlls else float("nan")
+
+    return {
+        "perplexity_cross_doc_only":    _ppl(cross_doc_nlls),
+        "average_nll_cross_doc_only":   _mean(cross_doc_nlls),
+        "perplexity_flat_linked_only":  _ppl(paired_flat_nlls),
+        "average_nll_flat_linked_only": _mean(paired_flat_nlls),
+        "n_cross_doc":                  len(cross_doc_nlls),
+        "perplexity_with_fallback":     _ppl(all_nlls),
+        "average_nll_with_fallback":    _mean(all_nlls),
+        "total_examples":               len(all_nlls),
+        "n_link_found":                 n_link_found,
+        "n_link_not_found":             n_link_not_found,
+        "n_skipped_no_corpus":          n_skipped_no_corpus,
+        "n_skipped_no_link":            n_skipped_no_link,
     }
 
 

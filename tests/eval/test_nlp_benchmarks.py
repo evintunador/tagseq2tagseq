@@ -5,7 +5,8 @@ Covers run_hellaswag, run_wiki_qa, run_arc, run_lambada,
 run_winogrande, run_piqa, run_boolq, run_commonsense_qa, run_copa,
 run_openbookqa, run_sciq, run_codexglue_line_completion,
 run_mmlu, run_mathqa, run_math, run_codexglue_code_to_text,
-run_repobench, run_repobench_cross_doc, run_humaneval_buggy.
+run_repobench, run_repobench_cross_doc, run_humaneval_buggy,
+run_hotpotqa, run_hotpotqa_cross_doc.
 All tests run on CPU with mock models and synthetic data — no HuggingFace
 network access required.
 """
@@ -23,6 +24,7 @@ from eval.nlp_benchmarks import (
     run_mmlu, run_mathqa, run_math,
     run_codexglue_code_to_text, run_repobench, run_repobench_cross_doc,
     run_humaneval_buggy,
+    run_hotpotqa, run_hotpotqa_cross_doc,
 )
 
 VOCAB_SIZE = 256
@@ -101,6 +103,8 @@ def _patch_fitb_dataset(monkeypatch, dataset_class_path, items):
     (run_repobench,             {}),
     (run_repobench_cross_doc,   {}),
     (run_humaneval_buggy,       {}),
+    (run_hotpotqa,              {}),
+    (run_hotpotqa_cross_doc,    {}),
 ])
 def test_requires_tokenizer(fn, kwargs):
     model = _make_mock_model(tokenizer=False)
@@ -678,14 +682,23 @@ def test_repobench_cross_doc_link_found_increments_n_link_found(monkeypatch):
     model = _make_cross_doc_model()
     examples = _raw_repobench_examples()[:2]  # 2 valid examples
 
+    flat_calls = {"n": 0}
+    def _fake_flat(*a, **kw):
+        flat_calls["n"] += 1
+        return 2.0
+
     with patch("datasets.load_dataset", return_value=_FakeHFDataset(examples)), \
          patch.object(_bench, "score_completion_with_context_docs", return_value=1.5), \
-         patch.object(_bench, "score_completion", return_value=2.0):
+         patch.object(_bench, "score_completion", side_effect=_fake_flat):
         result = run_repobench_cross_doc(model=model, max_examples=2, device="cpu")
 
     assert result["n_link_found"] == 2
     assert result["n_link_not_found"] == 0
     assert result["total_examples"] == 2
+    # Paired flat NLL must be computed once per grant-found example
+    assert flat_calls["n"] == 2
+    assert "perplexity_flat_linked_only" in result
+    assert "average_nll_flat_linked_only" in result
 
 
 def test_repobench_cross_doc_no_link_falls_back_to_flat(monkeypatch):
@@ -719,6 +732,7 @@ def test_repobench_cross_doc_reports_both_metric_keys(monkeypatch):
 
     for key in ("perplexity_cross_doc_only", "perplexity_with_fallback",
                 "average_nll_cross_doc_only", "average_nll_with_fallback",
+                "perplexity_flat_linked_only", "average_nll_flat_linked_only",
                 "n_cross_doc", "total_examples", "n_link_found", "n_link_not_found"):
         assert key in result, f"Missing key: {key}"
 
@@ -789,3 +803,233 @@ def test_humaneval_buggy_two_choices(monkeypatch):
         lambda m, ctx, choices, device=None: (counts.append(len(choices)), [0.0, 1.0])[1])
     run_humaneval_buggy(model=_make_mock_model(), max_examples=2, device="cpu")
     assert all(c == 2 for c in counts)
+
+
+# ─── HotpotQA helpers ─────────────────────────────────────────────────────────
+
+def _make_hotpotqa_model():
+    """Mock cross_doc_link model with MarkdownLinkDetector and tokenizer."""
+    from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+    model = _make_mock_model(tokenizer=True)
+    model.mask_type = "cross_doc_link"
+    model.link_detector = MarkdownLinkDetector(decode_fn=lambda toks: "")
+    return model
+
+
+# Corpus returned by monkeypatched _load_hotpotqa_corpus.
+# Article A's sentence already contains the markdown link to Article B, simulating
+# what _html_links_to_markdown produces from a real <a href> anchor tag.
+_FAKE_HOTPOTQA_CORPUS = {
+    "article a": ['Article A mentions [Article B](Article B) here.'],
+    "article b": ['Article B text about the topic.'],
+    "article c": ['Article C has no link to Article D.'],
+    "article d": ['Article D text.'],
+}
+
+_FAKE_HOTPOTQA_BRIDGE = [
+    {
+        "question": "Who founded X?",
+        "answer": "John",
+        "supporting_facts": {"title": ["Article A", "Article B"], "sent_id": [0, 0]},
+        "type": "bridge",
+    },
+    {
+        "question": "Comparison Q",
+        "answer": "Yes",
+        "supporting_facts": {"title": ["Article A", "Article B"], "sent_id": [0, 0]},
+        "type": "comparison",  # must be filtered out
+    },
+]
+
+_FAKE_HOTPOTQA_NO_LINK = [
+    {
+        "question": "Q without link?",
+        "answer": "No",
+        "supporting_facts": {"title": ["Article C", "Article D"], "sent_id": [0, 0]},
+        "type": "bridge",
+    },
+]
+
+
+# ─── run_hotpotqa ─────────────────────────────────────────────────────────────
+
+def test_hotpotqa_scores_all_question_types(monkeypatch):
+    # Both bridge and comparison examples should be scored (no type filter in flat).
+    monkeypatch.setattr(_bench, "_hotpotqa_examples",
+                        lambda max_examples, cache_dir, bridge_only=False: _FAKE_HOTPOTQA_BRIDGE)
+    monkeypatch.setattr(_bench, "_load_hotpotqa_corpus",
+                        lambda **kw: _FAKE_HOTPOTQA_CORPUS)
+    monkeypatch.setattr(_bench, "_hotpotqa_titles",
+                        lambda ex: ("Article A", "Article B"))
+    monkeypatch.setattr(_bench, "_hotpotqa_supporting_sent_ids",
+                        lambda ex, title: [0])
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
+    result = run_hotpotqa(model=_make_mock_model(), max_examples=5, device="cpu")
+    # Both bridge and comparison examples counted
+    assert result["total_examples"] == 2
+    assert result["n_bridge"] == 1
+    assert result["n_comparison"] == 1
+
+
+def test_hotpotqa_returns_perplexity_keys(monkeypatch):
+    monkeypatch.setattr(_bench, "_hotpotqa_examples",
+                        lambda max_examples, cache_dir, bridge_only=False: [_FAKE_HOTPOTQA_BRIDGE[0]])
+    monkeypatch.setattr(_bench, "_load_hotpotqa_corpus",
+                        lambda **kw: _FAKE_HOTPOTQA_CORPUS)
+    monkeypatch.setattr(_bench, "_hotpotqa_titles",
+                        lambda ex: ("Article A", "Article B"))
+    monkeypatch.setattr(_bench, "_hotpotqa_supporting_sent_ids",
+                        lambda ex, title: [0])
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.5)
+    result = run_hotpotqa(model=_make_mock_model(), max_examples=1, device="cpu")
+    for key in ("perplexity", "average_nll", "total_examples",
+                "n_skipped_no_corpus", "n_bridge", "n_comparison"):
+        assert key in result, f"Missing key: {key}"
+    assert result["total_examples"] == 1
+
+
+def test_hotpotqa_skips_missing_corpus(monkeypatch):
+    monkeypatch.setattr(_bench, "_hotpotqa_examples",
+                        lambda max_examples, cache_dir, bridge_only=False: [_FAKE_HOTPOTQA_BRIDGE[0]])
+    monkeypatch.setattr(_bench, "_load_hotpotqa_corpus",
+                        lambda **kw: {})  # empty corpus — both articles missing
+    monkeypatch.setattr(_bench, "_hotpotqa_titles",
+                        lambda ex: ("Article A", "Article B"))
+    monkeypatch.setattr(_bench, "_hotpotqa_supporting_sent_ids",
+                        lambda ex, title: [0])
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
+    result = run_hotpotqa(model=_make_mock_model(), max_examples=1, device="cpu")
+    assert result["total_examples"] == 0
+    assert result["n_skipped_no_corpus"] == 1
+
+
+# ─── run_hotpotqa_cross_doc ───────────────────────────────────────────────────
+
+def test_hotpotqa_cross_doc_requires_cross_doc_link_model():
+    model = _make_mock_model()
+    model.mask_type = "doc_causal"
+    model.link_detector = MagicMock()
+    with pytest.raises(ValueError, match="cross_doc_link"):
+        run_hotpotqa_cross_doc(model=model, device="cpu")
+
+
+def test_hotpotqa_cross_doc_requires_markdown_link_detector():
+    from model.graph_traversal.python_import_detector import PythonImportDetector
+    model = _make_mock_model()
+    model.mask_type = "cross_doc_link"
+    model.link_detector = PythonImportDetector(decode_fn=lambda toks: "")
+    with pytest.raises(ValueError, match="MarkdownLinkDetector"):
+        run_hotpotqa_cross_doc(model=model, device="cpu")
+
+
+def test_hotpotqa_cross_doc_requires_link_detector_not_none():
+    model = _make_mock_model()
+    model.mask_type = "cross_doc_link"
+    model.link_detector = None
+    with pytest.raises(ValueError, match="link_detector"):
+        run_hotpotqa_cross_doc(model=model, device="cpu")
+
+
+def test_hotpotqa_cross_doc_link_found_increments_n_link_found(monkeypatch):
+    monkeypatch.setattr(_bench, "_load_hotpotqa_corpus",
+                        lambda **kw: _FAKE_HOTPOTQA_CORPUS)
+    monkeypatch.setattr(_bench, "_hotpotqa_bridge_examples",
+                        lambda max_examples, cache_dir: [_FAKE_HOTPOTQA_BRIDGE[0]])
+    monkeypatch.setattr(_bench, "_hotpotqa_titles",
+                        lambda ex: ("Article A", "Article B"))
+    monkeypatch.setattr(_bench, "_hotpotqa_supporting_sent_ids",
+                        lambda ex, title: [0])
+    monkeypatch.setattr(_bench, "score_completion_with_context_docs",
+                        lambda *a, **kw: 1.5)
+    flat_calls = {"n": 0}
+    def _fake_flat(*a, **kw):
+        flat_calls["n"] += 1
+        return 2.0
+    monkeypatch.setattr(_bench, "score_completion", _fake_flat)
+    result = run_hotpotqa_cross_doc(model=_make_hotpotqa_model(), max_examples=1,
+                                    device="cpu")
+    assert result["n_link_found"] == 1
+    assert result["n_link_not_found"] == 0
+    assert result["total_examples"] == 1
+    # Paired flat NLL must be computed for the grant-found example
+    assert flat_calls["n"] == 1
+    assert "perplexity_flat_linked_only" in result
+    assert "average_nll_flat_linked_only" in result
+
+
+def test_hotpotqa_cross_doc_no_grant_falls_back(monkeypatch):
+    monkeypatch.setattr(_bench, "_load_hotpotqa_corpus",
+                        lambda **kw: _FAKE_HOTPOTQA_CORPUS)
+    monkeypatch.setattr(_bench, "_hotpotqa_bridge_examples",
+                        lambda max_examples, cache_dir: [_FAKE_HOTPOTQA_BRIDGE[0]])
+    monkeypatch.setattr(_bench, "_hotpotqa_titles",
+                        lambda ex: ("Article A", "Article B"))
+    monkeypatch.setattr(_bench, "_hotpotqa_supporting_sent_ids",
+                        lambda ex, title: [0])
+    monkeypatch.setattr(_bench, "score_completion_with_context_docs",
+                        lambda *a, **kw: None)
+    flat_called = {"n": 0}
+    def _fake_flat(m, ctx, comp, **kw):
+        flat_called["n"] += 1
+        return 2.0
+    monkeypatch.setattr(_bench, "score_completion", _fake_flat)
+    result = run_hotpotqa_cross_doc(model=_make_hotpotqa_model(), max_examples=1,
+                                    device="cpu")
+    assert result["n_link_not_found"] == 1
+    assert result["n_link_found"] == 0
+    assert flat_called["n"] == 1
+
+
+def test_hotpotqa_cross_doc_reports_all_metric_keys(monkeypatch):
+    monkeypatch.setattr(_bench, "_load_hotpotqa_corpus",
+                        lambda **kw: _FAKE_HOTPOTQA_CORPUS)
+    monkeypatch.setattr(_bench, "_hotpotqa_bridge_examples",
+                        lambda max_examples, cache_dir: [_FAKE_HOTPOTQA_BRIDGE[0]])
+    monkeypatch.setattr(_bench, "_hotpotqa_titles",
+                        lambda ex: ("Article A", "Article B"))
+    monkeypatch.setattr(_bench, "_hotpotqa_supporting_sent_ids",
+                        lambda ex, title: [0])
+    monkeypatch.setattr(_bench, "score_completion_with_context_docs",
+                        lambda *a, **kw: 1.0)
+    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 2.0)
+    result = run_hotpotqa_cross_doc(model=_make_hotpotqa_model(), max_examples=1,
+                                    device="cpu")
+    for key in (
+        "perplexity_cross_doc_only", "average_nll_cross_doc_only",
+        "perplexity_flat_linked_only", "average_nll_flat_linked_only",
+        "n_cross_doc",
+        "perplexity_with_fallback", "average_nll_with_fallback", "total_examples",
+        "n_link_found", "n_link_not_found", "n_skipped_no_corpus", "n_skipped_no_link",
+    ):
+        assert key in result, f"Missing key: {key}"
+
+
+def test_hotpotqa_cross_doc_skips_missing_corpus_article(monkeypatch):
+    # Empty corpus so both title lookups fail
+    monkeypatch.setattr(_bench, "_load_hotpotqa_corpus", lambda **kw: {})
+    monkeypatch.setattr(_bench, "_hotpotqa_bridge_examples",
+                        lambda max_examples, cache_dir: [_FAKE_HOTPOTQA_BRIDGE[0]])
+    monkeypatch.setattr(_bench, "_hotpotqa_titles",
+                        lambda ex: ("Article A", "Article B"))
+    monkeypatch.setattr(_bench, "_hotpotqa_supporting_sent_ids",
+                        lambda ex, title: [0])
+    result = run_hotpotqa_cross_doc(model=_make_hotpotqa_model(), max_examples=1,
+                                    device="cpu")
+    assert result["total_examples"] == 0
+    assert result["n_skipped_no_corpus"] == 1
+
+
+def test_hotpotqa_cross_doc_skips_no_link_in_a_sentences(monkeypatch):
+    # Article C has no markdown link to Article D — pre-filter must catch this.
+    monkeypatch.setattr(_bench, "_load_hotpotqa_corpus",
+                        lambda **kw: _FAKE_HOTPOTQA_CORPUS)
+    monkeypatch.setattr(_bench, "_hotpotqa_bridge_examples",
+                        lambda max_examples, cache_dir: _FAKE_HOTPOTQA_NO_LINK)
+    monkeypatch.setattr(_bench, "_hotpotqa_titles",
+                        lambda ex: ("Article C", "Article D"))
+    monkeypatch.setattr(_bench, "_hotpotqa_supporting_sent_ids",
+                        lambda ex, title: [0])
+    result = run_hotpotqa_cross_doc(model=_make_hotpotqa_model(), max_examples=1,
+                                    device="cpu")
+    assert result["total_examples"] == 0
+    assert result["n_skipped_no_link"] == 1

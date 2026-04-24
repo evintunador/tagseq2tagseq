@@ -64,6 +64,7 @@ from eval.nlp_benchmarks import (
     run_mmlu, run_mathqa, run_math,
     run_codexglue_code_to_text, run_repobench, run_repobench_cross_doc,
     run_humaneval_buggy,
+    run_hotpotqa, run_hotpotqa_cross_doc,
     MMLU_STEM_SUBJECTS, MATH_SUBJECTS,
 )
 
@@ -99,6 +100,9 @@ _KNOWN_BENCHMARKS = (
     "repobench",          # requires --repobench-split
     "repobench_cross_doc",
     "humaneval_buggy",    # requires --humaneval-language
+    # Wikipedia multi-hop QA
+    "hotpotqa",           # bridge-type, flat concat baseline
+    "hotpotqa_cross_doc", # bridge-type, cross-doc-link structured variant
     # Graph-structured (multi-doc; experimental condition auto-applies)
     "pack_contrastive_perplexity",  # cross_doc_link models only (requires precomputed epoch dirs)
     "community_pack_perplexity",    # all models; cross_doc_link gets contrastive delta, doc_causal gets baseline
@@ -145,6 +149,7 @@ _KNOWN_BENCHMARKS = (
 # CHECKLIST FOR NEW BENCHMARKS:
 #   1. Add name to _KNOWN_BENCHMARKS (with category comment).
 #   2. Add to _SINGLE_DOC_BENCHMARKS if it scores documents in isolation.
+#      (hotpotqa YES — flat concat; hotpotqa_cross_doc NO — multi-doc.)
 #   3. Add a dispatch case in run_benchmarks_on_model.
 #   4. Add to _SINGLE_DOC_BENCHMARKS tests in tests/test_eval_checkpoints.py.
 #   5. Consider which conditions make sense: doceval for standard comparison;
@@ -178,6 +183,8 @@ _SINGLE_DOC_BENCHMARKS = frozenset({
     "codexglue_code_to_text",
     "repobench",
     "humaneval_buggy",
+    # hotpotqa is single-doc (flat concat); hotpotqa_cross_doc is NOT in this set
+    "hotpotqa",
 })
 
 _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
@@ -479,6 +486,35 @@ def run_benchmarks_on_model(
                         )
                         continue
                     results[key] = run_repobench_cross_doc(
+                        model=model,
+                        max_examples=max_docs,
+                        device=device,
+                    )
+
+                elif bname == "hotpotqa":
+                    results[key] = run_hotpotqa(
+                        model=model,
+                        max_examples=max_docs,
+                        device=device,
+                    )
+
+                elif bname == "hotpotqa_cross_doc":
+                    if model.mask_type != "cross_doc_link":
+                        logger.info(
+                            "Skipping hotpotqa_cross_doc: requires cross_doc_link model "
+                            "(model.mask_type=%r).",
+                            model.mask_type,
+                        )
+                        continue
+                    from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector as _MLD
+                    if not isinstance(getattr(model, "link_detector", None), _MLD):
+                        logger.info(
+                            "Skipping hotpotqa_cross_doc: requires MarkdownLinkDetector "
+                            "(model.link_detector=%r). Only Wikipedia models apply.",
+                            type(getattr(model, "link_detector", None)).__name__,
+                        )
+                        continue
+                    results[key] = run_hotpotqa_cross_doc(
                         model=model,
                         max_examples=max_docs,
                         device=device,
@@ -812,6 +848,7 @@ def main() -> None:
             "math (all %d subjects run automatically). "
             "Code: codexglue_line_completion, codexglue_code_to_text, "
             "repobench (see --repobench-split), humaneval_buggy (see --humaneval-language). "
+            "Wikipedia QA: hotpotqa (flat), hotpotqa_cross_doc (cross-doc-link, bridge only). "
             "Graph: pack_contrastive_perplexity." % (len(MMLU_STEM_SUBJECTS), len(MATH_SUBJECTS))
         ),
     )

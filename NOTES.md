@@ -91,16 +91,51 @@ Added to `eval/nlp_benchmarks.py` (HF-direct):
 All wired into `eval_checkpoints.py` dispatcher and CLI with flags:
   --mmlu-subject, --math-subject, --repobench-split, --humaneval-language
 
-### Wikipedia cross-doc benchmark — TODO
-Wikipedia-trained models have no equivalent of `repobench_cross_doc`. Candidates:
-- HotpotQA / 2WikiMultihopQA: multi-hop QA where the answer requires two linked
-  Wikipedia articles. Pack both supporting docs as aux DocSpans (analogous to
-  repobench_cross_doc), score the answer under cross_doc_link vs doc_causal mask.
-  This would be the clearest "smoking gun" for Wikipedia cross-doc attention.
-- Strategy: implement `run_hotpotqa_cross_doc` in `eval/nlp_benchmarks.py` on
-  the same pattern as `run_repobench_cross_doc` — fetch both gold supporting
-  passages from the corpus by their Wikipedia page name, pack as aux DocSpans,
-  score answer NLL under both conditions.
+### Wikipedia cross-doc benchmark (HotpotQA) — DONE
+`run_hotpotqa` and `run_hotpotqa_cross_doc` in `eval/nlp_benchmarks.py`.
+
+**`run_hotpotqa`** — full-benchmark flat baseline. Scores all 7405 validation examples
+(bridge + comparison) using the gold supporting sentences from the downloaded Wikipedia
+corpus as plain-text context. Use for comparison against other models and published numbers.
+
+**`run_hotpotqa_cross_doc`** — bridge-only, cross-doc-link structured. Packs article B's
+supporting sentences as an aux DocSpan; article A's sentences contain a naturally-occurring
+`[text](Title)` markdown link (converted from HotpotQA's `<a href>` HTML) that fires
+MarkdownLinkDetector. Only bridge questions are used; comparison questions lack an A→B
+hyperlink. Only runs on `cross_doc_link` models with a `MarkdownLinkDetector`.
+
+**Corpus:** HotpotQA Wikipedia abstracts corpus (Stanford NLP, ~1.55 GB compressed),
+downloaded lazily to `data/.cache/hotpotqa/` and pickled after first extraction.
+Covers introductory paragraphs of all English Wikipedia articles (~5.2M).
+Double-compressed (outer tar.bz2, inner per-file bz2). Links inline as HTML
+`<a href="url%20encoded%20title">anchor</a>`; `_html_links_to_markdown` converts
+these to `[anchor](Title)` matching our training format exactly.
+
+**Paired comparison design:** `run_hotpotqa_cross_doc` computes a paired flat NLL
+(`perplexity_flat_linked_only`) on the same N examples where a grant fired — identical
+questions, identical tokenizations, differing only in whether cross-doc attention is
+active. This avoids selection confounds and is the preferred headline metric.
+
+**Why bridge-only for cross_doc:** The grant fires on `](B_title)` in article A's text.
+Comparison questions share two supporting articles but article A doesn't hyperlink to B,
+so no grant fires; those examples produce identical NLL under both conditions and are
+excluded to keep the signal clean. Of the ~29 bridge examples where no `](B_title)` is
+found in supporting sentences, the cause is: (a) link is in a non-supporting sentence
+(intro-only corpus limitation), (b) title-matching mismatch (redirects).
+
+**Why `n_link_not_found` (26/200) is unfixable:** pre-check passed (substring found) but
+detector didn't fire after tokenization. Root causes are structural and match training
+distribution — no fix appropriate:
+  - Paren-in-title (e.g. `Alien (film)`): detector extracts `Alien (film` (stops at first
+    `)`) — same mismatch that happens on the training corpus for `[[Alien (film)]]`.
+  - Quoted bracket (e.g. `"[Animorphs](...)`): `"[` tokenizes differently from `[`/` [`,
+    backwards scan for link-open token fails.
+
+**Validated results on simplewiki cross_doc_link model (012516), 200 bridge examples:**
+- `perplexity_flat_linked_only`:  3490  (doc_causal, 145 matched questions)
+- `perplexity_cross_doc_only`:    1608  (cross-doc,  145 matched questions, same)
+- Link match rate: 145/171 examples where both articles found in corpus (~85%)
+- Stack models correctly skip with info log (PythonImportDetector, not MarkdownLinkDetector)
 
 ### RepoBench cross-doc-link mode — DONE
 `run_repobench_cross_doc` in `eval/nlp_benchmarks.py` packs each example's cross-file
@@ -117,11 +152,19 @@ Accepts `source_file_path` and resolves relative imports (`from . import X`) at 
 time using the file's known path — brings effective cross-file match rate from ~67% → ~97%.
 Reports both `perplexity_cross_doc_only` (samples with detected imports) and
 `perplexity_with_fallback` (all samples; no-link cases fall back to flat scoring).
+Also reports `perplexity_flat_linked_only` — paired doc_causal baseline on the same
+N matched examples, for a confound-free comparison (same design as hotpotqa_cross_doc).
 
 Only runs on `cross_doc_link` models with a `PythonImportDetector`. For future languages,
 split by language and match each to its `<Language>ImportDetector`.
 
-Validated result on stack_10m: cross_doc ppl=31 vs flat doc_causal ppl=62 (~2× improvement).
+**Validated results on stack_10m cross_doc_link model (012521), 200 examples:**
+- `perplexity_flat_linked_only`:  31.19  (doc_causal, 174 matched examples)
+- `perplexity_cross_doc_only`:    31.06  (cross-doc,  174 matched examples)
+- Note: the old reported "2× improvement" (ppl=31 vs ppl=62) was a selection artifact —
+  `run_repobench` scores all 200 including the 26 harder no-match examples, while
+  `cross_doc_only` saw only the easier 174. The true paired improvement is ~0.4% at
+  step 14,900 of training — real but small. Expected to grow with further training.
 
 ### PythonImportDetector: relative imports in training — TODO (discuss separately)
 At eval time, relative imports are now resolved via `source_file_path` in
