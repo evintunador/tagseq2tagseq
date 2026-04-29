@@ -55,6 +55,13 @@ train_loop:
 seed: 42
 
 eval:
-  run_on_completion: false
-  benchmarks: [held_out_perplexity, community_pack_perplexity, repobench_cross_doc]
+  run_on_completion: true
+  benchmarks:
+    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
+    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
+    - {name: repobench,                 conditions: [doceval]}
+    - {name: repobench_cross_doc,       conditions: [experimental]}
+    - {name: codexglue_code_to_text,    conditions: [doceval]}
+    - {name: humaneval_buggy,           conditions: [doceval]}
   max_docs: 500
+  # annotator_corpus not set — no link annotator for code models yet

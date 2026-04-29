@@ -65,6 +65,7 @@ from eval.nlp_benchmarks import (
     run_codexglue_code_to_text, run_repobench, run_repobench_cross_doc,
     run_humaneval_buggy,
     run_hotpotqa, run_hotpotqa_cross_doc,
+    run_benchmark_annotated, ANNOTATABLE_BENCHMARKS,
     MMLU_STEM_SUBJECTS, MATH_SUBJECTS,
 )
 
@@ -106,6 +107,9 @@ _KNOWN_BENCHMARKS = (
     # Graph-structured (multi-doc; experimental condition auto-applies)
     "pack_contrastive_perplexity",  # cross_doc_link models only (requires precomputed epoch dirs)
     "community_pack_perplexity",    # all models; cross_doc_link gets contrastive delta, doc_causal gets baseline
+    # Annotated benchmarks — NLP benchmarks run under injected cross-doc links
+    # Dispatched specially (not via condition loop); uses MarkdownPromptAnnotator.
+    # Any benchmark in ANNOTATABLE_BENCHMARKS can carry "annotated" in its conditions list.
 )
 
 # ─── Condition registry ───────────────────────────────────────────────────────
@@ -200,6 +204,11 @@ _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
     "doceval": {
         "mask_type":    "doc_causal",
         "layout_policy": "eos",
+    },
+    # Sentinel for the annotated condition — handled separately after the main
+    # condition loop by run_benchmarks_on_model. The main loop skips it.
+    "annotated": {
+        "_is_annotated": True,
     },
 }
 
@@ -315,6 +324,10 @@ def run_benchmarks_on_model(
                     f"Available: {sorted(all_conditions)}."
                 )
             cond = all_conditions[cname]
+
+            # The "annotated" condition is handled separately after this loop.
+            if cond.get("_is_annotated"):
+                continue
 
             # Skip conditions that only make sense for cross_doc_link models.
             # Doc-causal models ARE the baseline; running the baseline condition
@@ -568,6 +581,75 @@ def run_benchmarks_on_model(
                 )
                 results[key] = {"error": str(_exc)}
 
+    # ── Annotated condition pass ──────────────────────────────────────────────
+    # Benchmarks that include "annotated" in their conditions list are dispatched
+    # here rather than in the main loop, because they require building a
+    # MarkdownPromptAnnotator (which needs a corpus and is model-specific).
+    # Guard: cross_doc_link model with MarkdownLinkDetector only.
+    annotated_specs = [
+        spec for spec in benchmark_specs
+        if "annotated" in spec.get("conditions", [])
+        and spec["name"] in ANNOTATABLE_BENCHMARKS
+    ]
+    if annotated_specs:
+        from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector as _MLD
+        _is_annotatable = (
+            getattr(model, "mask_type", None) == "cross_doc_link"
+            and isinstance(getattr(model, "link_detector", None), _MLD)
+        )
+        if not _is_annotatable:
+            logger.info(
+                "Skipping annotated condition: requires cross_doc_link model with "
+                "MarkdownLinkDetector (mask_type=%r, link_detector=%r).",
+                getattr(model, "mask_type", None),
+                type(getattr(model, "link_detector", None)).__name__,
+            )
+        else:
+            annotator_corpus_dir = cfg.get("annotator_corpus") or str(dataset_dir)
+            annotator_mode = cfg.get("annotator_mode", "corpus_only")
+            try:
+                from generate import PretokCorpus
+                from eval.link_annotator import MarkdownPromptAnnotator
+                from eval.title_index import HashNormTitleIndex
+                _corpus = PretokCorpus(annotator_corpus_dir)
+                _title_index = HashNormTitleIndex(
+                    _corpus._graph.get_raw_identifier(_corpus._graph.get_normed_identifier(i))
+                    for i in range(len(_corpus._graph))
+                )
+                _annotator = MarkdownPromptAnnotator(
+                    corpus=_corpus,
+                    title_index=_title_index,
+                    link_retrieval_mode=annotator_mode,
+                    layout_policy=getattr(model, "inference_layout_policy", None),
+                )
+                logger.info(
+                    "Annotated eval: corpus=%s, mode=%s",
+                    annotator_corpus_dir, annotator_mode,
+                )
+                for spec in annotated_specs:
+                    bname = spec["name"]
+                    key = f"{bname}/annotated"
+                    logger.info("Running %s (condition=annotated)", bname)
+                    try:
+                        results[key] = run_benchmark_annotated(
+                            model=model,
+                            benchmark_name=bname,
+                            annotator=_annotator,
+                            max_examples=max_docs,
+                            device=device,
+                        )
+                    except Exception as _exc:
+                        logger.error(
+                            "Benchmark %s (condition=annotated) failed: %s: %s",
+                            bname, type(_exc).__name__, _exc,
+                        )
+                        results[key] = {"error": str(_exc)}
+                _corpus.close()
+            except Exception as _exc:
+                logger.error(
+                    "Annotated eval setup failed: %s: %s", type(_exc).__name__, _exc
+                )
+
     _log_summary(results)
     return results
 
@@ -669,6 +751,39 @@ def _log_summary(results: Dict[str, Any]) -> None:
                     stats.get("mean_nll_baseline", float("nan")),
                     stats.get("n_packs", 0),
                 )
+        elif isinstance(res, dict) and "baseline_flat" in res and "t=0.0" in res:
+            # run_benchmark_annotated: multi-threshold result
+            for t_label in ("baseline_flat", "t=0.0", "t=p25", "t=p50", "t=p75"):
+                stats = res.get(t_label)
+                if not isinstance(stats, dict):
+                    continue
+                n_ann  = stats.get("n_annotated", "—")
+                n_fire = stats.get("n_link_fired", "—")
+                if "accuracy" in stats:
+                    logger.info(
+                        "  %-40s  acc=%.4f  n=%d  annotated=%s  link_fired=%s",
+                        f"{name}[{t_label}]",
+                        stats.get("accuracy", float("nan")),
+                        stats.get("total_examples", 0),
+                        n_ann, n_fire,
+                    )
+                else:
+                    logger.info(
+                        "  %-40s  ppl=%.3f  nll=%.4f  n=%d  annotated=%s  link_fired=%s",
+                        f"{name}[{t_label}]",
+                        stats.get("perplexity", float("nan")),
+                        stats.get("average_nll", float("nan")),
+                        stats.get("total_examples", 0),
+                        n_ann, n_fire,
+                    )
+            tv = res.get("threshold_values", {})
+            logger.info(
+                "  %-40s  p25=%.4f  p50=%.4f  p75=%.4f",
+                f"{name}[thresholds]",
+                tv.get("p25", float("nan")),
+                tv.get("p50", float("nan")),
+                tv.get("p75", float("nan")),
+            )
         else:
             logger.info("  %-40s  %s", name, res)
     logger.info("─────────────────────────────────────────────────────")
@@ -765,6 +880,20 @@ def _headline_metric(key: str, result: Any) -> str:
         if isinstance(stats, dict) and "mean_delta" in stats:
             v = stats.get("mean_delta", nan)
             return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:+.4f}"
+
+    # run_benchmark_annotated → show t=p50 accuracy or perplexity as headline
+    if "baseline_flat" in result and "t=0.0" in result:
+        p50 = result.get("t=p50", {})
+        if isinstance(p50, dict):
+            if "accuracy" in p50:
+                v = p50.get("accuracy", nan)
+                base = result.get("baseline_flat", {}).get("accuracy", nan)
+                if not (math.isnan(v) or math.isnan(base)):
+                    return f"{v:.4f} (Δ={v - base:+.4f} vs flat)"
+                return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:.4f}"
+            elif "perplexity" in p50:
+                v = p50.get("perplexity", nan)
+                return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:.2f}"
 
     return "—"
 
@@ -903,6 +1032,19 @@ def main() -> None:
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to run inference on.",
     )
+    parser.add_argument(
+        "--annotator-corpus", default=None, metavar="PATH",
+        help="Path to pretokenized dataset directory used for corpus lookup by the "
+             "link annotator (used when 'annotated' is in --conditions). "
+             "Defaults to --dataset if not specified. Use the full unsplit dataset "
+             "dir (not splits/train) so all articles are searchable.",
+    )
+    parser.add_argument(
+        "--annotator-mode", default="corpus_only",
+        choices=["no_op", "corpus_only", "generate", "corpus_then_generate"],
+        help="Link retrieval mode for the MarkdownPromptAnnotator "
+             "(used when 'annotated' is in --conditions).",
+    )
     args = parser.parse_args()
 
     checkpoints = [Path(c) for c in args.checkpoints]
@@ -928,6 +1070,8 @@ def main() -> None:
         ],
         "split": args.split,
         "max_docs": args.max_docs,
+        "annotator_corpus": args.annotator_corpus or args.dataset,
+        "annotator_mode": args.annotator_mode,
     }
 
     from tunalab.reproducibility import ReproducibilityManager

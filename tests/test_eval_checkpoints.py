@@ -63,6 +63,8 @@ def test_pack_contrastive_not_in_single_doc():
 
 def test_builtin_conditions_have_required_keys():
     for name, cond in _BUILTIN_CONDITIONS.items():
+        if cond.get("_is_annotated"):
+            continue  # annotated is a sentinel, not a model-config condition
         assert "mask_type" in cond, f"Condition {name!r} missing 'mask_type'"
         assert "layout_policy" in cond, f"Condition {name!r} missing 'layout_policy'"
 

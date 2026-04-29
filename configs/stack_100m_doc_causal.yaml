@@ -51,6 +51,11 @@ train_loop:
 seed: 42
 
 eval:
-  run_on_completion: false
-  benchmarks: [held_out_perplexity, community_pack_perplexity]
+  run_on_completion: true
+  benchmarks:
+    - {name: held_out_perplexity,       conditions: [doceval]}
+    - {name: community_pack_perplexity, conditions: [doceval]}
+    - {name: repobench,                 conditions: [doceval]}
+    - {name: codexglue_code_to_text,    conditions: [doceval]}
+    - {name: humaneval_buggy,           conditions: [doceval]}
   max_docs: 500

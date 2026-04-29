@@ -55,6 +55,16 @@ train_loop:
 seed: 42
 
 eval:
-  run_on_completion: false
-  benchmarks: [held_out_perplexity, community_pack_perplexity, wiki_qa, hellaswag]
+  run_on_completion: true
+  benchmarks:
+    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
+    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
+    - {name: wiki_qa,            conditions: [doceval, annotated]}
+    - {name: hellaswag,          conditions: [doceval, annotated]}
+    - {name: boolq,              conditions: [doceval, annotated]}
+    - {name: openbookqa,         conditions: [doceval, annotated]}
+    - {name: hotpotqa,           conditions: [doceval]}
+    - {name: hotpotqa_cross_doc, conditions: [experimental]}
   max_docs: 500
+  annotator_corpus: data/pretokenized_datasets/simplewiki
+  annotator_mode: corpus_only
