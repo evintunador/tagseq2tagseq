@@ -49,9 +49,12 @@ import datetime
 import json
 import logging
 import math
+import random
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+import numpy as np
 
 import torch
 
@@ -1045,7 +1048,27 @@ def main() -> None:
         help="Link retrieval mode for the MarkdownPromptAnnotator "
              "(used when 'annotated' is in --conditions).",
     )
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="Global RNG seed (torch, numpy, cuda, Python random). "
+             "Set this to make annotated title generation reproducible across runs.",
+    )
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity. Use DEBUG to see per-example corpus hit/miss messages.",
+    )
     args = parser.parse_args()
+
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
+        logger.info("Global seed set to %d", args.seed)
 
     checkpoints = [Path(c) for c in args.checkpoints]
     multi = len(checkpoints) > 1

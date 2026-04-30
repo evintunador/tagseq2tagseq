@@ -44,6 +44,14 @@ def test_empty_query():
     assert idx.lookup("") is None
 
 
+def test_punct_only_query_no_spurious_match():
+    # "." and "](" normalize to empty string — must not collide with
+    # corpus entries whose titles also normalize to empty (e.g. non-ASCII-only titles).
+    idx = HashNormTitleIndex(["ظ", "Python"])
+    assert idx.lookup(".") is None
+    assert idx.lookup("](") is None
+
+
 # ── Normalization behaviour ───────────────────────────────────────────────────
 
 def test_hyphen_stripped():
@@ -70,30 +78,47 @@ def test_disambiguation_survives():
 
 # ── Collision (first-wins) ────────────────────────────────────────────────────
 
-def test_collision_first_wins():
-    # "C++" and "C" both normalize to "c"; first entry should win.
+def test_collision_exact_wins():
+    # "C++" and "C" both normalize to "c" but are distinct exact keys.
+    # Exact match fires first, so each resolves to itself.
     idx = HashNormTitleIndex(["C++", "C"])
-    result = idx.lookup("C")
-    assert result == "C++"  # "C++" was inserted first
+    assert idx.lookup("C") == "C"
+    assert idx.lookup("C++") == "C++"
 
 
-def test_collision_second_not_reachable():
+def test_exact_wins_over_norm_collision():
+    # Same corpus — confirm "C" is reachable by its own exact key even though
+    # "C++" was inserted first and would win under norm-only lookup.
     idx = HashNormTitleIndex(["C++", "C"])
-    # "C" resolves to "C++" (first-wins), so "C" is unreachable by its own name
-    assert idx.lookup("C") == "C++"
+    assert idx.lookup("C") == "C"
 
 
 # ── __len__ ───────────────────────────────────────────────────────────────────
 
-def test_len_deduplicates_collisions():
-    # "C++" and "C" collide → only 1 entry stored
+def test_len_counts_distinct_raws():
+    # "C++", "C", and "Python" are all distinct exact keys → 3 entries
     idx = HashNormTitleIndex(["C++", "C", "Python"])
-    assert len(idx) == 2
+    assert len(idx) == 3
 
 
 def test_len_no_collisions():
     idx = HashNormTitleIndex(["Mercury (planet)", "Mercury (element)", "Python"])
     assert len(idx) == 3
+
+
+# ── Exact-match priority ─────────────────────────────────────────────────────
+
+def test_exact_fires_before_norm():
+    # "C" exact-matches itself; without exact priority it would return "C++" (norm collision).
+    idx = HashNormTitleIndex(["C++", "C"])
+    assert idx.lookup("C") == "C"
+    assert idx.lookup("c") == "C"  # case-insensitive
+
+
+def test_exact_case_insensitive_no_norm_needed():
+    # "PYTHON" hits exact ("python" -> "Python") before norm fires.
+    idx = HashNormTitleIndex(["Python"])
+    assert idx.lookup("PYTHON") == "Python"
 
 
 # ── MarkdownPromptAnnotator integration ──────────────────────────────────────
