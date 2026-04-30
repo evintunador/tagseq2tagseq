@@ -51,7 +51,9 @@ imported from tunalab at module load time.
 """
 
 import logging
-from typing import Any, Dict, List, Literal, Optional
+import math as _math_module
+import numpy as _np_module
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +112,7 @@ except ImportError as _e:
     ) from _e
 
 from eval.scoring import score_completions_batched, score_completion, score_completion_with_context_docs
+from eval.link_annotator import MarkdownPromptAnnotator, AnnotatedPrompt
 
 
 def _make_encoder(tokenizer):
@@ -1613,3 +1616,475 @@ def run_humaneval_buggy(
         limit=max_examples,
     )
     return MultipleChoiceEvaluation(_Adapter()).run(dataset, batch_size=1, limit=max_examples)
+
+
+# ─── Annotated benchmark driver ───────────────────────────────────────────────
+
+#: Benchmarks supported by run_benchmark_annotated.
+ANNOTATABLE_BENCHMARKS = frozenset({
+    "hellaswag", "wiki_qa", "arc_easy", "arc_challenge", "lambada",
+    "winogrande", "piqa", "boolq", "commonsense_qa", "copa",
+    "openbookqa", "sciq", "hotpotqa",
+})
+
+
+def _load_benchmark_items(
+    benchmark_name: str,
+    enc,
+    max_examples: Optional[int],
+    cache_dir: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Load items for a benchmark as plain token lists (no model calls).
+
+    Returns a list of dicts with keys:
+      - For MC benchmarks:
+        {"type": "mc", "context_tokens": List[int],
+         "completion_token_lists": List[List[int]], "label": int}
+      - For fill-in-the-blank:
+        {"type": "fitb", "context_tokens": List[int],
+         "completion_tokens": List[int]}
+      - For hotpotqa (no tunalab dataset class; loaded directly):
+        same fitb structure
+
+    Benchmarks that need bridge-only filtering (hotpotqa) handle it internally.
+    """
+    items: List[Dict[str, Any]] = []
+
+    # ── multiple-choice benchmarks ──────────────────────────────────────
+    _MC_CONFIGS = {
+        "hellaswag": (
+            "tunalab.data_sources.evaluations.multiple_choice.hellaswag.HellaSwagDataset",
+            {"split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "wiki_qa": (
+            "tunalab.data_sources.evaluations.multiple_choice.wiki_qa.WikiQADataset",
+            {"split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "arc_easy": (
+            "tunalab.data_sources.evaluations.multiple_choice.arc.ARCDataset",
+            {"config": "easy", "split": "test"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "arc_challenge": (
+            "tunalab.data_sources.evaluations.multiple_choice.arc.ARCDataset",
+            {"config": "challenge", "split": "test"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "winogrande": (
+            "tunalab.data_sources.evaluations.multiple_choice.winogrande.WinoGrandeDataset",
+            {"config": "xl", "split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(ch),
+        ),
+        "piqa": (
+            "tunalab.data_sources.evaluations.multiple_choice.piqa.PIQADataset",
+            {"split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "boolq": (
+            "tunalab.data_sources.evaluations.multiple_choice.boolq.BoolQDataset",
+            {"split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "commonsense_qa": (
+            "tunalab.data_sources.evaluations.multiple_choice.commonsense_qa.CommonsenseQADataset",
+            {"split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "copa": (
+            "tunalab.data_sources.evaluations.multiple_choice.copa.COPADataset",
+            {"split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "openbookqa": (
+            "tunalab.data_sources.evaluations.multiple_choice.openbookqa.OpenBookQADataset",
+            {"split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+        "sciq": (
+            "tunalab.data_sources.evaluations.multiple_choice.sciq.SciQDataset",
+            {"split": "val"},
+            lambda c: enc(c),
+            lambda ch: enc(" " + ch),
+        ),
+    }
+
+    if benchmark_name in _MC_CONFIGS:
+        cls_path, extra_kwargs, ctx_enc, ch_enc = _MC_CONFIGS[benchmark_name]
+        # Dynamically import the dataset class
+        import importlib
+        module_path, cls_name = cls_path.rsplit(".", 1)
+        try:
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, cls_name)
+        except (ImportError, AttributeError) as exc:
+            raise ImportError(f"Could not load {cls_path}: {exc}") from exc
+
+        # Map our kwargs to Enum values as the dataset class expects
+        init_kwargs: Dict[str, Any] = {"cache_dir": cache_dir, "limit": max_examples}
+        # split → Split enum
+        if "split" in extra_kwargs:
+            _split_map = {"val": "VAL", "test": "TEST"}
+            split_str = _split_map.get(extra_kwargs["split"], extra_kwargs["split"].upper())
+            split_mod = importlib.import_module(module_path)
+            split_cls_name = "Split"
+            if hasattr(split_mod, split_cls_name):
+                try:
+                    init_kwargs["split"] = getattr(split_mod, split_cls_name)[split_str]
+                except KeyError:
+                    init_kwargs["split"] = getattr(split_mod, split_cls_name).VAL
+        # config → Config enum (arc)
+        if "config" in extra_kwargs:
+            cfg_mod = importlib.import_module(module_path)
+            if hasattr(cfg_mod, "Config"):
+                cfg_val = extra_kwargs["config"].upper()
+                try:
+                    init_kwargs["config"] = getattr(cfg_mod, "Config")[cfg_val]
+                except KeyError:
+                    init_kwargs["config"] = getattr(cfg_mod, "Config").CHALLENGE
+            if hasattr(cfg_mod, "ARCConfig"):
+                cfg_val = extra_kwargs["config"].upper()
+                try:
+                    init_kwargs["config"] = getattr(cfg_mod, "ARCConfig")[cfg_val]
+                except KeyError:
+                    pass
+        # winogrande config
+        if benchmark_name == "winogrande":
+            wg_mod = importlib.import_module(module_path)
+            if hasattr(wg_mod, "Config"):
+                init_kwargs["config"] = wg_mod.Config.XL
+
+        try:
+            dataset = cls(**init_kwargs)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to construct {cls_name}: {exc}") from exc
+
+        lim = max_examples if max_examples is not None else len(dataset)
+        for i in range(min(lim, len(dataset))):
+            item = dataset[i]
+            items.append({
+                "type": "mc",
+                "context_tokens": ctx_enc(item.context),
+                "completion_token_lists": [ch_enc(ch) for ch in item.choices],
+                "label": item.label,
+            })
+        return items
+
+    # ── lambada (fill-in-the-blank) ─────────────────────────────────────
+    if benchmark_name == "lambada":
+        from tunalab.data_sources.evaluations.fill_in_the_blank.lambada import LambadaDataset
+        dataset = LambadaDataset(cache_dir=cache_dir, limit=max_examples)
+        lim = max_examples if max_examples is not None else len(dataset)
+        for i in range(min(lim, len(dataset))):
+            item = dataset[i]
+            items.append({
+                "type": "fitb",
+                "context_tokens": enc(item.prompt),
+                "completion_tokens": enc(" " + item.answer),
+            })
+        return items
+
+    # ── hotpotqa (fill-in-the-blank, bridge only) ───────────────────────
+    if benchmark_name == "hotpotqa":
+        import math as _m
+        corpus = _load_hotpotqa_corpus(cache_dir=cache_dir)
+        examples = _hotpotqa_examples(max_examples, cache_dir, bridge_only=False)
+        for ex in examples:
+            a_title, b_title = _hotpotqa_titles(ex)
+            if a_title is None:
+                continue
+            a_sents_raw = corpus.get(a_title.lower())
+            b_sents_raw = corpus.get(b_title.lower())
+            if a_sents_raw is None or b_sents_raw is None:
+                continue
+            a_ids = _hotpotqa_supporting_sent_ids(ex, a_title)
+            b_ids = _hotpotqa_supporting_sent_ids(ex, b_title)
+
+            def _pick_plain(sents, ids):
+                picked = [_strip_html_links(sents[i]) for i in ids if i < len(sents)]
+                return picked if picked else [_strip_html_links(sents[0])]
+
+            a_text = " ".join(_pick_plain(a_sents_raw, a_ids))
+            b_text = " ".join(_pick_plain(b_sents_raw, b_ids))
+            context = a_text + " " + b_text + "\nQuestion: " + ex["question"] + "\nAnswer: "
+            items.append({
+                "type": "fitb",
+                "context_tokens": enc(context),
+                "completion_tokens": enc(ex["answer"]),
+            })
+        return items
+
+    raise ValueError(
+        f"Benchmark {benchmark_name!r} is not supported by run_benchmark_annotated. "
+        f"Supported: {sorted(ANNOTATABLE_BENCHMARKS)}"
+    )
+
+
+def run_benchmark_annotated(
+    model,
+    benchmark_name: str,
+    annotator: "MarkdownPromptAnnotator",
+    max_examples: Optional[int] = None,
+    cache_dir: Optional[str] = None,
+    device: str = "cuda",
+) -> Dict[str, Any]:
+    """Run a benchmark under annotated cross-doc conditions.
+
+    Injects a Wikipedia-style link into each example's context using the
+    annotator, then scores under four link-probability thresholds and a flat
+    baseline. The threshold values are calibrated from the distribution of
+    max P('[') values observed across all examples in a cheap phase-1 scan.
+
+    Only supports ANNOTATABLE_BENCHMARKS (benchmarks where the context is
+    contiguous natural text that a markdown link can meaningfully augment).
+    Requires a cross_doc_link model with MarkdownLinkDetector.
+
+    Args:
+        model: TS2TSModel in eval mode. Must have tokenizer set.
+        benchmark_name: One of ANNOTATABLE_BENCHMARKS.
+        annotator: MarkdownPromptAnnotator instance.
+        max_examples: Cap on examples. None = full benchmark.
+        cache_dir: Cache directory for dataset downloads.
+        device: Device for tensor ops.
+
+    Returns:
+        Dict with keys:
+          "baseline_flat"  — flat score on original context (no annotation)
+          "t=0.0"          — all examples annotated
+          "t=p25"          — 75% annotated (threshold = p25 of prob distribution)
+          "t=p50"          — 50% annotated
+          "t=p75"          — 25% annotated
+          "threshold_values" — {"p25": float, "p50": float, "p75": float}
+        Each threshold dict has either "accuracy" (MC) or "perplexity"/"average_nll"
+        (fill-in-the-blank) plus "n_annotated", "n_link_fired", "total_examples".
+    """
+    if benchmark_name not in ANNOTATABLE_BENCHMARKS:
+        raise ValueError(
+            f"Benchmark {benchmark_name!r} not in ANNOTATABLE_BENCHMARKS. "
+            f"Supported: {sorted(ANNOTATABLE_BENCHMARKS)}"
+        )
+    _require_tokenizer(model, f"run_benchmark_annotated/{benchmark_name}")
+    enc = _make_encoder(model.tokenizer)
+
+    logger.info(
+        "run_benchmark_annotated: loading %s items for %s ...",
+        max_examples or "all", benchmark_name,
+    )
+    items = _load_benchmark_items(benchmark_name, enc, max_examples, cache_dir)
+    if not items:
+        logger.warning("run_benchmark_annotated: no items loaded for %s", benchmark_name)
+        return {}
+
+    is_mc = items[0]["type"] == "mc"
+
+    # ── Annotate all items — link_opener_prob used for threshold calibration ──
+    # We annotate first (which includes the forward pass that would have been
+    # phase-1's scan_prob), then derive percentile thresholds from the recorded
+    # link_opener_prob values. This avoids a redundant forward pass per item.
+    logger.info(
+        "run_benchmark_annotated: annotating %d items ...", len(items)
+    )
+    annotated_cache: List[Optional[AnnotatedPrompt]] = []
+    for item in items:
+        try:
+            ann = annotator.annotate(model, item["context_tokens"], device)
+        except Exception as exc:
+            logger.warning("Annotation failed: %s", exc)
+            ann = None
+        annotated_cache.append(ann)
+
+    probs: List[float] = [
+        ann.link_opener_prob if ann is not None else 0.0
+        for ann in annotated_cache
+    ]
+
+    sorted_probs = sorted(probs)
+    n = len(sorted_probs)
+    # Threshold at the k-th percentile: items whose prob is >= this value are annotated.
+    # p25 threshold → ~75% of items annotated (prob >= 25th-percentile value)
+    # p50 threshold → ~50% of items annotated (prob >= 50th-percentile value)
+    # p75 threshold → ~25% of items annotated (prob >= 75th-percentile value)
+    p25 = sorted_probs[min(n - 1, int(0.25 * n))]
+    p50 = sorted_probs[min(n - 1, int(0.50 * n))]
+    p75 = sorted_probs[min(n - 1, int(0.75 * n))]
+    threshold_values = {"p25": p25, "p50": p50, "p75": p75}
+    threshold_specs = [
+        ("t=0.0", 0.0),
+        ("t=p25", p25),
+        ("t=p50", p50),
+        ("t=p75", p75),
+    ]
+    logger.info(
+        "run_benchmark_annotated: thresholds p25=%.4f p50=%.4f p75=%.4f",
+        p25, p50, p75,
+    )
+
+    # ── Scoring helpers ─────────────────────────────────────────────────
+    def _score_item_flat(item: Dict[str, Any]) -> Tuple[float, Optional[int]]:
+        """Score under doc_causal on original context. Returns (nll_or_acc_signal, pred_label)."""
+        if is_mc:
+            nlls = score_completions_batched(
+                model, item["context_tokens"], item["completion_token_lists"], device=device,
+            )
+            pred = int(min(range(len(nlls)), key=lambda i: nlls[i]))
+            return float(nlls[pred]), pred
+        else:
+            nll = score_completion(model, item["context_tokens"], item["completion_tokens"], device=device)
+            return nll, None
+
+    def _score_item_annotated(
+        item: Dict[str, Any], ann: AnnotatedPrompt
+    ) -> Tuple[float, Optional[int]]:
+        """Score under cross-doc (or no-op link) using the annotated prompt."""
+        if ann.link_fired and ann.aux_token_lists:
+            # Cross-doc scoring
+            if is_mc:
+                nlls_cross = []
+                for comp_toks in item["completion_token_lists"]:
+                    nll = score_completion_with_context_docs(
+                        model,
+                        aux_token_lists=ann.aux_token_lists,
+                        context_tokens=ann.context_tokens,
+                        completion_tokens=comp_toks,
+                        link_detector=model.link_detector,
+                        aux_raw_identifiers=ann.aux_raw_identifiers,
+                        device=device,
+                    )
+                    # Fall back to flat if cross-doc returns None for this choice
+                    if nll is None:
+                        nll = score_completion(
+                            model, ann.context_tokens, comp_toks, device=device
+                        )
+                    nlls_cross.append(nll)
+                pred = int(min(range(len(nlls_cross)), key=lambda i: nlls_cross[i]))
+                return float(nlls_cross[pred]), pred
+            else:
+                nll = score_completion_with_context_docs(
+                    model,
+                    aux_token_lists=ann.aux_token_lists,
+                    context_tokens=ann.context_tokens,
+                    completion_tokens=item["completion_tokens"],
+                    link_detector=model.link_detector,
+                    aux_raw_identifiers=ann.aux_raw_identifiers,
+                    device=device,
+                )
+                if nll is None:
+                    nll = score_completion(
+                        model, ann.context_tokens, item["completion_tokens"], device=device
+                    )
+                return nll, None
+        else:
+            # Link injected but no aux doc (no_op or corpus miss) — score on
+            # annotated context_tokens under doc_causal
+            if is_mc:
+                nlls = score_completions_batched(
+                    model, ann.context_tokens, item["completion_token_lists"], device=device,
+                )
+                pred = int(min(range(len(nlls)), key=lambda i: nlls[i]))
+                return float(nlls[pred]), pred
+            else:
+                nll = score_completion(
+                    model, ann.context_tokens, item["completion_tokens"], device=device
+                )
+                return nll, None
+
+    def _aggregate(
+        nll_or_signal_list: List[float],
+        pred_labels: List[Optional[int]],
+        true_labels: List[Optional[int]],
+        n_annotated: int,
+        n_link_fired: int,
+    ) -> Dict[str, Any]:
+        total = len(nll_or_signal_list)
+        if is_mc:
+            correct = sum(
+                1 for p, t in zip(pred_labels, true_labels)
+                if p is not None and t is not None and p == t
+            )
+            acc = correct / total if total > 0 else float("nan")
+            try:
+                from tunalab.stats_funcs import calculate_bootstrap_ci
+                acc_vals = [1.0 if p == t else 0.0
+                            for p, t in zip(pred_labels, true_labels)
+                            if p is not None and t is not None]
+                ci = calculate_bootstrap_ci(acc_vals) if acc_vals else (float("nan"), float("nan"))
+            except Exception:
+                ci = (float("nan"), float("nan"))
+            return {
+                "accuracy": acc,
+                "accuracy_ci": list(ci),
+                "total_examples": total,
+                "n_annotated": n_annotated,
+                "n_link_fired": n_link_fired,
+            }
+        else:
+            mean_nll = float(_np_module.mean(nll_or_signal_list)) if nll_or_signal_list else float("nan")
+            try:
+                ppl = _math_module.exp(mean_nll)
+            except OverflowError:
+                ppl = float("inf")
+            return {
+                "perplexity": ppl,
+                "average_nll": mean_nll,
+                "total_examples": total,
+                "n_annotated": n_annotated,
+                "n_link_fired": n_link_fired,
+            }
+
+    # ── Baseline flat pass ──────────────────────────────────────────────
+    logger.info("run_benchmark_annotated: scoring baseline_flat ...")
+    flat_signals: List[float] = []
+    flat_preds: List[Optional[int]] = []
+    flat_labels: List[Optional[int]] = []
+    for item in items:
+        sig, pred = _score_item_flat(item)
+        flat_signals.append(sig)
+        flat_preds.append(pred)
+        flat_labels.append(item.get("label"))
+
+    results: Dict[str, Any] = {
+        "baseline_flat": _aggregate(flat_signals, flat_preds, flat_labels, 0, 0),
+        "threshold_values": threshold_values,
+    }
+    # Remove n_annotated/n_link_fired from baseline_flat (not meaningful there)
+    results["baseline_flat"].pop("n_annotated", None)
+    results["baseline_flat"].pop("n_link_fired", None)
+
+    # ── Threshold passes ────────────────────────────────────────────────
+    for t_label, threshold in threshold_specs:
+        logger.info(
+            "run_benchmark_annotated: scoring %s (threshold=%.4f) ...",
+            t_label, threshold,
+        )
+        signals: List[float] = []
+        preds: List[Optional[int]] = []
+        labels: List[Optional[int]] = []
+        n_annotated = 0
+        n_link_fired = 0
+
+        for item, prob, ann in zip(items, probs, annotated_cache):
+            if prob >= threshold and ann is not None:
+                sig, pred = _score_item_annotated(item, ann)
+                n_annotated += 1
+                if ann.link_fired:
+                    n_link_fired += 1
+            else:
+                sig, pred = _score_item_flat(item)
+            signals.append(sig)
+            preds.append(pred)
+            labels.append(item.get("label"))
+
+        results[t_label] = _aggregate(signals, preds, labels, n_annotated, n_link_fired)
+
+    return results
