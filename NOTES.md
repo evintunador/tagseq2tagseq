@@ -231,6 +231,17 @@ individual detectors, doesn't need to be fast) is a future milestone.
 
 No FineWeb or other flat data planned — the point is structured graph data.
 
+### Wikipedia redirect map — TODO
+The Wikipedia dump ships a `redirect.sql` table mapping stub redirect titles to
+their canonical targets (e.g. "UK" → "United Kingdom"). At Wikipedia graph
+construction time, inject redirect aliases as additional entries in the node's
+`raw_identifier` list (or a separate alias field), so the pretokenized graph
+already captures them. Downstream benefit: `HashNormTitleIndex` built from the
+corpus will index these aliases for free, directly fixing the class of eval misses
+where the model generates a redirect title that isn't a first-class graph node.
+A secondary benefit at eval time in `title_index.py` without any separate redirect-
+handling logic — the alias is just another corpus entry pointing to the same doc.
+
 ---
 
 ## Model

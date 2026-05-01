@@ -49,6 +49,37 @@ Future strategies (not yet implemented):
                    next-token candidates, probe "exact"/"norm" on each partial
                    decoded string, return first hit. k=2 doubles forward passes but
                    recovers single wrong-character errors cheaply.
+
+  "edit_distance" — after all other strategies fail, find the corpus entry whose
+                   normalized form has minimum Levenshtein distance (or highest
+                   Jaccard on char trigrams) from the generated string. Cap at a
+                   distance threshold to prevent wild misfires. Build a BK-tree at
+                   construction time for sub-linear lookup (O(log N) instead of O(N)
+                   linear scan). Catches OCR-style errors, split/merged words, and
+                   accent variants that the norm pipeline misses (e.g. "Réunion" vs
+                   "Reunion"). Cheap to add — pure HashNormTitleIndex change, no
+                   modifications to the generation loop or MarkdownPromptAnnotator.
+                   Recommended threshold: Levenshtein ≤ 2 (normalized by query length)
+                   or Jaccard trigram ≥ 0.7.
+
+  "prefix_commit" — post-generation, no change to the generation loop. After
+                   _generate_title produces a target_str, find all corpus titles that
+                   share the longest common prefix (word-level) with the generated
+                   string; among those run exact/norm/overlap. Covers the common case
+                   where the model gets the first several words right then either halts
+                   early ("Russian Civil" → "Russian Civil War") or overshoots and
+                   appends a spurious trailing word. Orthogonal to edit_distance;
+                   combine both as final fallback tiers.
+
+Fallback via display text (to implement in MarkdownPromptAnnotator._fetch_aux):
+  When the generated title misses all strategies, retry lookup using the display
+  text (the anchor text already present in the prompt between '[' and ']('). The
+  display text goes through the exact same cascading strategy pipeline as the
+  generated title. Rationale: anchor text in Wikipedia often IS the canonical title
+  or a close variant (e.g. the prompt contains "[the Battle of Waterloo](...)" and
+  the corpus has "Battle of Waterloo"). Requires _fetch_aux to receive the display_str
+  and pass it as a secondary query to title_index.lookup(). No new strategy needed —
+  it is a second call to the existing lookup() with a different input string.
 """
 
 import re as _re
