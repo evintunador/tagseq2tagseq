@@ -50,17 +50,17 @@ Future strategies (not yet implemented):
                    decoded string, return first hit. k=2 doubles forward passes but
                    recovers single wrong-character errors cheaply.
 
-  "edit_distance" — after all other strategies fail, find the corpus entry whose
-                   normalized form has minimum Levenshtein distance (or highest
-                   Jaccard on char trigrams) from the generated string. Cap at a
-                   distance threshold to prevent wild misfires. Build a BK-tree at
-                   construction time for sub-linear lookup (O(log N) instead of O(N)
-                   linear scan). Catches OCR-style errors, split/merged words, and
-                   accent variants that the norm pipeline misses (e.g. "Réunion" vs
-                   "Reunion"). Cheap to add — pure HashNormTitleIndex change, no
-                   modifications to the generation loop or MarkdownPromptAnnotator.
-                   Recommended threshold: Levenshtein ≤ 2 (normalized by query length)
-                   or Jaccard trigram ≥ 0.7.
+  "edit_distance" — fuzzy match: find the corpus entry whose normalized form has
+                   the highest Levenshtein normalized similarity to the generated
+                   string. Conservative default threshold: normalized_similarity
+                   ≥ 0.80 (i.e. ≤ 20% of characters differ). Short queries
+                   (< edit_distance_min_chars=5) are skipped to suppress false
+                   positives. Uses rapidfuzz for fast scoring (pip install
+                   rapidfuzz). Unlike all other strategies this one is lossy —
+                   it may return a wrong doc — so it is recommended to place it
+                   last in the strategy sequence so exact matches are preferred.
+                   Catches accent variants (Réunion → Reunion), minor typos, and
+                   OCR-style single-character errors.
 
   "prefix_commit" — post-generation, no change to the generation loop. After
                    _generate_title produces a target_str, find all corpus titles that
@@ -98,7 +98,7 @@ class TitleIndex(Protocol):
 
 
 _VALID_STRATEGIES = frozenset({
-    "exact", "norm", "word_overlap_ordered", "word_overlap_unordered",
+    "exact", "norm", "word_overlap_ordered", "word_overlap_unordered", "edit_distance",
 })
 _DEFAULT_STRATEGIES: tuple = ("exact", "norm", "word_overlap_ordered")
 _WORD_OVERLAP_STRATEGIES = frozenset({"word_overlap_ordered", "word_overlap_unordered"})
@@ -118,6 +118,11 @@ class HashNormTitleIndex:
       titles ("Russian Civil" → "Russian Civil War").
     * ``"word_overlap_unordered"`` — query words must all appear in the candidate's word
       set (any order); tiebreak by shortest candidate. More permissive than ordered.
+    * ``"edit_distance"``          — fuzzy match using Levenshtein normalized
+      similarity. Lossy — may return a wrong doc. Recommended last in the
+      sequence so lossless strategies take priority, but not structurally
+      enforced. Requires ``rapidfuzz`` (``pip install rapidfuzz``). Tunable
+      via ``edit_distance_threshold`` and ``edit_distance_min_chars``.
 
     For strategies that can collide (norm, word_overlap_*), first-inserted entry wins.
 
@@ -125,12 +130,21 @@ class HashNormTitleIndex:
         raw_identifiers: Iterable of raw identifier strings from the corpus.
         strategies: Ordered sequence of strategy names to try in order.
             Default: ``("exact", "norm", "word_overlap_ordered")``.
+        edit_distance_threshold: Maximum normalized edit distance allowed for a
+            match (1 - normalized_similarity). Range [0, 1]; default 0.2 means
+            ≥80% of characters must match. Only used with ``"edit_distance"``.
+        edit_distance_min_chars: Minimum length (chars) of the normalized query
+            before ``edit_distance`` will fire. Queries shorter than this are
+            skipped to suppress false positives on short ambiguous strings.
+            Default 5. Only used with ``"edit_distance"``.
     """
 
     def __init__(
         self,
         raw_identifiers: Iterable[str],
         strategies: Sequence[str] = _DEFAULT_STRATEGIES,
+        edit_distance_threshold: float = 0.2,
+        edit_distance_min_chars: int = 5,
     ) -> None:
         unknown = set(strategies) - _VALID_STRATEGIES
         if unknown:
@@ -139,6 +153,8 @@ class HashNormTitleIndex:
                 f"Valid: {sorted(_VALID_STRATEGIES)}"
             )
         self._strategies: tuple = tuple(strategies)
+        self._ed_threshold: float = edit_distance_threshold
+        self._ed_min_chars: int = edit_distance_min_chars
 
         self._exact: Dict[str, str] = {}          # raw.lower() -> raw
         self._index: Dict[str, str] = {}          # strip_hash(norm(raw)) -> raw
@@ -146,8 +162,12 @@ class HashNormTitleIndex:
         self._word_index: Dict[str, List[str]] = {}
         # normed word list per raw title (for ordered subsequence check)
         self._word_lists: Dict[str, List[str]] = {}  # raw -> [word, ...]
+        # parallel lists for edit_distance: normed key + raw (positional index)
+        self._ed_keys: List[str] = []
+        self._ed_raws: List[str] = []
 
         _need_word = bool(set(strategies) & _WORD_OVERLAP_STRATEGIES)
+        _need_ed = "edit_distance" in strategies
 
         for raw in raw_identifiers:
             lower = raw.lower()
@@ -165,6 +185,12 @@ class HashNormTitleIndex:
                     if word not in self._word_index:
                         self._word_index[word] = []
                     self._word_index[word].append(raw)
+
+            if _need_ed:
+                ed_key = strip_hash(create_normed_identifier(raw))
+                if ed_key:
+                    self._ed_keys.append(ed_key)
+                    self._ed_raws.append(raw)
 
     @property
     def strategies(self) -> tuple:
@@ -190,6 +216,8 @@ class HashNormTitleIndex:
             return self._word_overlap(generated_str, ordered=True)
         if strategy == "word_overlap_unordered":
             return self._word_overlap(generated_str, ordered=False)
+        if strategy == "edit_distance":
+            return self._edit_distance_lookup(generated_str)
         return None
 
     def _word_overlap(self, generated_str: str, ordered: bool) -> Optional[str]:
@@ -227,6 +255,38 @@ class HashNormTitleIndex:
                 return None
 
         return min(candidates, key=len)
+
+    def _edit_distance_lookup(self, generated_str: str) -> Optional[str]:
+        """Return closest corpus entry by Levenshtein normalized similarity, or None.
+
+        Compares normalized forms (same pipeline as the ``norm`` strategy) to avoid
+        spurious distance inflation from punctuation differences. Returns None when
+        the query is too short (< edit_distance_min_chars) or no entry exceeds the
+        similarity cutoff (1 - edit_distance_threshold).
+        """
+        try:
+            from rapidfuzz.distance import Levenshtein as _Lev
+            from rapidfuzz import process as _rfp
+        except ImportError:
+            raise ImportError(
+                "edit_distance strategy requires rapidfuzz: pip install rapidfuzz"
+            )
+        query_norm = strip_hash(create_normed_identifier(generated_str))
+        if not query_norm or len(query_norm) < self._ed_min_chars:
+            return None
+        if not self._ed_keys:
+            return None
+        cutoff = 1.0 - self._ed_threshold
+        result = _rfp.extractOne(
+            query_norm,
+            self._ed_keys,
+            scorer=_Lev.normalized_similarity,
+            score_cutoff=cutoff,
+        )
+        if result is None:
+            return None
+        _match_key, _score, idx = result
+        return self._ed_raws[idx]
 
     def __len__(self) -> int:
         return len(self._exact)

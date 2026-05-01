@@ -616,9 +616,16 @@ def run_benchmarks_on_model(
                 from eval.title_index import HashNormTitleIndex
                 _corpus = PretokCorpus(annotator_corpus_dir)
                 _title_index = HashNormTitleIndex(
-                    node["raw_identifier"]
-                    for node in _corpus._graph.nodes.values()
-                    if "raw_identifier" in node
+                    (
+                        node["raw_identifier"]
+                        for node in _corpus._graph.nodes.values()
+                        if "raw_identifier" in node
+                    ),
+                    strategies=cfg.get(
+                        "annotator_strategies",
+                        ("exact", "norm", "word_overlap_ordered", "edit_distance"),
+                    ),
+                    edit_distance_threshold=cfg.get("annotator_ed_threshold", 0.2),
                 )
                 _annotator = MarkdownPromptAnnotator(
                     corpus=_corpus,
@@ -1050,6 +1057,21 @@ def main() -> None:
              "(used when 'annotated' is in --conditions).",
     )
     parser.add_argument(
+        "--annotator-strategies", nargs="+",
+        default=["exact", "norm", "word_overlap_ordered", "edit_distance"],
+        metavar="STRATEGY",
+        help="Ordered list of title-matching strategies for HashNormTitleIndex "
+             "(used when 'annotated' is in --conditions). "
+             "Valid: exact, norm, word_overlap_ordered, word_overlap_unordered, "
+             "edit_distance. Default includes edit_distance as final fallback.",
+    )
+    parser.add_argument(
+        "--annotator-ed-threshold", type=float, default=0.2,
+        metavar="THRESH",
+        help="Normalized edit distance threshold for the edit_distance strategy "
+             "[0, 1]. Lower = stricter. Default 0.2 (≥80%% similarity required).",
+    )
+    parser.add_argument(
         "--seed", type=int, default=None,
         help="Global RNG seed (torch, numpy, cuda, Python random). "
              "Set this to make annotated title generation reproducible across runs.",
@@ -1096,6 +1118,8 @@ def main() -> None:
         "max_docs": args.max_docs,
         "annotator_corpus": args.annotator_corpus or args.dataset,
         "annotator_mode": args.annotator_mode,
+        "annotator_strategies": args.annotator_strategies,
+        "annotator_ed_threshold": args.annotator_ed_threshold,
     }
 
     from tunalab.reproducibility import ReproducibilityManager

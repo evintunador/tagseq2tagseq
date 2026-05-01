@@ -274,6 +274,70 @@ def test_ordered_punct_only_query():
     assert idx.lookup("...") is None
 
 
+# ── edit_distance strategy ───────────────────────────────────────────────────
+
+def test_ed_accent_variant():
+    idx = HashNormTitleIndex(["Réunion"], strategies=("edit_distance",))
+    assert idx.lookup("Reunion") == "Réunion"
+
+
+def test_ed_typo_one_char():
+    idx = HashNormTitleIndex(["Python"], strategies=("edit_distance",))
+    assert idx.lookup("Pythn") == "Python"
+
+
+def test_ed_typo_two_chars():
+    idx = HashNormTitleIndex(["Machine Learning"], strategies=("edit_distance",))
+    assert idx.lookup("Machin Lerning") == "Machine Learning"
+
+
+def test_ed_miss_when_too_different():
+    idx = HashNormTitleIndex(["Python"], strategies=("edit_distance",))
+    assert idx.lookup("Ruby") is None
+
+
+def test_ed_short_query_skipped():
+    # "Arc" is 3 chars, below the default min_chars=5 — must not match "Art".
+    idx = HashNormTitleIndex(["Art"], strategies=("edit_distance",))
+    assert idx.lookup("Arc") is None
+
+
+def test_ed_threshold_boundary():
+    # "Pythox" vs normed "Python" → 1 char differs out of 6 → similarity ~83%.
+    # Default threshold=0.2 means cutoff=80%; 83% > 80% so it should match.
+    idx = HashNormTitleIndex(["Python"], strategies=("edit_distance",))
+    assert idx.lookup("Pythox") == "Python"
+    # "Pxthox" — 2 chars differ out of 6 → similarity ~67%, below 80% cutoff.
+    assert idx.lookup("Pxthox") is None
+
+
+def test_ed_not_in_default_strategies():
+    # Default strategies do not include edit_distance — typo must miss.
+    idx = HashNormTitleIndex(["Python"])
+    assert idx.lookup("Pythn") is None
+
+
+def test_ed_fires_after_other_strategies_miss():
+    # "Pythn" misses exact, norm (different normed form), and word_overlap
+    # (word "pythn" not in word_index for "Python"). edit_distance catches it.
+    idx = HashNormTitleIndex(
+        ["Python"],
+        strategies=("exact", "norm", "word_overlap_ordered", "edit_distance"),
+    )
+    assert idx.lookup("Pythn") == "Python"
+
+
+def test_ed_import_error_without_rapidfuzz(monkeypatch):
+    import sys
+    idx = HashNormTitleIndex(["Python"], strategies=("edit_distance",))
+    # Temporarily hide rapidfuzz from the import system.
+    monkeypatch.setitem(sys.modules, "rapidfuzz", None)
+    monkeypatch.setitem(sys.modules, "rapidfuzz.distance", None)
+    monkeypatch.setitem(sys.modules, "rapidfuzz.process", None)
+    with pytest.raises(ImportError, match="rapidfuzz"):
+        idx.lookup("Pythn")
+
+
 # ── MarkdownPromptAnnotator integration ──────────────────────────────────────
 
 def test_annotator_uses_title_index_on_corpus_miss():

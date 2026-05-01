@@ -68,3 +68,4 @@ eval:
   max_docs: 500
   annotator_corpus: data/pretokenized_datasets/simplewiki
   annotator_mode: corpus_only
+  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
