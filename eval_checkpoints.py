@@ -616,8 +616,9 @@ def run_benchmarks_on_model(
                 from eval.title_index import HashNormTitleIndex
                 _corpus = PretokCorpus(annotator_corpus_dir)
                 _title_index = HashNormTitleIndex(
-                    _corpus._graph.get_raw_identifier(_corpus._graph.get_normed_identifier(i))
-                    for i in range(len(_corpus._graph))
+                    node["raw_identifier"]
+                    for node in _corpus._graph.nodes.values()
+                    if "raw_identifier" in node
                 )
                 _annotator = MarkdownPromptAnnotator(
                     corpus=_corpus,

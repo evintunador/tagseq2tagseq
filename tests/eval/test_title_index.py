@@ -2,7 +2,7 @@
 tests/eval/test_title_index.py — unit tests for eval.title_index.
 """
 import pytest
-from eval.title_index import HashNormTitleIndex, TitleIndex
+from eval.title_index import HashNormTitleIndex, TitleIndex, _DEFAULT_STRATEGIES, _is_contiguous_subsequence
 
 
 # ── Protocol compliance ───────────────────────────────────────────────────────
@@ -55,12 +55,12 @@ def test_punct_only_query_no_spurious_match():
 # ── Normalization behaviour ───────────────────────────────────────────────────
 
 def test_hyphen_stripped():
-    # normalize_identifier strips hyphens (non-alphanumeric) but keeps underscores.
-    # "Spider-Man" → "spiderman"; "Spider Man" → "spider_man" — different keys, no match.
     idx = HashNormTitleIndex(["Spider-Man"])
-    assert idx.lookup("Spider Man") is None
+    # "Spider Man" hits via word_overlap_ordered: ["spider", "man"] is a
+    # contiguous subsequence of Spider-Man's word list ["spider", "man"].
+    assert idx.lookup("Spider Man") == "Spider-Man"
     assert idx.lookup("Spider-Man") == "Spider-Man"
-    assert idx.lookup("SpiderMan") == "Spider-Man"  # same stripped-norm "spiderman"
+    assert idx.lookup("SpiderMan") == "Spider-Man"
 
 
 def test_punctuation_stripped():
@@ -69,8 +69,6 @@ def test_punctuation_stripped():
 
 
 def test_disambiguation_survives():
-    # Parens are stripped by normalize_identifier, but the inner text is kept,
-    # so disambiguation text still differentiates entries.
     idx = HashNormTitleIndex(["Mercury (planet)", "Mercury (element)"])
     assert idx.lookup("Mercury (planet)") == "Mercury (planet)"
     assert idx.lookup("Mercury (element)") == "Mercury (element)"
@@ -79,16 +77,12 @@ def test_disambiguation_survives():
 # ── Collision (first-wins) ────────────────────────────────────────────────────
 
 def test_collision_exact_wins():
-    # "C++" and "C" both normalize to "c" but are distinct exact keys.
-    # Exact match fires first, so each resolves to itself.
     idx = HashNormTitleIndex(["C++", "C"])
     assert idx.lookup("C") == "C"
     assert idx.lookup("C++") == "C++"
 
 
 def test_exact_wins_over_norm_collision():
-    # Same corpus — confirm "C" is reachable by its own exact key even though
-    # "C++" was inserted first and would win under norm-only lookup.
     idx = HashNormTitleIndex(["C++", "C"])
     assert idx.lookup("C") == "C"
 
@@ -96,7 +90,6 @@ def test_exact_wins_over_norm_collision():
 # ── __len__ ───────────────────────────────────────────────────────────────────
 
 def test_len_counts_distinct_raws():
-    # "C++", "C", and "Python" are all distinct exact keys → 3 entries
     idx = HashNormTitleIndex(["C++", "C", "Python"])
     assert len(idx) == 3
 
@@ -109,27 +102,186 @@ def test_len_no_collisions():
 # ── Exact-match priority ─────────────────────────────────────────────────────
 
 def test_exact_fires_before_norm():
-    # "C" exact-matches itself; without exact priority it would return "C++" (norm collision).
     idx = HashNormTitleIndex(["C++", "C"])
     assert idx.lookup("C") == "C"
-    assert idx.lookup("c") == "C"  # case-insensitive
+    assert idx.lookup("c") == "C"
 
 
 def test_exact_case_insensitive_no_norm_needed():
-    # "PYTHON" hits exact ("python" -> "Python") before norm fires.
     idx = HashNormTitleIndex(["Python"])
     assert idx.lookup("PYTHON") == "Python"
 
 
+# ── Strategy configuration ────────────────────────────────────────────────────
+
+def test_default_strategies():
+    idx = HashNormTitleIndex(["Python"])
+    assert idx.strategies == ("exact", "norm", "word_overlap_ordered")
+
+
+def test_unknown_strategy_raises():
+    with pytest.raises(ValueError, match="Unknown strategies"):
+        HashNormTitleIndex(["Python"], strategies=("exact", "bogus"))
+
+
+def test_old_word_overlap_name_raises():
+    # "word_overlap" was the old name — now split into _ordered / _unordered.
+    with pytest.raises(ValueError, match="Unknown strategies"):
+        HashNormTitleIndex(["Python"], strategies=("exact", "word_overlap"))
+
+
+def test_exact_only_skips_norm():
+    idx = HashNormTitleIndex(["C++", "C"], strategies=("exact",))
+    assert idx.lookup("C") == "C"
+    assert idx.lookup("C++") == "C++"
+    assert idx.lookup("SPIDERMAN") is None
+
+
+def test_norm_only_skips_exact():
+    idx = HashNormTitleIndex(["Spider-Man"], strategies=("norm",))
+    assert idx.lookup("SpiderMan") == "Spider-Man"
+
+
+# ── _is_contiguous_subsequence helper ────────────────────────────────────────
+
+def test_contiguous_subseq_exact():
+    assert _is_contiguous_subsequence(["a", "b"], ["a", "b", "c"]) is True
+
+
+def test_contiguous_subseq_at_end():
+    assert _is_contiguous_subsequence(["b", "c"], ["a", "b", "c"]) is True
+
+
+def test_contiguous_subseq_not_contiguous():
+    assert _is_contiguous_subsequence(["a", "c"], ["a", "b", "c"]) is False
+
+
+def test_contiguous_subseq_wrong_order():
+    assert _is_contiguous_subsequence(["b", "a"], ["a", "b", "c"]) is False
+
+
+def test_contiguous_subseq_longer_than_haystack():
+    assert _is_contiguous_subsequence(["a", "b", "c", "d"], ["a", "b", "c"]) is False
+
+
+# ── word_overlap_ordered strategy ─────────────────────────────────────────────
+
+def test_ordered_partial_title():
+    idx = HashNormTitleIndex(
+        ["Russian Civil War"],
+        strategies=("word_overlap_ordered",),
+    )
+    assert idx.lookup("Russian Civil") == "Russian Civil War"
+
+
+def test_ordered_rejects_wrong_order():
+    idx = HashNormTitleIndex(
+        ["Russian Civil War"],
+        strategies=("word_overlap_ordered",),
+    )
+    assert idx.lookup("Civil Russian") is None
+
+
+def test_ordered_rejects_non_contiguous():
+    # "Russian War" skips "Civil" — not contiguous, must miss.
+    idx = HashNormTitleIndex(
+        ["Russian Civil War"],
+        strategies=("word_overlap_ordered",),
+    )
+    assert idx.lookup("Russian War") is None
+
+
+def test_ordered_prefers_shorter_on_tie():
+    # "Indianapolis Motor" is a prefix of both — pick shorter.
+    idx = HashNormTitleIndex(
+        ["Indianapolis Motor Speedway", "Indianapolis Motor Sports"],
+        strategies=("word_overlap_ordered",),
+    )
+    result = idx.lookup("Indianapolis Motor")
+    assert result in ("Indianapolis Motor Speedway", "Indianapolis Motor Sports")
+    assert len(result) == min(
+        len("Indianapolis Motor Speedway"), len("Indianapolis Motor Sports")
+    )
+
+
+def test_ordered_in_default():
+    idx = HashNormTitleIndex(["Russian Civil War"])
+    assert idx.lookup("Russian Civil") == "Russian Civil War"
+
+
+# ── word_overlap_unordered strategy ──────────────────────────────────────────
+
+def test_unordered_partial_title():
+    idx = HashNormTitleIndex(
+        ["United States of America"],
+        strategies=("word_overlap_unordered",),
+    )
+    assert idx.lookup("United States") == "United States of America"
+
+
+def test_unordered_accepts_reordered_words():
+    idx = HashNormTitleIndex(
+        ["Russian Civil War"],
+        strategies=("word_overlap_unordered",),
+    )
+    # Unordered: "Civil Russian" still hits because both words are present.
+    assert idx.lookup("Civil Russian") == "Russian Civil War"
+
+
+def test_unordered_all_words_required():
+    idx = HashNormTitleIndex(
+        ["United Nations", "United Kingdom"],
+        strategies=("word_overlap_unordered",),
+    )
+    assert idx.lookup("United Kingdom") == "United Kingdom"
+    assert idx.lookup("United Nations") == "United Nations"
+
+
+def test_unordered_no_match_on_disjoint():
+    idx = HashNormTitleIndex(
+        ["United States of America"],
+        strategies=("word_overlap_unordered",),
+    )
+    assert idx.lookup("Python programming") is None
+
+
+def test_unordered_not_in_default():
+    # "United States" hits via word_overlap_ordered: ["united", "states"] is a
+    # contiguous prefix of ["united", "states", "of", "america"]. Unordered is
+    # still not needed for this case; ordered covers it.
+    idx = HashNormTitleIndex(["United States of America"])
+    assert idx.lookup("United States") == "United States of America"
+
+
+def test_word_overlap_ordered_in_default_unordered_not():
+    idx = HashNormTitleIndex(["Russian Civil War", "United States of America"])
+    assert "word_overlap_ordered" in idx.strategies
+    assert "word_overlap_unordered" not in idx.strategies
+
+
+def test_unordered_empty_query_no_crash():
+    idx = HashNormTitleIndex(["Python"], strategies=("word_overlap_unordered",))
+    assert idx.lookup("") is None
+
+
+def test_ordered_empty_query_no_crash():
+    idx = HashNormTitleIndex(["Python"], strategies=("word_overlap_ordered",))
+    assert idx.lookup("") is None
+
+
+def test_ordered_punct_only_query():
+    idx = HashNormTitleIndex(["Python"], strategies=("word_overlap_ordered",))
+    assert idx.lookup("...") is None
+
+
 # ── MarkdownPromptAnnotator integration ──────────────────────────────────────
 
-def test_annotator_uses_title_index_on_corpus_miss(monkeypatch):
+def test_annotator_uses_title_index_on_corpus_miss():
     """When the model generates a case-variant title, title_index resolves it."""
     from unittest.mock import MagicMock
     from eval.link_annotator import MarkdownPromptAnnotator
 
     corpus = MagicMock()
-    # has_document is case-sensitive verbatim — only matches exact raw_identifier
     corpus.has_document.side_effect = lambda s: s == "Python (programming language)"
     corpus.get_document.return_value = iter([1, 2, 3])
 
@@ -140,7 +292,6 @@ def test_annotator_uses_title_index_on_corpus_miss(monkeypatch):
         link_retrieval_mode="corpus_only",
     )
 
-    # Model generates lowercase variant — verbatim lookup would miss, index should hit
     aux_lists, aux_ids, fired = ann._fetch_aux(
         model=MagicMock(), target_str="python (programming language)", device="cpu"
     )
@@ -148,7 +299,7 @@ def test_annotator_uses_title_index_on_corpus_miss(monkeypatch):
     assert aux_ids == ["Python (programming language)"]
 
 
-def test_annotator_without_title_index_uses_verbatim(monkeypatch):
+def test_annotator_without_title_index_uses_verbatim():
     """Without a title_index, annotator falls back to verbatim has_document."""
     from unittest.mock import MagicMock
     from eval.link_annotator import MarkdownPromptAnnotator
@@ -163,14 +314,38 @@ def test_annotator_without_title_index_uses_verbatim(monkeypatch):
         link_retrieval_mode="corpus_only",
     )
 
-    # Verbatim miss
     _, _, fired_miss = ann._fetch_aux(
         model=MagicMock(), target_str="python (programming language)", device="cpu"
     )
     assert fired_miss is False
 
-    # Verbatim hit
     _, _, fired_hit = ann._fetch_aux(
         model=MagicMock(), target_str="Python (programming language)", device="cpu"
     )
     assert fired_hit is True
+
+
+def test_annotator_ordered_overlap_via_title_index():
+    """word_overlap_ordered resolves a truncated title for the annotator."""
+    from unittest.mock import MagicMock
+    from eval.link_annotator import MarkdownPromptAnnotator
+
+    corpus = MagicMock()
+    corpus.has_document.side_effect = lambda s: s == "Russian Civil War"
+    corpus.get_document.return_value = iter([10, 20, 30])
+
+    idx = HashNormTitleIndex(
+        ["Russian Civil War"],
+        strategies=("exact", "norm", "word_overlap_ordered"),
+    )
+    ann = MarkdownPromptAnnotator(
+        corpus=corpus,
+        title_index=idx,
+        link_retrieval_mode="corpus_only",
+    )
+
+    aux_lists, aux_ids, fired = ann._fetch_aux(
+        model=MagicMock(), target_str="Russian Civil", device="cpu"
+    )
+    assert fired is True
+    assert aux_ids == ["Russian Civil War"]

@@ -149,6 +149,19 @@ class MarkdownPromptAnnotator:
             text clean before the bracket.
         link_mid_token_id: Token ID for the '](' bigram. Default 16151.
         eos_token_id: EOS token ID. Default 50256 (GPT-2).
+
+    TODO — aux_fetch_depth: Currently _fetch_aux retrieves exactly one corpus doc.
+        Wikipedia redirect chains mean the model may generate "United Kingdom" but
+        the relevant content is one hop away via a stub redirect doc. Adding an
+        ``aux_fetch_depth: int = 1`` parameter would make _fetch_aux do a small BFS:
+        fetch the primary doc, run the link_detector over its tokens to find outgoing
+        links, then fetch those targets up to ``aux_fetch_depth`` hops, packing all
+        results as additional DocSpans in aux_token_lists. The scoring side already
+        accepts arbitrary-length aux_token_lists so no changes are needed there.
+        Treat it as a tunable hyperparameter — a depth of 2–3 should cover most
+        redirect chains without exploding context. Design note: the redirect docs
+        already exist in the corpus (they are real nodes in the Wikipedia graph), so
+        this is a natural extension of what the model was trained to do.
     """
 
     _VALID_MODES = frozenset({
