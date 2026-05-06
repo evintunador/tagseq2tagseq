@@ -40,19 +40,18 @@ def generate_identifier_hash(raw_identifier: str) -> str:
     Generate a deterministic 6-character hex hash from an identifier.
 
     The hash is used to disambiguate identifiers with identical normalized forms.
-    This must match the hashing scheme used during training data preprocessing.
+    This must match the hashing scheme used during training data preprocessing
+    (data/wiki_graph_extractor/extract.py), which hashes the canonical form
+    (lowercased, spaces→underscores) rather than the raw string.
 
     Args:
         raw_identifier: Original identifier string (before normalization)
 
     Returns:
         6-character hex hash string
-
-    Examples:
-        >>> generate_identifier_hash("Python")
-        'a7f8c3'  # Example output
     """
-    hash_obj = hashlib.md5(raw_identifier.encode('utf-8'))
+    canonical = raw_identifier.lower().replace(' ', '_')
+    hash_obj = hashlib.md5(canonical.encode('utf-8'))
     return hash_obj.hexdigest()[:6]
 
 
