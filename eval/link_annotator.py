@@ -54,7 +54,7 @@ import logging
 import math
 import re as _re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Set, Tuple, runtime_checkable
 
 import torch
 import torch.nn.functional as F
@@ -81,6 +81,10 @@ class AnnotatedPrompt:
     link_mid_pos: int
     link_opener_prob: float
     link_fired: bool
+    # Populated only when TrieTitleIndex is used with return_candidates=True.
+    # List of (raw_identifier, length_normalized_score) for all completed beam
+    # paths, sorted best-first. The first entry is the selected title.
+    beam_candidates: Optional[List[Tuple[str, float]]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +112,221 @@ class PromptAnnotator(Protocol):
     ) -> AnnotatedPrompt:
         """Full annotation pipeline."""
         ...
+
+
+# ---------------------------------------------------------------------------
+# TrieTitleIndex
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _TrieNode:
+    children: Dict[int, "_TrieNode"] = field(default_factory=dict)
+    raw_identifier: Optional[str] = None
+
+
+class TrieTitleIndex:
+    """
+    Token-level prefix trie over corpus titles for constrained title generation.
+
+    At construction time tokenizes every raw_identifier and inserts the resulting
+    token-id sequence as a trie path.  During generation, beam search keeps the
+    top-beam_width active paths alive simultaneously, scores each completed path
+    by its cumulative joint log-prob under the unconstrained distribution, and
+    returns the highest-scoring completed title.
+
+    beam_width=1 is greedy single-path traversal (original behaviour).
+    beam_width>1 allows shorter high-first-token titles (e.g. '25') to be beaten
+    by longer titles whose total log-prob is higher (e.g. 'New Hampshire').
+
+    Implements generate_title(model, prefix_tokens, device) which
+    MarkdownPromptAnnotator._generate_title delegates to when present.
+
+    lookup() delegates to fallback_index when provided (for post-hoc recovery
+    when generate_title returns None).
+
+    Args:
+        raw_identifiers: Corpus title strings.
+        tokenizer: Must expose .encode(str) -> List[int] and .decode(List[int]) -> str.
+        beam_width: Number of active paths to maintain during generation. Default 1.
+        length_penalty: Exponent alpha in the Wu et al. length normalization:
+            score = joint_log_prob / (n_tokens ** alpha). 0.0 = no normalization
+            (raw joint log-prob, shorter titles win); 1.0 = full per-token mean
+            log-prob; 0.6 = recommended middle ground. Default 0.0.
+        min_joint_logprob: If set, prune any path whose cumulative log P drops
+            below this value.  None disables the threshold.
+        fallback_index: Optional TitleIndex to delegate lookup() calls to.
+
+    Notes:
+        Collision policy: if two titles tokenize to identical token sequences,
+            the first-inserted raw_identifier is stored; subsequent collisions
+            are silently ignored.
+        Sampling parameters (temperature, top_k, top_p) passed to generate_title
+            are forwarded to the free-generation fallback path only. Beam search
+            itself always selects children deterministically by descending
+            unconstrained probability.
+    """
+
+    def __init__(
+        self,
+        raw_identifiers: Iterable[str],
+        tokenizer,
+        beam_width: int = 1,
+        length_penalty: float = 0.0,
+        min_joint_logprob: Optional[float] = None,
+        fallback_index: Optional[TitleIndex] = None,
+    ) -> None:
+        self.tokenizer = tokenizer
+        self.beam_width = beam_width
+        self.length_penalty = length_penalty
+        self.min_joint_logprob = min_joint_logprob
+        self.fallback_index = fallback_index
+
+        # Build trie from raw token sequences (no normalization).
+        self._root = _TrieNode()
+        for raw in raw_identifiers:
+            try:
+                token_ids: List[int] = list(tokenizer.encode(raw))
+            except Exception:
+                continue
+            if not token_ids:
+                continue
+            node = self._root
+            for tid in token_ids:
+                if tid not in node.children:
+                    node.children[tid] = _TrieNode()
+                node = node.children[tid]
+            if node.raw_identifier is None:  # first-inserted wins on collision
+                node.raw_identifier = raw
+
+        # Token ID for ')' — obtained once at construction.
+        try:
+            ids = tokenizer.encode(")")
+            self._close_paren_id: Optional[int] = ids[0] if ids else None
+        except Exception:
+            self._close_paren_id = None
+
+    # ------------------------------------------------------------------
+    # TitleIndex protocol
+    # ------------------------------------------------------------------
+
+    def lookup(self, generated_str: str) -> Optional[str]:
+        """Delegate to fallback_index, or None if none set."""
+        if self.fallback_index is not None:
+            return self.fallback_index.lookup(generated_str)
+        return None
+
+    # ------------------------------------------------------------------
+    # Constrained generation
+    # ------------------------------------------------------------------
+
+    def generate_title(
+        self,
+        model,
+        prefix_tokens: List[int],
+        device: str,
+        max_title_tokens: int = 50,
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        return_candidates: bool = False,
+    ) -> Optional[Tuple]:
+        """Trie-constrained title generation with beam search.
+
+        Maintains up to beam_width active paths simultaneously.  Each path is
+        scored by its cumulative sum of log P(token) under the *unconstrained*
+        distribution, so a longer title can beat a short one that happened to
+        have a high-probability first token.  All completed paths are collected
+        and the highest-scoring one is returned.
+
+        Returns (raw_identifier, title_token_ids) on success, or None when no
+        path completes within max_title_tokens or all paths are pruned by
+        min_joint_logprob.  None causes the caller to fall back to free generation.
+        """
+        def _fwd(tokens: List[int]) -> torch.Tensor:
+            tok_t = torch.tensor(tokens, dtype=torch.long, device=device)
+            span = DocSpan(
+                doc_id=0, normed_identifier="", raw_identifier="",
+                start=0, end=tok_t.shape[0], truncated=False,
+                outgoing_identifiers=[],
+            )
+            logits = model.forward_inference(
+                tok_t.unsqueeze(0).to(device), [span], mask_type="doc_causal"
+            )
+            return logits[0]  # [T, V]
+
+        # Clamp max_steps to both caller budget and model's positional limit.
+        _raw = getattr(getattr(model, "backbone", None), "max_seq_len", None)
+        model_max_seq = _raw if isinstance(_raw, int) else None
+        room = (model_max_seq - len(prefix_tokens) - 1) if model_max_seq else max_title_tokens
+        max_steps = min(max_title_tokens, max(room, 0))
+
+        # Each beam entry: (joint_logprob, title_tokens, trie_node)
+        beam: List[Tuple[float, List[int], _TrieNode]] = [(0.0, [], self._root)]
+        # Completed paths: (joint_logprob, title_tokens, raw_identifier)
+        candidates: List[Tuple[float, List[int], str]] = []
+
+        for _ in range(max_steps):
+            if not beam:
+                break
+            next_beam: List[Tuple[float, List[int], _TrieNode]] = []
+
+            for logprob, tokens, node in beam:
+                logits = _fwd(list(prefix_tokens) + tokens)[-1]  # [V]
+                probs = F.softmax(logits.float(), dim=-1)
+
+                # Interior-leaf: compare P(")") vs best valid child.
+                if node.raw_identifier is not None:
+                    p_close = (
+                        probs[self._close_paren_id].item()
+                        if self._close_paren_id is not None else 0.0
+                    )
+                    p_best_child = (
+                        max(probs[tid].item() for tid in node.children)
+                        if node.children else 0.0
+                    )
+                    if p_close >= p_best_child or not node.children:
+                        candidates.append((logprob, tokens, node.raw_identifier))
+                        continue  # don't expand further
+
+                if not node.children:
+                    if node.raw_identifier:
+                        candidates.append((logprob, tokens, node.raw_identifier))
+                    continue
+
+                # Expand: score every valid child by unconstrained P, keep top beam_width.
+                child_scores = sorted(
+                    ((probs[tid].item(), tid) for tid in node.children),
+                    reverse=True,
+                )
+                for p, tid in child_scores[:self.beam_width]:
+                    new_logprob = logprob + math.log(p + 1e-12)
+                    if self.min_joint_logprob is None or new_logprob >= self.min_joint_logprob:
+                        next_beam.append((new_logprob, tokens + [tid], node.children[tid]))
+
+            # Global prune to beam_width best active paths.
+            next_beam.sort(key=lambda x: x[0], reverse=True)
+            beam = next_beam[:self.beam_width]
+
+        # Collect any active paths that landed on a leaf node.
+        for logprob, tokens, node in beam:
+            if node.raw_identifier:
+                candidates.append((logprob, tokens, node.raw_identifier))
+
+        if not candidates:
+            return None
+
+        def _score(logprob: float, tokens: List[int]) -> float:
+            n = len(tokens)
+            if self.length_penalty == 0.0 or n == 0:
+                return logprob
+            return logprob / (n ** self.length_penalty)
+
+        scored = sorted(candidates, key=lambda x: _score(x[0], x[1]), reverse=True)
+        best_logprob, best_tokens, best_raw = scored[0]
+        if return_candidates:
+            sorted_candidates = [(raw, _score(lp, toks)) for lp, toks, raw in scored]
+            return best_raw, best_tokens, sorted_candidates
+        return best_raw, best_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +400,7 @@ class MarkdownPromptAnnotator:
         link_opener_token_ids: Tuple[int, ...] = (685,),
         link_mid_token_id: int = 16151,
         eos_token_id: int = 50256,
+        show_beam_candidates: bool = False,
     ):
         if link_retrieval_mode not in self._VALID_MODES:
             raise ValueError(
@@ -198,6 +418,7 @@ class MarkdownPromptAnnotator:
         self.link_opener_token_ids = set(link_opener_token_ids)
         self.link_mid_token_id = link_mid_token_id
         self.eos_token_id = eos_token_id
+        self.show_beam_candidates = show_beam_candidates
 
     # ------------------------------------------------------------------
     # Public API
@@ -268,11 +489,12 @@ class MarkdownPromptAnnotator:
         opener_tensor = torch.tensor(toks_with_opener, dtype=torch.long, device=device)
         fwd2_logits = self._run_fwd(model, opener_tensor, device)   # [T+1, V]
 
-        # Search window for '](' — positions strictly after the opener
-        search_start = link_opener_pos + 1
+        # Search window for '](' — at least one display token required between
+        # '[' and '](', so search starts at link_opener_pos + 2.
+        search_start = link_opener_pos + 2
         search_end = min(len(toks_with_opener), link_opener_pos + 1 + self.max_display_tokens)
         if search_start >= search_end:
-            link_mid_pos = link_opener_pos + 1
+            link_mid_pos = link_opener_pos + 2
         else:
             best_j = search_start
             best_score = -math.inf
@@ -314,7 +536,12 @@ class MarkdownPromptAnnotator:
         )
 
         # ── Step 5: autoregressive title generation ──────────────────────
-        target_str, title_tokens = self._generate_title(model, title_prefix, device)
+        _title_result = self._generate_title(model, title_prefix, device)
+        if len(_title_result) == 3:
+            target_str, title_tokens, beam_candidates = _title_result
+        else:
+            target_str, title_tokens = _title_result
+            beam_candidates = None
 
         # ── Step 6: build final context_tokens ───────────────────────────
         # Structure: prefix + ' [' + display + '](' + title + ')' + original_suffix
@@ -349,6 +576,7 @@ class MarkdownPromptAnnotator:
             link_mid_pos=mid_pos_final,
             link_opener_prob=link_opener_prob,
             link_fired=link_fired,
+            beam_candidates=beam_candidates,
         )
 
     # ------------------------------------------------------------------
@@ -407,9 +635,25 @@ class MarkdownPromptAnnotator:
         This handles BPE merges that absorb ')' or '\n' into larger tokens
         that would be missed by a bare token-ID comparison.
 
-        Returns (target_str, title_token_ids) where target_str is everything
-        before the first ')' in the decoded accumulation (stripped).
+        Returns (target_str, title_token_ids) or, when show_beam_candidates is
+        set and TrieTitleIndex is used, (target_str, title_token_ids, beam_candidates)
+        where beam_candidates is List[Tuple[raw_identifier, score]] sorted best-first.
         """
+        # Delegate to a constrained generation loop if the title_index provides one.
+        if self.title_index is not None and hasattr(self.title_index, "generate_title"):
+            cfg = self.generation_config
+            result = self.title_index.generate_title(
+                model, prefix_tokens, device,
+                max_title_tokens=self.max_title_tokens,
+                temperature=cfg.temperature,
+                top_k=cfg.top_k,
+                top_p=cfg.top_p,
+                return_candidates=self.show_beam_candidates,
+            )
+            if result is not None:
+                return result
+            # None → fall through to free generation below.
+
         tokenizer = getattr(model, "tokenizer", None)
         current_tokens = list(prefix_tokens)
         title_tokens: List[int] = []
@@ -508,11 +752,15 @@ class MarkdownPromptAnnotator:
         # verbatim has_document only when no index is available.
         if self.link_retrieval_mode in ("corpus_only", "corpus_then_generate"):
             if self.corpus is not None:
-                resolved = (
-                    self.title_index.lookup(target_str)
-                    if self.title_index is not None
-                    else (target_str if self.corpus.has_document(target_str) else None)
-                )
+                if self.title_index is not None:
+                    resolved = self.title_index.lookup(target_str)
+                    # TrieTitleIndex.lookup() returns None without a fallback_index,
+                    # but target_str may already be a valid corpus raw_identifier
+                    # (guaranteed when generate_title constrained generation to the trie).
+                    if resolved is None:
+                        resolved = target_str if self.corpus.has_document(target_str) else None
+                else:
+                    resolved = target_str if self.corpus.has_document(target_str) else None
                 if resolved is not None and self.corpus.has_document(resolved):
                     aux_tokens = list(self.corpus.get_document(resolved))
                     if aux_tokens:
@@ -630,6 +878,8 @@ def render_annotated_example(
     choices: Optional[List[List[int]]] = None,
     completion_tokens: Optional[List[int]] = None,
     label: Optional[int] = None,
+    pred_flat: Optional[int] = None,
+    pred_annotated: Optional[int] = None,
     use_color: bool = True,
     max_aux_tokens: int = 200,
     width: int = 72,
@@ -753,19 +1003,39 @@ def render_annotated_example(
         )
         lines.append(_c(sep, _BOLD, use_color))
 
-    # ── Panel 4: answer ───────────────────────────────────────────────
+    # ── Panel 4: beam candidates (TrieTitleIndex only) ───────────────
+    if annotated.beam_candidates:
+        lines.append("")
+        lines.append(_c(sep, _BOLD, use_color))
+        lines.append(_c(" BEAM CANDIDATES", _BOLD, use_color))
+        lines.append(_c(sep, _BOLD, use_color))
+        for rank, (raw_id, score) in enumerate(annotated.beam_candidates):
+            marker = " ←" if rank == 0 else ""
+            lines.append(
+                _c(f"  [{rank + 1}]", _CYAN if rank == 0 else _DIM, use_color)
+                + f" {raw_id!r:<50} score={score:.4f}{marker}"
+            )
+
+    # ── Panel 5: answer ───────────────────────────────────────────────
     if choices is not None:
         lines.append("")
         lines.append(_c(sep, _BOLD, use_color))
-        lines.append(_c(" CHOICES", _BOLD, use_color))
+        legend = " CHOICES   ✓=correct"
+        if pred_flat is not None:
+            legend += "  →=model(flat)"
+        if pred_annotated is not None:
+            legend += "  ★=model(annotated)"
+        lines.append(_c(legend, _BOLD, use_color))
         for idx, ch_toks in enumerate(choices):
             ch_text = _decode(ch_toks)
-            correct_marker = (
-                _c(" ✓", _GREEN, use_color)
-                if label is not None and idx == label
-                else ""
-            )
-            lines.append(f"  [{idx}] {ch_text}{correct_marker}")
+            markers = ""
+            if label is not None and idx == label:
+                markers += _c(" ✓", _GREEN, use_color)
+            if pred_flat is not None and idx == pred_flat:
+                markers += _c(" →", _YELLOW, use_color)
+            if pred_annotated is not None and idx == pred_annotated:
+                markers += _c(" ★", _CYAN, use_color)
+            lines.append(f"  [{idx}] {ch_text}{markers}")
     elif completion_tokens is not None:
         lines.append("")
         lines.append(_c(sep, _BOLD, use_color))

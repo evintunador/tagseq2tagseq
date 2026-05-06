@@ -413,3 +413,64 @@ def test_unknown_benchmark_raises():
     model.tokenizer = MagicMock()
     with pytest.raises(ValueError, match="not in ANNOTATABLE_BENCHMARKS"):
         _bench.run_benchmark_annotated(model, "mmlu", ann, device="cpu")
+
+
+# ─── _generate_title delegation to TrieTitleIndex ───────────────────────────
+
+def test_generate_title_delegates_to_trie_on_success():
+    """_generate_title calls title_index.generate_title when present and returns its result."""
+    trie = MagicMock()
+    trie.generate_title.return_value = ("Python", [80, 121, 116, 104, 111, 110])
+    trie.lookup.return_value = None
+
+    ann = MarkdownPromptAnnotator(
+        title_index=trie,
+        link_retrieval_mode="no_op",
+        max_title_tokens=10,
+    )
+    model = _make_mock_model()
+    result = ann._generate_title(model, [1, 2, 3], "cpu")
+
+    trie.generate_title.assert_called_once_with(
+        model, [1, 2, 3], "cpu", max_title_tokens=10,
+        temperature=ann.generation_config.temperature,
+        top_k=ann.generation_config.top_k,
+        top_p=ann.generation_config.top_p,
+        return_candidates=False,
+    )
+    assert result == ("Python", [80, 121, 116, 104, 111, 110])
+
+
+def test_generate_title_falls_back_when_trie_returns_none():
+    """When title_index.generate_title returns None, free generation runs."""
+    trie = MagicMock()
+    trie.generate_title.return_value = None
+    trie.lookup.return_value = None
+
+    ann = MarkdownPromptAnnotator(
+        title_index=trie,
+        link_retrieval_mode="no_op",
+        max_title_tokens=5,
+    )
+    model = _make_mock_model(title_tok=65, close_paren_tok=8)
+    # Free generation should run and return something (not raise).
+    target_str, title_tokens = ann._generate_title(model, [1, 2, 3], "cpu")
+    trie.generate_title.assert_called_once()
+    # Result is from the free loop — just verify it's the right types.
+    assert isinstance(target_str, str)
+    assert isinstance(title_tokens, list)
+
+
+def test_generate_title_no_delegation_without_generate_title_attr():
+    """HashNormTitleIndex has no generate_title — free loop runs without calling anything."""
+    from eval.title_index import HashNormTitleIndex
+    idx = HashNormTitleIndex(["Python"])
+    ann = MarkdownPromptAnnotator(
+        title_index=idx,
+        link_retrieval_mode="no_op",
+        max_title_tokens=5,
+    )
+    model = _make_mock_model(title_tok=65, close_paren_tok=8)
+    target_str, title_tokens = ann._generate_title(model, [1, 2, 3], "cpu")
+    assert isinstance(target_str, str)
+    assert isinstance(title_tokens, list)

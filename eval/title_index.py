@@ -1,9 +1,28 @@
 """
 eval/title_index.py — corpus title lookup for link annotation.
 
-TitleIndex protocol: lookup(generated_str) -> Optional[raw_identifier].
-HashNormTitleIndex: configurable cascading match — strategies tried in caller-specified
-  order, first hit wins:
+Two index classes, different use cases:
+
+  HashNormTitleIndex — post-hoc lookup. After free title generation produces a
+      string, tries cascading strategies (exact, norm, word_overlap, edit_distance)
+      to find the closest corpus entry. Good when generation mode is
+      corpus_then_generate or generate, or when the corpus is too large to build
+      a trie (TrieTitleIndex tokenizes every title at construction time).
+      Use-case framing: "accept whatever the model generates and find the nearest
+      corpus match, if any."
+
+  TrieTitleIndex — constrained generation (in eval/link_annotator.py). Builds a
+      BPE-level prefix trie over all corpus titles at construction time; during
+      title generation restricts each next-token step to tokens that continue at
+      least one valid corpus path. Uses beam search to explore the top-beam_width
+      paths simultaneously and returns the completed title with the highest
+      length-normalized joint log-prob. Guaranteed to return a valid corpus title
+      on success (no post-hoc lookup needed). Falls back to None (→ free generation
+      + HashNormTitleIndex cascade) only when min_joint_logprob threshold is hit.
+      Use-case framing: "force the model to generate a title that exists in the
+      corpus; prefer corpus coverage over generation freedom."
+
+HashNormTitleIndex strategies (tried in caller-specified order, first hit wins):
 
   "exact"                  — exact (case-insensitive): raw.lower() == generated.lower()
   "norm"                   — normalized: strip_hash(create_normed_identifier(s)) — reuses
@@ -27,59 +46,23 @@ Default strategies: ("exact", "norm", "word_overlap_ordered").
 Opt-in to unordered overlap by passing e.g.:
     strategies=("exact", "norm", "word_overlap_ordered", "word_overlap_unordered")
 
-Future strategies (not yet implemented):
+Implemented strategies (opt-in):
 
-  "trie_constrained" — build a BPE-level prefix trie over all corpus titles at
-                   construction time (tokenizer required). During autoregressive title
-                   generation, at each step restrict the next-token distribution to
-                   tokens that continue at least one valid corpus path in the trie.
-                   Track the running joint log-prob of the current path; if it exceeds
-                   a caller-supplied threshold, commit to the highest-probability corpus
-                   leaf and return it. Falls back gracefully when the model is not
-                   confident enough (prob < threshold) — no worse than the existing
-                   strategies. This is the most powerful strategy: it guarantees a
-                   corpus match when the model is on the right track from the first
-                   token, and the threshold prevents forcing spurious matches when it
-                   isn't. Requires replacing the free autoregressive loop in
-                   MarkdownPromptAnnotator._generate_title with a trie-constrained
-                   variant, and is best implemented as a new TitleIndex subclass
-                   (TrieTitleIndex) that also owns the constrained generation loop.
+  "edit_distance" — fuzzy match via Levenshtein normalized similarity (rapidfuzz).
+                   Lossy — may return a wrong doc. Recommend placing last so lossless
+                   strategies take priority. Tunable via edit_distance_threshold and
+                   edit_distance_min_chars.
 
-  "beam_trie"    — top-k token branching during generation: at each step keep top-k
-                   next-token candidates, probe "exact"/"norm" on each partial
-                   decoded string, return first hit. k=2 doubles forward passes but
-                   recovers single wrong-character errors cheaply.
+Future HashNormTitleIndex strategies (not yet implemented):
 
-  "edit_distance" — fuzzy match: find the corpus entry whose normalized form has
-                   the highest Levenshtein normalized similarity to the generated
-                   string. Conservative default threshold: normalized_similarity
-                   ≥ 0.80 (i.e. ≤ 20% of characters differ). Short queries
-                   (< edit_distance_min_chars=5) are skipped to suppress false
-                   positives. Uses rapidfuzz for fast scoring (pip install
-                   rapidfuzz). Unlike all other strategies this one is lossy —
-                   it may return a wrong doc — so it is recommended to place it
-                   last in the strategy sequence so exact matches are preferred.
-                   Catches accent variants (Réunion → Reunion), minor typos, and
-                   OCR-style single-character errors.
+  "prefix_commit" — after _generate_title produces a target_str, find all corpus
+                   titles that share the longest common word-level prefix. Covers
+                   early-halt ("Russian Civil" → "Russian Civil War") and overshoot
+                   cases. Orthogonal to edit_distance.
 
-  "prefix_commit" — post-generation, no change to the generation loop. After
-                   _generate_title produces a target_str, find all corpus titles that
-                   share the longest common prefix (word-level) with the generated
-                   string; among those run exact/norm/overlap. Covers the common case
-                   where the model gets the first several words right then either halts
-                   early ("Russian Civil" → "Russian Civil War") or overshoots and
-                   appends a spurious trailing word. Orthogonal to edit_distance;
-                   combine both as final fallback tiers.
-
-Fallback via display text (to implement in MarkdownPromptAnnotator._fetch_aux):
-  When the generated title misses all strategies, retry lookup using the display
-  text (the anchor text already present in the prompt between '[' and ']('). The
-  display text goes through the exact same cascading strategy pipeline as the
-  generated title. Rationale: anchor text in Wikipedia often IS the canonical title
-  or a close variant (e.g. the prompt contains "[the Battle of Waterloo](...)" and
-  the corpus has "Battle of Waterloo"). Requires _fetch_aux to receive the display_str
-  and pass it as a secondary query to title_index.lookup(). No new strategy needed —
-  it is a second call to the existing lookup() with a different input string.
+TODO (MarkdownPromptAnnotator._fetch_aux):
+  Display-text fallback — when all strategies miss, retry lookup using the anchor
+  text between '[' and ']('. No new strategy needed; just a second lookup() call.
 """
 
 import re as _re
