@@ -612,21 +612,33 @@ def run_benchmarks_on_model(
             annotator_mode = cfg.get("annotator_mode", "corpus_only")
             try:
                 from generate import PretokCorpus
-                from eval.link_annotator import MarkdownPromptAnnotator
+                from eval.link_annotator import MarkdownPromptAnnotator, TrieTitleIndex
                 from eval.title_index import HashNormTitleIndex
                 _corpus = PretokCorpus(annotator_corpus_dir)
-                _title_index = HashNormTitleIndex(
-                    (
-                        node["raw_identifier"]
-                        for node in _corpus._graph.nodes.values()
-                        if "raw_identifier" in node
-                    ),
+                _raw_ids = [
+                    node["raw_identifier"]
+                    for node in _corpus._graph.nodes.values()
+                    if "raw_identifier" in node
+                ]
+                _fallback = HashNormTitleIndex(
+                    _raw_ids,
                     strategies=cfg.get(
                         "annotator_strategies",
                         ("exact", "norm", "word_overlap_ordered", "edit_distance"),
                     ),
                     edit_distance_threshold=cfg.get("annotator_ed_threshold", 0.2),
                 )
+                if cfg.get("annotator_use_trie", False):
+                    _title_index = TrieTitleIndex(
+                        _raw_ids,
+                        model.tokenizer,
+                        beam_width=cfg.get("annotator_beam_width", 1),
+                        length_penalty=cfg.get("annotator_length_penalty", 0.0),
+                        min_joint_logprob=cfg.get("annotator_trie_min_logprob"),
+                        fallback_index=_fallback,
+                    )
+                else:
+                    _title_index = _fallback
                 _annotator = MarkdownPromptAnnotator(
                     corpus=_corpus,
                     title_index=_title_index,
@@ -1072,6 +1084,34 @@ def main() -> None:
              "[0, 1]. Lower = stricter. Default 0.2 (≥80%% similarity required).",
     )
     parser.add_argument(
+        "--annotator-use-trie", action="store_true",
+        help="Use TrieTitleIndex (trie-constrained generation) instead of "
+             "HashNormTitleIndex. HashNormTitleIndex is still used as the fallback "
+             "lookup when the trie returns None.",
+    )
+    parser.add_argument(
+        "--annotator-trie-min-logprob", type=float, default=None,
+        metavar="LOGPROB",
+        help="Minimum joint log-prob for trie-constrained generation. If the "
+             "running sum of log P(chosen token) drops below this value the trie "
+             "aborts and falls back to free generation. None (default) = no threshold.",
+    )
+    parser.add_argument(
+        "--annotator-beam-width", type=int, default=1,
+        metavar="W",
+        help="Beam width for TrieTitleIndex. 1 = greedy (default). Higher values "
+             "keep more active paths and select the completed title with highest "
+             "total log-prob, helping longer titles beat short high-first-token ones.",
+    )
+    parser.add_argument(
+        "--annotator-length-penalty", type=float, default=0.0,
+        metavar="ALPHA",
+        help="Length penalty exponent for TrieTitleIndex candidate scoring "
+             "(Wu et al. formula: score = joint_log_prob / n_tokens**alpha). "
+             "0.0 = no normalization (default); 1.0 = per-token mean log-prob; "
+             "0.6 = recommended middle ground.",
+    )
+    parser.add_argument(
         "--seed", type=int, default=None,
         help="Global RNG seed (torch, numpy, cuda, Python random). "
              "Set this to make annotated title generation reproducible across runs.",
@@ -1120,6 +1160,10 @@ def main() -> None:
         "annotator_mode": args.annotator_mode,
         "annotator_strategies": args.annotator_strategies,
         "annotator_ed_threshold": args.annotator_ed_threshold,
+        "annotator_use_trie": args.annotator_use_trie,
+        "annotator_trie_min_logprob": args.annotator_trie_min_logprob,
+        "annotator_beam_width": args.annotator_beam_width,
+        "annotator_length_penalty": args.annotator_length_penalty,
     }
 
     from tunalab.reproducibility import ReproducibilityManager
