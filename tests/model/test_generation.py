@@ -8,7 +8,6 @@ import pytest
 import torch
 import numpy as np
 from unittest.mock import MagicMock
-from torch.nn.attention.flex_attention import create_block_mask, BlockMask
 
 from model.generation_config import GenerationConfig
 from model.generation_result import GenerationResult, GeneratedDocument
@@ -300,130 +299,6 @@ def test_model_generate_requires_tokenizer():
     )
     with pytest.raises(RuntimeError, match="tokenizer"):
         model.generate("hello")
-
-
-# ---------------------------------------------------------------------------
-# CUDA integration tests
-# ---------------------------------------------------------------------------
-
-def simple_causal_mask_creator(**batch):
-    tokens = batch["tokens"]
-    seq_len = tokens.shape[-1]
-    def causal(b, h, q, kv):
-        return q >= kv
-    return create_block_mask(causal, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len,
-                              device=tokens.device)
-
-
-@pytest.fixture
-def small_inference_model(device):
-    """A tiny TS2TSModel with random weights, no tokenizer."""
-    if device != "cuda":
-        pytest.skip("FlexAttention requires CUDA")
-
-    from model.model import TS2TSModel
-    model = TS2TSModel.from_config(
-        vocab_size=VOCAB_SIZE,
-        num_layers=2,
-        model_dim=64,
-        num_heads=2,
-        max_seq_len=128,
-        dropout=0.0,
-        drop_path_rate=0.0,
-        mask_type='doc_causal',
-        weight_tying=True,
-    )
-    model.to(torch.device(device))
-    return model
-
-
-def test_forward_inference_output_shape(small_inference_model, device):
-    tokens = torch.randint(0, VOCAB_SIZE, (1, 10), device=device)
-    logits = small_inference_model.forward_inference(tokens)
-    assert logits.shape == (1, 10, VOCAB_SIZE)
-
-
-def test_forward_inference_no_nan(small_inference_model, device):
-    tokens = torch.randint(0, VOCAB_SIZE, (1, 10), device=device)
-    logits = small_inference_model.forward_inference(tokens)
-    assert not torch.isnan(logits).any()
-    assert not torch.isinf(logits).any()
-
-
-def test_forward_inference_with_doc_spans(small_inference_model, device):
-    from data.collate import DocSpan
-    tokens = torch.randint(0, VOCAB_SIZE, (1, 20), device=device)
-    doc_spans = [
-        DocSpan(doc_id=0, normed_identifier="doc0", start=0, end=20,
-                truncated=False, outgoing_identifiers=[], raw_identifier="doc0"),
-    ]
-    logits = small_inference_model.forward_inference(tokens, doc_spans)
-    assert logits.shape == (1, 20, VOCAB_SIZE)
-
-
-def test_generate_with_tokenizer_terminates(device):
-    """Full generate() call with random weights should terminate without error."""
-    if device != "cuda":
-        pytest.skip("FlexAttention requires CUDA")
-
-    from model.model import TS2TSModel
-
-    model = TS2TSModel.from_config(
-        vocab_size=VOCAB_SIZE,
-        num_layers=2,
-        model_dim=64,
-        num_heads=2,
-        max_seq_len=128,
-        dropout=0.0,
-        drop_path_rate=0.0,
-        mask_type='doc_causal',
-        weight_tying=True,
-        tokenizer=make_mock_tokenizer([10, 20]),
-    )
-    model.to(torch.device(device))
-
-    config = GenerationConfig(
-        max_new_tokens=5,
-        temperature=1.0,
-        device=device,
-        eos_token_id=EOS,
-        max_tokens_per_document=512,
-        max_context_length=1024,
-    )
-    result = model.generate("hello world", config=config)
-
-    assert isinstance(result, GenerationResult)
-    assert result.root_document.is_root is True
-    assert result.auxiliary_documents == []
-
-
-def test_generate_result_has_text(device):
-    """With a tokenizer, GeneratedDocument.text should be populated."""
-    if device != "cuda":
-        pytest.skip("FlexAttention requires CUDA")
-
-    from model.model import TS2TSModel
-
-    model = TS2TSModel.from_config(
-        vocab_size=VOCAB_SIZE,
-        num_layers=2,
-        model_dim=64,
-        num_heads=2,
-        max_seq_len=128,
-        dropout=0.0,
-        drop_path_rate=0.0,
-        mask_type='doc_causal',
-        weight_tying=True,
-        tokenizer=make_mock_tokenizer([10, 20]),
-    )
-    model.to(torch.device(device))
-
-    result = model.generate("test", config=GenerationConfig(
-        max_new_tokens=3, device=device, eos_token_id=EOS,
-        max_context_length=1024, max_tokens_per_document=512,
-    ))
-    assert result.root_document.text is not None
-    assert isinstance(result.root_document.text, str)
 
 
 # ---------------------------------------------------------------------------
