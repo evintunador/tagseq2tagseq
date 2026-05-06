@@ -258,6 +258,14 @@ class PretokCorpus:
         dataset_dir   = Path(dataset_dir)
         self._graph   = GraphIndex(dataset_dir)
         self._backend = PretokShardedBackend(self._graph)
+        # Build a raw_identifier → normed_identifier map from the graph for O(1)
+        # lookup in has_document / get_document. Falls back to create_normed_identifier
+        # for titles not in the graph (e.g. free-generated titles that missed the corpus).
+        self._raw_to_normed: dict[str, str] = {
+            node["raw_identifier"]: node["normed_identifier"]
+            for node in self._graph.nodes.values()
+            if "raw_identifier" in node and "normed_identifier" in node
+        }
 
     def has_document(self, raw_identifier: str) -> bool:
         # NOTE: Python import detector emits relative paths (e.g. "Phaedra/Notebook.py")
@@ -266,11 +274,11 @@ class PretokCorpus:
         # dataset like stack_100m. Fix: either (a) build a single-repo corpus so identifiers
         # match, or (b) make the import detector emit repo-qualified identifiers when a repo
         # context is available.
-        normed = create_normed_identifier(raw_identifier)
+        normed = self._raw_to_normed.get(raw_identifier) or create_normed_identifier(raw_identifier)
         return normed in self._graph
 
     def get_document(self, raw_identifier: str):
-        normed = create_normed_identifier(raw_identifier)
+        normed = self._raw_to_normed.get(raw_identifier) or create_normed_identifier(raw_identifier)
         tokens = self._backend.get_tokens(normed)
         if tokens is None:
             return iter([])
