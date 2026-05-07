@@ -47,7 +47,7 @@ from model.graph_traversal.block_mask_creator import (
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
 from model.graph_traversal.python_import_detector import PythonImportDetector
-from model.identifier_utils import create_normed_identifier
+from data.normalization import normalize_wiki_title
 from model.modules.training_module import TS2TSTrainingModule
 
 
@@ -259,7 +259,7 @@ class PretokCorpus:
         self._graph   = GraphIndex(dataset_dir)
         self._backend = PretokShardedBackend(self._graph)
         # Build a raw_identifier → normed_identifier map from the graph for O(1)
-        # lookup in has_document / get_document. Falls back to create_normed_identifier
+        # lookup in has_document / get_document. Falls back to normalize_wiki_title
         # for titles not in the graph (e.g. free-generated titles that missed the corpus).
         self._raw_to_normed: dict[str, str] = {
             node["raw_identifier"]: node["normed_identifier"]
@@ -274,11 +274,11 @@ class PretokCorpus:
         # dataset like stack_100m. Fix: either (a) build a single-repo corpus so identifiers
         # match, or (b) make the import detector emit repo-qualified identifiers when a repo
         # context is available.
-        normed = self._raw_to_normed.get(raw_identifier) or create_normed_identifier(raw_identifier)
+        normed = self._raw_to_normed.get(raw_identifier) or normalize_wiki_title(raw_identifier)
         return normed in self._graph
 
     def get_document(self, raw_identifier: str):
-        normed = self._raw_to_normed.get(raw_identifier) or create_normed_identifier(raw_identifier)
+        normed = self._raw_to_normed.get(raw_identifier) or normalize_wiki_title(raw_identifier)
         tokens = self._backend.get_tokens(normed)
         if tokens is None:
             return iter([])

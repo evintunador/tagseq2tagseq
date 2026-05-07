@@ -1,4 +1,3 @@
-import hashlib
 import json
 import re
 import pytest
@@ -7,8 +6,8 @@ from pathlib import Path
 from data.document_sources import (
     MarkdownDirectorySource,
     StackJSONLSource,
-    _normalize_repo_name,
 )
+from data.normalization import normalize_repo_name as _normalize_repo_name
 
 
 # ---------------------------------------------------------------------------
@@ -37,16 +36,15 @@ class TestNormalizeRepoName:
         assert _normalize_repo_name("user/repo") == _normalize_repo_name("user/repo")
 
     def test_matches_extract_py_logic(self):
-        # Reproduce the exact logic from github_graph_extractor/extract.py
-        # to ensure the mirror stays in sync.
+        # normalize_repo_name is now canonical in data.normalization and imported
+        # by both document_sources and github_graph_extractor.extract, so they
+        # are structurally identical — just verify the expected output shape.
+        import hashlib
         repo = "Phil65/prettyqt"
-        clean = repo.replace("/", "_").replace("-", "_").lower()
-        clean = re.sub(r"[^a-z0-9\-_]", "_", clean)
-        clean = re.sub(r"__+", "_", clean)
-        clean = clean.strip("_")
-        h = hashlib.md5(clean.encode("utf-8")).hexdigest()[:6]
-        expected = f"{clean}_{h}"
-        assert _normalize_repo_name(repo) == expected
+        h = hashlib.md5(repo.encode("utf-8")).hexdigest()[:6]
+        result = _normalize_repo_name(repo)
+        assert result.endswith(f"_{h}")
+        assert result.startswith("phil65_prettyqt_")
 
 
 # ---------------------------------------------------------------------------

@@ -794,7 +794,6 @@ class MarkdownPromptAnnotator:
         so the generated doc itself never spawns sub-links.
         """
         from model.generation_loop import run_generation
-        from model.identifier_utils import create_normed_identifier
 
         cfg = self.generation_config
         gen_cfg = GenerationConfig(

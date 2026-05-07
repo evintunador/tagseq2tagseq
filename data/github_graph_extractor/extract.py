@@ -5,10 +5,18 @@ GitHub Data Extractor: Extract dependency links from GitHub repository code.
 Processes Python repositories to extract import relationships as links.
 """
 import re
-import hashlib
 import json
 import os
+import sys
+from pathlib import Path
 from typing import Dict, List, Set
+
+# Allow importing data.normalization when run standalone from this directory.
+_project_root = Path(__file__).resolve().parents[2]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+from data.normalization import normalize_repo_name, normalize_package_name
 
 # ======================================================================
 # Main Processing Pipeline
@@ -63,19 +71,8 @@ def extract_and_normalize_imports(content: str) -> str:
     return '\n'.join(processed_lines)
 
 def normalize_package_name(package_name: str) -> str:
-    """
-    Normalize a Python package/module name for use in links.
-    Similar to the wiki identifier normalization but adapted for Python packages.
-    """
-    # Convert dots to underscores and clean up
-    clean_name = package_name.replace('.', '_').lower()
-    clean_name = re.sub(r'[^a-z0-9\-_]', '_', clean_name)
-    clean_name = re.sub(r'__+', '_', clean_name)
-    clean_name = clean_name.strip('_')
-
-    # Create hash for uniqueness (similar to wiki normalization)
-    package_hash = hashlib.md5(clean_name.encode('utf-8')).hexdigest()[:6]
-    return f"{clean_name}_{package_hash}"
+    """Normalize a Python package/module name to a normed_identifier."""
+    return normalize_package_name(package_name)
 
 def extract_file_imports(content: str, file_path: str, repo_name: str) -> Set[str]:
     """
@@ -134,18 +131,8 @@ def _is_potential_repo_file_import(module_name: str, file_path: str, repo_name: 
     return True
 
 def normalize_repository_name(repo_name: str) -> str:
-    """
-    Normalize a GitHub repository name for use as a node identifier.
-    """
-    # Clean up the repo name
-    clean_name = repo_name.replace('/', '_').replace('-', '_').lower()
-    clean_name = re.sub(r'[^a-z0-9\-_]', '_', clean_name)
-    clean_name = re.sub(r'__+', '_', clean_name)
-    clean_name = clean_name.strip('_')
-
-    # Create hash for uniqueness
-    repo_hash = hashlib.md5(clean_name.encode('utf-8')).hexdigest()[:6]
-    return f"{clean_name}_{repo_hash}"
+    """Normalize a GitHub repository name to a normed_identifier."""
+    return normalize_repo_name(repo_name)
 
 # ======================================================================
 # Helper Functions

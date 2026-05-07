@@ -54,13 +54,17 @@ def test_punct_only_query_no_spurious_match():
 
 # ── Normalization behaviour ───────────────────────────────────────────────────
 
-def test_hyphen_stripped():
+def test_hyphen_variants():
     idx = HashNormTitleIndex(["Spider-Man"])
     # "Spider Man" hits via word_overlap_ordered: ["spider", "man"] is a
     # contiguous subsequence of Spider-Man's word list ["spider", "man"].
     assert idx.lookup("Spider Man") == "Spider-Man"
+    # exact (case-insensitive)
     assert idx.lookup("Spider-Man") == "Spider-Man"
-    assert idx.lookup("SpiderMan") == "Spider-Man"
+    # "SpiderMan" has a different normalized body ("spiderman" vs "spider-man")
+    # so it does NOT match via norm; word_overlap also misses because "spiderman"
+    # is a single word that differs from ["spider", "man"].
+    assert idx.lookup("SpiderMan") is None
 
 
 def test_punctuation_stripped():
@@ -139,7 +143,10 @@ def test_exact_only_skips_norm():
 
 def test_norm_only_skips_exact():
     idx = HashNormTitleIndex(["Spider-Man"], strategies=("norm",))
-    assert idx.lookup("SpiderMan") == "Spider-Man"
+    # "spider-man" and "spiderman" are different normalized bodies — no match
+    assert idx.lookup("SpiderMan") is None
+    # Hyphen/space variants resolve to same body "spider-man"
+    assert idx.lookup("Spider-Man") == "Spider-Man"
 
 
 # ── _is_contiguous_subsequence helper ────────────────────────────────────────

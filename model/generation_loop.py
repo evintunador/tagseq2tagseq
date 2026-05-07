@@ -10,7 +10,7 @@ from data.layout import DocLayoutInfo
 from model.document_context import DocumentContext, _DocEntry
 from model.generation_config import GenerationConfig
 from model.generation_result import GeneratedDocument, GenerationResult, GenerationTrace
-from model.identifier_utils import create_normed_identifier
+from data.normalization import normalize_wiki_title
 from model.sampling import sample_token
 
 logger = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ def _handle_link(
     # Corpus fetch — skipped when generate_only.
     if config.link_retrieval_mode != "generate_only" and corpus is not None and corpus.has_document(target):
         corpus_tokens = list(corpus.get_document(target))
-        normed_target = create_normed_identifier(target)
+        normed_target = normalize_wiki_title(target)
         if layout_policy is not None:
             info = DocLayoutInfo(
                 raw_identifier=target,

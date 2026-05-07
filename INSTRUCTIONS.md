@@ -6,7 +6,7 @@ Full instructions for data preparation, training, and generation. See [README.md
 
 ## Available Checkpoints
 
-> This table is a temporarily maintained personal reference — it tracks runs on the author's cluster and will go stale as training progresses. It lives here rather than in the README because it's operational bookkeeping, not project documentation.
+> **All checkpoint paths below are broken.** They were trained against the old normalization scheme (identifier hashes derived from the canonical form, not the raw string). New checkpoints must be trained against the re-processed datasets before generation examples here will work.
 
 | Checkpoint | Architecture | Dataset | Context | Mask | Steps | Val loss |
 |-----------|-------------|---------|---------|------|-------|----------|
@@ -17,33 +17,33 @@ Full instructions for data preparation, training, and generation. See [README.md
 | `runs/20260308_012521/checkpoints/best_model.pt` | 36L / 1280D | Stack 10M | 32k | `cross_doc_link` (py) | 14,900 | 2.291 |
 | `runs/run_20260311_184203_685319/checkpoints/best_model.pt` | 24L / 1024D | Stack 100M | 32k | `cross_doc_link` (py) | 3,000 | 1.430 |
 
-> The Stack 100M checkpoint is partially trained (~16% of planned steps), currently being continued in a LR-cooldown run.
-
 ---
 
 ## Datasets
 
-Four pretokenized datasets are ready to use on `/fss`:
+Pretokenized datasets live outside all worktrees at `/fss/evin_t/tagseq2tagseq_artifacts/`:
 
-| Dataset | Graph edges | Nodes | Tokens | Shards | Pretokenized location |
-|---------|-------------|-------|--------|--------|-----------------------|
-| **SimpleWiki** | Markdown hyperlinks | 275k | ~108M | 1 | `data/pretokenized_datasets/simplewiki/` |
-| **EnWikiSource** | Markdown hyperlinks | 662k | ~612M | 1 | `data/pretokenized_datasets/enwikisource/` |
-| **The Stack (10M)** | Python imports | 2.38M | ~7B | 6 | `data/pretokenized_datasets/stack_10m/` |
-| **The Stack (100M)** | Python imports | 3.56M | ~8.7B | 9 | `data/pretokenized_datasets/stack_100m/` |
+| Dataset | Graph edges | Nodes | Shards | Pretokenized location |
+|---------|-------------|-------|--------|-----------------------|
+| **SimpleWiki** | Markdown hyperlinks | 275k | 1 | `/fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/` |
+| **TheStack** | Python imports | 3.56M | 9 | `/fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/` |
 
-SimpleWiki and EnWikiSource use `--model.link_detector markdown`; both Stack datasets use `--model.link_detector python`.
+SimpleWiki uses `--model.link_detector markdown`; TheStack uses `--model.link_detector python`.
 
-All four datasets have been split into train/val/test subdirectories (see [Graph Splitting](#graph-splitting) below). Training automatically uses `splits/train/` and `splits/val_community/` when they exist.
+Both datasets have been split into train/val/test subdirectories (see [Graph Splitting](#graph-splitting) below).
 
-Raw dumps and JSONL source files:
+Raw dumps and intermediate graph files:
 
-| Dataset | Raw source |
-|---------|-----------|
-| SimpleWiki | `/fss/evin_t/wiki_dumps/simplewiki-20251027-cirrussearch-content.json.gz` |
-| EnWikiSource | `/fss/evin_t/wiki_dumps/enwikisource-20251027-cirrussearch-content.json.gz` |
-| The Stack (10M) | `data/github_graph_extractor/sample_10M.jsonl` + `graph_10M.jsonl` |
-| The Stack (100M) | `data/github_graph_extractor/sample_100M.jsonl` + `graph_100M.jsonl` |
+| Dataset | Raw source | Graph |
+|---------|-----------|-------|
+| SimpleWiki | `/fss/evin_t/wiki_dumps/simplewiki-20251027-cirrussearch-content.json.gz` | `/fss/evin_t/tagseq2tagseq_artifacts/graphs/simplewiki_graph.jsonl` |
+| TheStack | `/fss/evin_t/tagseq2tagseq/data/github_graph_extractor/sample_100M.jsonl` | `/fss/evin_t/tagseq2tagseq_artifacts/graphs/thestack_graph.jsonl` |
+
+Extracted article files (reusable across pipeline runs — no need to re-extract from dumps):
+
+| Dataset | Articles directory |
+|---------|--------------------|
+| SimpleWiki | `/fss/evin_t/tagseq2tagseq/data/wiki_articles/` |
 
 ---
 
@@ -53,83 +53,82 @@ Raw dumps and JSONL source files:
 
 **1. Extract dump → markdown articles**
 
-The raw dump is at `/fss/evin_t/wiki_dumps/simplewiki-20251027-cirrussearch-content.json.gz`.
+Only needed if the articles directory doesn't already exist. The extracted files at
+`/fss/evin_t/tagseq2tagseq/data/wiki_articles/` are reusable.
 
 ```bash
 python -m data.wiki_graph_extractor.dump_extractor \
     /fss/evin_t/wiki_dumps/simplewiki-20251027-cirrussearch-content.json.gz \
-    -o data/wiki_articles \
+    -o /fss/evin_t/tagseq2tagseq/data/wiki_articles \
     -p 60
 ```
 
-Produces ~275,000 `.md` files in `data/wiki_articles/` organised into per-letter subdirectories.
+Produces ~275,000 `.md` files organised into per-letter subdirectories.
 
 **2. Build link graph**
 
 ```bash
 python -m data.wiki_graph_extractor.build_graph \
-    data/wiki_articles \
-    -o data/wiki_articles/graph.jsonl \
-    -p 60
+    /fss/evin_t/tagseq2tagseq/data/wiki_articles \
+    -o /fss/evin_t/tagseq2tagseq_artifacts/graphs/simplewiki_graph.jsonl \
+    -p 40
 ```
 
-Produces `data/wiki_articles/graph.jsonl` (~275k nodes, ~2.3M edges) plus `graph_stats.json` and `graph_degree_dist.png`.
+Produces `simplewiki_graph.jsonl` (~275k nodes, ~542k edges) plus `_stats.json` and `_degree_dist.png`.
 
 **3. Pretokenize**
 
 ```bash
 python -m data.pretokenize \
-    data/wiki_articles \
-    data/wiki_articles/graph.jsonl \
-    -o data/pretokenized_datasets/simplewiki \
-    -p 60
+    /fss/evin_t/tagseq2tagseq/data/wiki_articles \
+    /fss/evin_t/tagseq2tagseq_artifacts/graphs/simplewiki_graph.jsonl \
+    -o /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \
+    -p 40
 ```
 
-Produces `shard_000000.bin` (~108M tokens), `tokenized_graph.jsonl`, and `metadata.json` in `data/pretokenized_datasets/simplewiki/`.
+Produces `shard_000000.bin`, `tokenized_graph.jsonl`, and `metadata.json`.
 
 ---
 
-### The Stack (10M Python files)
+### TheStack (~100M Python files)
 
-**1. Download 10M samples**
+**1. Download samples**
 
 Requires a HuggingFace token with read access to `bigcode/the-stack-dedup`.
 
 ```bash
 HF_TOKEN=<your_token> python data/github_graph_extractor/download_sample.py \
-    --limit 10000000 \
-    -o data/github_graph_extractor/sample_10M.jsonl
+    --limit 100000000 \
+    -o /fss/evin_t/tagseq2tagseq/data/github_graph_extractor/sample_100M.jsonl
 ```
-
-Streams ~56 GB of Python source files.
 
 **2. Build import dependency graph**
 
-Must be run from inside `data/github_graph_extractor/` (uses relative imports):
+Run from inside `data/github_graph_extractor/` (standalone script, uses project-root sys.path injection):
 
 ```bash
 cd data/github_graph_extractor
 python build_graph_streaming.py \
-    sample_10M.jsonl \
-    -o graph_10M.jsonl \
-    -p 8 \
+    /fss/evin_t/tagseq2tagseq/data/github_graph_extractor/sample_100M.jsonl \
+    -o /fss/evin_t/tagseq2tagseq_artifacts/graphs/thestack_graph.jsonl \
+    -p 32 \
     --bucket-workers 8
 cd -
 ```
 
-Produces `graph_10M.jsonl` (~2.4M nodes) plus statistics and a degree-distribution plot.
+Produces `thestack_graph.jsonl` (~3.56M nodes) plus stats and a degree-distribution plot.
 
 **3. Pretokenize**
 
 ```bash
 python -m data.pretokenize_stack \
-    data/github_graph_extractor/sample_10M.jsonl \
-    data/github_graph_extractor/graph_10M.jsonl \
-    -o data/pretokenized_datasets/stack_10m \
-    -p 60
+    /fss/evin_t/tagseq2tagseq/data/github_graph_extractor/sample_100M.jsonl \
+    /fss/evin_t/tagseq2tagseq_artifacts/graphs/thestack_graph.jsonl \
+    -o /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
+    -p 40
 ```
 
-Produces 6 binary shards, `tokenized_graph.jsonl`, and `metadata.json` in `data/pretokenized_datasets/stack_10m/`.
+Produces 9 binary shards, `tokenized_graph.jsonl`, and `metadata.json`.
 
 ---
 
@@ -153,14 +152,14 @@ The `--layout-policy` flag controls per-document token decoration:
 
 ```bash
 # Default (no decoration)
-python demo_traversal.py data/pretokenized_datasets/simplewiki --strategy dfs
+python demo_traversal.py /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki --strategy dfs
 
 # With identifier prefix (e.g. "# Water\n\n..." before each article)
-python demo_traversal.py data/pretokenized_datasets/simplewiki \
+python demo_traversal.py /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \
     --strategy dfs --layout-policy identifier-prefix
 
-# The Stack with identifier prefix (e.g. "# repo:src/file.py\n\n...")
-python demo_traversal.py data/pretokenized_datasets/stack_10m \
+# TheStack with identifier prefix (e.g. "# repo:src/file.py\n\n...")
+python demo_traversal.py /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
     --strategy dfs --layout-policy identifier-prefix
 ```
 
@@ -170,27 +169,29 @@ python demo_traversal.py data/pretokenized_datasets/stack_10m \
 
 ```bash
 # doc_causal mask — Wikipedia
-python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/simplewiki \
+python -m model.graph_traversal.block_mask_creator \
+    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \
     --mask-type doc_causal --strategy bfs --seed 42
 
 # cross-document link mask — Wikipedia (markdown link detector)
-python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/simplewiki \
+python -m model.graph_traversal.block_mask_creator \
+    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \
     --mask-type cross_doc_link --link-detector markdown --strategy bfs --seed 42
 
-# doc_causal mask — The Stack
-python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/stack_10m \
+# doc_causal mask — TheStack
+python -m model.graph_traversal.block_mask_creator \
+    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
     --mask-type doc_causal --strategy bfs --seed 42
 
-# cross-document link mask — The Stack (Python import detector)
-python -m model.graph_traversal.block_mask_creator data/pretokenized_datasets/stack_10m \
+# cross-document link mask — TheStack (Python import detector)
+python -m model.graph_traversal.block_mask_creator \
+    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
     --mask-type cross_doc_link --link-detector python --strategy bfs --seed 42
 ```
 
 Available mask types: `doc_causal`, `causal`, `full`, `doc_bidirectional`, `cross_doc_link`.
 Available strategies: `dfs`, `bfs`, `random_walk`, `random`.
 `--link-detector` is only used with `cross_doc_link`: `markdown` for Wikipedia, `python` for TheStack.
-
----
 
 ---
 
@@ -214,20 +215,16 @@ of the others.
 
 ```bash
 # Split simplewiki (275k nodes, ~3 s)
-python data/split_graph.py \
-    --dataset-dir data/pretokenized_datasets/simplewiki
+python -m data.split_graph \
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 
-# Split stack_10m (2.38M nodes, ~40 s)
-python data/split_graph.py \
-    --dataset-dir data/pretokenized_datasets/stack_10m
-
-# Split stack_100m (3.56M nodes, ~60 s)
-python data/split_graph.py \
-    --dataset-dir data/pretokenized_datasets/stack_100m
+# Split thestack (3.56M nodes, ~60 s)
+python -m data.split_graph \
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
 
 # Dry-run to preview split counts without writing
-python data/split_graph.py \
-    --dataset-dir data/pretokenized_datasets/simplewiki \
+python -m data.split_graph \
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \
     --dry-run
 ```
 
@@ -251,14 +248,14 @@ match the filesystem directory names (they're used as subdirectory names by
 ```yaml
 # In your training config (e.g. configs/large_32k.yaml):
 data:
-  dataset_dir: data/pretokenized_datasets/stack_10m   # full graph for generation/eval
-  train_dir:   data/pretokenized_datasets/stack_10m/splits/train
+  dataset_dir: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+  train_dir:   /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
   val_dirs:
-    val_community: data/pretokenized_datasets/stack_10m/splits/val_community
-    val_random:    data/pretokenized_datasets/stack_10m/splits/val_random
+    val_community: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
+    val_random:    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
   test_dirs:
-    test_community: data/pretokenized_datasets/stack_10m/splits/test_community
-    test_random:    data/pretokenized_datasets/stack_10m/splits/test_random
+    test_community: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
+    test_random:    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
 ```
 
 `train_dir` drives the training `GraphIndex`. If absent, falls back to `dataset_dir` (full
@@ -275,8 +272,8 @@ reproducible pack sequence for fair cross-checkpoint comparison:
 ```bash
 # Pre-compute val_community packs (--n-buckets 1: no density sorting needed for eval)
 CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
-    --dataset-dir data/pretokenized_datasets/stack_10m/splits/val_community \
-    --output-dir  schedules/stack10m_val_community \
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community \
+    --output-dir  schedules/thestack_val_community \
     --n-epochs 1 --strategy bfs --local-seq-len 32768 \
     --n-buckets 1 --n-workers 4 --seed 42 \
     --link-detector python --layout-policy stochastic_identifier_prefix
@@ -286,9 +283,9 @@ Then in the config:
 ```yaml
 data:
   val_dirs:
-    val_community: data/pretokenized_datasets/stack_10m/splits/val_community
+    val_community: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
   val_epoch_dirs:
-    val_community: [schedules/stack10m_val_community/epoch_0]
+    val_community: [schedules/thestack_val_community/epoch_0]
 ```
 
 When `val_epoch_dirs[name]` is set it takes precedence over `val_dirs[name]` for the loader,
@@ -300,32 +297,19 @@ but `val_dirs[name]` is still used as the `GraphIndex` source for the precompute
 
 Pre-computing epochs offline eliminates online link detection overhead (~1.3 s/step at 32k) and ensures all DDP ranks receive packs of the same attention-mask density at each step, eliminating rank-stall waste on multi-node InfiniBand runs.
 
-**Only supported for TheStack datasets** (identifier format `owner/repo:path`). Wikipedia / WikiSource must use the standard live `PackedSequenceDataset` path.
+**Only supported for TheStack** (identifier format `owner/repo:path`). Wikipedia must use the standard live `PackedSequenceDataset` path.
 
 ---
 
 ### Step 1 — Pre-compute epochs
 
-Run once before training. Each epoch takes ~20 min on 1 GPU for Stack 10M (8 workers); Stack 100M will take longer in proportion to corpus size.
+Run once before training. Each epoch takes ~20 min on 1 GPU for Stack 10M (8 workers); TheStack will take longer in proportion to corpus size.
 
 ```bash
-# Stack 10M — pre-compute 3 epochs (seed offset per epoch)
+# TheStack — pre-compute 5 epochs (seed offset per epoch)
 CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
-    --dataset-dir  data/pretokenized_datasets/stack_10m \
-    --output-dir   schedules/stack10m_bfs \
-    --n-epochs     3 \
-    --strategy     bfs \
-    --local-seq-len 32768 \
-    --n-buckets    8 \
-    --n-workers    8 \
-    --seed         42 \
-    --link-detector python \
-    --layout-policy identifier_prefix_bos_eos
-
-# Stack 100M — larger corpus, more workers
-CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
-    --dataset-dir  data/pretokenized_datasets/stack_100m \
-    --output-dir   schedules/stack100m_bfs \
+    --dataset-dir  /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
+    --output-dir   schedules/thestack_bfs \
     --n-epochs     5 \
     --strategy     bfs \
     --local-seq-len 32768 \
@@ -362,22 +346,22 @@ Pass `--data.epoch_dirs` pointing at the pre-computed epoch directories. The tra
 # Single-node (local torchrun, 2 GPUs)
 CUDA_VISIBLE_DEVICES=4,5 torchrun --nproc_per_node=2 main.py \
     --config configs/stack_100m_32k.yaml \
-    --data.dataset_dir data/pretokenized_datasets/stack_10m \
-    --data.epoch_dirs schedules/stack10m_bfs/epoch_0
+    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
+    --data.epoch_dirs schedules/thestack_bfs/epoch_0
 
 # Multi-node SLURM (2 nodes × 4 GPUs = 8 ranks)
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 4 --time 24:00:00 \
     --config configs/stack_100m_32k.yaml \
-    --data.dataset_dir data/pretokenized_datasets/stack_100m \
-    --data.epoch_dirs schedules/stack100m_bfs/epoch_0,schedules/stack100m_bfs/epoch_1,schedules/stack100m_bfs/epoch_2
+    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
+    --data.epoch_dirs schedules/thestack_bfs/epoch_0,schedules/thestack_bfs/epoch_1,schedules/thestack_bfs/epoch_2
 
 # Resume from checkpoint (BucketState is embedded in the checkpoint metadata)
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 4 --time 24:00:00 \
     --config configs/stack_100m_32k.yaml \
-    --data.dataset_dir data/pretokenized_datasets/stack_100m \
-    --data.epoch_dirs schedules/stack100m_bfs/epoch_0,schedules/stack100m_bfs/epoch_1 \
+    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
+    --data.epoch_dirs schedules/thestack_bfs/epoch_0,schedules/thestack_bfs/epoch_1 \
     --resume-from runs/<run_dir>/checkpoints/best_model.pt
 ```
 
@@ -395,17 +379,17 @@ Notes:
 ```bash
 # Density overview + masks (no timing data needed)
 python visualize_epoch.py \
-    --epoch-dir   schedules/stack10m_bfs/epoch_0 \
-    --dataset-dir data/pretokenized_datasets/stack_10m \
-    --output-dir  artifacts/stack10m_report
+    --epoch-dir   schedules/thestack_bfs/epoch_0 \
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
+    --output-dir  artifacts/thestack_report
 
 # Full report with training timing comparison
 python visualize_epoch.py \
-    --epoch-dir         schedules/stack10m_bfs/epoch_0 \
-    --dataset-dir       data/pretokenized_datasets/stack_10m \
+    --epoch-dir         schedules/thestack_bfs/epoch_0 \
+    --dataset-dir       /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
     --live-run          runs/<live_run_dir> \
     --precomputed-run   runs/<precomputed_run_dir> \
-    --output-dir        artifacts/stack10m_report
+    --output-dir        artifacts/thestack_report
 ```
 
 **Outputs:**
@@ -430,38 +414,30 @@ The baseline uses document-causal masking (each document attends only to itself)
 ```bash
 # SimpleWiki (~108M tokens, fast iteration)
 python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/simplewiki
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 
-# EnWikiSource (~612M tokens, longer literary texts)
+# TheStack (~8.7B tokens, full Python corpus)
 python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/enwikisource
-
-# The Stack 10M (~7B tokens)
-python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/stack_10m
-
-# The Stack 100M (~8.7B tokens, full Python corpus)
-python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/stack_100m
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
 ```
 
 ### Cross-document runs (cross_doc_link, BFS traversal)
 
 BFS traversal places linked documents adjacently in the packed sequence, which is required for cross-doc attention to be meaningful. Set `model.link_detector` to match the dataset.
 
-**Wikipedia / WikiSource** (`--model.link_detector markdown`):
+**Wikipedia** (`--model.link_detector markdown`):
 ```bash
 python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/enwikisource \
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \
     --strategy bfs \
     --model.mask_type cross_doc_link \
     --model.link_detector markdown
 ```
 
-**The Stack** (`--model.link_detector python`):
+**TheStack** (`--model.link_detector python`):
 ```bash
 python main.py --config configs/baseline.yaml \
-    --dataset-dir data/pretokenized_datasets/stack_100m \
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
     --strategy bfs \
     --model.mask_type cross_doc_link \
     --model.link_detector python
@@ -492,17 +468,17 @@ shorthand flags (`--dataset-dir`, `--strategy`, etc.) are not defined in the lau
 everything as `--section.key value` so the YAML config is never silently overridden.
 
 ```bash
-# 2 nodes × 8 GPUs — Stack 100M (the canonical large run)
+# 2 nodes × 8 GPUs — TheStack (the canonical large run)
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 8 --time 48:00:00 \
     --config configs/stack_100m_32k.yaml \
-    --data.dataset_dir data/pretokenized_datasets/stack_100m
+    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
 
-# 1 node × 4 GPUs — quick iteration on EnWikiSource
+# 1 node × 4 GPUs — quick iteration on SimpleWiki
 python launch_slurm.py \
     --nodes 1 --gpus-per-node 4 --time 12:00:00 \
     --config configs/large_32k.yaml \
-    --data.dataset_dir data/pretokenized_datasets/enwikisource \
+    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \
     --model.mask_type cross_doc_link --model.link_detector markdown
 ```
 
@@ -512,20 +488,21 @@ python launch_slurm.py \
 
 ## Generation
 
+> **Checkpoint paths in the examples below are broken** — they were trained on the old normalizer. Update these paths once new checkpoints are trained against the re-processed datasets.
+
 After training, generate text from a checkpoint using `generate.py`. The script auto-reads
 `hyperparameters.json` from the run directory to reconstruct the architecture, tokenizer,
 link detector, and layout policy — no manual config needed.
 
-### Stack 100M model (24L/1024D, cross-doc, 32k context)
+### TheStack model (cross-doc, 32k context)
 
-This checkpoint was trained with `identifier_prefix_bos_eos` layout policy, so every document
-seen during training began with `<BOS># path/to/file.py\n\n`. Pass `--root-identifier` with a
-plausible filename or the model will see an empty `# \n\n` header and immediately generate EOS.
+Checkpoints trained with `identifier_prefix_bos_eos` layout policy require `--root-identifier`
+or the model sees an empty `# \n\n` header and immediately generates EOS.
 
 ```bash
 python generate.py \
-    --checkpoint runs/run_20260311_184203_685319/checkpoints/best_model.pt \
-    --dataset data/pretokenized_datasets/stack_100m \
+    --checkpoint runs/<run_dir>/checkpoints/best_model.pt \
+    --dataset /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
     --root-identifier "trainer.py" \
     --prompt "import torch
 from torch.optim import Adam
@@ -538,42 +515,17 @@ def train_epoch(model, loader, optimizer, criterion, device):" \
     --temperature 0.9
 ```
 
-**Repetition penalty tuning for this checkpoint:** at ~3,000 steps the model is partially trained
-and prone to repetition loops. The default `--repetition-penalty 1.3` is too aggressive for code
-(it penalises legitimate re-use of variable names like `d_model` or `optimizer`), causing premature
-EOS. Use `1.05–1.15` for code generation. `1.0` disables the penalty entirely but risks infinite
-repetition loops.
+**Repetition penalty for code:** use `1.05–1.15`. The default `1.3` is too aggressive — it
+penalises legitimate variable name reuse (e.g. `d_model`, `optimizer`), causing premature EOS.
+`1.0` disables the penalty but risks infinite repetition loops.
 
-### Stack 10M models (36L/1280D, 32k context)
-
-```bash
-# doc_causal variant
-python generate.py \
-    --checkpoint runs/20260308_012518/checkpoints/best_model.pt \
-    --root-identifier "sort.py" \
-    --prompt "def merge_sort(arr):" \
-    --max-link-depth 0 \
-    --max-new-tokens 400
-
-# cross_doc_link variant (imports resolved against corpus)
-python generate.py \
-    --checkpoint runs/20260308_012521/checkpoints/best_model.pt \
-    --dataset data/pretokenized_datasets/stack_10m \
-    --root-identifier "main.py" \
-    --prompt "import numpy as np
-
-def softmax(x):" \
-    --max-link-depth 2 \
-    --max-new-tokens 400
-```
-
-### SimpleWiki baseline (12L/768D, doc_causal, 2k context)
+### SimpleWiki model (doc_causal or cross-doc)
 
 ```bash
 python generate.py \
-    --checkpoint runs/20260224_212158/checkpoints/best_model.pt \
+    --checkpoint runs/<run_dir>/checkpoints/best_model.pt \
     --prompt "Python is a high-level programming language." \
-    --dataset data/pretokenized_datasets/simplewiki \
+    --dataset /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \
     --max-link-depth 2 \
     --max-new-tokens 300
 ```
@@ -586,7 +538,7 @@ documents are inserted into the attention context before the active document. Se
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--root-identifier` | `""` | Filename / identifier for the root document header (e.g. `attention.py`). **Required** for checkpoints trained with `identifier_prefix_bos_eos` layout policy (all Stack 100M runs) — without it the model sees an empty `# \n\n` header and generates EOS immediately. |
+| `--root-identifier` | `""` | Filename / identifier for the root document header (e.g. `attention.py`). **Required** for checkpoints trained with `identifier_prefix_bos_eos` layout policy — without it the model sees an empty `# \n\n` header and generates EOS immediately. |
 | `--max-link-depth` | `2` | `0` = single-doc baseline; `≥1` enables aux doc insertion |
 | `--repetition-penalty` | `1.3` | Values `>1` reduce probability of already-seen tokens. Use `1.05–1.15` for code; `1.3` is appropriate for prose but too aggressive for code (penalises legitimate variable name reuse). |
 | `--temperature` | `0.8` | Sampling temperature |

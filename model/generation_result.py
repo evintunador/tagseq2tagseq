@@ -9,7 +9,7 @@ from typing import List, Literal, Optional
 
 import numpy as np
 
-from .identifier_utils import create_normed_identifier
+from data.normalization import normalize_wiki_title
 
 
 @dataclass
