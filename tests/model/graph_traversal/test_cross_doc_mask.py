@@ -9,7 +9,9 @@ import torch
 import tiktoken
 import pytest
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+from model.graph_traversal.link_detector import LinkInfo
 from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+from model.graph_traversal.python_import_detector import PythonImportDetector
 from dataclasses import dataclass, field
 from typing import List
 
@@ -169,3 +171,65 @@ def test_detect_links_space_form_target():
     # index_doc_span returns raw_identifier unchanged
     span = MockDocSpan(doc_id=0, raw_identifier="Sunshine Coast, Queensland", start=0, end=10)
     assert detector.index_doc_span(span) == "Sunshine Coast, Queensland"
+
+
+def test_per_doc_dispatch_fires_relative_import_grant():
+    """CrossDocLinkMaskCreator dispatches to detect_links_for_doc for PythonImportDetector.
+
+    Builds a two-doc pack where doc 1 has a relative import pointing to doc 0.
+    The whole-sequence detect_links path would miss this (it skips relative
+    imports); the per-doc path resolves it and should produce a grant.
+    """
+    enc = tiktoken.get_encoding("gpt2")
+    detector = PythonImportDetector(decode_fn=enc.decode)
+    creator = CrossDocLinkMaskCreator(link_detector=detector)
+
+    # Doc 0: a utility module at pkg/utils.py
+    doc0_text = "def helper():\n    return 42\n"
+    doc0_raw_id = "myrepo/myrepo:pkg/utils.py"
+
+    # Doc 1: imports doc 0 via a relative import
+    doc1_text = "from . import utils\nresult = utils.helper()\n"
+    doc1_raw_id = "myrepo/myrepo:pkg/mod.py"
+
+    toks0 = enc.encode(doc0_text)
+    toks1 = enc.encode(doc1_text)
+    all_toks = toks0 + toks1
+    tokens_2d = torch.tensor(all_toks + [0], dtype=torch.long).unsqueeze(0)
+
+    spans = [
+        MockDocSpan(doc_id=0, raw_identifier=doc0_raw_id, start=0, end=len(toks0)),
+        MockDocSpan(doc_id=1, raw_identifier=doc1_raw_id, start=len(toks0), end=len(all_toks)),
+    ]
+
+    # Verify detect_links_for_doc is used (not the whole-sequence path).
+    assert hasattr(detector, "detect_links_for_doc"), (
+        "PythonImportDetector must implement detect_links_for_doc"
+    )
+
+    # Collect links via per-doc path and check the relative import produces a
+    # link whose target matches pkg/utils.py.
+    links = creator._collect_links_per_doc(tokens_2d, spans)
+    targets = {lk.target_str for lk in links}
+    assert "pkg/utils.py" in targets, (
+        f"Expected 'pkg/utils.py' in per-doc link targets; got {targets}"
+    )
+
+    # _match_links_to_docs should also resolve to doc 0.
+    link_to_target = creator._match_links_to_docs(links, spans)
+    assert link_to_target, "Expected at least one matched link"
+    matched_doc_ids = {did for dids in link_to_target.values() for did in dids}
+    assert 0 in matched_doc_ids, (
+        f"Expected doc_id 0 in matched targets; got {matched_doc_ids}"
+    )
+
+
+def test_markdown_detector_uses_whole_sequence_path():
+    """MarkdownLinkDetector has no detect_links_for_doc; hasattr returns False."""
+    enc = tiktoken.get_encoding("gpt2")
+    detector = MarkdownLinkDetector(decode_fn=enc.decode)
+
+    assert not hasattr(detector, "detect_links_for_doc"), (
+        "MarkdownLinkDetector must NOT implement detect_links_for_doc — "
+        "it uses the whole-sequence path"
+    )

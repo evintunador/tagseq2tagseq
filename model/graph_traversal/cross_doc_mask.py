@@ -308,6 +308,47 @@ class CrossDocLinkMaskCreator:
             + (self.max_grants - self._max_grants_start) * cosine_factor
         )
 
+    def _collect_links_per_doc(
+        self,
+        tokens: torch.Tensor,
+        doc_spans: List[Any],
+    ) -> List[LinkInfo]:
+        """
+        Detect links by calling ``detect_links_for_doc`` once per span.
+
+        Used when the detector implements ``detect_links_for_doc`` (currently
+        ``PythonImportDetector``).  Each span's token slice is passed along with
+        its ``raw_identifier`` so the detector can resolve relative imports.
+        Local positions returned by the detector are offset by ``span.start``
+        to produce global packed-sequence coordinates before returning.
+
+        Args:
+            tokens:    Full packed token tensor of shape ``[1, T]``.
+            doc_spans: List of DocSpan objects for the current batch.
+
+        Returns:
+            List of ``LinkInfo`` objects with global ``link_end_pos`` values.
+        """
+        seq = tokens[0]
+        all_links: List[LinkInfo] = []
+        for span in doc_spans:
+            local_links = self.link_detector.detect_links_for_doc(
+                seq[span.start:span.end], span.raw_identifier
+            )
+            for lk in local_links:
+                all_links.append(
+                    LinkInfo(
+                        link_end_pos=lk.link_end_pos + span.start,
+                        target_str=lk.target_str,
+                    )
+                )
+        logger.info(
+            "_collect_links_per_doc: %d total LinkInfos across %d spans",
+            len(all_links),
+            len(doc_spans),
+        )
+        return all_links
+
     def _match_links_to_docs(
         self,
         links: List[LinkInfo],
@@ -840,10 +881,14 @@ class CrossDocLinkMaskCreator:
         seq_len = tokens.shape[-1]
 
         if link_to_target is None:
-            # Online path: detect links from tokens
-            input_ids = tokens[0]  # [seq_len]
-            links = self.link_detector.detect_links(input_ids)
-            logger.info(f"Found {len(links)} links in batch")
+            # Online path: detect links from tokens.
+            # Use per-doc detection when available (e.g. PythonImportDetector)
+            # so relative imports can be resolved from each span's raw_identifier.
+            if hasattr(self.link_detector, "detect_links_for_doc"):
+                links = self._collect_links_per_doc(tokens, doc_spans)
+            else:
+                links = self.link_detector.detect_links(tokens[0])
+                logger.info(f"Found {len(links)} links in batch")
             link_to_target = self._match_links_to_docs(links, doc_spans)
         else:
             logger.info(

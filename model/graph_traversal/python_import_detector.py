@@ -19,11 +19,20 @@ Detection works in three stages:
    positions.  For Python source (nearly all ASCII) this is exact; for the rare
    UTF-8 edge case the position may be off by one token, which is acceptable.
 
+Relative imports
+----------------
+``detect_links`` operates on a flat packed sequence with no knowledge of which
+document each token belongs to, so relative imports are skipped there.
+
+``detect_links_for_doc`` is the per-document variant: it receives a single
+document's token span plus its ``raw_identifier`` (which encodes the file path),
+enabling full relative-import resolution via ``_parse_relative_imports`` and
+``_resolve_relative_import``.  ``CrossDocLinkMaskCreator`` uses this method when
+available (detected via ``hasattr``), looping over each ``DocSpan`` and offsetting
+the returned local positions back to global packed-sequence coordinates.
+
 Limitations
 -----------
-- **Relative imports** (``from . import foo``, ``from ..bar import baz``) are
-  silently skipped: the current file path is not available inside
-  ``detect_links`` and would be required to resolve them.
 - **Dynamic / conditional imports** (``__import__``, ``importlib.import_module``,
   imports inside ``if TYPE_CHECKING:`` blocks, etc.) are not detected.
 - The module-to-file mapping assumes the repo root equals the Python path root.
@@ -117,6 +126,108 @@ def module_path_to_file_paths(module_path: str, from_name: str = "") -> List[str
         return [f"{sub}.py", f"{sub}/__init__.py"] + module_candidates
 
     return module_candidates
+
+
+def _parse_relative_imports(text: str) -> List[Tuple[str, str, int, int]]:
+    """
+    Find all *relative* Python import statements in *text*.
+
+    Same return format as ``_parse_imports`` — ``(module_path, from_name,
+    char_start, char_end)`` — but only entries whose ``module_path`` starts
+    with ``'.'``.  Plain ``import .foo`` is a syntax error in Python so only
+    the ``from … import`` patterns are checked.
+    """
+    results: List[Tuple[str, str, int, int]] = []
+
+    # --- "from .foo import name1, name2" (single-line) ---
+    for m in _FROM_IMPORT_INLINE_RE.finditer(text):
+        module_path = m.group(1)
+        if not module_path.startswith("."):
+            continue
+        names_str = m.group(2).strip()
+        if names_str == "*":
+            results.append((module_path, "*", m.start(), m.end()))
+        else:
+            for name in names_str.split(","):
+                name = name.strip()
+                if name:
+                    results.append((module_path, name, m.start(), m.end()))
+
+    # --- "from .foo import (\n    name1,\n    name2\n)" ---
+    for m in _FROM_IMPORT_PAREN_RE.finditer(text):
+        module_path = m.group(1)
+        if not module_path.startswith("."):
+            continue
+        clean_lines = [
+            line.split("#")[0].rstrip("\\")
+            for line in m.group(2).split("\n")
+        ]
+        for name in " ".join(clean_lines).split(","):
+            name = name.strip()
+            if name:
+                results.append((module_path, name, m.start(), m.end()))
+
+    return results
+
+
+def _resolve_relative_import(
+    module_path: str,
+    from_name: str,
+    source_file_path: str,
+) -> List[str]:
+    """
+    Resolve a single relative import to candidate absolute file paths.
+
+    Args:
+        module_path:      Dotted module path starting with one or more ``'.'``
+                          characters, e.g. ``'.'``, ``'.utils'``, ``'..models'``.
+        from_name:        Imported name (``'*'`` or ``''`` → no submodule candidates).
+        source_file_path: Repo-relative path of the importing file, e.g.
+                          ``'pkg/sub/mod.py'``.  Both ``/`` and ``\\`` separators
+                          are accepted.
+
+    Returns:
+        Candidate file paths (most-specific first), or ``[]`` when the import
+        walks above the repo root or ``from_name`` is ``'*'`` / ``''``.
+
+    Examples::
+
+        >>> _resolve_relative_import('.', 'utils', 'pkg/sub/mod.py')
+        ['pkg/sub/utils.py', 'pkg/sub/utils/__init__.py']
+
+        >>> _resolve_relative_import('..', 'models', 'pkg/sub/mod.py')
+        ['pkg/models.py', 'pkg/models/__init__.py']
+
+        >>> _resolve_relative_import('.schema', 'User', 'pkg/sub/mod.py')
+        ['pkg/sub/schema/User.py', 'pkg/sub/schema/User/__init__.py',
+         'pkg/sub/schema.py', 'pkg/sub/schema/__init__.py']
+    """
+    dot_count = len(module_path) - len(module_path.lstrip("."))
+    base_module = module_path[dot_count:]  # '' for '.', 'utils' for '.utils'
+
+    # Start from the directory containing the source file.
+    dir_parts = source_file_path.replace("\\", "/").split("/")[:-1]
+
+    # Walk up (dot_count - 1) levels.  A single dot means "current package"
+    # (the directory itself), so dot_count=1 requires no upward traversal.
+    for _ in range(dot_count - 1):
+        if not dir_parts:
+            return []  # import walks above repo root — unresolvable
+        dir_parts.pop()
+
+    if base_module:
+        resolved_parts = dir_parts + base_module.split(".")
+    else:
+        # "from . import X" — X lives directly in the current package directory.
+        resolved_parts = dir_parts
+
+    if not resolved_parts:
+        # Root-level file with "from . import X": X is at the repo root.
+        if from_name and from_name != "*":
+            return [f"{from_name}.py", f"{from_name}/__init__.py"]
+        return []
+
+    return module_path_to_file_paths(".".join(resolved_parts), from_name)
 
 
 def _parse_imports(text: str) -> List[Tuple[str, str, int, int]]:
@@ -246,6 +357,59 @@ class PythonImportDetector:
         logger.debug(
             f"PythonImportDetector: produced {len(links)} LinkInfos "
             f"({len(raw_imports)} import entries × avg candidates)"
+        )
+        return links
+
+    def detect_links_for_doc(
+        self,
+        span_tokens: torch.Tensor,
+        raw_identifier: str,
+    ) -> List[LinkInfo]:
+        """
+        Detect import links for a *single* document span.
+
+        Unlike ``detect_links``, which operates on a full packed sequence with
+        no per-document context, this method also resolves relative imports
+        (``from . import foo``, ``from ..models import User``, etc.) by
+        extracting the source file path from ``raw_identifier``.
+
+        Args:
+            span_tokens:    1-D token-ID tensor for this document only
+                            (``tokens[span.start:span.end]``).
+            raw_identifier: The span's ``raw_identifier``, e.g.
+                            ``'owner/repo:pkg/sub/mod.py'``.
+
+        Returns:
+            List of ``LinkInfo`` objects with positions **local to the span**
+            (i.e. offset 0 = first token of this span).  The caller is
+            responsible for adding ``span.start`` to convert to global
+            packed-sequence coordinates.
+        """
+        tokens = span_tokens.tolist()
+        full_text = self.decode_fn(tokens)
+        cumulative = self._build_char_to_token_index(tokens)
+
+        links: List[LinkInfo] = []
+
+        # Absolute imports — same as detect_links.
+        for module_path, from_name, _char_start, char_end in _parse_imports(full_text):
+            pos = self._char_pos_to_token_pos(cumulative, char_end)
+            for fp in module_path_to_file_paths(module_path, from_name):
+                links.append(LinkInfo(link_end_pos=pos, target_str=fp))
+
+        # Relative imports — resolved using the source file path.
+        source_file_path = (
+            raw_identifier.split(":", 1)[1] if ":" in raw_identifier else raw_identifier
+        )
+        for module_path, from_name, _char_start, char_end in _parse_relative_imports(full_text):
+            pos = self._char_pos_to_token_pos(cumulative, char_end)
+            for fp in _resolve_relative_import(module_path, from_name, source_file_path):
+                links.append(LinkInfo(link_end_pos=pos, target_str=fp))
+
+        logger.debug(
+            "PythonImportDetector.detect_links_for_doc: %d LinkInfos for %r",
+            len(links),
+            raw_identifier,
         )
         return links
 

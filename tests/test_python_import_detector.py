@@ -16,6 +16,8 @@ import torch
 from model.graph_traversal.python_import_detector import (
     PythonImportDetector,
     _parse_imports,
+    _parse_relative_imports,
+    _resolve_relative_import,
     module_path_to_file_paths,
 )
 
@@ -452,3 +454,171 @@ class TestCharToTokenIndex:
         # Character at position len(code)-1 should map to the last token or close
         last_pos = detector._char_pos_to_token_pos(cum, len(code) - 1)
         assert 0 < last_pos <= len(tokens)
+
+
+# ---------------------------------------------------------------------------
+# _parse_relative_imports
+# ---------------------------------------------------------------------------
+
+
+class TestParseRelativeImports:
+    def test_single_dot_inline(self):
+        results = _parse_relative_imports("from . import foo\n")
+        assert len(results) == 1
+        mp, fn, cs, ce = results[0]
+        assert mp == "."
+        assert fn == "foo"
+        assert ce > cs
+
+    def test_dotted_module_inline(self):
+        results = _parse_relative_imports("from .utils import helper\n")
+        assert len(results) == 1
+        mp, fn, _, _ = results[0]
+        assert mp == ".utils"
+        assert fn == "helper"
+
+    def test_parent_package(self):
+        results = _parse_relative_imports("from .. import models\n")
+        assert len(results) == 1
+        mp, fn, _, _ = results[0]
+        assert mp == ".."
+        assert fn == "models"
+
+    def test_parent_dotted(self):
+        results = _parse_relative_imports("from ..pkg import thing\n")
+        assert len(results) == 1
+        mp, fn, _, _ = results[0]
+        assert mp == "..pkg"
+        assert fn == "thing"
+
+    def test_multiple_names_inline(self):
+        results = _parse_relative_imports("from .schema import User, Role\n")
+        assert len(results) == 2
+        names = {fn for _, fn, _, _ in results}
+        assert names == {"User", "Role"}
+        # Both share same char range
+        assert results[0][2] == results[1][2]
+
+    def test_parenthesized(self):
+        code = "from .schema import (\n    User,\n    Role,\n)\n"
+        results = _parse_relative_imports(code)
+        assert len(results) == 2
+        names = {fn for _, fn, _, _ in results}
+        assert names == {"User", "Role"}
+
+    def test_absolute_imports_excluded(self):
+        results = _parse_relative_imports("import os\nfrom foo import bar\n")
+        assert results == []
+
+    def test_mixed_absolute_and_relative(self):
+        code = "from foo import bar\nfrom . import utils\n"
+        results = _parse_relative_imports(code)
+        assert len(results) == 1
+        assert results[0][0] == "."
+
+    def test_char_positions_nonzero(self):
+        code = "x = 1\nfrom . import foo\n"
+        results = _parse_relative_imports(code)
+        assert len(results) == 1
+        _, _, cs, ce = results[0]
+        assert cs > 0   # statement starts after "x = 1\n"
+        assert ce > cs
+
+
+# ---------------------------------------------------------------------------
+# _resolve_relative_import
+# ---------------------------------------------------------------------------
+
+
+class TestResolveRelativeImport:
+    def test_single_dot_import(self):
+        paths = _resolve_relative_import(".", "utils", "pkg/sub/mod.py")
+        assert "pkg/sub/utils.py" in paths
+        assert "pkg/sub/utils/__init__.py" in paths
+
+    def test_double_dot_import(self):
+        paths = _resolve_relative_import("..", "models", "pkg/sub/mod.py")
+        assert "pkg/models.py" in paths
+        assert "pkg/models/__init__.py" in paths
+
+    def test_dotted_submodule(self):
+        paths = _resolve_relative_import(".schema", "User", "pkg/sub/mod.py")
+        # Most-specific first: schema/User.py before schema.py
+        assert paths.index("pkg/sub/schema/User.py") < paths.index("pkg/sub/schema.py")
+
+    def test_root_level_file(self):
+        # Source file at repo root: "from . import utils" in top.py
+        paths = _resolve_relative_import(".", "utils", "top.py")
+        assert paths == ["utils.py", "utils/__init__.py"]
+
+    def test_star_import_returns_package(self):
+        # "from . import *" — targets the current package's __init__.py / module file.
+        paths = _resolve_relative_import(".", "*", "pkg/sub/mod.py")
+        assert "pkg/sub.py" in paths or "pkg/sub/__init__.py" in paths
+
+    def test_over_deep_returns_empty(self):
+        # Source is "a/mod.py" but import uses "../../.." — walks above root.
+        paths = _resolve_relative_import("...", "foo", "a/mod.py")
+        assert paths == []
+
+    def test_backslash_separator_normalised(self):
+        paths = _resolve_relative_import(".", "utils", "pkg\\sub\\mod.py")
+        assert "pkg/sub/utils.py" in paths
+
+    def test_from_name_empty_string_returns_package(self):
+        # Empty from_name behaves like no submodule specified — returns the package.
+        paths = _resolve_relative_import(".", "", "pkg/sub/mod.py")
+        assert "pkg/sub.py" in paths or "pkg/sub/__init__.py" in paths
+
+
+# ---------------------------------------------------------------------------
+# PythonImportDetector.detect_links_for_doc
+# ---------------------------------------------------------------------------
+
+
+class TestDetectLinksForDoc:
+    def test_relative_import_resolved(self, enc):
+        detector = PythonImportDetector(decode_fn=enc.decode)
+        code = "from . import utils\n"
+        tokens = torch.tensor(enc.encode(code), dtype=torch.long)
+        links = detector.detect_links_for_doc(tokens, "myrepo/myrepo:pkg/sub/mod.py")
+        targets = {lk.target_str for lk in links}
+        assert "pkg/sub/utils.py" in targets
+
+    def test_absolute_import_also_present(self, enc):
+        # detect_links_for_doc is a superset of detect_links for absolute imports.
+        detector = PythonImportDetector(decode_fn=enc.decode)
+        code = "import os.path\nfrom . import utils\n"
+        tokens = torch.tensor(enc.encode(code), dtype=torch.long)
+        links = detector.detect_links_for_doc(tokens, "myrepo/myrepo:pkg/sub/mod.py")
+        targets = {lk.target_str for lk in links}
+        assert "os/path.py" in targets           # absolute
+        assert "pkg/sub/utils.py" in targets     # relative
+
+    def test_positions_are_local(self, enc):
+        # Returned link_end_pos must be < len(span tokens), not a global offset.
+        detector = PythonImportDetector(decode_fn=enc.decode)
+        code = "from . import utils\n"
+        tokens = torch.tensor(enc.encode(code), dtype=torch.long)
+        links = detector.detect_links_for_doc(tokens, "myrepo/myrepo:pkg/sub/mod.py")
+        assert links, "expected at least one link"
+        for lk in links:
+            assert lk.link_end_pos <= len(tokens), (
+                f"link_end_pos {lk.link_end_pos} exceeds span length {len(tokens)}"
+            )
+
+    def test_no_imports_returns_empty(self, enc):
+        detector = PythonImportDetector(decode_fn=enc.decode)
+        code = "x = 1\ny = x + 2\n"
+        tokens = torch.tensor(enc.encode(code), dtype=torch.long)
+        links = detector.detect_links_for_doc(tokens, "myrepo/myrepo:pkg/mod.py")
+        assert links == []
+
+    def test_raw_identifier_without_colon(self, enc):
+        # Fallback: no repo prefix — treat whole string as file path.
+        detector = PythonImportDetector(decode_fn=enc.decode)
+        code = "from . import foo\n"
+        tokens = torch.tensor(enc.encode(code), dtype=torch.long)
+        links = detector.detect_links_for_doc(tokens, "pkg/sub/mod.py")
+        targets = {lk.target_str for lk in links}
+        assert "pkg/sub/foo.py" in targets
