@@ -273,7 +273,7 @@ reproducible pack sequence for fair cross-checkpoint comparison:
 # Pre-compute val_community packs (--n-buckets 1: no density sorting needed for eval)
 CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
     --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community \
-    --output-dir  schedules/thestack_val_community \
+    --output-dir  /fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_val_community \
     --n-epochs 1 --strategy bfs --local-seq-len 32768 \
     --n-buckets 1 --n-workers 4 --seed 42 \
     --link-detector python --layout-policy stochastic_identifier_prefix
@@ -285,7 +285,7 @@ data:
   val_dirs:
     val_community: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
   val_epoch_dirs:
-    val_community: [schedules/thestack_val_community/epoch_0]
+    val_community: [/fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_val_community/epoch_0]
 ```
 
 When `val_epoch_dirs[name]` is set it takes precedence over `val_dirs[name]` for the loader,
@@ -297,19 +297,26 @@ but `val_dirs[name]` is still used as the `GraphIndex` source for the precompute
 
 Pre-computing epochs offline eliminates online link detection overhead (~1.3 s/step at 32k) and ensures all DDP ranks receive packs of the same attention-mask density at each step, eliminating rank-stall waste on multi-node InfiniBand runs.
 
-**Only supported for TheStack** (identifier format `owner/repo:path`). Wikipedia must use the standard live `PackedSequenceDataset` path.
+**Currently only supported for TheStack** (identifier format `owner/repo:path`). Wikipedia must use the standard live `PackedSequenceDataset` path.
+
+> **TODO — Wikipedia support:** The TheStack restriction exists because workers are partitioned by repo prefix, keeping linked files co-resident in the same shard so BFS traversal doesn't immediately hit boundaries. Wikipedia needs a graph-community partitioner (multi-source BFS Voronoi: seed one doc per worker, expand round-robin with a size cap to prevent hub nodes dominating, re-seed workers that exhaust their queue). See the module-level TODO in `data/epoch_precompute.py` for the full design.
 
 ---
 
 ### Step 1 — Pre-compute epochs
 
-Run once before training. Each epoch takes ~20 min on 1 GPU for Stack 10M (8 workers); TheStack will take longer in proportion to corpus size.
+Run once before training. Both `doc_causal` and `cross_doc_link` configs use
+`stochastic_identifier_prefix` as their training layout policy, so they share a
+single set of precomputed packs. The `doc_causal` model just ignores the
+`link_to_target` field; sharing packs keeps the baseline directly comparable.
+
+Each epoch takes roughly 20 min on 1 GPU for TheStack at 32k seq_len (16 workers).
 
 ```bash
-# TheStack — pre-compute 5 epochs (seed offset per epoch)
+# TheStack train split — 5 epochs, shared by both doc_causal and cross_doc_link
 CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
-    --dataset-dir  /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
-    --output-dir   schedules/thestack_bfs \
+    --dataset-dir  /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
+    --output-dir   /fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs \
     --n-epochs     5 \
     --strategy     bfs \
     --local-seq-len 32768 \
@@ -317,7 +324,7 @@ CUDA_VISIBLE_DEVICES=0 python precompute_epochs.py \
     --n-workers    16 \
     --seed         42 \
     --link-detector python \
-    --layout-policy identifier_prefix_bos_eos
+    --layout-policy stochastic_identifier_prefix
 ```
 
 Each `epoch_{i}/` directory receives:
@@ -333,7 +340,7 @@ The script is **resume-safe**: it skips any epoch whose `packs.parquet` already 
 | `--n-buckets` | 32 | Density quantile buckets. Use 8 for quick experiments, 32 for production. |
 | `--n-workers` | 8 | Subprocess workers (one repo shard each). Each worker opens its own GraphIndex. |
 | `--local-seq-len` | 32768 | Token budget per pack — must match `model.max_seq_len`. |
-| `--layout-policy` | `null` | Must match the layout used during training (e.g. `identifier_prefix_bos_eos`). |
+| `--layout-policy` | `null` | Must match the training layout policy (`stochastic_identifier_prefix` for production). |
 | `--gpu-kv-pass` | off | Use GPU BlockMask instead of CPU analytical method for kv_block_count (36 ms/pack vs 1 ms/pack; only useful for verifying C==B on a real dataset). |
 
 ---
@@ -343,25 +350,30 @@ The script is **resume-safe**: it skips any epoch whose `packs.parquet` already 
 Pass `--data.epoch_dirs` pointing at the pre-computed epoch directories. The training script automatically activates `BucketedPackDataset` and injects `bucket_state_fn` so dataset position is saved in every checkpoint.
 
 ```bash
-# Single-node (local torchrun, 2 GPUs)
-CUDA_VISIBLE_DEVICES=4,5 torchrun --nproc_per_node=2 main.py \
-    --config configs/stack_100m_32k.yaml \
-    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
-    --data.epoch_dirs schedules/thestack_bfs/epoch_0
-
-# Multi-node SLURM (2 nodes × 4 GPUs = 8 ranks)
+# Multi-node SLURM — doc_causal baseline
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 4 --time 24:00:00 \
-    --config configs/stack_100m_32k.yaml \
-    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
-    --data.epoch_dirs schedules/thestack_bfs/epoch_0,schedules/thestack_bfs/epoch_1,schedules/thestack_bfs/epoch_2
+    --config configs/stack_100m_doc_causal.yaml \
+    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
+    --data.val_dirs.val_community /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community \
+    --data.val_dirs.val_random /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random \
+    --data.epoch_dirs /fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0,/fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_1,/fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_2
+
+# Multi-node SLURM — cross_doc_link experimental (same packs, different mask)
+python launch_slurm.py \
+    --nodes 2 --gpus-per-node 4 --time 24:00:00 \
+    --config configs/stack_100m_cross_doc.yaml \
+    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
+    --data.val_dirs.val_community /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community \
+    --data.val_dirs.val_random /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random \
+    --data.epoch_dirs /fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0,/fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_1,/fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_2
 
 # Resume from checkpoint (BucketState is embedded in the checkpoint metadata)
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 4 --time 24:00:00 \
-    --config configs/stack_100m_32k.yaml \
-    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
-    --data.epoch_dirs schedules/thestack_bfs/epoch_0,schedules/thestack_bfs/epoch_1 \
+    --config configs/stack_100m_cross_doc.yaml \
+    --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
+    --data.epoch_dirs /fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0,/fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_1 \
     --resume-from runs/<run_dir>/checkpoints/best_model.pt
 ```
 
@@ -379,17 +391,17 @@ Notes:
 ```bash
 # Density overview + masks (no timing data needed)
 python visualize_epoch.py \
-    --epoch-dir   schedules/thestack_bfs/epoch_0 \
-    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
-    --output-dir  artifacts/thestack_report
+    --epoch-dir   /fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0 \
+    --dataset-dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
+    --output-dir  /fss/evin_t/tagseq2tagseq_artifacts/artifacts/thestack_report
 
 # Full report with training timing comparison
 python visualize_epoch.py \
-    --epoch-dir         schedules/thestack_bfs/epoch_0 \
-    --dataset-dir       /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack \
+    --epoch-dir         /fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0 \
+    --dataset-dir       /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
     --live-run          runs/<live_run_dir> \
     --precomputed-run   runs/<precomputed_run_dir> \
-    --output-dir        artifacts/thestack_report
+    --output-dir        /fss/evin_t/tagseq2tagseq_artifacts/artifacts/thestack_report
 ```
 
 **Outputs:**

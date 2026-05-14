@@ -166,15 +166,18 @@ split by language and match each to its `<Language>ImportDetector`.
   `cross_doc_only` saw only the easier 174. The true paired improvement is ~0.4% at
   step 14,900 of training — real but small. Expected to grow with further training.
 
-### PythonImportDetector: relative imports in training — TODO (discuss separately)
-At eval time, relative imports are now resolved via `source_file_path` in
-`score_completion_with_context_docs`. The training pipeline question is separate:
-the epoch precompute fast-path uses pre-built `link_to_target` from graph edges (which
-ARE built with relative imports resolved by `data/github_graph_extractor/extract.py:80`),
-so training may already handle this correctly. Needs verification before any changes to
-`PythonImportDetector.detect_links` or the training collation path.
+### PythonImportDetector: relative imports in training — DONE
+`PythonImportDetector.detect_links_for_doc(span_tokens, raw_identifier)` resolves
+relative imports using the source file path embedded in `raw_identifier`. Added
+`_parse_relative_imports` (mirrors `_parse_imports` but keeps only `.`-prefixed
+entries) and `_resolve_relative_import` (walks up directories per dot count).
+`CrossDocLinkMaskCreator` dispatches to `_collect_links_per_doc` (loops over spans,
+offsets local positions to global) when `hasattr(detector, 'detect_links_for_doc')`;
+falls back to whole-sequence `detect_links` otherwise (Markdown path unchanged).
+Same `hasattr` dispatch in `epoch_precompute.py`. Training/eval divergence for code
+datasets is now closed.
 
-### Multi-hop QA beyond 2-hop — TODO
+### Multi-hop QA beyond 2-hop — NOTE (future, low priority)
 HotpotQA is strictly 2-hop. Deeper graph traversal (BFS depth ≥ 3) is a core
 claim of the system but is untested by any current benchmark. Candidates to
 investigate:
@@ -186,7 +189,7 @@ Both have supporting paragraph annotations that map naturally to aux DocSpans.
 Before implementing, check whether the datasets are available on cluster and
 whether they overlap with our Wikipedia training data (leakage analysis needed).
 
-### Better cross-doc benchmark for Stack models — TODO
+### Better cross-doc benchmark for Stack models — NOTE (future, low priority)
 RepoBench cross-doc shows only ~0.4% NLL improvement at early training — good
 signal-to-noise but a small headline number. Candidates:
 - **CodeSearchNet** with cross-file call graphs — look for a dataset that
@@ -197,7 +200,7 @@ signal-to-noise but a small headline number. Candidates:
   under both conditions. Controlled, no labelling needed, directly tests our
   training setup. Design needed before implementing.
 
-### Link injection eval for other external benchmarks — TODO
+### Link injection eval for other external benchmarks — NOTE (future)
 For all external benchmarks OTHER than RepoBench, the path to cross-doc-link
 evaluation is via prompt preprocessing (link injection), not direct structural
 reformatting. This requires `eval/link_annotator.py`:
@@ -230,6 +233,23 @@ Aggregate model combining all three with a composite link detector (runs all thr
 individual detectors, doesn't need to be fast) is a future milestone.
 
 No FineWeb or other flat data planned — the point is structured graph data.
+
+### Epoch precompute for Wikipedia — TODO
+`epoch_precompute.py` currently only supports TheStack (repo-partitioned identifiers).
+Wikipedia needs a **graph-community partitioner** before it can use the precomputed
+path. The TheStack partitioner groups all files in a repo onto one worker so BFS
+traversal stays intra-shard; naive random chunking of Wikipedia would scatter linked
+articles across workers and BFS would immediately hit boundaries, producing
+effectively doc_causal packs with no cross-doc grants.
+
+Design: multi-source BFS Voronoi — pick `n_workers` random seeds, expand round-robin
+with a per-worker size cap (≈ 1.5 × `len(graph) / n_workers`) to prevent hub nodes
+(e.g. "United States") from dominating; re-seed workers that exhaust their queue
+before the cap; assign leftover isolated/overflow docs round-robin. O(n) like the
+existing repo-prefix scan. Full design in `data/epoch_precompute.py` module docstring.
+
+Until this is implemented, simplewiki / Wikipedia training uses the live
+`PackedSequenceDataset` path (no density-aware bucketing).
 
 ### Wikipedia redirect map — TODO
 The Wikipedia dump ships a `redirect.sql` table mapping stub redirect titles to
