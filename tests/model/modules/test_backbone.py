@@ -26,7 +26,6 @@ def test_backbone_forward_backward(model_dim, num_heads, num_layers, max_seq_len
         model_dim=model_dim,
         num_heads=num_heads,
         max_seq_len=max_seq_len,
-        dropout=0.0,
         drop_path_rate=0.0,
         fp8=False,
     ).to(device, dtype)
@@ -58,7 +57,6 @@ def test_backbone_skip_connections(num_layers, device, dtype):
         model_dim=model_dim,
         num_heads=4,
         max_seq_len=max_seq_len,
-        dropout=0.0,
         drop_path_rate=0.0,
         fp8=False,
     ).to(device, dtype)
@@ -83,7 +81,6 @@ def test_backbone_module_list_structure(device, dtype):
         model_dim=256,
         num_heads=4,
         max_seq_len=128,
-        dropout=0.0,
         drop_path_rate=0.0,
         fp8=False,
     ).to(device, dtype)

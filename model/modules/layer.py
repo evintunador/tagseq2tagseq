@@ -1,11 +1,14 @@
+import math
+from typing import Optional
+
+import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Any
 
-from tunalab.modules.sequence_mixing.flex_self_attention import FlexSelfAttention
-from tunalab.modules.channel_mixing.glu import GLU
 from tunalab.modules.regularization.drop_path import DropPath
 from tunalab.modules.norms.rms_norm import RMSNorm
+from kernels.fused_relu_sq_mlp import FusedReLUSquaredMLP
 
 
 class Layer(nn.Module):
@@ -13,7 +16,6 @@ class Layer(nn.Module):
         self,
         n_embd: int,
         n_head: int,
-        dropout: float,
         max_seq_len: int,
         fp8: bool,
         drop_path_rate: float,
@@ -28,23 +30,43 @@ class Layer(nn.Module):
             self.attn = BIMv12Attention(
                 dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
             )
-        elif attention_backend == "varlen_bim_v1":
-            from model.modules.attention import VarlenBIMv1Attention
-            self.attn = VarlenBIMv1Attention(
+        elif attention_backend in ("triton_v17", "triton_v18"):
+            from model.modules.attention import BIMv17Attention, BIMv18Attention
+            _cls = BIMv18Attention if attention_backend == "triton_v18" else BIMv17Attention
+            self.attn = _cls(
+                dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
+            )
+        elif attention_backend in ("varlen_bim_v1", "varlen_bim_v2"):
+            from model.modules.attention import VarlenBIMv1Attention, VarlenBIMv2Attention
+            _cls = VarlenBIMv2Attention if attention_backend == "varlen_bim_v2" else VarlenBIMv1Attention
+            self.attn = _cls(
                 dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
             )
         else:
-            self.attn = FlexSelfAttention(
+            from model.modules.attention import VEFlexSelfAttention
+            self.attn = VEFlexSelfAttention(
                 dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
             )
 
         self.ln_2 = RMSNorm(n_embd)
-        self.mlp = GLU(
-            in_dim=n_embd, out_dim=n_embd, hidden_dim=int(8/3*n_embd),
-            activation="silu", dropout=dropout, fp8=fp8,
-        )
+        self.mlp = FusedReLUSquaredMLP(model_dim=n_embd)
 
-    def forward(self, x: Tensor, block_mask: Any):
-        x = x + self.drop_path(self.attn(self.ln_1(x), block_mask=block_mask))
-        x = x + self.drop_path(self.mlp(self.ln_2(x)))
+        # Per-sublayer learnable residual scaling (from modded-nanogpt).
+        # resid_lambdas[0/1]: scale applied to the residual stream before adding
+        #   the sublayer output. Initialized to sqrt(1.1) so that, at init,
+        #   each sublayer slightly amplifies the residual stream.
+        # post_lambdas[0/1]: scale applied to the sublayer output itself.
+        #   Initialized to 1.0 to match the original residual connection at init.
+        # Index 0 = attention sublayer, index 1 = MLP sublayer.
+        self.resid_lambdas = nn.Parameter(torch.full((2,), math.sqrt(1.1)))
+        self.post_lambdas = nn.Parameter(torch.ones(2))
+
+    def forward(self, x: Tensor, block_mask: Any,
+                ve: Optional[Tensor] = None, ve_gate_w: Optional[Tensor] = None):
+        rl = self.resid_lambdas
+        pl = self.post_lambdas
+        x = rl[0] * x + pl[0] * self.drop_path(
+            self.attn(self.ln_1(x), block_mask=block_mask, ve=ve, ve_gate_w=ve_gate_w)
+        )
+        x = rl[1] * x + pl[1] * self.drop_path(self.mlp(self.ln_2(x)))
         return x

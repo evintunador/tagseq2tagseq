@@ -42,21 +42,24 @@ class DocCausalTritonMaskInputs:
 
 @dataclass
 class TritonMaskInputs:
-    """Bundle of tensors passed to triton_attn_cross_doc_bitmask_bim_v12.
+    """Bundle of tensors passed to the Triton cross-doc kernel.
 
-    Built by CrossDocLinkMaskCreator when backend="triton_v12" and reused
-    across every layer and head (the mask is the same everywhere).
+    Built by CrossDocLinkMaskCreator when backend="triton_v12" or
+    "triton_v17" and reused across every layer and head.
 
     Attributes:
         document_ids:  [T]           int32 — doc index per token position
         q_bitmasks:    [n_chunks, T] int64 — query-side grant bitmasks
         kv_bitmasks:   [n_chunks, T] int64 — key-side grant bitmasks
-        bim:           BlockInteractionMask at block_size=128
+        bim:           BlockInteractionMask at block_size=128 (forward tiles)
+        bim64:         BlockInteractionMask at block_size=64 (backward tiles);
+                       None when backend="triton_v12" (backward uses bim128).
     """
     document_ids: torch.Tensor
     q_bitmasks:   torch.Tensor
     kv_bitmasks:  torch.Tensor
     bim:          "BlockInteractionMask"
+    bim64:        "Optional[BlockInteractionMask]" = None
 
 
 # ---------------------------------------------------------------------------
@@ -271,8 +274,8 @@ class CrossDocLinkMaskCreator:
                                     Should match the BLOCK_SIZE used by the Triton
                                     kernel (typically the autotune winner, default 64).
         """
-        assert backend in ("flex", "triton", "triton_v12"), \
-            f"backend must be 'flex', 'triton', or 'triton_v12', got {backend!r}"
+        assert backend in ("flex", "triton", "triton_v12", "triton_v17", "triton_v18"), \
+            f"backend must be 'flex', 'triton', 'triton_v12', or 'triton_v17', got {backend!r}"
         self.link_detector = link_detector
         self.max_grants = max_grants
         self.backend = backend
@@ -587,6 +590,14 @@ class CrossDocLinkMaskCreator:
         # 4. Causal mask: kv_block <= q_block
         causal = np.arange(n_blocks)[:, None] >= np.arange(n_blocks)[None, :]
 
+        # 4b. Diagonal guard: same_doc[i,i] can be False when doc_ids=-1 (layout-gap
+        #     tokens, e.g. BOS/EOS outside a span) fall at the END of a block, making
+        #     blk_max_doc[i]=-1 < blk_min_doc[i]≥0.  A block always attends causally
+        #     to itself, so force the diagonal True before building the interaction
+        #     matrix.  Without this guard the backward kernel reads
+        #     q_kv_indices[start - 1] (OOB) for any Q-block with 0 interactions.
+        np.fill_diagonal(same_doc, True)
+
         # 5. Final interaction matrix and CSR construction via np.where
         interact = causal & (same_doc | grant)  # [n_blocks, n_blocks] bool
 
@@ -880,20 +891,32 @@ class CrossDocLinkMaskCreator:
                 seq_len, document_ids, q_bms, kv_bms, device
             )
 
-        if self.backend == "triton_v12":
-            # Build BIM at block_size=128 (required by v12 kernel) and package
-            # all kernel inputs into a TritonMaskInputs bundle.
+        if self.backend in ("triton_v12", "triton_v17", "triton_v18"):
+            # Build BIM at block_size=128 (forward tiles) and package all
+            # kernel inputs into a TritonMaskInputs bundle.
             saved_bs = self.triton_block_size
             self.triton_block_size = 128
-            bim = self._build_block_interaction_mask(
+            bim128 = self._build_block_interaction_mask(
                 seq_len, document_ids, q_bms, kv_bms, device
             )
             self.triton_block_size = saved_bs
+
+            # For v12_bwd64: also build BIM at block_size=64 for the backward
+            # passes (halves register pressure, fits within A100 SMEM at Dh=128).
+            bim64 = None
+            if self.backend in ("triton_v17", "triton_v18"):
+                self.triton_block_size = 64
+                bim64 = self._build_block_interaction_mask(
+                    seq_len, document_ids, q_bms, kv_bms, device
+                )
+                self.triton_block_size = saved_bs
+
             return TritonMaskInputs(
                 document_ids=document_ids,
-                q_bitmasks=torch.stack(q_bms, dim=0),   # (n_chunks, T)
+                q_bitmasks=torch.stack(q_bms, dim=0),    # (n_chunks, T)
                 kv_bitmasks=torch.stack(kv_bms, dim=0),  # (n_chunks, T)
-                bim=bim,
+                bim=bim128,
+                bim64=bim64,
             )
 
         # backend == "flex": build FlexAttention BlockMask (default, DDP training path)

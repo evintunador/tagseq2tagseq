@@ -59,8 +59,9 @@ def load_model(checkpoint_path: Path, device: torch.device):
 
     block_mask_creator = make_mask_creator_callable(mask_type)
 
+    vocab_size = ckpt["model"]["embedding.weight"].shape[0]
     training_module = TS2TSTrainingModule.from_config(
-        vocab_size=50257,
+        vocab_size=vocab_size,
         num_layers=mcfg["num_layers"],
         model_dim=mcfg["model_dim"],
         num_heads=mcfg["num_heads"],
@@ -87,9 +88,10 @@ def load_model(checkpoint_path: Path, device: torch.device):
 
 def check_forward_inference(model, device, dtype):
     print("\n[1] forward_inference shape / NaN check")
-    tokens = torch.randint(0, 50257, (1, 50), device=device, dtype=torch.long)
+    vocab_size = model.vocab_size
+    tokens = torch.randint(0, vocab_size, (1, 50), device=device, dtype=torch.long)
     logits = model.forward_inference(tokens)
-    assert logits.shape == (1, 50, 50257), f"Wrong shape: {logits.shape}"
+    assert logits.shape == (1, 50, vocab_size), f"Wrong shape: {logits.shape}"
     assert not torch.isnan(logits).any(), "NaN in logits!"
     assert not torch.isinf(logits).any(), "Inf in logits!"
     print(f"  shape={logits.shape}  OK")
@@ -110,7 +112,7 @@ def check_generate(model, device, max_new_tokens: int, temperature: float):
         "The Roman Empire was",
         "Water is composed of",
     ]
-    max_entropy = math.log(50257)   # entropy of uniform distribution over vocab
+    max_entropy = math.log(model.vocab_size)   # entropy of uniform distribution over vocab
 
     for prompt in prompts:
         config = GenerationConfig(

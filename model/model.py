@@ -68,7 +68,6 @@ class TS2TSModel:
         model_dim: int,
         num_heads: int,
         max_seq_len: int,
-        dropout: float,
         drop_path_rate: float,
         block_mask_creator: Callable,
         fp8: bool = False,
@@ -84,7 +83,6 @@ class TS2TSModel:
             model_dim=model_dim,
             num_heads=num_heads,
             max_seq_len=max_seq_len,
-            dropout=dropout,
             drop_path_rate=drop_path_rate,
             fp8=fp8,
         )
@@ -230,8 +228,10 @@ class TS2TSModel:
             Logits tensor of shape [1, T, vocab_size]
         """
         block_mask = self.block_mask_creator(tokens=tokens, doc_spans=doc_spans or [], **kwargs)
-        x = F.embedding(tokens, self.embedding_weight)   # [1, T, D]
-        x = self.backbone(x, block_mask=block_mask)      # [1, T, D]
+        x = F.embedding(tokens, self.embedding_weight)                        # [1, T, D]
+        ve_map = self.backbone.prepare_ve(tokens)
+        bigram = self.backbone.prepare_bigram(tokens)
+        x = self.backbone(x, block_mask=block_mask, ve_map=ve_map, bigram=bigram)  # [1, T, D]
         x = self.norm(x)
         logits = F.linear(x, self.lm_head_weight)        # [1, T, V]
         return logits

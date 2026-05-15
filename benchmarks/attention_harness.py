@@ -284,16 +284,17 @@ FIXTURES_DIR = Path(__file__).parent.parent / "tests" / "fixtures" / "real_packs
 @dataclass
 class FixtureMeta:
     """Metadata for a pre-sampled pack fixture."""
-    label: str           # "sparse" | "medium" | "dense"
+    label: str           # display name — also used as filename unless file_label is set
     n_grants: int        # pre-sampled grant count (resolved cross-doc grants)
     max_grants: int      # max_grants used when building masks; < n_grants → truncation
     kv_block_count: int  # analytical block count
     seq_len: int
     n_docs: int
+    file_label: str = "" # if non-empty, load from <file_label>.pt instead of <label>.pt
 
     @property
     def path(self) -> Path:
-        return FIXTURES_DIR / f"{self.label}.pt"
+        return FIXTURES_DIR / f"{self.file_label or self.label}.pt"
 
     def data_label(self) -> str:
         trunc = f",trunc@{self.max_grants}" if self.max_grants < self.n_grants else ""
@@ -302,9 +303,15 @@ class FixtureMeta:
 
 
 REAL_PACK_FIXTURES: List[FixtureMeta] = [
-    FixtureMeta(label="sparse", n_grants=0,   max_grants=64,  kv_block_count=31653, seq_len=32768, n_docs=2),
-    FixtureMeta(label="medium", n_grants=25,  max_grants=64,  kv_block_count=8157,  seq_len=32768, n_docs=17),
-    FixtureMeta(label="dense",  n_grants=609, max_grants=128, kv_block_count=10680, seq_len=32768, n_docs=191),
+    FixtureMeta(label="sparse",    n_grants=0,   max_grants=64,  kv_block_count=31653, seq_len=32768, n_docs=2),
+    FixtureMeta(label="medium",    n_grants=25,  max_grants=64,  kv_block_count=8157,  seq_len=32768, n_docs=17),
+    FixtureMeta(label="dense",     n_grants=609, max_grants=128, kv_block_count=10680, seq_len=32768, n_docs=191),
+    # dense re-run with max_grants=256 → n_chunks=4 (vs. n_chunks=2 above).
+    # This is the regression case for v17: the BIM_BS=128 fwd / BIM_BS=64 bwd
+    # split is first exercised at n_chunks≥3; the original v17 backward produced
+    # NaN gradients under these conditions at Dh=128 (T=32768, real simplewiki).
+    FixtureMeta(label="dense_n4chunks", n_grants=609, max_grants=256, kv_block_count=10680,
+                seq_len=32768, n_docs=191, file_label="dense"),
 ]
 
 
@@ -537,6 +544,12 @@ def _impl_varlen_bim_v1(q, k, v, mask_inputs, scale):
     return triton_attn_doc_causal_bim_v1(q, k, v, mask_inputs.cu_seqlens, mask_inputs.max_seqlen, scale)
 
 
+def _impl_varlen_bim_v2(q, k, v, mask_inputs, scale):
+    """varlen_bim_v2: v1 + nan_to_num guard for sentinel-LSE NaN in backward."""
+    from kernels.varlen_bim_v2 import triton_attn_doc_causal_bim_v2
+    return triton_attn_doc_causal_bim_v2(q, k, v, mask_inputs.cu_seqlens, mask_inputs.max_seqlen, scale)
+
+
 def _impl_triton_cross_doc_naive(q, k, v, mask_inputs, scale):
     from kernels.cross_doc_naive_attn import triton_attn_cross_doc_naive
     assert mask_inputs.dense_mask is not None
@@ -732,6 +745,49 @@ def _impl_cdb_bim_v12(q, k, v, mask_inputs, scale):
     return triton_attn_cross_doc_bitmask_bim_v12(
         q, k, v, mask_inputs.document_ids,
         mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
+    )
+
+
+_bim64_cache: Dict[int, Any] = {}
+
+def _get_bim64(mask_inputs):
+    """Build (and cache) a BIM at block_size=64 for the given mask_inputs."""
+    from kernels.cross_doc_bitmask_bim_v17 import _build_bim_64
+    key = id(mask_inputs)
+    if key not in _bim64_cache:
+        _bim64_cache[key] = _build_bim_64(
+            mask_inputs.seq_len, mask_inputs.document_ids,
+            mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks,
+            mask_inputs.document_ids.device, mask_inputs.q_bitmasks.shape[0],
+        )
+    return _bim64_cache[key]
+
+
+def _impl_cdb_bim_v17(q, k, v, mask_inputs, scale):
+    """cdb_bim_v17: BIM_BS=128 forward, BIM_BS=64 backward (SMEM fix for Dh=128)."""
+    from kernels.cross_doc_bitmask_bim_v17 import (
+        triton_attn_cross_doc_bitmask_bim_v17,
+    )
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _get_bim128(mask_inputs)
+    bim64  = _get_bim64(mask_inputs)
+    return triton_attn_cross_doc_bitmask_bim_v17(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, bim64, scale,
+    )
+
+
+def _impl_cdb_bim_v18(q, k, v, mask_inputs, scale):
+    """cdb_bim_v18: v17 + nan_to_num guard for sentinel-LSE NaN in backward."""
+    from kernels.cross_doc_bitmask_bim_v18 import (
+        triton_attn_cross_doc_bitmask_bim_v18,
+    )
+    assert mask_inputs.q_bitmasks is not None
+    bim128 = _get_bim128(mask_inputs)
+    bim64  = _get_bim64(mask_inputs)
+    return triton_attn_cross_doc_bitmask_bim_v18(
+        q, k, v, mask_inputs.document_ids,
+        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, bim64, scale,
     )
 
 
@@ -946,6 +1002,7 @@ REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
         ("flex",               _impl_flex_doc_causal),
         ("triton_varlen",      _impl_triton_varlen),
         ("varlen_bim_v1",      _impl_varlen_bim_v1),
+        ("varlen_bim_v2",      _impl_varlen_bim_v2),   # v1 + sentinel-LSE NaN guard
     ],
     MaskType.CROSS_DOC_NAIVE: [
         ("naive_pytorch",          _make_naive_impl(MaskType.CROSS_DOC_NAIVE, compiled=False)),
@@ -970,7 +1027,9 @@ REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
         ("cdb_bim_v9",       _impl_cdb_bim_v9),       # split pipelined same-doc + BIM cross-doc
         ("cdb_bim_v10",      _impl_cdb_bim_v10),      # native-dtype matmuls (bf16 TC)
         ("cdb_bim_v11",      _impl_cdb_bim_v11),      # v10 + no permute copies
-        ("cdb_bim_v12",      _impl_cdb_bim_v12),      # v11 + BIM_BLOCK_SIZE=128
+        ("cdb_bim_v12",        _impl_cdb_bim_v12),        # v11 + BIM_BLOCK_SIZE=128
+        ("cdb_bim_v17", _impl_cdb_bim_v17), # v12 fwd + BIM_BS=64 bwd (SMEM fix for Dh=128)
+        ("cdb_bim_v18", _impl_cdb_bim_v18), # v17 + nan_to_num guard for sentinel-LSE NaN
         ("cdb_bim_v13",      _impl_cdb_bim_v13),      # v12 + pure-cross dispatch
         ("cdb_bim_v14",      _impl_cdb_bim_v14),      # v12 + expanded bwd autotune
         ("cdb_bim_v15",      _impl_cdb_bim_v15),      # v12 + persistent-CTA backward
@@ -1492,7 +1551,7 @@ def _add_common_args(p: argparse.ArgumentParser):
     p.add_argument("--dataset-dir", type=str, default=None,
                    help="Path to pretokenized dataset (enables real-data fixtures for cross_doc)")
     p.add_argument("--num-heads", type=int, default=16)
-    p.add_argument("--head-dim", type=int, default=64)
+    p.add_argument("--head-dim", type=int, default=128)
     p.add_argument("--dtype", type=str, default="bfloat16")
 
 
@@ -1532,6 +1591,186 @@ def _add_bench_args(p: argparse.ArgumentParser):
              "are used directly (much faster second run). "
              "Set to '' to disable caching. (default: benchmarks/.autotune_cache.json)",
     )
+
+
+def _check_sentinel_lse_nan(
+    num_heads: int,
+    head_dim: int,
+    dtype: torch.dtype,
+    impls_filter: Optional[List[str]],
+) -> bool:
+    """Regression test: v17 backward NaN from sentinel LSE values.
+
+    The flash-attention forward initialises the running max to M=-1e6.  If a
+    Q token ends up with only a single attended KV position that has a very
+    negative score (≈-999993 after scaling), LSE stays near -1e6.  In the
+    backward, exp2(score - (-999993)) overflows bfloat16 to inf, and
+    inf * 0 = NaN when dLdO is zero.
+
+    We reproduce this by running the v17 forward normally, then patching the
+    saved LSE tensor (in a wrapper autograd Function) so that ~1% of token
+    positions get LSE = -999993.  With upstream gradient = zeros the backward
+    must return dLdq = zeros (not NaN) for the fix to be considered correct.
+
+    Returns True (any_fail) if the tested impl produces NaN or inf gradients.
+    """
+    from kernels.cross_doc_bitmask_bim_v17 import (
+        triton_attn_cross_doc_bitmask_bim_v17,
+        _build_bim_64,
+    )
+    from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+
+    # Locate a fixture with real cross-doc structure.
+    meta = next((m for m in reversed(REAL_PACK_FIXTURES) if m.path.exists()
+                 and m.n_grants > 0), None)
+    if meta is None:
+        return False
+
+    print(f"\n{'='*80}")
+    print(f"  SENTINEL-LSE NaN REGRESSION: cross_doc_bitmask bwd, head_dim={head_dim}")
+    print(f"  Fixture: {meta.data_label()}")
+    print(f"{'='*80}")
+
+    try:
+        q, k, v, mask_inputs = load_fixture_batch(
+            meta, num_heads, head_dim, dtype, DEVICE,
+        )
+    except Exception as e:
+        print(f"  [sentinel test] fixture load error: {e}")
+        return False
+
+    bim128 = _get_bim128(mask_inputs)
+    bim64  = _get_bim64(mask_inputs)
+    scale  = head_dim ** -0.5
+
+    # Implementations to test: any bim_v1x variant in the filter (or all).
+    _v17_name = "cdb_bim_v17"
+    _v18_name = "cdb_bim_v18"
+    target_impls = {_v17_name, _v18_name}
+    if impls_filter is not None:
+        target_impls &= set(impls_filter)
+    if not target_impls:
+        return False
+
+    # Inject sentinel LSE into saved tensors via saved_tensors_hooks.
+    # The LSE tensor has shape [H, T] (unique among saved tensors in this kernel).
+    T = q.shape[0]; H = q.shape[1]
+    sentinel_positions = list(range(0, T, 64))   # every 64th token
+
+    def _pack(t):
+        if t.shape == (H, T):   # matches LSE shape exactly
+            t = t.clone()
+            t[:, sentinel_positions] = -999993.
+        return t
+
+    any_fail = False
+    _impl_map = {n: f for n, f in REGISTRY.get(MaskType.CROSS_DOC_BITMASK, [])
+                 if n in target_impls}
+
+    for name in sorted(target_impls):
+        if name not in _impl_map:
+            print(f"  {name}: not registered — skipping sentinel test")
+            continue
+        impl_fn = _impl_map[name]
+        q_i = q.clone().requires_grad_(True)
+        try:
+            with torch.autograd.graph.saved_tensors_hooks(_pack, lambda t: t):
+                out = impl_fn(q_i, k, v, mask_inputs, scale)
+            # Upstream gradient = zeros (simulates the deepest attention layer
+            # receiving dLdO = 0, which is the exact training scenario that
+            # triggered NaN in v17).
+            dLdO = torch.zeros_like(out)
+            (dq,) = torch.autograd.grad(out, q_i, grad_outputs=dLdO)
+            has_nan = torch.isnan(dq).any().item()
+            has_inf = torch.isinf(dq).any().item()
+            if has_nan or has_inf:
+                print(f"  [{name}] sentinel-LSE bwd: FAIL  "
+                      f"(dLdq has {'NaN' if has_nan else 'inf'}) ← BUG CONFIRMED")
+                any_fail = True
+            else:
+                print(f"  [{name}] sentinel-LSE bwd: PASS  (dLdq clean with injected LSE=-999993)")
+        except Exception as e:
+            print(f"  [{name}] sentinel-LSE bwd: ERROR — {e}")
+            any_fail = True
+
+    return any_fail
+
+
+def _check_sentinel_lse_nan_doc_causal(
+    num_heads: int,
+    head_dim: int,
+    dtype: torch.dtype,
+    impls_filter: Optional[List[str]],
+) -> bool:
+    """Sentinel-LSE NaN regression test for doc_causal (varlen_bim) kernels.
+
+    Same mechanism as _check_sentinel_lse_nan but targets varlen_bim_v1/v2.
+    Uses the sparse fixture (no cross-doc links — pure doc_causal scenario).
+    """
+    meta = next((m for m in REAL_PACK_FIXTURES if m.path.exists()), None)
+    if meta is None:
+        return False
+
+    print(f"\n{'='*80}")
+    print(f"  SENTINEL-LSE NaN REGRESSION: doc_causal bwd, head_dim={head_dim}")
+    print(f"  Fixture: {meta.data_label()}")
+    print(f"{'='*80}")
+
+    try:
+        q, k, v, mask_inputs = load_fixture_batch(
+            meta, num_heads, head_dim, dtype, DEVICE,
+        )
+    except Exception as e:
+        print(f"  [sentinel doc_causal] fixture load error: {e}")
+        return False
+
+    scale = head_dim ** -0.5
+
+    _v1_name = "varlen_bim_v1"
+    _v2_name = "varlen_bim_v2"
+    target_impls = {_v1_name, _v2_name}
+    if impls_filter is not None:
+        target_impls &= set(impls_filter)
+    if not target_impls:
+        return False
+
+    T = q.shape[0]; H = q.shape[1]
+    sentinel_positions = list(range(0, T, 64))
+
+    def _pack(t):
+        if t.shape == (H, T):
+            t = t.clone()
+            t[:, sentinel_positions] = -999993.
+        return t
+
+    any_fail = False
+    _impl_map = {n: f for n, f in REGISTRY.get(MaskType.DOC_CAUSAL, [])
+                 if n in target_impls}
+
+    for name in sorted(target_impls):
+        if name not in _impl_map:
+            print(f"  {name}: not registered — skipping sentinel test")
+            continue
+        impl_fn = _impl_map[name]
+        q_i = q.clone().requires_grad_(True)
+        try:
+            with torch.autograd.graph.saved_tensors_hooks(_pack, lambda t: t):
+                out = impl_fn(q_i, k, v, mask_inputs, scale)
+            dLdO = torch.zeros_like(out)
+            (dq,) = torch.autograd.grad(out, q_i, grad_outputs=dLdO)
+            has_nan = torch.isnan(dq).any().item()
+            has_inf = torch.isinf(dq).any().item()
+            if has_nan or has_inf:
+                print(f"  [{name}] sentinel-LSE bwd: FAIL  "
+                      f"(dLdq has {'NaN' if has_nan else 'inf'}) ← BUG CONFIRMED")
+                any_fail = True
+            else:
+                print(f"  [{name}] sentinel-LSE bwd: PASS  (dLdq clean with injected LSE=-999993)")
+        except Exception as e:
+            print(f"  [{name}] sentinel-LSE bwd: ERROR — {e}")
+            any_fail = True
+
+    return any_fail
 
 
 def cmd_correctness(args):
@@ -1598,6 +1837,34 @@ def cmd_correctness(args):
                 for r in report.results:
                     if not r.error and (not r.fwd_pass or not r.bwd_pass):
                         any_fail = True
+
+    # ── Sentinel-LSE NaN regression (v17 backward bug) ───────────────────────
+    # v17 backward kernels compute P = exp2(score - LSE).  When LSE is near
+    # the flash-attention init sentinel (-1e6), this overflows bfloat16 to ∞,
+    # and ∞ × 0 = NaN when dLdO is small.  v18 guards against this with
+    # tl.where(tl.math.isinf(P), 0., P).  The harness fixtures don't naturally
+    # produce sentinel LSE (their synthetic Q/K don't hit the edge case), so we
+    # inject it manually via a wrapper autograd Function.
+    #
+    # Only runs when cross_doc_bitmask is in the requested mask types, CUDA is
+    # available, and real fixtures exist.
+    if (MaskType.CROSS_DOC_BITMASK in mask_types
+            and torch.cuda.is_available()
+            and any(m.path.exists() for m in REAL_PACK_FIXTURES)):
+
+        _sentinel_fail = _check_sentinel_lse_nan(args.num_heads, args.head_dim, dtype, impls_filter)
+        if _sentinel_fail:
+            any_fail = True
+
+    if (MaskType.DOC_CAUSAL in mask_types
+            and torch.cuda.is_available()
+            and any(m.path.exists() for m in REAL_PACK_FIXTURES)):
+
+        _sentinel_fail_dc = _check_sentinel_lse_nan_doc_causal(
+            args.num_heads, args.head_dim, dtype, impls_filter,
+        )
+        if _sentinel_fail_dc:
+            any_fail = True
 
     if any_fail:
         print("\nSome checks FAILED.")
