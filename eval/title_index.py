@@ -60,9 +60,10 @@ Future HashNormTitleIndex strategies (not yet implemented):
                    early-halt ("Russian Civil" → "Russian Civil War") and overshoot
                    cases. Orthogonal to edit_distance.
 
-TODO (MarkdownPromptAnnotator._fetch_aux):
-  Display-text fallback — when all strategies miss, retry lookup using the anchor
-  text between '[' and ']('. No new strategy needed; just a second lookup() call.
+  display-text fallback (MarkdownPromptAnnotator._fetch_aux) — when all strategies
+                   miss on target_str, retry lookup() using the anchor text between
+                   '[' and ']('. No new strategy needed; just a second lookup() call
+                   with clean_display_str (already computed at the call site).
 """
 
 import re as _re

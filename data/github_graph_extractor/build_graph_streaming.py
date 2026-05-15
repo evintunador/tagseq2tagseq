@@ -209,27 +209,6 @@ def _pick_from_candidates(candidates: list, direct_init: str) -> str:
     return random.choice(candidates)
 
 
-# TODO(@jamesljr): consider piping the imported *name* (the "baz" in
-# "from foo.bar import baz") into this function as a resolution hint.
-# Rough idea: try foo/bar/baz.py and foo/bar/baz/__init__.py before falling
-# back to the same-level heuristic below — which would align with the
-# priority order already used by PythonImportDetector.module_path_to_file_paths.
-# One possible implementation path:
-#   1. Update extract_file_imports to capture names after "import" and return
-#      Set[Tuple[module_str, from_name_str]] instead of Set[str].
-#   2. Add an optional `from_name: str = ""` param here.
-#   3. Try direct_dir/from_name.py and direct_dir/from_name/__init__.py
-#      ahead of the same-level fallback.
-# Not confident this is the right abstraction — "from foo import bar, baz"
-# would produce two edges (one per name) increasing graph density, and it is
-# unclear whether that is desirable.  Needs more thought before implementing.
-
-# TODO(@jamesljr): longer-term, consider a preprocessing pass that rewrites
-# import statements in the stored text to more explicit absolute paths before
-# tokenisation (e.g. making the __init__.py target explicit), so that
-# PythonImportDetector can produce exact matches at mask-creation time without
-# relying on the heuristics in this function.  The right shape of that rewrite
-# is still uncertain — worth revisiting once the Stack pipeline is more mature.
 def _resolve_import_to_file(imported_module: str, module_to_file: dict, importing_file: str) -> str:
     if imported_module.startswith("."):
         dot_count = len(imported_module) - len(imported_module.lstrip("."))

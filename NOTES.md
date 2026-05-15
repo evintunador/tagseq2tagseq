@@ -203,19 +203,27 @@ signal-to-noise but a small headline number. Candidates:
 ### Link injection eval for other external benchmarks — NOTE (future)
 For all external benchmarks OTHER than RepoBench, the path to cross-doc-link
 evaluation is via prompt preprocessing (link injection), not direct structural
-reformatting. This requires `eval/link_annotator.py`:
-  `annotate_prompt_with_links(model, prompt_tokens, threshold)`:
-  - Single forward pass over prompt
-  - Find positions where the link-opener token (e.g. ` [` for markdown) has
-    logit probability above threshold
-  - Insert link + generate target + fetch/generate aux doc
-  - Return augmented prompt tokens
-Then the eval comparison: score benchmark items with bare prompt vs
-link-annotated prompt, report delta.
+reformatting. `eval/link_annotator.py` (`MarkdownPromptAnnotator`) is the
+infrastructure for this. Score benchmark items with bare prompt vs
+link-annotated prompt and report delta.
+
+**Title-lookup miss recovery (deferred — implement when eval performance matters):**
+- `display-text fallback` — when all `TitleIndex` strategies miss on the generated
+  target_str, retry `lookup()` with the anchor text between `[` and `](`. Described
+  in `eval/title_index.py` module docstring.
+- `prefix_commit` strategy in `HashNormTitleIndex` — find corpus titles sharing the
+  longest common word-level prefix with target_str. Covers early-halt and overshoot.
+  Described in `eval/title_index.py` module docstring.
 
 ### Parallelized eval in main.py — TODO
-Currently the post-training eval runs serially. If multiple benchmarks are
-configured, they could run in parallel threads/processes after training.
+Currently the post-training eval runs serially in `run_benchmarks_on_model`.
+Naïve thread-pool parallelism is risky: benchmarks vary widely in runtime
+(HellaSwag ~30s vs. community_pack_perplexity ~20min), so fast workers block
+waiting for slow ones before the "round" ends — net win near zero, timeout risk
+real. Better design: shared job queue (e.g. `queue.Queue`) where each worker
+pulls the next unstarted benchmark, so fast workers don't sit idle. All workers
+share the same compiled model (no re-compile), so the queue just dispatches spec
+dicts. Implement only if eval wall-time becomes a bottleneck.
 
 ---
 
@@ -234,7 +242,7 @@ individual detectors, doesn't need to be fast) is a future milestone.
 
 No FineWeb or other flat data planned — the point is structured graph data.
 
-### Epoch precompute for Wikipedia — TODO
+### Epoch precompute for Wikipedia — TODO (training concern, not eval)
 `epoch_precompute.py` currently only supports TheStack (repo-partitioned identifiers).
 Wikipedia needs a **graph-community partitioner** before it can use the precomputed
 path. The TheStack partitioner groups all files in a repo onto one worker so BFS
@@ -253,14 +261,18 @@ Until this is implemented, simplewiki / Wikipedia training uses the live
 
 ### Wikipedia redirect map — TODO
 The Wikipedia dump ships a `redirect.sql` table mapping stub redirect titles to
-their canonical targets (e.g. "UK" → "United Kingdom"). At Wikipedia graph
-construction time, inject redirect aliases as additional entries in the node's
-`raw_identifier` list (or a separate alias field), so the pretokenized graph
-already captures them. Downstream benefit: `HashNormTitleIndex` built from the
-corpus will index these aliases for free, directly fixing the class of eval misses
-where the model generates a redirect title that isn't a first-class graph node.
-A secondary benefit at eval time in `title_index.py` without any separate redirect-
-handling logic — the alias is just another corpus entry pointing to the same doc.
+their canonical targets (e.g. "UK" → "United Kingdom"). Fix at graph construction
+time: rewrite in-text `[anchor](RedirectTitle)` links to the canonical node's title
+and drop redirect stub nodes entirely, so the graph has no redirects. Downstream
+benefit: `HashNormTitleIndex` hits these titles directly, fixing the class of eval
+misses where the model generates a redirect title that isn't a first-class node.
+
+**TheStack analogue:** `build_graph_streaming.py`'s `_pick_from_candidates` heuristic
+creates edges to `foo/bar` (package `__init__.py`) when the semantically intended
+target is `foo/bar/baz.py` (a specific submodule) for `from foo.bar import baz`.
+This is a graph-quality issue (noisier co-packing), *not* a training correctness bug —
+`PythonImportDetector.module_path_to_file_paths` already tries `foo/bar/baz.py` first
+at mask-creation time, so attention fires on the right doc when it's present.
 
 ---
 
@@ -296,8 +308,10 @@ external benchmarks vs. fixed eos layout?
   (both fully implemented; no stubs remain)
 - `link_retrieval_mode` in `GenerationConfig` — **DONE**
   (`corpus_only`, `generate_only`, `corpus_then_generate`, `link_but_skip`, `full_skip`)
-- `process_prompt_links` (scan completed prompt for links before generation) — TODO
-- `GenerationTrace` completion — TODO
+- `process_prompt_links` (scan completed prompt for links before generation) — **DONE**
+  (`GenerationConfig.process_prompt_links: bool = True`; dispatched in `run_generation`)
+- `GenerationTrace` completion — **DONE**
+  (`model/generation_result.py`; opt-in via `GenerationConfig.record_trace`)
 
 ---
 

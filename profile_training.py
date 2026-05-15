@@ -155,10 +155,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         order_mode=cfg.get('data', {}).get('order_mode', 'prefer_targets_first'),
         layout_policy=layout_policy,
     )
-    # TODO: optionally accept a pre-computed epoch path and use BucketedPackDataset
-    # here instead of PackedSequenceDataset. Needed to correctly profile the
-    # density-aware bucketed training path (the one actually used for cross_doc_link
-    # multi-node runs) and to isolate rank-stall overhead vs. the live-sampling path.
+    # TODO: BucketedPackDataset path (pre-computed epoch) for profiling density-aware packing.
     dataset = PackedSequenceDataset(
         graph=graph_index,
         backend=backend,
