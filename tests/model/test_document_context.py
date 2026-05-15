@@ -9,7 +9,7 @@ import torch
 
 from data.layout import DocLayoutInfo
 from model.document_context import DocumentContext, _DocEntry
-from model.identifier_utils import create_normed_identifier
+from data.normalization import normalize_wiki_title
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ def test_add_root_layout_policy_receives_identifier():
     assert len(received) == 1
     info = received[0]
     assert info.raw_identifier == "Python (programming language)"
-    assert info.normed_identifier == create_normed_identifier("Python (programming language)")
+    assert info.normed_identifier == normalize_wiki_title("Python (programming language)")
     assert info.body_tokens == [1]  # prompt tokens available at prefix time
 
 

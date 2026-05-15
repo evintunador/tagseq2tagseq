@@ -8,7 +8,7 @@ Usage:
         [--dataset data/pretokenized_datasets/simplewiki] \\
         [--max-new-tokens 300] \\
         [--max-link-depth 2] \\
-        [--allow-generation-fallback] \\
+        [--link-retrieval-mode {corpus_only,generate_only,corpus_then_generate,link_but_skip,full_skip}] \\
         [--temperature 0.8] \\
         [--top-k 50] \\
         [--max-display-tokens 200] \\
@@ -32,7 +32,12 @@ import torch.nn.functional as F
 
 from data.collate import DocSpan
 from data.dataset import GraphIndex, PretokShardedBackend
-from data.layout import BOSEOSLayoutPolicy, IdentifierPrefixBOSEOSLayoutPolicy, IdentifierPrefixLayoutPolicy, NullLayoutPolicy
+from data.layout import (
+    EOSLayoutPolicy,
+    IdentifierPrefixEOSLayoutPolicy,
+    IdentifierPrefixLayoutPolicy,
+    NullLayoutPolicy,
+)
 from model.generation_config import GenerationConfig
 from model.generation_result import GeneratedDocument, GenerationResult
 from model.graph_traversal.block_mask_creator import (
@@ -42,7 +47,7 @@ from model.graph_traversal.block_mask_creator import (
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
 from model.graph_traversal.python_import_detector import PythonImportDetector
-from model.identifier_utils import create_normed_identifier
+from data.normalization import normalize_wiki_title
 from model.modules.training_module import TS2TSTrainingModule
 
 
@@ -63,13 +68,55 @@ def _c(text: str, code: str, use_color: bool) -> str:
 # Checkpoint loading
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
+# Maps training layout policy names to their deterministic inference equivalents.
+# Stochastic policies must never be used at inference — they produce different
+# prefix tokens each call, breaking stable generation and eval comparisons.
+_STOCHASTIC_TO_DETERMINISTIC = {
+    'stochastic_identifier_prefix': 'identifier_prefix_eos',
+}
+
+
+def _build_layout_policy(name: str, enc):
+    """Construct a DocLayoutPolicy from a config name string."""
+    if name == "null":
+        return NullLayoutPolicy()
+    elif name == "eos":
+        return EOSLayoutPolicy(eos_token_id=50256)
+    elif name == "identifier_prefix":
+        return IdentifierPrefixLayoutPolicy(encode_fn=enc.encode_ordinary)
+    elif name in ("identifier_prefix_eos", "identifier_prefix_bos_eos"):
+        # 'identifier_prefix_bos_eos' is a legacy alias from before BOS was removed.
+        return IdentifierPrefixEOSLayoutPolicy(
+            encode_fn=enc.encode_ordinary, eos_token_id=50256
+        )
+    else:
+        raise ValueError(
+            f"Unknown layout_policy {name!r}. "
+            "Expected 'null', 'eos', 'identifier_prefix', "
+            "'identifier_prefix_eos', or 'stochastic_identifier_prefix'."
+        )
+
+
+def load_inference_model(
+    checkpoint_path: str | Path,
+    device: str = "cuda",
+    inference_attention_backend: str = "flex",
+):
     """
     Load a trained checkpoint and return (inference_model, hyperparams_dict).
 
     Reads hyperparameters.json from the run directory adjacent to the
-    checkpoint, reconstructs the architecture, loads weights, and returns
-    a TS2TSModel ready for generate().
+    checkpoint, reconstructs the architecture, then converts to inference mode.
+
+    Args:
+        checkpoint_path: Path to best_model.pt.
+        device: Target device.
+        inference_attention_backend: Attention backend for the returned inference
+            model. Defaults to 'flex' — FlexSelfAttention + torch.compile is
+            ~40× faster than varlen_bim_v1 for single-doc forward passes (37ms
+            vs 1.6s) because it compiles a single dynamic kernel rather than
+            JIT-compiling per unique sequence length. Use 'triton' to keep the
+            training backend (e.g. for batched multi-doc eval pipelines).
     """
     checkpoint_path = Path(checkpoint_path)
     run_dir = checkpoint_path.parent.parent   # .../runs/YYYYMMDD/checkpoints/best.pt
@@ -86,7 +133,7 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
     # Tokenizer (GPT-2 only for now)
     enc = tiktoken.get_encoding("gpt2")
 
-    # Link detector — needed both for the block mask and for the inference model
+    # Mask type and link detector
     mask_type          = model_cfg.get("mask_type", "doc_causal")
     link_detector_name = model_cfg.get("link_detector")
     link_detector      = None
@@ -101,35 +148,52 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
                 f"Unknown link_detector {link_detector_name!r}. "
                 "Expected 'markdown' or 'python'."
             )
-        block_mask_creator = make_mask_creator_callable_from(
+
+    # Training backend — determines which attention kernel was used during training
+    use_triton = model_cfg.get("attention_backend", "triton") != "flex"
+    if mask_type == "cross_doc_link":
+        training_attention_backend = "triton" if use_triton else "flex"
+        training_attn_class_backend = "triton_v12" if use_triton else "flex"
+    elif mask_type == "doc_causal" and use_triton:
+        training_attention_backend = "triton"
+        training_attn_class_backend = "varlen_bim_v1"
+    else:
+        training_attention_backend = "flex"
+        training_attn_class_backend = "flex"
+
+    # Build the block_mask_creator for weight reconstruction only.
+    # The resulting TS2TSModel will build its own _creators dict.
+    from model.graph_traversal.block_mask_creator import create_doc_causal_triton_mask
+    if mask_type == "cross_doc_link":
+        training_bmc = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=link_detector,
                 max_grants=model_cfg.get('max_grants', 64),
+                backend=training_attn_class_backend,
             )
         )
+    elif training_attn_class_backend == "varlen_bim_v1":
+        training_bmc = make_mask_creator_callable_from(create_doc_causal_triton_mask)
     else:
-        block_mask_creator = make_mask_creator_callable(mask_type)
+        training_bmc = make_mask_creator_callable(mask_type)
 
-    # Layout policy — explicit key wins; fall back to use_bos_eos for old checkpoints
-    layout_policy_name = data_cfg.get("layout_policy")
-    if layout_policy_name is None:
-        layout_policy_name = "bos_eos" if data_cfg.get("use_bos_eos", False) else "null"
+    # Layout policies — training name from config, inference name may differ.
+    training_layout_name = data_cfg.get("layout_policy") or "null"
 
-    if layout_policy_name == "null":
-        layout_policy = NullLayoutPolicy()
-    elif layout_policy_name == "bos_eos":
-        layout_policy = BOSEOSLayoutPolicy(bos_token_id=50256, eos_token_id=50256)
-    elif layout_policy_name == "identifier_prefix":
-        layout_policy = IdentifierPrefixLayoutPolicy(encode_fn=enc.encode_ordinary)
-    elif layout_policy_name == "identifier_prefix_bos_eos":
-        layout_policy = IdentifierPrefixBOSEOSLayoutPolicy(
-            encode_fn=enc.encode_ordinary, bos_token_id=50256, eos_token_id=50256
-        )
-    else:
-        raise ValueError(
-            f"Unknown layout_policy {layout_policy_name!r}. "
-            "Expected 'null', 'bos_eos', 'identifier_prefix', or 'identifier_prefix_bos_eos'."
-        )
+    # inference_layout_policy key wins; stochastic policies map to deterministic equivalents.
+    inference_layout_name = data_cfg.get(
+        "inference_layout_policy", training_layout_name
+    )
+    inference_layout_name = _STOCHASTIC_TO_DETERMINISTIC.get(
+        inference_layout_name, inference_layout_name
+    )
+    # Also resolve stochastic training name (safety net for legacy checkpoints)
+    training_layout_name_resolved = _STOCHASTIC_TO_DETERMINISTIC.get(
+        training_layout_name, training_layout_name
+    )
+
+    training_layout_policy  = _build_layout_policy(training_layout_name_resolved, enc)
+    inference_layout_policy = _build_layout_policy(inference_layout_name, enc)
 
     # Reconstruct architecture (dropout=0 at inference).
     # Infer vocab_size from the checkpoint embedding weight so that both
@@ -146,40 +210,38 @@ def load_inference_model(checkpoint_path: str | Path, device: str = "cuda"):
         max_seq_len=model_cfg["max_seq_len"],
         dropout=0.0,
         drop_path_rate=0.0,
-        block_mask_creator=block_mask_creator,
+        block_mask_creator=training_bmc,
         fp8=model_cfg.get("fp8", False),
         weight_tying=model_cfg.get("weight_tying", True),
         ignore_index=model_cfg.get("ignore_index", -100),
         dtype=torch.bfloat16,
+        attention_backend=training_attn_class_backend,
     )
 
     # Load weights (ckpt/state_dict already loaded above)
     training_module.load_state_dict(state_dict)
 
-    # Convert to inference model
+    # Convert to inference model. to_inference_model handles the backbone
+    # class-swap (triton → flex) and builds _creators internally.
     inference_model = training_module.to_inference_model(
         tokenizer=enc,
+        mask_type=mask_type,
         link_detector=link_detector,
-        layout_policy=layout_policy,
+        training_backend=training_attention_backend,
+        inference_backend=inference_attention_backend,
+        training_layout_policy=training_layout_policy,
+        inference_layout_policy=inference_layout_policy,
     )
     inference_model.to(torch.device(device), torch.bfloat16)
 
-    # Patch flex_attention with a compiled version instead of compiling the full
-    # backbone. This is much faster to compile while still fusing the attention kernel.
-    # dynamic=True is required for inference because T grows by one each generation step.
+    # Set a stable per-project inductor cache so compiled kernels survive between runs.
+    # flex_attention is compiled at module load in attention.py and flex_self_attention.py.
     if torch.cuda.is_available():
-        import tunalab.modules.sequence_mixing.flex_self_attention as _fa_mod
-        from torch.nn.attention.flex_attention import flex_attention as _raw_fa
-
-        # Stable per-project cache so compiled kernels survive between runs.
-        # Can be overridden by setting TORCHINDUCTOR_CACHE_DIR in the environment.
         _cache_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), ".torch_compile_cache"
         )
         os.makedirs(_cache_dir, exist_ok=True)
         os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", _cache_dir)
-
-        _fa_mod.flex_attention = torch.compile(_raw_fa, dynamic=True, mode="default")
 
     return inference_model, hp
 
@@ -200,6 +262,14 @@ class PretokCorpus:
         dataset_dir   = Path(dataset_dir)
         self._graph   = GraphIndex(dataset_dir)
         self._backend = PretokShardedBackend(self._graph)
+        # Build a raw_identifier → normed_identifier map from the graph for O(1)
+        # lookup in has_document / get_document. Falls back to normalize_wiki_title
+        # for titles not in the graph (e.g. free-generated titles that missed the corpus).
+        self._raw_to_normed: dict[str, str] = {
+            node["raw_identifier"]: node["normed_identifier"]
+            for node in self._graph.nodes.values()
+            if "raw_identifier" in node and "normed_identifier" in node
+        }
 
     def has_document(self, raw_identifier: str) -> bool:
         # NOTE: Python import detector emits relative paths (e.g. "Phaedra/Notebook.py")
@@ -208,11 +278,11 @@ class PretokCorpus:
         # dataset like stack_100m. Fix: either (a) build a single-repo corpus so identifiers
         # match, or (b) make the import detector emit repo-qualified identifiers when a repo
         # context is available.
-        normed = create_normed_identifier(raw_identifier)
+        normed = self._raw_to_normed.get(raw_identifier) or normalize_wiki_title(raw_identifier)
         return normed in self._graph
 
     def get_document(self, raw_identifier: str):
-        normed = create_normed_identifier(raw_identifier)
+        normed = self._raw_to_normed.get(raw_identifier) or normalize_wiki_title(raw_identifier)
         tokens = self._backend.get_tokens(normed)
         if tokens is None:
             return iter([])
@@ -308,7 +378,7 @@ def compute_metrics(
         # doc.tokens is prefix + body + suffix.  prompt_token_len counts only
         # the prompt body tokens, so we must also skip the layout prefix.
         if doc.is_root:
-            prefix_len = _root_prefix_length(model.layout_policy, doc)
+            prefix_len = _root_prefix_length(model.inference_layout_policy, doc)
             body_start = start + prefix_len + prompt_token_len
         else:
             body_start = start
@@ -510,9 +580,14 @@ def main():
                         help="Path to pretokenized dataset dir (corpus for link resolution).")
     parser.add_argument("--max-new-tokens", type=int, default=300)
     parser.add_argument("--max-link-depth", type=int, default=2)
-    parser.add_argument("--allow-generation-fallback", action="store_true",
-                        help="Generate aux docs for links not found in corpus "
-                             "(default: off when --dataset provided, on otherwise).")
+    parser.add_argument(
+        "--link-retrieval-mode",
+        choices=["corpus_only", "generate_only", "corpus_then_generate",
+                 "link_but_skip", "full_skip"],
+        default=None,
+        help="How to resolve links during generation. Default: 'corpus_only' when "
+             "--dataset is provided, 'corpus_then_generate' otherwise.",
+    )
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--repetition-penalty", type=float, default=1.3,
@@ -539,7 +614,11 @@ def main():
         corpus = PretokCorpus(args.dataset)
 
     # ── Generation config ─────────────────────────────────────────────────────
-    allow_gen_fallback = args.allow_generation_fallback or (corpus is None)
+    # Default mode: corpus_only when a dataset is provided (no generation fallback),
+    # corpus_then_generate otherwise (no corpus → generation is the only option).
+    link_retrieval_mode = args.link_retrieval_mode or (
+        "corpus_only" if corpus is not None else "corpus_then_generate"
+    )
     # max_tokens_per_document must be >= max_new_tokens (GenerationConfig validates this).
     # Give a small 256-token headroom above max_new_tokens for layout prefix/suffix,
     # but cap at half the model's context window.
@@ -551,7 +630,7 @@ def main():
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
         max_link_depth=args.max_link_depth,
-        allow_generation_fallback=allow_gen_fallback,
+        link_retrieval_mode=link_retrieval_mode,
         max_context_length=hp["model"]["max_seq_len"],
         max_tokens_per_document=max_tokens_per_document,
         device=args.device,

@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from torch import Tensor
 import torch.nn as nn
 
-from tunalab.evaluation import register_handler
 from tunalab.modules.norms.rms_norm import RMSNorm
 from tunalab.modules.losses.fused_cross_entropy import FusedLinearCELoss
 from .modules import TS2TSBackbone
@@ -19,21 +18,42 @@ class TS2TSModel:
     Inference and evaluation wrapper for TS2TS models.
 
     This class does NOT inherit from nn.Module, providing a cleaner interface
-    for inference and evaluation without the nn.Module ceremony. It holds
-    references to the trained components (backbone, weights, norms) and provides
-    methods for generation and benchmark evaluation.
+    for inference and evaluation without the nn.Module ceremony.
+
+    The model tracks four independent axes:
+
+      mask_type        — 'doc_causal' | 'cross_doc_link'  (model identity)
+      link_detector    — dataset-specific link extractor; None for doc_causal
+      training_backend — 'triton' | 'flex'  (default for self._is_training=True)
+      inference_backend— 'flex' | 'triton'  (default for self._is_training=False)
+
+    These are combined into a ``_creators`` dict keyed by
+    ``'{mask_type}_{backend}'`` (e.g. ``'doc_causal_flex'``).
+    ``forward_inference`` accepts optional ``mask_type=`` and ``backend=``
+    overrides at call time, enabling eval under different conditions without
+    reconstructing the model.
+
+    Layout policies are stored separately for training and inference:
+      training_layout_policy  — used when self._is_training is True
+      inference_layout_policy — used otherwise
+    ``active_layout_policy`` switches between them automatically.
 
     Attributes:
-        backbone: The transformer layer stack (nn.Module)
-        embedding_weight: Token embedding matrix (Tensor reference)
-        lm_head_weight: Output projection matrix (Tensor reference)
-        norm: RMS normalization layer (nn.Module)
-        block_mask_creator: Callable for creating attention masks
-        vocab_size: Vocabulary size
-        ignore_index: Index to ignore in loss/eval computations
-        tokenizer: Tokenizer for prompt encoding / output decoding (required for generate())
-        link_detector: LinkDetector for cross-doc link detection (Stage 2+)
-        layout_policy: DocLayoutPolicy for document prefix/suffix tokens (Stage 2+)
+        backbone:                  The transformer layer stack (nn.Module)
+        embedding_weight:          Token embedding matrix (Tensor reference)
+        lm_head_weight:            Output projection matrix (Tensor reference)
+        norm:                      RMS normalization layer (nn.Module)
+        mask_type:                 'doc_causal' | 'cross_doc_link'
+        link_detector:             LinkDetector or None
+        training_backend:          'triton' | 'flex'
+        inference_backend:         'flex' | 'triton'
+        training_layout_policy:    DocLayoutPolicy used during training
+        inference_layout_policy:   DocLayoutPolicy used during inference/eval
+        vocab_size:                Vocabulary size
+        ignore_index:              Index ignored in loss/eval computations
+        tokenizer:                 Required for generate()
+        _creators:                 Dict[str, Callable] — mask creator per key
+        _is_training:              Bool tracking current mode (set by train/eval)
     """
 
     def __init__(
@@ -42,24 +62,87 @@ class TS2TSModel:
         embedding_weight: Tensor,
         lm_head_weight: Tensor,
         norm: nn.Module,
-        block_mask_creator: Callable,
         vocab_size: int,
+        mask_type: str = 'doc_causal',
+        link_detector=None,
+        training_backend: str = 'triton',
+        inference_backend: str = 'flex',
+        training_layout_policy=None,
+        inference_layout_policy=None,
         ignore_index: int = -100,
         tokenizer=None,
-        link_detector=None,
-        layout_policy=None,
     ):
+        from data.layout import NullLayoutPolicy
+
         self.backbone = backbone
         self.embedding_weight = embedding_weight
         self.lm_head_weight = lm_head_weight
         self.norm = norm
-        self.block_mask_creator = block_mask_creator
         self.vocab_size = vocab_size
+        self.mask_type = mask_type
+        self.link_detector = link_detector
+        self.training_backend = training_backend
+        self.inference_backend = inference_backend
+        self.training_layout_policy = training_layout_policy or NullLayoutPolicy()
+        self.inference_layout_policy = inference_layout_policy or self.training_layout_policy
         self.ignore_index = ignore_index
         self.tokenizer = tokenizer
-        self.link_detector = link_detector
-        self.layout_policy = layout_policy
-    
+        self._is_training = False  # default to eval mode
+        self._creators = self._build_creators()
+
+    def _build_creators(self) -> Dict[str, Callable]:
+        """Build the _creators dict from mask_type, link_detector, and backends.
+
+        doc_causal creators are always present (needed for eval overrides on
+        cross_doc_link models). cross_doc_link creators are only built when
+        mask_type == 'cross_doc_link'.
+
+        Keys follow the pattern '{mask_type}_{backend}', e.g.:
+            'doc_causal_flex', 'doc_causal_triton',
+            'cross_doc_link_flex', 'cross_doc_link_triton'
+        """
+        from model.graph_traversal.block_mask_creator import (
+            make_mask_creator_callable,
+            make_mask_creator_callable_from,
+            create_doc_causal_triton_mask,
+        )
+        from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+
+        creators: Dict[str, Callable] = {}
+
+        # doc_causal always available — needed for eval overrides on cross_doc_link models
+        creators['doc_causal_flex'] = make_mask_creator_callable('doc_causal')
+        creators['doc_causal_triton'] = make_mask_creator_callable_from(
+            create_doc_causal_triton_mask
+        )
+
+        if self.mask_type == 'cross_doc_link':
+            if self.link_detector is None:
+                raise ValueError(
+                    "link_detector must be set when mask_type='cross_doc_link'"
+                )
+            # Triton creator: no warmup state (warmup lives in the training module)
+            creators['cross_doc_link_triton'] = make_mask_creator_callable_from(
+                CrossDocLinkMaskCreator(
+                    link_detector=self.link_detector,
+                    backend='triton_v12',
+                )
+            )
+            # Flex creator: used for inference and eval
+            creators['cross_doc_link_flex'] = make_mask_creator_callable_from(
+                CrossDocLinkMaskCreator(
+                    link_detector=self.link_detector,
+                    backend='flex',
+                )
+            )
+
+        return creators
+
+    @property
+    def active_layout_policy(self):
+        """Return training or inference layout policy based on current mode."""
+        return self.training_layout_policy if self._is_training else self.inference_layout_policy
+
     @classmethod
     def from_config(
         cls,
@@ -69,15 +152,23 @@ class TS2TSModel:
         num_heads: int,
         max_seq_len: int,
         drop_path_rate: float,
-        block_mask_creator: Callable,
+        mask_type: str = 'doc_causal',
         fp8: bool = False,
         weight_tying: bool = True,
         ignore_index: int = -100,
         tokenizer=None,
         link_detector=None,
-        layout_policy=None,
+        training_layout_policy=None,
+        inference_layout_policy=None,
+        training_backend: str = 'triton',
+        inference_backend: str = 'flex',
     ) -> 'TS2TSModel':
-        # Construct backbone
+        """Construct a TS2TSModel from configuration parameters.
+
+        Primarily used in tests and benchmarks. For production use, prefer
+        constructing via TS2TSTrainingModule.to_inference_model() or
+        load_inference_model() in generate.py.
+        """
         backbone = TS2TSBackbone(
             num_layers=num_layers,
             model_dim=model_dim,
@@ -86,58 +177,47 @@ class TS2TSModel:
             drop_path_rate=drop_path_rate,
             fp8=fp8,
         )
-        
-        # Construct embedding
+
         embedding = nn.Embedding(vocab_size, model_dim)
-        
-        # Construct normalization
         norm = RMSNorm(model_dim)
-        
-        # Construct lm_head weight
+
         if weight_tying:
             lm_head_weight = embedding.weight
         else:
             lm_head_weight = nn.Parameter(torch.empty(vocab_size, model_dim))
             nn.init.normal_(lm_head_weight, mean=0.0, std=0.02)
-        
+
         return cls(
             backbone=backbone,
             embedding_weight=embedding.weight,
             lm_head_weight=lm_head_weight,
             norm=norm,
-            block_mask_creator=block_mask_creator,
             vocab_size=vocab_size,
+            mask_type=mask_type,
+            link_detector=link_detector,
+            training_backend=training_backend,
+            inference_backend=inference_backend,
+            training_layout_policy=training_layout_policy,
+            inference_layout_policy=inference_layout_policy,
             ignore_index=ignore_index,
             tokenizer=tokenizer,
-            link_detector=link_detector,
-            layout_policy=layout_policy,
         )
 
     def to_training_module(
         self,
         dtype: torch.dtype = torch.bfloat16,
     ) -> 'TS2TSTrainingModule':
-        """
-        Convert this inference model to a training-ready TS2TSTrainingModule.
-        
-        This wraps the model's components in a training module that provides
-        the "batch in, loss out" interface required for training loops. The
-        weights are shared (not copied), so training will update this model's
-        weights in-place.
-        
-        Args:
-            dtype: Data type for loss computation
-        
-        Returns:
-            TS2TSTrainingModule ready for training, sharing weights with this model
+        """Convert this inference model to a training-ready TS2TSTrainingModule.
+
+        Weights are shared (not copied), so training will update this model's
+        weights in-place. The training module receives the triton creator so
+        it uses the optimal training kernel.
         """
         from .modules.training_module import TS2TSTrainingModule
-        
-        # Create embedding layer from weight reference
+
         embedding = nn.Embedding(self.vocab_size, self.embedding_weight.shape[1])
         embedding.weight = nn.Parameter(self.embedding_weight)
-        
-        # Create loss function with weight reference
+
         loss_fn = FusedLinearCELoss(
             D=self.embedding_weight.shape[1],
             V=self.vocab_size,
@@ -145,89 +225,107 @@ class TS2TSModel:
             ignore_index=self.ignore_index,
             weight=self.lm_head_weight
         )
-        
+
+        training_key = f'{self.mask_type}_{self.training_backend}'
+        training_creator = self._creators[training_key]
+
         return TS2TSTrainingModule(
             backbone=self.backbone,
             embedding=embedding,
             norm=self.norm,
             loss_fn=loss_fn,
-            block_mask_creator=self.block_mask_creator,
+            block_mask_creator=training_creator,
             vocab_size=self.vocab_size,
             ignore_index=self.ignore_index,
         )
-    
+
     def update_from_training_module(self, training_module: 'TS2TSTrainingModule') -> 'TS2TSModel':
-        """
-        Update this model's weights and components from a trained training module.
-        
-        This method updates the model in-place with weights from a trained module,
-        useful for updating an inference model after training or fine-tuning.
-        
-        Args:
-            training_module: Trained TS2TSTrainingModule to extract weights from
-        
-        Returns:
-            self for method chaining
+        """Update this model's weights from a trained training module.
+
+        Updates backbone, embedding, lm_head, and norm in-place.
+        mask_type, link_detector, and _creators are identity properties and
+        are not updated (they depend on architecture, not weights).
         """
         self.backbone = training_module.backbone
         self.embedding_weight = training_module.embedding.weight
         self.lm_head_weight = training_module.loss_fn.weight
         self.norm = training_module.norm
-        self.block_mask_creator = training_module.block_mask_creator
         self.vocab_size = training_module.vocab_size
         self.ignore_index = training_module.ignore_index
         return self
-    
+
     def eval(self):
-        """Set the backbone to evaluation mode (disables dropout)."""
+        """Set to evaluation mode (disables dropout, selects inference defaults)."""
         self.backbone.eval()
+        self._is_training = False
         return self
 
     def train(self, mode: bool = True):
-        """Set the backbone to training mode."""
+        """Set to training mode."""
         self.backbone.train(mode)
+        self._is_training = mode
         return self
-    
+
     def to(self, device, dtype=None):
-        """
-        Move all components to the specified device (and optionally dtype).
+        """Move all components to the specified device (and optionally dtype).
 
-        Args:
-            device: Target device or torch.dtype (passed through to nn.Module.to).
-            dtype: Optional dtype (e.g. torch.bfloat16).
-
-        Returns:
-            self for method chaining
+        Returns self for method chaining.
         """
         self.backbone.to(device, dtype)
         self.norm.to(device, dtype)
         # embedding_weight and lm_head_weight may not be owned by any nn.Module
-        # stored on this object (e.g. when constructed via from_config), so we
-        # must move them explicitly.  Handle the tied case (same object) carefully.
+        # stored on this object, so move them explicitly. Handle the tied case.
         tied = self.lm_head_weight is self.embedding_weight
         self.embedding_weight = self.embedding_weight.to(device=device, dtype=dtype)
-        self.lm_head_weight = self.embedding_weight if tied else self.lm_head_weight.to(device=device, dtype=dtype)
+        self.lm_head_weight = (
+            self.embedding_weight if tied
+            else self.lm_head_weight.to(device=device, dtype=dtype)
+        )
         return self
-    
+
     @torch.no_grad()
     def forward_inference(
         self,
         tokens: Tensor,
         doc_spans: Optional[List[Any]] = None,
-        **kwargs
+        mask_type: Optional[str] = None,
+        backend: Optional[str] = None,
+        **kwargs,
     ) -> Tensor:
-        """
-        Forward pass for inference: tokens in, logits out.
+        """Forward pass for inference: tokens in, logits out.
 
         Args:
-            tokens: Input token IDs of shape [1, T]
-            doc_spans: List of DocSpan objects for document-aware masking
-            **kwargs: Additional arguments forwarded to block_mask_creator
+            tokens:    Input token IDs of shape [1, T]
+            doc_spans: List of DocSpan objects for document-aware masking.
+            mask_type: Override the model's default mask type for this call.
+                       'doc_causal' | 'cross_doc_link'. Useful for running the
+                       same model under different eval conditions (e.g. contrastive
+                       perplexity: once with cross_doc_link, once with doc_causal).
+            backend:   Override the backend for this call. 'flex' | 'triton'.
+                       Defaults to training_backend when self._is_training, else
+                       inference_backend.
+            **kwargs:  Additional arguments forwarded to the mask creator.
 
         Returns:
             Logits tensor of shape [1, T, vocab_size]
+
+        Raises:
+            KeyError: If the resolved (mask_type, backend) combination has no
+                      creator (e.g. requesting 'cross_doc_link' on a doc_causal
+                      model that has no link_detector).
         """
-        block_mask = self.block_mask_creator(tokens=tokens, doc_spans=doc_spans or [], **kwargs)
+        effective_mask = mask_type or self.mask_type
+        effective_backend = backend or (
+            self.training_backend if self._is_training else self.inference_backend
+        )
+        key = f'{effective_mask}_{effective_backend}'
+        if key not in self._creators:
+            raise KeyError(
+                f"No creator for {key!r}. Available: {sorted(self._creators)}. "
+                f"Cross-doc-link creators only exist on cross_doc_link models "
+                f"(this model has mask_type={self.mask_type!r})."
+            )
+        block_mask = self._creators[key](tokens=tokens, doc_spans=doc_spans or [], **kwargs)
         x = F.embedding(tokens, self.embedding_weight)                        # [1, T, D]
         ve_map = self.backbone.prepare_ve(tokens)
         bigram = self.backbone.prepare_bigram(tokens)
@@ -243,16 +341,16 @@ class TS2TSModel:
         config=None,
         root_identifier: str = "",
     ) -> GenerationResult:
-        """
-        Generate text autoregressively, returning a structured GenerationResult.
+        """Generate text autoregressively, returning a structured GenerationResult.
 
         Args:
-            prompt: Text prompt to condition on. Encoded using self.tokenizer.
-            corpus: Optional DocumentCorpus for cross-doc link resolution (Stage 2+).
-            config: GenerationConfig. Defaults to GenerationConfig() if None.
+            prompt:          Text prompt to condition on. Encoded using self.tokenizer.
+            corpus:          Optional DocumentCorpus for cross-doc link resolution.
+            config:          GenerationConfig. Defaults to GenerationConfig() if None.
+            root_identifier: Filename / identifier prefix for the root document.
 
         Returns:
-            GenerationResult with the root document (and aux docs in Stage 2+).
+            GenerationResult with the root document (and aux docs if links resolved).
 
         Raises:
             RuntimeError: If self.tokenizer is not set.
@@ -274,70 +372,6 @@ class TS2TSModel:
             config=config,
             link_detector=self.link_detector,
             tokenizer_decode=self.tokenizer.decode,
-            layout_policy=self.layout_policy,
+            layout_policy=self.inference_layout_policy,
             root_identifier=root_identifier,
         )
-    
-    @register_handler("perplexity")
-    def compute_perplexity(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Compute perplexity for a batch of examples.
-        
-        TODO: Implement this evaluation handler:
-        1. Convert eval batch format to your packed sequence format
-        2. Create doc_spans metadata
-        3. Generate appropriate block masks
-        4. Run forward_inference to get logits
-        5. Compute per-token cross-entropy losses
-        6. Return perplexity and related metrics
-        
-        Args:
-            batch: List of evaluation examples, each a dict with:
-                - 'text': str or 'tokens': Tensor
-                - Additional context fields as needed
-        
-        Returns:
-            Dictionary containing:
-                - 'perplexity': float
-                - 'avg_loss': float
-                - 'num_tokens': int
-                Additional metrics as desired
-        
-        Raises:
-            NotImplementedError: This is a stub for user implementation
-        """
-        raise NotImplementedError(
-            "compute_perplexity evaluation handler must be implemented. "
-            "This requires converting standard eval format to your packed "
-            "sequence format with doc_spans."
-        )
-    
-    @register_handler("next_token_prediction")
-    def predict_next_token(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Evaluate next token prediction accuracy.
-        
-        TODO: Implement this evaluation handler:
-        1. Process batch into packed sequences
-        2. Run forward_inference
-        3. Compare predicted tokens with ground truth
-        4. Compute accuracy metrics (overall, per-document, cross-document)
-        
-        Args:
-            batch: List of examples with context and target tokens
-        
-        Returns:
-            Dictionary containing:
-                - 'accuracy': float
-                - 'top5_accuracy': float
-                Additional metrics as desired
-        
-        Raises:
-            NotImplementedError: This is a stub for user implementation
-        """
-        raise NotImplementedError(
-            "predict_next_token evaluation handler must be implemented. "
-            "Consider metrics that highlight your model's unique graph-aware "
-            "capabilities, such as cross-document prediction accuracy."
-        )
-

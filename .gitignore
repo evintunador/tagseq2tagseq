@@ -211,6 +211,7 @@ __marimo__/
 
 # Specific to this repo
 runs/
+evals/
 logs/
 data/pretokenized_datasets/
 artifacts/

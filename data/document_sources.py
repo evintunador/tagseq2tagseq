@@ -5,12 +5,12 @@ Each source is an iterable of (normed_id, content_str) pairs. New dataset
 types (Stack v2, ArXiv, etc.) add a class here without touching the
 shared sharding/writing infrastructure in pretokenize.py.
 """
-import hashlib
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Iterator
+
+from data.normalization import normalize_repo_name
 
 logger = logging.getLogger(__name__)
 
@@ -41,23 +41,6 @@ class MarkdownDirectorySource:
             except Exception as e:
                 logger.error(f"Could not read {filepath}: {e}")
 
-
-def _normalize_repo_name(repo_name: str) -> str:
-    """
-    Canonical normalization for GitHub repository names.
-
-    Mirrors github_graph_extractor.extract.normalize_repository_name
-    exactly so that titles produced here match those in graph.jsonl.
-    Pure function with no external deps — duplicated intentionally to
-    avoid a cross-module dependency on a script that must be run from
-    its own directory.
-    """
-    clean = repo_name.replace("/", "_").replace("-", "_").lower()
-    clean = re.sub(r"[^a-z0-9\-_]", "_", clean)
-    clean = re.sub(r"__+", "_", clean)
-    clean = clean.strip("_")
-    h = hashlib.md5(clean.encode("utf-8")).hexdigest()[:6]
-    return f"{clean}_{h}"
 
 
 class StackJSONLSource:
@@ -94,6 +77,6 @@ class StackJSONLSource:
                 content = record.get("content", "")
                 if not (repo and path and content):
                     continue
-                normed_id = f"{_normalize_repo_name(repo)}:{path}"
+                normed_id = f"{normalize_repo_name(repo)}:{path}"
                 if normed_id in self._graph_normed_ids:
                     yield normed_id, content

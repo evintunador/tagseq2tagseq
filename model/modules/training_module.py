@@ -179,36 +179,70 @@ class TS2TSTrainingModule(nn.Module):
             mtp_decay_micro_steps=mtp_decay_micro_steps,
         )
     
-    def to_inference_model(self, tokenizer, link_detector=None, layout_policy=None):
+    def to_inference_model(
+        self,
+        tokenizer,
+        mask_type: str = 'doc_causal',
+        link_detector=None,
+        training_backend: str = 'triton',
+        inference_backend: str = 'flex',
+        training_layout_policy=None,
+        inference_layout_policy=None,
+    ):
         """
         Convert this training module to an inference-ready TS2TSModel.
 
         Weights are passed as tensor references (not Parameters) to avoid
-        unnecessary copying while maintaining gradient-free inference.
+        unnecessary copying. The resulting TS2TSModel builds its own _creators
+        dict from mask_type, link_detector, and the backend args — no creator
+        objects need to be constructed at the call site.
+
+        When inference_backend != training_backend, the backbone's attention
+        layer classes are swapped zero-copy so the uncompiled backbone uses
+        FlexSelfAttention for inference (faster for single-doc paths with
+        torch.compile) without duplicating any weights.
 
         Args:
-            tokenizer: Tokenizer for encoding prompts and decoding output text.
-                Required for generate(). Must match the tokenizer used during
-                data pre-tokenization.
-            link_detector: LinkDetector for cross-doc link detection (Stage 2+).
-            layout_policy: DocLayoutPolicy for document prefix/suffix tokens (Stage 2+).
+            tokenizer:               Required for generate().
+            mask_type:               'doc_causal' | 'cross_doc_link'.
+            link_detector:           LinkDetector instance; None for doc_causal.
+            training_backend:        'triton' | 'flex'. Used when model._is_training.
+            inference_backend:       'flex' | 'triton'. Used otherwise.
+            training_layout_policy:  DocLayoutPolicy used during training.
+            inference_layout_policy: DocLayoutPolicy used during inference/eval.
+                                     Defaults to training_layout_policy if None.
 
         Returns:
             TS2TSModel instance ready for inference/evaluation.
         """
         from model.model import TS2TSModel
 
+        backbone = self.backbone
+
+        # Switch attention backend from triton → flex for inference.
+        # TS2TSAttention holds its kernel choice in self.backend, so flipping
+        # that attribute is all that's needed — no __class__ reassignment,
+        # no weight copying.
+        if inference_backend == 'flex' and training_backend == 'triton':
+            raw_backbone = getattr(backbone, '_orig_mod', backbone)
+            for layer in raw_backbone.layers:
+                layer.attn.backend = 'flex'
+            backbone = raw_backbone
+
         return TS2TSModel(
-            backbone=self.backbone,
+            backbone=backbone,
             embedding_weight=self.embedding.weight,
             lm_head_weight=self.loss_fn.weight,
             norm=self.norm,
-            block_mask_creator=self.block_mask_creator,
             vocab_size=self.vocab_size,
+            mask_type=mask_type,
+            link_detector=link_detector,
+            training_backend=training_backend,
+            inference_backend=inference_backend,
+            training_layout_policy=training_layout_policy,
+            inference_layout_policy=inference_layout_policy,
             ignore_index=self.ignore_index,
             tokenizer=tokenizer,
-            link_detector=link_detector,
-            layout_policy=layout_policy,
         )
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Type[Tensor] | Any]:

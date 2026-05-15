@@ -10,7 +10,7 @@ from typing import Optional
 import numpy as np
 
 from data.dataset import GraphIndex, PretokShardedBackend
-from .identifier_utils import create_normed_identifier
+from data.normalization import normalize_wiki_title
 
 
 class DocumentCorpus:
@@ -62,7 +62,7 @@ class DocumentCorpus:
             return self.backend.get_tokens(identifier)
 
         # Try constructing the normed_identifier from the raw identifier
-        normed = create_normed_identifier(identifier)
+        normed = normalize_wiki_title(identifier)
         if normed in self.index:
             return self.backend.get_tokens(normed)
 
@@ -80,7 +80,7 @@ class DocumentCorpus:
         """
         if identifier in self.index:
             return True
-        normed = create_normed_identifier(identifier)
+        normed = normalize_wiki_title(identifier)
         return normed in self.index
 
     def get_normed_identifier(self, identifier: str) -> Optional[str]:
@@ -102,7 +102,7 @@ class DocumentCorpus:
         """
         if identifier in self.index:
             return identifier
-        normed = create_normed_identifier(identifier)
+        normed = normalize_wiki_title(identifier)
         if normed in self.index:
             return normed
         return None

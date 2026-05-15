@@ -10,7 +10,7 @@ from data.layout import DocLayoutInfo
 from model.document_context import DocumentContext, _DocEntry
 from model.generation_config import GenerationConfig
 from model.generation_result import GeneratedDocument, GenerationResult, GenerationTrace
-from model.identifier_utils import create_normed_identifier
+from data.normalization import normalize_wiki_title
 from model.sampling import sample_token
 
 logger = logging.getLogger(__name__)
@@ -229,14 +229,20 @@ def _handle_link(
 
     Decision tree (in order):
         1. Empty target → skip.
-        2. depth >= max_link_depth → skip (enforces depth limit for all doc types).
-        3. Already in active window → skip (cross-doc mask handles attention).
-        4. Previously evicted → restore (potentially evicting another first).
-        5. In corpus → fetch and insert before active_entry.
-        6. allow_generation_fallback → recursively generate.
+        2. full_skip mode → skip immediately (no link processing at all).
+        3. depth >= max_link_depth → skip (enforces depth limit for all doc types).
+        4. Already in active window → skip (cross-doc mask handles attention).
+        5. link_but_skip mode → bookkeep in trace, don't insert any doc.
+        6. Previously evicted → restore (potentially evicting another first).
+        7. In corpus → fetch and insert before active_entry (skipped for generate_only).
+        8. Generate recursively (skipped for corpus_only).
     """
     target = link.target_str
     if not target:
+        return
+
+    # full_skip: never process links at all.
+    if config.link_retrieval_mode == "full_skip":
         return
 
     # Enforce max_link_depth for all doc types (corpus, generated, re-evicted).
@@ -246,6 +252,12 @@ def _handle_link(
         return
 
     if context.has_identifier(target):
+        return
+
+    # link_but_skip: detect the link for trace bookkeeping, but don't insert any doc.
+    if config.link_retrieval_mode == "link_but_skip":
+        if trace is not None:
+            trace.max_depth_reached = max(trace.max_depth_reached, depth + 1)
         return
 
     # Re-eviction: restore a previously evicted doc if possible.
@@ -272,10 +284,10 @@ def _handle_link(
             )
         return
 
-    # Corpus fetch.
-    if corpus is not None and corpus.has_document(target):
+    # Corpus fetch — skipped when generate_only.
+    if config.link_retrieval_mode != "generate_only" and corpus is not None and corpus.has_document(target):
         corpus_tokens = list(corpus.get_document(target))
-        normed_target = create_normed_identifier(target)
+        normed_target = normalize_wiki_title(target)
         if layout_policy is not None:
             info = DocLayoutInfo(
                 raw_identifier=target,
@@ -319,8 +331,8 @@ def _handle_link(
             )
         return
 
-    # Recursive generation fallback.
-    if not config.allow_generation_fallback:
+    # Recursive generation fallback — skipped when corpus_only.
+    if config.link_retrieval_mode == "corpus_only":
         return
 
     # Room estimate uses max_tokens_per_document as a conservative upper bound.

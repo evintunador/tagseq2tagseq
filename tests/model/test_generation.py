@@ -8,7 +8,6 @@ import pytest
 import torch
 import numpy as np
 from unittest.mock import MagicMock
-from torch.nn.attention.flex_attention import create_block_mask, BlockMask
 
 from model.generation_config import GenerationConfig
 from model.generation_result import GenerationResult, GeneratedDocument
@@ -294,8 +293,8 @@ def test_model_generate_requires_tokenizer():
         embedding_weight=emb.weight,
         lm_head_weight=emb.weight,
         norm=norm,
-        block_mask_creator=lambda **kw: None,
         vocab_size=VOCAB_SIZE,
+        mask_type='doc_causal',
         tokenizer=None,
     )
     with pytest.raises(RuntimeError, match="tokenizer"):
@@ -548,7 +547,7 @@ def test_handle_link_generates_when_not_in_corpus():
     model = make_mock_model(next_tokens=[EOS])
     ctx = make_context_obj()
     root = ctx.add_root("", [1], None)
-    cfg = base_config(max_link_depth=1, allow_generation_fallback=True)
+    cfg = base_config(max_link_depth=1, link_retrieval_mode="corpus_then_generate")
     _handle_link(
         LinkInfo(link_end_pos=1, target_str="Go"),
         root, ctx, model, None, None, cfg, None, depth=0,
@@ -565,7 +564,7 @@ def test_handle_link_respects_max_link_depth_generation():
     LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
     ctx = make_context_obj()
     root = ctx.add_root("", [1], None)
-    cfg = base_config(max_link_depth=0, allow_generation_fallback=True)
+    cfg = base_config(max_link_depth=0, link_retrieval_mode="corpus_then_generate")
     _handle_link(
         LinkInfo(link_end_pos=1, target_str="Go"),
         root, ctx, None, None, None, cfg, None, depth=0,
@@ -573,12 +572,12 @@ def test_handle_link_respects_max_link_depth_generation():
     assert ctx.num_aux_docs == 0  # depth 0 >= max_link_depth 0 → skip
 
 
-def test_handle_link_respects_allow_generation_fallback_false():
+def test_handle_link_respects_corpus_only_mode():
     from collections import namedtuple
     LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
     ctx = make_context_obj()
     root = ctx.add_root("", [1], None)
-    cfg = base_config(max_link_depth=2, allow_generation_fallback=False)
+    cfg = base_config(max_link_depth=2, link_retrieval_mode="corpus_only")
     _handle_link(
         LinkInfo(link_end_pos=1, target_str="Go"),
         root, ctx, None, None, None, cfg, None, depth=0,
@@ -1091,7 +1090,7 @@ def test_trace_counts_generated_aux_docs():
         model=model,
         prompt_tokens=[1],
         corpus=None,
-        config=base_config(max_link_depth=1, allow_generation_fallback=True,
+        config=base_config(max_link_depth=1, link_retrieval_mode="corpus_then_generate",
                            record_trace=True),
         link_detector=detector,
         tokenizer_decode=None,
@@ -1183,7 +1182,7 @@ def test_scenario_generate_link_generate_aux():
         model=model,
         prompt_tokens=[1],
         corpus=None,
-        config=base_config(max_link_depth=1, allow_generation_fallback=True,
+        config=base_config(max_link_depth=1, link_retrieval_mode="corpus_then_generate",
                            record_trace=True),
         link_detector=detector,
         tokenizer_decode=None,
@@ -1491,7 +1490,7 @@ def test_aux_doc_sampled_from_correct_logit_position():
         model=model,
         prompt_tokens=[1],
         corpus=None,
-        config=base_config(max_link_depth=1, allow_generation_fallback=True),
+        config=base_config(max_link_depth=1, link_retrieval_mode="corpus_then_generate"),
         link_detector=detector,
         tokenizer_decode=None,
         layout_policy=None,

@@ -9,8 +9,8 @@ dependencies = [
     "torch",
     "numpy",
     "tunalab>=0.1.4",
-    "tunalab-common>=0.1.1",
-    "tunalab-nlp",
+    "tunalab-common>=0.1.2",
+    "tunalab-nlp>=0.5.1",
 ]
 
 [project.optional-dependencies]
@@ -18,7 +18,8 @@ dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["data", "data.*", "model", "model.*", "tunalab", "tunalab.*"]
+include = ["data", "data.*", "eval", "eval.*", "model", "model.*", "tunalab", "tunalab.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

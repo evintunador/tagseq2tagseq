@@ -1,6 +1,14 @@
 import re
 import html
 import hashlib
+import sys
+from pathlib import Path
+
+_project_root = Path(__file__).resolve().parents[2]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+from data.normalization import normalize_wiki_title
 
 # ======================================================================
 # Main Processing Pipeline
@@ -545,43 +553,8 @@ def raw_link_target(raw: str) -> str:
 
 
 def normalize_identifier(raw):
-    """
-    Produces a normed_identifier from a raw article identifier.
-    Strict normalization to ensure alignment:
-    - Lowercase
-    - Replace spaces and special characters with underscores
-    - Limit length
-    - Appends a hash of the pre-stripped form to ensure distinct identifiers
-      (e.g. 'A+B' vs 'A-B') don't collide.
-    """
-    # Decode HTML entities
-    raw = html.unescape(raw)
-
-    # Pre-normalization canonicalization (soft) to determine identity
-    # This handles case-insensitivity and space/underscore equivalence
-    canonical = raw.lower().strip().replace(' ', '_')
-
-    # Compute hash of the canonical form to distinguish different symbols
-    # e.g. "a+b" vs "a-b" which both normalize to "a_b" below.
-    # We use MD5 and take the first 6 chars for a compact suffix.
-    title_hash = hashlib.md5(canonical.encode('utf-8')).hexdigest()[:6]
-
-    # Apply strict normalization for the filename part
-    normed = canonical
-    
-    # Replace invalid chars with underscores (keep only alphanumeric, hyphen, underscore)
-    normed = re.sub(r'[^a-z0-9\-_]', '_', normed)
-    # Collapse underscores
-    normed = re.sub(r'__+', '_', normed)
-    # Strip leading/trailing underscores
-    normed = normed.strip('_')
-    
-    # Limit length (leave room for hash and separator)
-    # 200 - 1 (separator) - 6 (hash) = 193
-    if len(normed) > 193:
-        normed = normed[:193]
-        
-    return f"{normed}_{title_hash}"
+    """Produce a normed_identifier from a raw Wikipedia article title."""
+    return normalize_wiki_title(raw)
 
 def convert_bold_and_italics(text):
     """Converts wikitext bold/italics to Markdown."""

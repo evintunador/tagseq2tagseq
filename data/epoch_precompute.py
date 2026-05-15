@@ -7,6 +7,35 @@ for load-balanced DDP training.
 
 Supported datasets: TheStack only (repo-partitioned graph with "owner/repo:path"
 identifiers).  Wikipedia / SimpleWiki must use the online PackedSequenceDataset.
+
+TODO — Wikipedia / flat-identifier dataset support:
+    The TheStack restriction exists because _partition_repos groups documents by
+    their "owner/repo" prefix so that all files in a repo land on the same worker.
+    This matters because _ShardedEpochView only exposes each worker's own doc IDs;
+    BFS traversal stops at the shard boundary, so if linked documents scatter across
+    workers the resulting packs are effectively doc_causal (no cross-doc grants fire).
+
+    Wikipedia identifiers have no repo prefix, so _partition_repos degenerates to
+    one singleton "repo" per article — linked articles scatter randomly, defeating
+    the purpose.
+
+    The fix is a graph-community partitioner: multi-source BFS Voronoi.
+    High-level algorithm:
+      1. Pick n_workers random seed doc IDs.
+      2. Maintain one BFS queue per worker; initialize each with its seed.
+      3. Interleave expansion round-robin: dequeue one doc from each worker in
+         turn, claim all unclaimed neighbors into that worker's queue.
+         Once a worker's territory reaches ~(len(graph) / n_workers * 1.5) docs,
+         stop expanding it (size cap prevents hub-heavy nodes from dominating).
+         Re-seed any worker that exhausts its queue before the cap from the
+         remaining unclaimed docs.
+      4. Any unclaimed docs after all queues are empty (isolated nodes, capped
+         overflow) are assigned round-robin.
+    This produces n_workers connected subgraphs so BFS traversal stays
+    intra-shard, yielding the same density-scheduling benefits as TheStack.
+    Partitioning is O(n) — same order as the existing _partition_repos scan —
+    and runs in the main process before workers start, so it adds negligible
+    wall time.
 """
 
 import collections
@@ -68,14 +97,20 @@ def _record_to_placements(record: PackRecord) -> List[DocPlacement]:
 # ---------------------------------------------------------------------------
 
 def _assert_thestack_dataset(graph: GraphIndex) -> None:
-    """Raise ValueError if graph is not a TheStack (repo-partitioned) dataset."""
+    """Raise ValueError if graph is not a TheStack (repo-partitioned) dataset.
+
+    TODO: remove once the graph-community partitioner is implemented (see module
+    docstring).  The restriction exists solely because _partition_repos relies on
+    the "owner/repo:" prefix; the rest of the pipeline is dataset-agnostic.
+    """
     if len(graph) == 0:
         raise ValueError("Graph is empty.")
     first_id = graph.get_normed_identifier(0)
     if ":" not in first_id:
         raise ValueError(
-            "Density pre-computation requires a TheStack dataset (repo-partitioned graph). "
-            "Other datasets (Wikipedia, etc.) must use the online PackedSequenceDataset path."
+            "Density pre-computation currently requires a TheStack dataset (repo-partitioned "
+            "graph with 'owner/repo:path' identifiers). Wikipedia / flat-identifier datasets "
+            "need a graph-community partitioner — see the module-level TODO for the design."
         )
 
 
@@ -283,7 +318,10 @@ def _worker_fn(
         tokens = batch["tokens"]
         doc_spans = batch["doc_spans"]
 
-        links = detector.detect_links(tokens[0])
+        if hasattr(detector, "detect_links_for_doc"):
+            links = creator._collect_links_per_doc(tokens, doc_spans)
+        else:
+            links = detector.detect_links(tokens[0])
         link_to_target = creator._match_links_to_docs(links, doc_spans)
 
         link_end_positions = list(link_to_target.keys())

@@ -155,6 +155,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         order_mode=cfg.get('data', {}).get('order_mode', 'prefer_targets_first'),
         layout_policy=layout_policy,
     )
+    # TODO: BucketedPackDataset path (pre-computed epoch) for profiling density-aware packing.
     dataset = PackedSequenceDataset(
         graph=graph_index,
         backend=backend,

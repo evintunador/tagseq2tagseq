@@ -16,7 +16,7 @@ from torch import Tensor
 from data.collate import DocSpan
 from data.layout import DocLayoutInfo
 from model.generation_result import GeneratedDocument
-from model.identifier_utils import create_normed_identifier
+from data.normalization import normalize_wiki_title
 
 
 @dataclass
@@ -93,7 +93,7 @@ class DocumentContext:
         doc_id = self._next_doc_id
         self._next_doc_id += 1
 
-        normed = create_normed_identifier(raw_identifier) if raw_identifier else ""
+        normed = normalize_wiki_title(raw_identifier) if raw_identifier else ""
         if layout_policy is not None:
             info = DocLayoutInfo(
                 raw_identifier=raw_identifier,
@@ -251,7 +251,7 @@ class DocumentContext:
         """
         doc_id = self._next_doc_id
         self._next_doc_id += 1
-        normed = create_normed_identifier(raw_identifier)
+        normed = normalize_wiki_title(raw_identifier)
 
         if layout_policy is not None:
             info = DocLayoutInfo(
@@ -302,7 +302,7 @@ class DocumentContext:
         """
         doc_id = self._next_doc_id
         self._next_doc_id += 1
-        normed = create_normed_identifier(raw_identifier)
+        normed = normalize_wiki_title(raw_identifier)
 
         if layout_policy is not None:
             info = DocLayoutInfo(

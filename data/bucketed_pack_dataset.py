@@ -100,6 +100,10 @@ class BucketedPackDataset(IterableDataset):
             self._global_accum_step = 0
             self._bucket_consumed = {}
 
+        # Signal initial epoch to stochastic layout policies.
+        if hasattr(self.layout, 'set_epoch'):
+            self.layout.set_epoch(self._epoch_idx)
+
     # ------------------------------------------------------------------
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
@@ -167,6 +171,8 @@ class BucketedPackDataset(IterableDataset):
 
             # Epoch exhausted — advance to next
             self._epoch_idx += 1
+            if hasattr(self.layout, 'set_epoch'):
+                self.layout.set_epoch(self._epoch_idx)
             self._global_accum_step = 0
             self._bucket_consumed = {}
 

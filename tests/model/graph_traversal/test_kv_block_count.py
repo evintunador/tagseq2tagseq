@@ -12,7 +12,6 @@ skipped when CUDA is unavailable.
 
 import math
 import random
-import time
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -262,93 +261,3 @@ class TestKVBlockCountMethods:
             assert a == b, f"real batch: A={a} != B={b}"
             assert a == c, f"real batch: A={a} != C={c}"
 
-
-# ---------------------------------------------------------------------------
-# TestKVBlockCountPerf — timing only, no assertions
-# ---------------------------------------------------------------------------
-
-class TestKVBlockCountPerf:
-
-    @CUDA_MARK
-    @pytest.mark.skipif(
-        not __import__("os").path.isdir(SIMPLEWIKI_DIR),
-        reason="simplewiki dataset not present",
-    )
-    def test_profile_three_methods(self):
-        """Profile all three methods on a 32k sequence.  Prints results for human review."""
-        import itertools
-        import tiktoken
-
-        from data.dataset import GraphIndex, PretokShardedBackend
-        from data.packed_dataset import PackedSequenceDataset
-        from data.pack_sampler import PackBatchSampler
-        from data.traversal import BFSStrategy
-        from data.layout import make_layout_policy
-
-        enc = tiktoken.get_encoding("gpt2")
-        detector = MarkdownLinkDetector(decode_fn=enc.decode)
-        creator = CrossDocLinkMaskCreator(link_detector=detector)
-
-        graph = GraphIndex(SIMPLEWIKI_DIR)
-        backend = PretokShardedBackend(graph)
-        layout = make_layout_policy("null", encode_fn=enc.encode_ordinary)
-        sampler = PackBatchSampler(
-            graph=graph,
-            strategy_factory=lambda: BFSStrategy(edge_mode="outgoing"),
-            token_budget=32768,
-            seed=0,
-            layout_policy=layout,
-        )
-        dataset = PackedSequenceDataset(
-            graph=graph, backend=backend, pack_sampler=sampler,
-            layout_policy=layout,
-        )
-        batch = next(iter(dataset))
-        tokens = batch["tokens"]
-        doc_spans = batch["doc_spans"]
-        seq_len = tokens.shape[-1]
-        links = detector.detect_links(tokens[0])
-        link_to_target = creator._match_links_to_docs(links, doc_spans)
-
-        cpu = torch.device("cpu")
-        n_warmup, n_reps = 3, 50
-
-        # Method A
-        full_mask = _build_full_dense_mask(creator, seq_len, doc_spans, link_to_target, cpu)
-        for _ in range(n_warmup):
-            _kv_block_count_from_dense(full_mask)
-        t0 = time.perf_counter()
-        for _ in range(n_reps):
-            _kv_block_count_from_dense(full_mask)
-        t_a = (time.perf_counter() - t0) / n_reps * 1000
-
-        # Method B
-        device = torch.device("cuda")
-        tok_gpu = tokens.to(device)
-        for _ in range(n_warmup):
-            bm = creator(tok_gpu, doc_spans, link_to_target=link_to_target)
-            _ = bm.kv_num_blocks.sum().item()
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        for _ in range(n_reps):
-            bm = creator(tok_gpu, doc_spans, link_to_target=link_to_target)
-            _ = bm.kv_num_blocks.sum().item()
-        torch.cuda.synchronize()
-        t_b = (time.perf_counter() - t0) / n_reps * 1000
-
-        # Method C
-        for _ in range(n_warmup):
-            _kv_block_count_analytical(doc_spans, link_to_target, seq_len)
-        t0 = time.perf_counter()
-        for _ in range(n_reps):
-            _kv_block_count_analytical(doc_spans, link_to_target, seq_len)
-        t_c = (time.perf_counter() - t0) / n_reps * 1000
-
-        print(
-            f"\n[kv_block_count profile] seq_len={seq_len}, {len(doc_spans)} docs, "
-            f"{len(link_to_target)} links\n"
-            f"  Method A (dense CPU):      {t_a:.2f} ms/call\n"
-            f"  Method B (BlockMask GPU):  {t_b:.2f} ms/call\n"
-            f"  Method C (analytical CPU): {t_c:.2f} ms/call\n"
-        )
-        # No assertion — results printed for human review to select method for EpochPrecomputer

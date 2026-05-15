@@ -10,6 +10,8 @@ from tunalab.modules.regularization.drop_path import DropPath
 from tunalab.modules.norms.rms_norm import RMSNorm
 from kernels.fused_relu_sq_mlp import FusedReLUSquaredMLP
 
+from model.modules.attention import TS2TSAttention
+
 
 class Layer(nn.Module):
     def __init__(
@@ -25,28 +27,21 @@ class Layer(nn.Module):
         self.drop_path = DropPath(drop_path_rate)
         self.ln_1 = RMSNorm(n_embd)
 
-        if attention_backend == "triton_v12":
-            from model.modules.attention import BIMv12Attention
-            self.attn = BIMv12Attention(
-                dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
-            )
-        elif attention_backend in ("triton_v17", "triton_v18"):
-            from model.modules.attention import BIMv17Attention, BIMv18Attention
-            _cls = BIMv18Attention if attention_backend == "triton_v18" else BIMv17Attention
-            self.attn = _cls(
-                dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
-            )
-        elif attention_backend in ("varlen_bim_v1", "varlen_bim_v2"):
-            from model.modules.attention import VarlenBIMv1Attention, VarlenBIMv2Attention
-            _cls = VarlenBIMv2Attention if attention_backend == "varlen_bim_v2" else VarlenBIMv1Attention
-            self.attn = _cls(
-                dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
-            )
+        # Map all backend names to the TS2TSAttention unified class.
+        # 'triton_v12' → 'triton', 'varlen_bim_v1' → 'triton' (kernel selected at runtime
+        # from block_mask type). v17/v18/varlen_bim_v2 pass through directly.
+        if attention_backend in ('triton_v12',):
+            backend = 'triton'
+        elif attention_backend in ('varlen_bim_v1',):
+            backend = 'triton'
+        elif attention_backend in ('triton_v17', 'triton_v18', 'varlen_bim_v2', 'flex', 'triton'):
+            backend = attention_backend
         else:
-            from model.modules.attention import VEFlexSelfAttention
-            self.attn = VEFlexSelfAttention(
-                dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len, fp8_out_proj=fp8,
-            )
+            backend = 'flex'
+        self.attn = TS2TSAttention(
+            dim=n_embd, num_heads=n_head, max_seq_len=max_seq_len,
+            fp8_out_proj=fp8, backend=backend,
+        )
 
         self.ln_2 = RMSNorm(n_embd)
         self.mlp = FusedReLUSquaredMLP(model_dim=n_embd)
