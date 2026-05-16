@@ -38,7 +38,8 @@ def _eval_loss(model: nn.Module, loader) -> float:
     local_loss = total / max(count, 1)
 
     if dist.is_available() and dist.is_initialized():
-        t = torch.tensor([local_loss, float(count)], dtype=torch.float64)
+        device = next(model.parameters()).device if list(model.parameters()) else torch.device("cuda")
+        t = torch.tensor([local_loss, float(count)], dtype=torch.float64, device=device)
         dist.all_reduce(t, op=dist.ReduceOp.SUM)
         return t[0].item() / max(t[1].item(), 1.0)
 

@@ -1189,14 +1189,24 @@ if __name__ == "__main__":
 
     config = compose_config(parser)
 
-    # Run directory is created only by rank 0 (ReproducibilityManager handles this).
-    run_dir = os.path.join(
-        os.path.dirname(__file__), "runs",
-        datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-    )
-
     dist_mgr = DistributedManager()
-    rep = ReproducibilityManager(output_dir=run_dir, is_main_process=dist_mgr.is_main)
 
-    with dist_mgr, rep:
-        main(config, dist_mgr, rep)
+    with dist_mgr:
+        # Rank 0 picks the run directory name; all ranks receive it via broadcast
+        # so they agree on one name even when launched within the same second.
+        if dist_mgr.is_main:
+            run_dir = os.path.join(
+                os.path.dirname(__file__), "runs",
+                datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            )
+        else:
+            run_dir = None
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            run_dir_list = [run_dir]
+            torch.distributed.broadcast_object_list(run_dir_list, src=0)
+            run_dir = run_dir_list[0]
+
+        rep = ReproducibilityManager(output_dir=run_dir, is_main_process=dist_mgr.is_main)
+        with rep:
+            main(config, dist_mgr, rep)
