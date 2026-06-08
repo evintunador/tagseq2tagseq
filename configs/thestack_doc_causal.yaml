@@ -6,6 +6,7 @@ data:
   order_mode: 'prefer_targets_first'
   doc_budget: null
   train_dir:   /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
+  epoch_dirs:  /fss/evin_t/tagseq2tagseq/schedules/thestack_bfs/epoch_0
   val_dirs:
     val_community: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
     val_random:    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
@@ -53,7 +54,7 @@ optimizer:
 
 train_loop:
   epochs: 1
-  max_optimizer_steps: null  # ~1 pass ≈ 18,400 steps (3.56M nodes / 12 docs/pack / 16 GPUs)
+  max_optimizer_steps: null  # set after epoch precomputation; BucketedPackDataset terminates naturally
   warmup_steps: 300
   cooldown_frac: 0.4
   min_lr_ratio: 0.1

@@ -53,7 +53,7 @@ optimizer:
 
 train_loop:
   epochs: 1
-  max_optimizer_steps: null  # ~1 pass ≈ 1,400 steps (246k nodes / 12 docs/pack / 16 GPUs)
+  max_optimizer_steps: null  # determined by epoch precomputation once community partitioner is implemented
   warmup_steps: 300
   cooldown_frac: 0.4
   min_lr_ratio: 0.1
