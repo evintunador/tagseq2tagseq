@@ -249,6 +249,7 @@ class _WorkerConfig:
     seed:             int
     order_mode:       str
     worker_idx:       int
+    epoch_idx:        int = 0        # propagated to stochastic layout policies
     use_analytical:   bool = True    # compute kv_block_count in worker (CPU, ~1ms/pack)
 
 
@@ -278,6 +279,8 @@ def _worker_fn(
     backend = PretokShardedBackend(graph)
     enc = tiktoken.get_encoding(graph.metadata.get("tokenizer", "gpt2"))
     layout = make_layout_policy(config.layout_policy, encode_fn=enc.encode_ordinary)
+    if hasattr(layout, "set_epoch"):
+        layout.set_epoch(config.epoch_idx)
 
     if config.link_detector == "python":
         detector = PythonImportDetector(decode_fn=enc.decode)
@@ -311,12 +314,20 @@ def _worker_fn(
         if not placements:
             continue
 
-        for p in placements:
-            epoch_visited.add(p.doc_id)
-
         batch = build_packed_batch(graph, backend, layout, placements, as_2d=True)
         tokens = batch["tokens"]
         doc_spans = batch["doc_spans"]
+
+        if tokens.shape[-1] != config.token_budget:
+            logger.debug(
+                "Worker %d: dropping pack with T=%d (expected %d).",
+                config.worker_idx, tokens.shape[-1], config.token_budget,
+            )
+            pack_id += 1
+            continue
+
+        for p in placements:
+            epoch_visited.add(p.doc_id)
 
         if hasattr(detector, "detect_links_for_doc"):
             links = creator._collect_links_per_doc(tokens, doc_spans)
@@ -514,6 +525,7 @@ class EpochPrecomputer:
                 seed=seed + i,
                 order_mode=self.order_mode,
                 worker_idx=i,
+                epoch_idx=epoch_idx,
                 use_analytical=self.use_analytical,
             )
             for i in range(self.n_workers)

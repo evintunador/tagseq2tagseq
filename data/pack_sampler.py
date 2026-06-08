@@ -489,13 +489,23 @@ class PackBatchSampler:
             if p.effective_len <= 0:
                 continue
 
-            trim_amount = min(p.effective_len, overshoot)
-            if trim_amount <= 0:
-                continue
+            pre, suf = self._layout_lengths(p.doc_id)
+            full_doc_tokens = pre + p.effective_len + suf
 
-            p.effective_len -= trim_amount
-            overshoot -= trim_amount
-            p.truncated = True
+            if overshoot >= full_doc_tokens:
+                # Removing this whole doc closes overshoot by its full size.
+                overshoot -= full_doc_tokens
+                p.effective_len = 0
+                p.truncated = True
+            elif overshoot <= p.effective_len:
+                # Body alone can absorb the overshoot; partial body trim suffices.
+                p.effective_len -= overshoot
+                overshoot = 0
+                p.truncated = True
+            # else: overshoot > effective_len but < full_doc_tokens — cannot
+            # fix by trimming body (would go to 0) and cannot drop doc (would
+            # over-correct by removing pre+suf too).  Skip this doc and try
+            # the next one in the trim direction.
 
         # Drop any documents that have been reduced to zero length.
         final_placements = [p for p in placements if p.effective_len > 0]
