@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol
 
@@ -239,8 +240,14 @@ class StochasticIdentifierPrefixLayoutPolicy(DocLayoutPolicy):
         self._epoch = epoch
 
     def _include_prefix(self, normed_identifier: str) -> bool:
-        """Deterministic per-(doc, epoch) coin flip; no cache, no shared state."""
-        return hash(normed_identifier + ":" + str(self._epoch)) % 2 == 0
+        """Deterministic per-(doc, epoch) coin flip; no cache, no shared state.
+
+        Uses hashlib.md5 rather than Python's built-in hash() so the result is
+        stable across processes, interpreter restarts, and subprocesses (Python's
+        hash() is randomized per-process by default via PYTHONHASHSEED).
+        """
+        key = f"{normed_identifier}:{self._epoch}".encode()
+        return int(hashlib.md5(key).hexdigest(), 16) % 2 == 0
 
     def _get_prefix_tokens(self, raw_identifier: str) -> List[int]:
         return self._encode(f"# {raw_identifier}\n\n")
