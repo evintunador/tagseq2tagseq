@@ -121,7 +121,7 @@ def launch(
     gpus_per_node: int   = 1,
     config:        str   = "configs/baseline.yaml",
     partition:     str   = "compute",
-    time_limit:    str   = "24:00:00",
+    time_limit:    str   = "168:00:00",
     mem_per_gpu:   int   = 128,
     cpus_per_task: int   = 8,
     exclude:       str   = None,
@@ -152,7 +152,7 @@ def launch(
         slurm_max_num_timeout=0,
     )
 
-    parts       = time_limit.split(":")
+    parts = time_limit.split(":")
     timeout_min = int(parts[0]) * 60 + int(parts[1])
     if len(parts) > 2:
         timeout_min += int(parts[2]) // 60
@@ -230,7 +230,7 @@ def main():
                         help="Config YAML path (relative to project root)")
     parser.add_argument("--partition",     type=str, default="compute",
                         help="SLURM partition")
-    parser.add_argument("--time",          type=str, default="24:00:00",
+    parser.add_argument("--time",          type=str, default="168:00:00",
                         help="Wall-clock limit HH:MM:SS")
     parser.add_argument("--mem-per-gpu",   type=int, default=64,
                         help="CPU RAM (GB) per GPU")
