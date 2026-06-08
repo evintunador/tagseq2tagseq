@@ -180,5 +180,3 @@ def build_packed_batch(
         "doc_ids": [span.doc_id for span in spans],
         "normed_identifiers": [span.normed_identifier for span in spans],
     }
-
-

@@ -118,6 +118,7 @@ class BucketedPackDataset(IterableDataset):
             with open(meta_path) as f:
                 meta = json.load(f)
             n_buckets: int = meta["n_buckets"]
+            self._token_budget: Optional[int] = meta.get("token_budget")
 
             # Warn if max_grants warmup is active (bucketing is approximate during warmup)
             max_grants_start = meta.get("max_grants_start")
@@ -193,6 +194,19 @@ class BucketedPackDataset(IterableDataset):
         """Reconstruct a full batch dict from a PackRecord."""
         placements = _record_to_placements(pack)
         batch = build_packed_batch(self.graph, self.backend, self.layout, placements)
+        T = batch["tokens"].shape[-1]
+        budget = getattr(self, '_token_budget', None)
+        if budget is not None and T != budget:
+            import logging as _logging
+            _logging.getLogger(__name__).error(
+                "Materialized pack has T=%d, expected token_budget=%d. "
+                "Re-run precompute_epochs.py to regenerate packs at the correct length.",
+                T, budget,
+            )
+            raise AssertionError(
+                f"Materialized pack has T={T}, expected token_budget={budget}. "
+                "Re-run precompute_epochs.py to regenerate packs at the correct length."
+            )
         batch["link_to_target"] = dict(
             zip(pack.link_end_positions, pack.link_target_doc_ids)
         )

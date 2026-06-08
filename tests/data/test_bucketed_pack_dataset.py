@@ -59,7 +59,7 @@ def _make_epoch_dir(
     table = _records_to_table(records)
     pq.write_table(table, os.path.join(epoch_dir, "packs.parquet"), compression="snappy")
     with open(os.path.join(epoch_dir, "metadata.json"), "w") as f:
-        json.dump({"n_buckets": n_buckets, "n_packs": len(records), "token_budget": 512}, f)
+        json.dump({"n_buckets": n_buckets, "n_packs": len(records), "token_budget": 128}, f)
 
     return epoch_dir
 
@@ -248,3 +248,15 @@ class TestBucketedPackDataset:
             block = seq[i:i + 8]
             if len(block) == 8:
                 assert len(set(block)) == 8, f"Block {i//8} has duplicate buckets: {block}"
+
+    def test_token_budget_mismatch_raises(self):
+        """AssertionError is raised when a materialized pack has wrong token length."""
+        with tempfile.TemporaryDirectory() as tmp:
+            epoch_dir = _make_epoch_dir(tmp, n_buckets=1, packs_per_bucket=1)
+            # Overwrite metadata with a mismatched token_budget (128 is correct; 512 is wrong).
+            with open(os.path.join(epoch_dir, "metadata.json"), "w") as f:
+                json.dump({"n_buckets": 1, "n_packs": 1, "token_budget": 512}, f)
+            ds = _make_dataset([epoch_dir])
+            it = iter(ds)
+            with pytest.raises(AssertionError, match="token_budget"):
+                next(it)

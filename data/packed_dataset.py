@@ -53,6 +53,3 @@ class PackedSequenceDataset(IterableDataset):
                 as_2d=self.as_2d,
             )
             yield batch
-
-
-
