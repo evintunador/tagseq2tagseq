@@ -356,6 +356,19 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         log_dir = os.path.join(rep.output_dir, "logs")
         tracking.init(log_dir, dist.rank)
 
+        # TODO: move this handler into tunalab/tracking.py and install it automatically
+        # in tracking.init() so that logger.info(extra={"metrics": {...}}) calls from
+        # compiled training loops are captured without any main.py glue.
+        class _MetricsHandler(logging.Handler):
+            def emit(self, record):
+                metrics = getattr(record, "metrics", None)
+                if metrics and isinstance(metrics, dict):
+                    tracking.log(metrics)
+
+        _mh = _MetricsHandler()
+        _mh.setLevel(logging.INFO)
+        logging.getLogger().addHandler(_mh)
+
     dist.set_seed(cfg.get("seed", 42))
 
     # Only rank 0 writes the hyperparameter dump; no point writing N copies.
@@ -686,15 +699,8 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             block_mask_creator = make_mask_creator_callable(mask_type)
 
     mtp_extra_weights = cfg['model'].get('mtp_extra_weights') or []
-    # compose_config may deliver CLI list overrides as a raw string (e.g. "[0.3,0.1]").
-    if isinstance(mtp_extra_weights, str):
-        import ast
-        mtp_extra_weights = ast.literal_eval(mtp_extra_weights)
 
     ve_layers = cfg['model'].get('ve_layers') or []
-    if isinstance(ve_layers, str):
-        import ast
-        ve_layers = ast.literal_eval(ve_layers)
     ve_layers = [int(x) for x in ve_layers]
     shared_ve_bank = bool(cfg['model'].get('shared_ve_bank', False))
     use_bigram = bool(cfg['model'].get('use_bigram', False))
