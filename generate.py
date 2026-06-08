@@ -202,13 +202,17 @@ def load_inference_model(
     state_dict = ckpt["model"]
     vocab_size = state_dict["embedding.weight"].shape[0]
 
+    ve_layers = model_cfg.get("ve_layers") or []
+    ve_layers = [int(x) for x in ve_layers]
+
+    mtp_extra_weights = model_cfg.get("mtp_extra_weights") or []
+
     training_module = TS2TSTrainingModule.from_config(
         vocab_size=vocab_size,
         num_layers=model_cfg["num_layers"],
         model_dim=model_cfg["model_dim"],
         num_heads=model_cfg["num_heads"],
         max_seq_len=model_cfg["max_seq_len"],
-        dropout=0.0,
         drop_path_rate=0.0,
         block_mask_creator=training_bmc,
         fp8=model_cfg.get("fp8", False),
@@ -216,6 +220,12 @@ def load_inference_model(
         ignore_index=model_cfg.get("ignore_index", -100),
         dtype=torch.bfloat16,
         attention_backend=training_attn_class_backend,
+        logit_softcap=model_cfg.get("logit_softcap"),
+        mtp_extra_weights=mtp_extra_weights,
+        ve_layers=ve_layers,
+        shared_ve_bank=bool(model_cfg.get("shared_ve_bank", False)),
+        use_bigram=bool(model_cfg.get("use_bigram", False)),
+        bigram_vocab_size=int(model_cfg.get("bigram_vocab_size", 50304 * 5)),
     )
 
     # Load weights (ckpt/state_dict already loaded above)
