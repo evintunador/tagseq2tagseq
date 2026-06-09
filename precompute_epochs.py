@@ -8,8 +8,8 @@ load-balanced DDP training.
 Usage
 -----
     python precompute_epochs.py \\
-        --dataset-dir  data/pretokenized_datasets/stack_100m \\
-        --output-dir   schedules/stack100m_bfs \\
+        --dataset-dir  /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \\
+        --output-dir   schedules/thestack_bfs \\
         --n-epochs     5 \\
         --strategy     bfs \\
         --local-seq-len 32768 \\

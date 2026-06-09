@@ -285,7 +285,7 @@ class PretokCorpus:
         # NOTE: Python import detector emits relative paths (e.g. "Phaedra/Notebook.py")
         # but corpus identifiers are repo-qualified ("000alen/Phaedra:Phaedra/Notebook.py").
         # This means corpus hits will never fire for Python imports when using a multi-repo
-        # dataset like stack_100m. Fix: either (a) build a single-repo corpus so identifiers
+        # dataset like thestack. Fix: either (a) build a single-repo corpus so identifiers
         # match, or (b) make the import detector emit repo-qualified identifiers when a repo
         # context is available.
         normed = self._raw_to_normed.get(raw_identifier) or normalize_wiki_title(raw_identifier)

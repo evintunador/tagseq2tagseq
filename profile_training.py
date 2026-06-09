@@ -24,8 +24,8 @@ Launched via launch_slurm.py (--script profile_training) or standalone:
     # Multi-node via SLURM
     python launch_slurm.py --nodes 2 --gpus-per-node 8 \\
         --script profile_training \\
-        --config configs/stack_100m_32k.yaml \\
-        --data.dataset_dir data/pretokenized_datasets/stack_100m
+        --config configs/thestack_cross_doc.yaml \\
+        --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
 """
 
 import os

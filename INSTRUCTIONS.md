@@ -353,7 +353,7 @@ Pass `--data.epoch_dirs` pointing at the pre-computed epoch directories. The tra
 # Multi-node SLURM — doc_causal baseline
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 4 --time 24:00:00 \
-    --config configs/stack_100m_doc_causal.yaml \
+    --config configs/thestack_doc_causal.yaml \
     --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
     --data.val_dirs.val_community /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community \
     --data.val_dirs.val_random /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random \
@@ -362,7 +362,7 @@ python launch_slurm.py \
 # Multi-node SLURM — cross_doc_link experimental (same packs, different mask)
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 4 --time 24:00:00 \
-    --config configs/stack_100m_cross_doc.yaml \
+    --config configs/thestack_cross_doc.yaml \
     --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
     --data.val_dirs.val_community /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community \
     --data.val_dirs.val_random /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random \
@@ -371,7 +371,7 @@ python launch_slurm.py \
 # Resume from checkpoint (BucketState is embedded in the checkpoint metadata)
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 4 --time 24:00:00 \
-    --config configs/stack_100m_cross_doc.yaml \
+    --config configs/thestack_cross_doc.yaml \
     --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
     --data.epoch_dirs /fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0,/fss/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_1 \
     --resume-from runs/<run_dir>/checkpoints/best_model.pt
@@ -483,7 +483,7 @@ everything as `--section.key value` so the YAML config is never silently overrid
 # 2 nodes × 8 GPUs — TheStack (the canonical large run)
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 8 --time 48:00:00 \
-    --config configs/stack_100m_32k.yaml \
+    --config configs/thestack_cross_doc.yaml \
     --data.dataset_dir /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
 
 # 1 node × 4 GPUs — quick iteration on SimpleWiki

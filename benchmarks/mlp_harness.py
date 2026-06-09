@@ -372,12 +372,12 @@ def main() -> None:
     if args.cmd == "correctness":
         if args.configs is None:
             # Production shapes: T=32768 tokens, model dims matching our configs
-            #   baseline: C=768, stack_100m: C=1024, large: C=1280
+            #   baseline: C=768, thestack: C=1024, large: C=1280
             # Also include a small shape for fast iteration during development.
             configs = [
                 (1024, 256),    # small — fast sanity check
                 (32768, 768),   # baseline model
-                (32768, 1024),  # stack_100m (primary training run)
+                (32768, 1024),  # thestack (primary training run)
                 (32768, 1280),  # large model
             ]
         else:

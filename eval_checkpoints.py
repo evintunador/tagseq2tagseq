@@ -148,10 +148,10 @@ _KNOWN_BENCHMARKS = (
 # Validated checkpoint grid (as of 2026-04-17):
 #   20260308_012514  doc_causal      simplewiki  36L/1280D  dfs  → use doceval
 #   20260308_012516  cross_doc_link  simplewiki  36L/1280D  dfs  → use doceval / baseline+experimental
-#   20260308_012518  doc_causal      stack_10m   36L/1280D  dfs  → use doceval
-#   20260308_012521  cross_doc_link  stack_10m   36L/1280D  dfs  → use doceval / baseline+experimental
-#   run_20260311_184203_685319  cross_doc_link  stack_100m  24L/1024D  bfs  step=3000  → early ckpt
-#   run_20260313_183004_686307  cross_doc_link  stack_100m  24L/1024D  bfs  step=900   → early ckpt
+#   20260308_012518  doc_causal      stack_10m   36L/1280D  dfs  → use doceval  # TODO: stack_10m deleted, replace with thestack version when available
+#   20260308_012521  cross_doc_link  stack_10m   36L/1280D  dfs  → use doceval / baseline+experimental  # TODO: stack_10m deleted, replace with thestack version when available
+#   run_20260311_184203_685319  cross_doc_link  stack_100m  24L/1024D  bfs  step=3000  → early ckpt  # TODO: stack_100m deleted, replace with thestack version when available
+#   run_20260313_183004_686307  cross_doc_link  stack_100m  24L/1024D  bfs  step=900   → early ckpt  # TODO: stack_100m deleted, replace with thestack version when available
 #
 # CHECKLIST FOR NEW BENCHMARKS:
 #   1. Add name to _KNOWN_BENCHMARKS (with category comment).
