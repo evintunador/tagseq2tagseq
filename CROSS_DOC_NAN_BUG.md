@@ -49,51 +49,129 @@
 - `mtp_extra_weights` interaction — job 41803: removing MTP entirely made no difference, NaN at step 110.
 - BIM bitmask truncation — job 41805 (max_grants=64, more aggressive truncation): NaN at step 121, slightly later but same range. max_grants=1024/9999 OOM on compile warmup and couldn't be tested. Step shift from 64→256 is too small to implicate truncation as cause.
 
-## Probe results (2026-06-09)
-
-Three probes written and run against `schedules/thestack_bfs/epoch_0/packs.parquet`:
+## Probe results (2026-06-09 / 2026-06-10)
 
 ### `benchmarks/thestack_nan_probe.py` — kernel correctness sweep
 Iterates the exact rank-0/world_size-16 pack sequence, steps 0–199. At each step
 builds MaskInputs from the real parquet record and runs cdb_bim_v18 vs flex on
 random q/k/v (no model, no optimizer). fwd_max_err ~8e-3, bwd_max_err ~6e-2
 throughout — matching the established flex-vs-naive error floor. **Zero NaN/Inf
-across all 200 steps, including the full NaN window (108–154). Rules out
-hypothesis 1 (kernel bug on thestack pack structures).**
+across all 200 steps, including the full NaN window (108–154).**
 
 ### `benchmarks/thestack_training_probe.py` — 1-layer training loop
-Real Muon+AdamW training loop, real token IDs, real pack sequence. At each step:
-cdb_bim_v18 used for training forward; flex runs on the same stashed q/k/v
-(detached) for comparison; activations, gradients, and optimizer state buffers all
-checked for NaN/Inf. 300 steps, 0 NaN/Inf, attn_err flatlined ~5e-4 to 1e-3.
-Grad norms 1–28 (climbing late but stable). **Rules out Muon momentum corruption
-as a single-process mechanism. Also confirms kernel produces no NaN on real data
-with real weight dynamics at 1 layer.**
+Real Muon+AdamW training loop, real token IDs, real pack sequence. 300 steps, 0 NaN/Inf.
+Grad norms 1–28 (climbing late but stable). **No NaN at 1 layer with real weight dynamics.**
 
-### 24-layer run (in progress)
-Same probe with `--num-layers 24`. Grad norms immediately ~300–900 (vs 1–28 at 1
-layer) — qualitatively different regime. Awaiting completion.
+### SLURM job 41830 — per-parameter gradient norm logging (rank 0, world_size=8)
 
-## Remaining hypotheses
+`main.py` feature: `_GradNormLogOptimizer` wrapper (gated by `train_loop.log_grad_norms: true`)
+writes `runs/<run_dir>/grad_norms.jsonl` per optimizer step (rank 0, post-`clip_grad_norm_`).
 
-2. **Gradient explosion through the cross_doc grant path, amplified across depth.**
-The gradient norm clip operates on the global grad norm after accumulation. With
-24 layers the residual stream can amplify a per-layer spike to a globally
-catastrophic level before clipping takes effect. The 24-layer single-GPU probe
-shows grad norms 300–900 even without NaN — consistent with depth being the
-load-bearing factor. Next: per-parameter grad norm logging in a real SLURM run
-(1 node × 8 GPUs) to identify which parameter explodes first.
+**Key observations from `runs/run_20260609_202318_076868/grad_norms.jsonl`:**
 
-6. **Optimizer state corruption from dense-bucket gradient spikes (multi-rank).**
-Muon momentum corruption ruled out in single-process. May still manifest under
-multi-rank all-gather: sharded parameter updates interact across ranks in a way
-the single-GPU probe can't replicate. Test jointly with hypothesis 2 via per-step
-logging in the production run.
+1. **Steps 64, 67, 80, 83–85, 88–90, 97**: ALL 149 param norms are exactly 0.0 (post-clip).
+   These are the sparse-bucket steps from the precomputed schedule.
+
+2. **Step 98**: `layers.0.attn.Wqkv.grad` is NaN; all other 148 params are 0.0.
+   `clip_grad_norm_()` did not clear the NaN (CUDA `fminf(NaN, 1.0) = 1.0`).
+
+3. **Step 99**: all 149 params go NaN simultaneously (NaN weight → NaN forward → NaN everywhere).
+
+### SLURM job 41835 — flex backend control run (2026-06-09)
+
+Same config/data/scale, `--model.attention_backend flex`. **200 steps, no NaN, no zero-norm steps.**
+
+| | triton_v18 (job 41830) | flex (job 41835) |
+|---|---|---|
+| Zero-norm steps | 10 | 0 |
+| First NaN step | 98 (Wqkv) | never |
+| Steps completed | 200 | 200 |
+
+Flex produces nonzero gradients on all the sparse-bucket steps where triton returns zero.
+This establishes that `triton_v18`'s backward is behaving differently from flex's on these packs.
+
+### SLURM job 41841 — layer-0 q/k/v capture (triton-trained, 2026-06-09)
+
+`main.py` feature: `_AttnCapture` class (gated by `train_loop.capture_attn_steps: [...]`)
+intercepts `TS2TSAttention.forward` at specified optimizer steps and saves post-projection,
+post-norm, post-RoPE q/k/v plus block_mask metadata to `runs/<run_dir>/attn_captures/step_N_rank0.pt`.
+
+Captured steps 97, 98, 99 from a triton_v18 training run.
+Saved permanently: `tests/fixtures/thestack_packs/nan_0_qkv_pre.pt` (step 97) and
+`nan_0_qkv_nan.pt` (step 98).
+
+- Step 97 q/k/v: clean (no NaN/Inf), std ~1.0
+- Step 98 q/k/v: clean input (no NaN/Inf in q/k/v entering the kernel)
+- Step 99 v: NaN present (weight contamination propagated from step 98)
+
+### SLURM job 41851 — layer-0 q/k/v capture (flex-trained, 2026-06-10)
+
+Same setup but `--model.attention_backend flex`. Captured steps 64, 67, 80, 83–85, 88–90, 97, 98, 99.
+All captures clean (no NaN/Inf anywhere through step 99).
+
+Saved permanently: `tests/fixtures/thestack_packs/flex_step_<N>.pt` for each step.
+
+### `benchmarks/thestack_bwd_probe.py` — backward correctness test (2026-06-10)
+
+New script testing `cdb_bim_v18` (and future versions) against flex reference on three fixture types:
+
+1. **Pack-structure fixtures with random q/k/v** (`zero_0`–`zero_9`, `nan_0.pt`):
+   - All PASS. The backward bugs do not reproduce with random activations.
+
+2. **Triton-trained activations** (`nan_0_qkv_pre.pt` = step 97, `nan_0_qkv_nan.pt` = step 98):
+   - `step97_pre`: **FAIL** — bwd_dq_max = 1.27e+04 (spike at token 1920, which is at the start of BIM block 15; nearest doc boundary is at token 2014, mid-block)
+   - `step98_nan`: **FAIL** — bwd_max_err = 5.06 (dK and dV errors well above tolerance)
+
+3. **Flex-trained activations** (`flex_step_*.pt`, all 12 steps):
+   - 11/12 PASS
+   - `flex:step84`: **FAIL** — bwd_dk_max = 2.50e-01 (just above the 2e-1 atol)
+   - All zero-gradient steps (64–90) and NaN-adjacent steps (97–99): PASS
+
+Run:
+```bash
+CUDA_VISIBLE_DEVICES=1 python benchmarks/thestack_bwd_probe.py --impls cdb_bim_v18
+CUDA_VISIBLE_DEVICES=1 python benchmarks/thestack_bwd_probe.py --impls cdb_bim_v18 cdb_bim_v19
+```
+
+## Raw data summary
+
+| Step | Pack kv_block_count | triton bwd dQ norm | flex bwd dQ norm | Notes |
+|------|--------------------|--------------------|-----------------|-------|
+| 64 | 12309 | 0 (all-zero) | nonzero | zero_0 pack |
+| 67 | 20042 | 0 | nonzero | zero_1 pack |
+| 80 | 13581 | 0 | nonzero | zero_2 pack |
+| 83 | 8405 | 0 | nonzero | zero_3 pack |
+| 84 | 15682 | 0 | nonzero | zero_4 pack; flex-trained: dk_max=2.50e-01 |
+| 85 | 16494 | 0 | nonzero | zero_5 pack |
+| 88 | 3608 | 0 | nonzero | zero_6 pack |
+| 89 | 22741 | 0 | nonzero | zero_7 pack |
+| 90 | 3736 | 0 | nonzero | zero_8 pack |
+| 97 | 20457 | 0 | nonzero | zero_9 pack |
+| 98 | 29530 | NaN (Wqkv) | nonzero | nan_0 pack; 5 grants, 3 docs; triton-trained: dQ spike at token 1920 |
+| 99 | — | all NaN | nonzero | model already contaminated |
+
+## Fixtures and tooling
+
+```
+tests/fixtures/thestack_packs/
+  zero_0.pt .. zero_9.pt        — pack structure only (random q/k/v in probe)
+  nan_0.pt                      — pack structure for step 98 (random q/k/v in probe)
+  nan_0_qkv_pre.pt              — real q/k/v from step 97 (triton-trained)
+  nan_0_qkv_nan.pt              — real q/k/v from step 98 (triton-trained)
+  flex_step_64.pt .. flex_step_99.pt  — real q/k/v from corresponding steps (flex-trained)
+
+scripts/generate_thestack_fixtures.py   — regenerates zero_*.pt / nan_0.pt from parquet
+benchmarks/thestack_bwd_probe.py        — backward correctness test harness
+```
+
+Pack fixtures use the same schema as `tests/fixtures/real_packs/` (simplewiki fixtures).
+q/k/v captures are saved as `{step, q, k, v, block_mask}` dicts; flex captures have an
+empty `block_mask` dict and require the corresponding pack fixture to supply the mask.
 
 ## Files relevant to investigation
 
-- `kernels/cross_doc_bitmask_bim_v18.py` — the training attention kernel for cross_doc_link
-- `model/graph_traversal/cross_doc_mask.py` — `CrossDocLinkMaskCreator.__call__`, `_collect_links_per_doc`
-- `benchmarks/attention_harness.py` — correctness/benchmark harness; add thestack fixtures
-- `schedules/thestack_bfs/epoch_0/packs.parquet` — precomputed packs with `kv_block_count` and `link_target_doc_ids`
+- `kernels/cross_doc_bitmask_bim_v18.py` — the training attention kernel
+- `main.py` — `_GradNormLogOptimizer`, `_AttnCapture` (debug tooling, gated by config flags)
+- `model/modules/attention.py` — `TS2TSAttention.forward`, kernel dispatch
+- `schedules/thestack_bfs/epoch_0/packs.parquet` — precomputed packs
 - `data/bucketed_pack_dataset.py` — `_make_bucket_sequence`, step→bucket mapping

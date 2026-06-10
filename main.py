@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import logging
+import math
 import os
 import datetime
 from pathlib import Path
@@ -196,6 +197,156 @@ class LimitedDataLoader:
     @property
     def dataset(self):
         return self.loader.dataset
+
+
+class _AttnCapture:
+    """Intercepts layer-0 attention forward to save q, k, v and block_mask at target steps.
+
+    Wraps the TS2TSAttention.forward so that on specified optimizer steps it
+    serialises the post-projection, post-norm, post-RoPE q/k/v tensors (the
+    exact inputs to the kernel) plus the block_mask to .pt files.  Only rank 0
+    captures.
+
+    Why at the attention level rather than with a model hook: the compiled
+    backbone's forward hook sees graph-captured tensors that can't be .detach()
+    cloned safely.  The TS2TSAttention kernel dispatch boundary is already
+    @torch._dynamo.disable'd, so q/k/v are live Python Tensors there.
+
+    Activated by ``train_loop.capture_attn_steps: [97, 98]`` in config.
+    Each capture writes ``<output_dir>/attn_captures/step_<N>_rank0.pt``.
+    """
+
+    def __init__(self, attn_module, target_steps: list, output_dir: str, is_main_process: bool):
+        self._attn = attn_module
+        self._targets = set(target_steps)
+        self._out_dir = Path(output_dir) / "attn_captures"
+        self._is_main = is_main_process
+        self._step = 0          # micro-step counter (increments each forward call)
+        self._opt_step = -1     # optimizer-step counter (set externally)
+        self._orig_forward = attn_module.forward
+        if is_main_process:
+            self._out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _hook_forward(self, x, block_mask, ve=None, ve_gate_w=None):
+        out = self._orig_forward(x, block_mask, ve=ve, ve_gate_w=ve_gate_w)
+        if self._is_main and self._opt_step in self._targets:
+            self._save(x, block_mask, ve, ve_gate_w)
+            self._targets.discard(self._opt_step)  # capture once per target step
+            if not self._targets:
+                self._restore()  # unhook when all targets captured
+        return out
+
+    def _save(self, x, block_mask, ve, ve_gate_w):
+        import torch.nn.functional as F
+        step = self._opt_step
+        attn = self._attn
+        with torch.no_grad():
+            B, T = x.size(0), x.size(1)
+            q, k, v = (
+                F.linear(x, attn.Wqkv.flatten(end_dim=1).type_as(x))
+                .view(B, T, 3 * attn.num_heads, attn.head_dim)
+                .chunk(3, dim=-2)
+            )
+            q, k = attn.norm(q), attn.norm(k)
+            q, k = attn.rotary(q), attn.rotary(k)
+            if ve is not None:
+                from model.modules.attention import _inject_ve
+                v = _inject_ve(x, v, ve, ve_gate_w, attn.num_heads, attn.head_dim)
+            # squeeze batch dim: (T, H, Dh)
+            q_save = q.squeeze(0).cpu()
+            k_save = k.squeeze(0).cpu()
+            v_save = v.squeeze(0).cpu()
+
+        # Serialise block_mask metadata (not the mask object itself)
+        bm_meta = {}
+        if hasattr(block_mask, 'q_bitmasks'):
+            bm_meta['q_bitmasks']     = block_mask.q_bitmasks.cpu()
+            bm_meta['kv_bitmasks']    = block_mask.kv_bitmasks.cpu()
+            bm_meta['document_ids']   = block_mask.document_ids.cpu()
+        if hasattr(block_mask, 'bim') and block_mask.bim is not None:
+            bm_meta['bim']   = block_mask.bim
+        if hasattr(block_mask, 'bim64') and block_mask.bim64 is not None:
+            bm_meta['bim64'] = block_mask.bim64
+
+        path = self._out_dir / f"step_{step}_rank0.pt"
+        torch.save({'step': step, 'q': q_save, 'k': k_save, 'v': v_save,
+                    'block_mask': bm_meta}, str(path))
+        logger.info("_AttnCapture: saved layer-0 q/k/v for step %d → %s", step, path)
+
+    def install(self):
+        self._attn.forward = self._hook_forward
+
+    def _restore(self):
+        self._attn.forward = self._orig_forward
+        logger.info("_AttnCapture: all target steps captured, hook removed")
+
+
+class _GradNormLogOptimizer:
+    """Wraps an optimizer to log per-parameter gradient norms before each step.
+
+    Reads gradients from ``model.named_parameters()`` at step() time (after
+    clip_grad_norm_ has already run) and writes one JSON-lines record per step
+    to ``output_path``.  Only rank 0 writes.  Only active when
+    ``train_loop.log_grad_norms: true`` is set in the config.
+
+    Record layout:
+        {"step": int, "param_norms": {"name": float, ...}, "global_norm": float}
+
+    ``global_norm`` is recomputed from the per-param norms here (post-clip, so
+    it reflects what the optimizer actually sees).  Infinity/NaN are recorded
+    as strings "inf"/"nan" so the JSONL is always valid.
+    """
+
+    def __init__(self, optimizer, model, output_path: str, is_main_process: bool):
+        self._opt = optimizer
+        self._model = model
+        self._path = output_path
+        self._is_main = is_main_process
+        self._step = 0
+        self._capture = None   # optional _AttnCapture to notify on each step
+        if self._is_main:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    def _log(self):
+        if not self._is_main:
+            return
+        param_norms: Dict[str, Any] = {}
+        sq_sum = 0.0
+        for name, param in self._model.named_parameters():
+            if param.grad is None:
+                continue
+            n = param.grad.detach().float().norm().item()
+            if math.isnan(n):
+                param_norms[name] = "nan"
+            elif math.isinf(n):
+                param_norms[name] = "inf"
+            else:
+                param_norms[name] = n
+                sq_sum += n * n
+        global_norm = math.sqrt(sq_sum)
+        record = {"step": self._step, "global_norm": global_norm, "param_norms": param_norms}
+        with open(self._path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+
+    def step(self, *args, **kwargs):
+        self._log()
+        self._opt.step(*args, **kwargs)
+        self._step += 1
+        if self._capture is not None:
+            self._capture._opt_step = self._step  # next forward sees the post-step count
+
+    def zero_grad(self, *args, **kwargs):
+        self._opt.zero_grad(*args, **kwargs)
+
+    def state_dict(self):
+        return self._opt.state_dict()
+
+    def load_state_dict(self, state_dict):
+        self._opt.load_state_dict(state_dict)
+
+    @property
+    def param_groups(self):
+        return self._opt.param_groups
 
 
 def _run_generation_demo(training_module, tokenizer, link_detector, layout_policy, mask_type,
@@ -1018,6 +1169,61 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             f"{untie_at_frac:.3f}" if untie_at_frac is not None else "None", split_step,
             resumed_steps,
         )
+
+    # -------------------------------------------------------------------------
+    # 3d. Optional per-parameter gradient norm logging.
+    #
+    # Activated by train_loop.log_grad_norms: true in the config.  Wraps the
+    # optimizer so that every step() call (post clip_grad_norm_) serialises
+    # per-param norms to runs/<run_dir>/grad_norms.jsonl.  Only rank 0 writes.
+    # The wrapper is transparent: it exposes the same optimizer interface.
+    # -------------------------------------------------------------------------
+    if cfg.get('train_loop', {}).get('log_grad_norms', False) and dist.is_main_process:
+        _grad_norm_path = os.path.join(rep.output_dir, "grad_norms.jsonl")
+        logger.info("Per-parameter gradient norm logging enabled → %s", _grad_norm_path)
+        # model may be DDP-wrapped; unwrap to get clean named_parameters
+        _log_model = model.module if hasattr(model, 'module') else model
+        optimizer = _GradNormLogOptimizer(
+            optimizer=optimizer,
+            model=_log_model,
+            output_path=_grad_norm_path,
+            is_main_process=dist.is_main_process,
+        )
+
+    # -------------------------------------------------------------------------
+    # 3e. Optional layer-0 attention q/k/v capture.
+    #
+    # Activated by train_loop.capture_attn_steps: [97, 98] (or any list of
+    # optimizer step numbers).  Wraps layer-0's TS2TSAttention.forward to
+    # serialise the post-projection, post-norm, post-RoPE q/k/v tensors plus
+    # block_mask metadata to <run_dir>/attn_captures/step_<N>_rank0.pt.
+    # Only rank 0 captures.  Requires log_grad_norms to also be active so the
+    # _GradNormLogOptimizer can propagate the step counter to the capture hook.
+    # -------------------------------------------------------------------------
+    _capture_steps = cfg.get('train_loop', {}).get('capture_attn_steps', [])
+    if _capture_steps and dist.is_main_process:
+        _raw_model = model.module if hasattr(model, 'module') else model
+        _layer0_attn = _raw_model.backbone._orig_mod.layers[0].attn
+        _capture = _AttnCapture(
+            attn_module=_layer0_attn,
+            target_steps=list(_capture_steps),
+            output_dir=rep.output_dir,
+            is_main_process=dist.is_main_process,
+        )
+        _capture.install()
+        logger.info(
+            "Layer-0 attn q/k/v capture enabled at optimizer steps %s → %s/attn_captures/",
+            list(_capture_steps), rep.output_dir,
+        )
+        # Connect to the grad-norm optimizer wrapper if present so it can
+        # propagate the step counter.
+        if isinstance(optimizer, _GradNormLogOptimizer):
+            optimizer._capture = _capture
+        else:
+            logger.warning(
+                "capture_attn_steps requires log_grad_norms to be active for "
+                "step-counter propagation; capture will use step 0 for all steps."
+            )
 
     # -------------------------------------------------------------------------
     # 4. Training Loop
