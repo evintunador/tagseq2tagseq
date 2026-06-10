@@ -606,15 +606,35 @@ class CrossDocLinkMaskCreator:
             q_union_np[c]  = np.bitwise_or.reduce(q_pad.reshape(n_blocks, bs), axis=1)
             kv_union_np[c] = np.bitwise_or.reduce(kv_pad.reshape(n_blocks, bs), axis=1)
 
-        # 2. Same-doc pairs: block q and block kv share a doc iff their doc_id
-        #    ranges overlap.  doc_ids are non-decreasing in the packed sequence
-        #    (each doc is contiguous and packed in order), so the range of doc IDs
-        #    present in a block is exactly [block_start_doc, block_end_doc].
+        # 2. Same-doc pairs: block q and block kv share a doc iff their doc-range
+        #    intervals overlap.  The interval-overlap test
+        #    max(min_q, min_kv) <= min(max_q, max_kv) is only valid if the
+        #    per-position labels are MONOTONIC non-decreasing along the sequence.
+        #
+        #    The raw doc IDs are NOT monotonic: docs are contiguous runs but are
+        #    packed in graph-traversal order, so e.g. doc 612824 (tokens 0–2013)
+        #    can precede doc 395655 (tokens 2014+).  A block straddling that
+        #    boundary then has blk_min_doc=612824 > blk_max_doc=395655 — an empty
+        #    interval that overlaps nothing — so the straddling Q-block silently
+        #    drops every same-doc KV-block before it.  In the kernel that produces
+        #    a wrong (single-element) softmax for the whole block: LSE collapses,
+        #    O blows up, and the backward dQ explodes (observed ~5.7e4), which is
+        #    the source of the thestack cross_doc_link training NaN.
+        #
+        #    Fix: relabel positions by an ORDINAL run-index (cumulative count of
+        #    doc-id changes).  Because docs are contiguous, run-index is monotonic
+        #    by construction and ordinal[i]==ordinal[j] iff doc_ids[i]==doc_ids[j],
+        #    so every same-doc / pure-block test below is semantically identical
+        #    while the interval math is now valid regardless of doc-id ordering.
+        #    (-1 layout-gap runs each get their own ordinal, exactly as a real doc.)
         doc_ids_np = document_ids.cpu().numpy()
+        ordinal_np = np.zeros(seq_len, dtype=np.int64)
+        if seq_len > 1:
+            ordinal_np[1:] = np.cumsum(doc_ids_np[1:] != doc_ids_np[:-1])
         block_starts = np.arange(n_blocks) * bs
         block_ends   = np.minimum(block_starts + bs - 1, seq_len - 1)
-        blk_min_doc  = doc_ids_np[block_starts]           # [n_blocks]
-        blk_max_doc  = doc_ids_np[block_ends]              # [n_blocks]
+        blk_min_doc  = ordinal_np[block_starts]           # [n_blocks] run-index
+        blk_max_doc  = ordinal_np[block_ends]             # [n_blocks] run-index
         # Ranges overlap: max(min_q, min_kv) <= min(max_q, max_kv)
         same_doc = (
             np.maximum(blk_min_doc[:, None], blk_min_doc[None, :])
