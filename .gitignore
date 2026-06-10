@@ -224,6 +224,3 @@ benchmarks/.autotune_cache*.json
 
 # Pre-computed epoch data (large binary parquet files, dataset-specific)
 schedules/
-
-# Kernel debug fixtures — large .pt tensors with real activations/weights
-tests/fixtures/thestack_packs/

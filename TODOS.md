@@ -44,16 +44,6 @@ whether to use the same BFS+cross_doc_link config as current best runs.
 
 ## Training
 
-### Clean up NaN-debug instrumentation in main.py
-`main.py` contains `_AttnCapture` and `_GradNormLogOptimizer` added for the
-`triton_v18` backward bug investigation. Once v19 is verified and training runs
-cleanly, consider stripping these out (or moving them to a separate debug module)
-to keep `main.py` lean. The config flags `train_loop.log_grad_norms` and
-`train_loop.capture_attn_steps` can also be removed at that point. The fixtures
-and probe script in `benchmarks/thestack_bwd_probe.py` are worth keeping as a
-regression test harness; the fixtures themselves are gitignored (too large) but
-are documented in `CROSS_DOC_NAN_BUG.md` with regeneration instructions.
-
 ### Parallelized eval in main.py
 `run_benchmarks_on_model` runs serially. Naïve thread-pool parallelism is risky:
 benchmarks vary widely in runtime (HellaSwag ~30s vs. community_pack_perplexity
