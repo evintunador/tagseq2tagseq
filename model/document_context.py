@@ -205,8 +205,6 @@ class DocumentContext:
         Only call when eviction_policy == 'drop_oldest'; caller is responsible
         for checking the policy.
 
-        TODO: consider more efficient eviction strategies (e.g. evict largest
-        doc first) rather than always evicting the oldest.
         """
         while not self.can_add_document(num_tokens_needed):
             if self.num_aux_docs == 0:

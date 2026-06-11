@@ -35,14 +35,42 @@ a redirect title that isn't a first-class node.
 
 ## Model
 
-### Scale-up
-36L/1280D is placeholder. For the paper, need at least one run at a meaningfully
-larger scale. Decisions needed: target param count, num_layers/model_dim tradeoff,
-whether to use the same BFS+cross_doc_link config as current best runs.
+### Additional datasets
+- **EnWiki / full Wikipedia**: expand beyond SimpleWiki to the other available Wikipedia
+  dumps (enwiki, etc.). Same markdown link graph pipeline; main cost is graph build +
+  pretokenization at larger scale.
+- **ArXiv LaTeX**: add an ArXiv dataset using LaTeX citation/reference links as graph
+  edges. Requires implementing the LaTeX link detector sketched in
+  `model/graph_traversal/link_detector.py` (the `# TODO(@jamesljr)` comment there).
+- **TheStack all languages**: expand TheStack beyond Python to include all available
+  coding languages. Requires extending the Python import graph extractor to handle
+  other languages' import/require semantics, or using a language-agnostic call-graph
+  approach.
 
 ---
 
 ## Training
+
+### doc-concatenated baseline (controls for cross_doc_link FLOP allocation)
+`cross_doc_link` gets more FLOPs than `doc_causal` because BFS-packed batches tend
+to have denser attention patterns (linked docs attend to each other). The existing
+`doc_causal` baseline controls for *architecture* but not for *compute*. Add a
+`doc_concatenated` mask type: connected documents in a BFS batch are treated as a
+single concatenated sequence (full causal attention across their combined tokens) while
+still using BFS traversal. Documents from disjoint sub-graphs within the same batch
+remain causally isolated from each other, so it's *not* simply a lower-triangular
+matrix.
+
+Implementation: reuse the existing varlen/doc-causal kernel infrastructure — just
+merge the `doc_spans` of BFS-connected runs into a single span before passing to the
+mask creator. No new kernel needed.
+
+This lets the comparison table become:
+- `doc_causal` — BFS packing, isolated documents, fewest FLOPs
+- `doc_concatenated` — BFS packing, connected docs merged, more FLOPs, no inference-time
+  linking
+- `cross_doc_link` — BFS packing, connected docs linked via attention mask, most FLOPs,
+  full inference-time linking
 
 ### Parallelized eval in main.py
 `run_benchmarks_on_model` runs serially. Naïve thread-pool parallelism is risky:
@@ -73,6 +101,10 @@ signal but small headline number. Candidates:
 - Synthetic benchmark from The Stack: take a file that imports another, score the
   imported function's body under both conditions. No labelling needed, directly
   tests our training setup.
+
+### Better cross-doc benchmark for multi-language Stack models (future)
+Once TheStack is expanded to all languages, extend the synthetic intra-repo benchmark
+above to non-Python languages (e.g. JS/TS `require`/`import`, Ruby `require`).
 
 ### Link injection eval for external benchmarks
 For external benchmarks other than RepoBench, the path to cross-doc-link eval is
