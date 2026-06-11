@@ -1,17 +1,17 @@
 data:
-  dataset_dir: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+  dataset_dir: <to/be/generated>/pretokenized_datasets/simplewiki
   strategy: 'bfs'
   layout_policy: 'stochastic_identifier_prefix'
   inference_layout_policy: 'identifier_prefix_eos'
   order_mode: 'prefer_targets_first'
   doc_budget: null
-  train_dir:   /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/train
+  train_dir:   <to/be/generated>/pretokenized_datasets/simplewiki/splits/train
   val_dirs:
-    val_community: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_community
-    val_random:    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_random
+    val_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_community
+    val_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_random
   test_dirs:
-    test_community: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_community
-    test_random:    /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_random
+    test_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_community
+    test_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_random
 
 model:
   compile: true
@@ -81,7 +81,7 @@ eval:
     - {name: hotpotqa,           conditions: [doceval]}
     - {name: hotpotqa_cross_doc, conditions: [experimental]}
   max_docs: 500
-  annotator_corpus: /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+  annotator_corpus: <to/be/generated>/pretokenized_datasets/simplewiki
   annotator_mode: corpus_only
   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
 
