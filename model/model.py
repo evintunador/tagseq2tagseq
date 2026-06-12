@@ -105,34 +105,51 @@ class TS2TSModel:
             make_mask_creator_callable,
             make_mask_creator_callable_from,
             create_doc_causal_triton_mask,
+            create_doc_concat_triton_mask,
         )
         from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 
         creators: Dict[str, Callable] = {}
 
-        # doc_causal always available — needed for eval overrides on cross_doc_link models
+        # doc_causal always available — needed for eval overrides on every model
+        # (the apples-to-apples isolated-attention eval condition).
         creators['doc_causal_flex'] = make_mask_creator_callable('doc_causal')
         creators['doc_causal_triton'] = make_mask_creator_callable_from(
             create_doc_causal_triton_mask
         )
 
-        if self.mask_type == 'cross_doc_link':
+        if self.mask_type == 'doc_concatenated':
+            # Merge each traversal component into one causally-concatenated
+            # super-doc; reuses the doc-causal varlen kernel via component ids.
+            creators['doc_concatenated_flex'] = make_mask_creator_callable(
+                'doc_concatenated'
+            )
+            creators['doc_concatenated_triton'] = make_mask_creator_callable_from(
+                create_doc_concat_triton_mask
+            )
+
+        if self.mask_type in ('cross_doc_link', 'doc_concat_link'):
             if self.link_detector is None:
                 raise ValueError(
-                    "link_detector must be set when mask_type='cross_doc_link'"
+                    f"link_detector must be set when mask_type='{self.mask_type}'"
                 )
+            # doc_concat_link grants whole-doc attention (full concatenation, no
+            # link-position gate); cross_doc_link gates from the link position.
+            whole_doc = self.mask_type == 'doc_concat_link'
             # Triton creator: no warmup state (warmup lives in the training module)
-            creators['cross_doc_link_triton'] = make_mask_creator_callable_from(
+            creators[f'{self.mask_type}_triton'] = make_mask_creator_callable_from(
                 CrossDocLinkMaskCreator(
                     link_detector=self.link_detector,
                     backend='triton_v12',
+                    whole_doc_grant=whole_doc,
                 )
             )
             # Flex creator: used for inference and eval
-            creators['cross_doc_link_flex'] = make_mask_creator_callable_from(
+            creators[f'{self.mask_type}_flex'] = make_mask_creator_callable_from(
                 CrossDocLinkMaskCreator(
                     link_detector=self.link_detector,
                     backend='flex',
+                    whole_doc_grant=whole_doc,
                 )
             )
 

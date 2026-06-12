@@ -69,7 +69,7 @@ except ImportError:
 
 from data.pack_sampler import PackBatchSampler
 from data.dataset import GraphIndex, PretokShardedBackend
-from data.layout import NullLayoutPolicy
+from data.layout import NullLayoutPolicy, make_layout_policy
 from data.collate import build_packed_batch
 from data.traversal import (
     BFSStrategy,
@@ -158,6 +158,98 @@ def create_doc_causal_triton_mask(
         if start < end:
             document_ids[start:end] = span.doc_id
     return DocCausalTritonMaskInputs(document_ids=document_ids)
+
+
+def _build_component_document_ids(
+    tokens: torch.Tensor, doc_spans: List[Any]
+) -> torch.Tensor:
+    """Build a [T] int32 document_ids tensor keyed by ``component_id``.
+
+    Documents sharing a ``component_id`` (a connected sub-graph of the pack) are
+    assigned the SAME id, so the doc-causal kernel — which merges positions that
+    lie in the same contiguous run of equal ids — treats the whole component as
+    one causally-concatenated super-document.
+
+    This relies on each component occupying a single contiguous run in the pack
+    (guaranteed by ``PackBatchSampler._order_placements``). We assert that
+    invariant here and fail loud rather than silently building a malformed mask
+    if a future ordering change interleaves components.
+    """
+    device = tokens.device
+    seq_len = tokens.shape[-1]
+    document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
+
+    for span in doc_spans:
+        start = max(0, span.start)
+        end = min(seq_len, span.end)
+        if start < end:
+            # Fall back to doc_id when a span carries no component assignment
+            # (component_id == -1), making it its own singleton component.
+            comp = getattr(span, "component_id", -1)
+            document_ids[start:end] = comp if comp >= 0 else span.doc_id
+
+    # Contiguity check: every distinct component id (ignoring -1 gaps) must form
+    # exactly one contiguous run. Count runs per id and assert at most one.
+    ids_cpu = document_ids.detach().to("cpu")
+    if seq_len > 0:
+        ids_list = ids_cpu.tolist()
+        runs_seen: dict = {}
+        prev = None
+        for cid in ids_list:
+            if cid != prev:
+                if cid != -1:
+                    runs_seen[cid] = runs_seen.get(cid, 0) + 1
+                prev = cid
+        offenders = {cid: n for cid, n in runs_seen.items() if n > 1}
+        if offenders:
+            raise AssertionError(
+                "doc_concatenated requires each component to be one contiguous "
+                f"run, but these component ids are split across multiple runs: "
+                f"{offenders}. doc_spans order: "
+                f"{[(s.doc_id, getattr(s, 'component_id', -1), s.start, s.end) for s in doc_spans]}"
+            )
+
+    return document_ids
+
+
+def create_doc_concat_triton_mask(
+    tokens: torch.Tensor, doc_spans: List[Any], **kwargs
+) -> DocCausalTritonMaskInputs:
+    """doc_concatenated mask for the varlen_bim_v2 Triton kernel.
+
+    Identical to ``create_doc_causal_triton_mask`` except positions are labelled
+    by ``component_id`` instead of ``doc_id``, so a whole connected component is
+    merged into one causally-concatenated super-document.
+    """
+    document_ids = _build_component_document_ids(tokens, doc_spans)
+    return DocCausalTritonMaskInputs(document_ids=document_ids)
+
+
+def create_doc_concat_block_mask(
+    tokens: torch.Tensor, doc_spans: List[Any], **kwargs
+) -> BlockMask:
+    """doc_concatenated mask as a FlexAttention BlockMask (inference/eval/viz).
+
+    Causal + component isolation: a position attends to earlier positions in the
+    same connected component (the flex twin of ``create_doc_concat_triton_mask``).
+    """
+    device = tokens.device
+    seq_len = tokens.shape[-1]
+    document_ids = _build_component_document_ids(tokens, doc_spans)
+
+    def doc_concat_mod(b, h, q_idx, kv_idx):
+        causal = q_idx >= kv_idx
+        same_component = document_ids[q_idx] == document_ids[kv_idx]
+        return causal & same_component
+
+    return create_block_mask(
+        doc_concat_mod,
+        B=None,
+        H=None,
+        Q_LEN=seq_len,
+        KV_LEN=seq_len,
+        device=device,
+    )
 
 
 def create_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **kwargs) -> BlockMask:
@@ -270,6 +362,7 @@ def create_doc_bidirectional_block_mask(tokens: torch.Tensor, doc_spans: List[An
 
 MASK_CREATORS = {
     'doc_causal': create_doc_causal_block_mask,
+    'doc_concatenated': create_doc_concat_block_mask,
     'causal': create_causal_block_mask,
     'full': create_full_attention_block_mask,
     'doc_bidirectional': create_doc_bidirectional_block_mask,
@@ -361,7 +454,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize FlexAttention mask for a real batch.")
     parser.add_argument("dataset_dir", type=Path,
                         help="Path to pretokenized dataset directory (REQUIRED)")
-    _viz_mask_types = list_mask_creators() + ['cross_doc_link']
+    _viz_mask_types = list_mask_creators() + ['cross_doc_link', 'doc_concat_link']
     parser.add_argument("--mask-type", type=str, default="doc_causal",
                         choices=_viz_mask_types,
                         help=f"Type of attention mask to create. Available: {', '.join(_viz_mask_types)}")
@@ -374,6 +467,13 @@ if __name__ == "__main__":
     parser.add_argument("--link-detector", type=str, default="markdown",
                         choices=["markdown", "python"],
                         help="Link detector for cross_doc_link: 'markdown' (Wikipedia) or 'python' (TheStack)")
+    parser.add_argument("--layout-policy", type=str, default="stochastic_identifier_prefix",
+                        choices=["null", "eos", "identifier_prefix",
+                                 "identifier_prefix_eos", "stochastic_identifier_prefix"],
+                        help="Layout policy for packing. Defaults to the training policy "
+                             "'stochastic_identifier_prefix' so link targets resolve to "
+                             "co-packed docs (cross_doc_link / doc_concat_link grants only "
+                             "fire when the identifier prefix is emitted into the tokens).")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -388,7 +488,17 @@ if __name__ == "__main__":
     graph_index = GraphIndex(args.dataset_dir)
     backend = PretokShardedBackend(graph_index)
     
-    # 2. Setup Sampler
+    # 2. Setup layout policy. The identifier-prefix policies emit each doc's
+    # identifier into its tokens, which is what lets the link detector resolve a
+    # link's target to a co-packed doc — without it cross_doc_link /
+    # doc_concat_link grants almost never fire. Defaults to the training policy.
+    _enc = tiktoken.get_encoding('gpt2') if tiktoken is not None else None
+    layout_policy = make_layout_policy(
+        args.layout_policy,
+        encode_fn=(_enc.encode_ordinary if _enc is not None else None),
+    )
+
+    # 3. Setup Sampler
     logger.info(f"Initializing sampler with seed {args.seed} and strategy {args.strategy}...")
 
     # Map strategy name to factory function
@@ -406,21 +516,22 @@ if __name__ == "__main__":
         doc_budget=args.doc_budget,
         seed=args.seed,
         overflow_policy="truncate",
-        order_mode="prefer_targets_first"
+        order_mode="prefer_targets_first",
+        layout_policy=layout_policy,
     )
-    
-    # 3. Fetch Batch
+
+    # 4. Fetch Batch
     logger.info("Fetching batch...")
     try:
         placements = next(iter(pack_sampler))
     except StopIteration:
         logger.error("Sampler yielded no packs. Check budget or dataset.")
         sys.exit(1)
-        
+
     batch = build_packed_batch(
         graph=graph_index,
         backend=backend,
-        layout=NullLayoutPolicy(),
+        layout=layout_policy,
         placements=placements,
         as_2d=True
     )
@@ -433,11 +544,11 @@ if __name__ == "__main__":
     doc_identifiers = [s.normed_identifier for s in doc_spans]
     logger.info(f"Docs in batch ({len(doc_identifiers)}): {doc_identifiers}")
 
-    # 4. Create Mask
+    # 5. Create Mask
     cross_doc_creator = None
-    if args.mask_type == 'cross_doc_link':
+    if args.mask_type in ('cross_doc_link', 'doc_concat_link'):
         if tiktoken is None:
-            raise ImportError("tiktoken is required for cross_doc_link visualization. Install with: pip install tiktoken")
+            raise ImportError(f"tiktoken is required for {args.mask_type} visualization. Install with: pip install tiktoken")
         enc = tiktoken.get_encoding('gpt2')
         if args.link_detector == 'python':
             from model.graph_traversal.python_import_detector import PythonImportDetector
@@ -445,22 +556,29 @@ if __name__ == "__main__":
         else:
             from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
             detector = MarkdownLinkDetector(decode_fn=enc.decode)
-        cross_doc_creator = CrossDocLinkMaskCreator(link_detector=detector)
+        # doc_concat_link: whole-doc grants (full concatenation, no link gate).
+        cross_doc_creator = CrossDocLinkMaskCreator(
+            link_detector=detector,
+            whole_doc_grant=(args.mask_type == 'doc_concat_link'),
+        )
         block_mask = cross_doc_creator(tokens, doc_spans)
     else:
         block_mask = get_mask_creator(args.mask_type)(tokens, doc_spans)
     logger.info(f"Block mask created using '{args.mask_type}' strategy.")
 
-    # 5. Visualization
+    # 6. Visualization
     input_len = tokens.shape[-1]
 
     # Reconstruct the dense mask by re-applying the mask logic
     # This is generic and works for any mask type
     doc_map = torch.full((input_len,), -1, dtype=torch.int32)
+    comp_map = torch.full((input_len,), -1, dtype=torch.int32)
     for span in doc_spans:
         s, e = max(0, span.start), min(input_len, span.end)
         if s < e:
             doc_map[s:e] = span.doc_id
+            comp = getattr(span, "component_id", -1)
+            comp_map[s:e] = comp if comp >= 0 else span.doc_id
 
     # Generate dense mask based on the selected mask type
     # We reconstruct the logic here for visualization purposes
@@ -472,6 +590,11 @@ if __name__ == "__main__":
         causal_mask = q_indices >= k_indices
         same_doc_mask = doc_map.unsqueeze(1) == doc_map.unsqueeze(0)
         dense_mask = causal_mask & same_doc_mask
+    elif args.mask_type == 'doc_concatenated':
+        # Causal + component isolation (connected docs merged into a super-doc)
+        causal_mask = q_indices >= k_indices
+        same_component = comp_map.unsqueeze(1) == comp_map.unsqueeze(0)
+        dense_mask = causal_mask & same_component
     elif args.mask_type == 'causal':
         # Just causal
         dense_mask = q_indices >= k_indices
@@ -481,7 +604,7 @@ if __name__ == "__main__":
     elif args.mask_type == 'doc_bidirectional':
         # Same document only (bidirectional within docs)
         dense_mask = doc_map.unsqueeze(1) == doc_map.unsqueeze(0)
-    elif args.mask_type == 'cross_doc_link':
+    elif args.mask_type in ('cross_doc_link', 'doc_concat_link'):
         dense_mask = cross_doc_creator.build_dense_mask_for_visualization(
             tokens, doc_spans, device=torch.device('cpu')
         )
@@ -518,7 +641,7 @@ if __name__ == "__main__":
     plt.savefig(output_img)
     logger.info(f"Saved visualization to {output_img}")
 
-    # 6. Dump Batch Info
+    # 7. Dump Batch Info
     # Initialize decoder
     enc = None
     if tiktoken:

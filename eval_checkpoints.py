@@ -194,6 +194,15 @@ _SINGLE_DOC_BENCHMARKS = frozenset({
     "hotpotqa",
 })
 
+# Mask types whose attention is multi-document (so the 'experimental' condition
+# differs from the doc_causal 'baseline'). Single-doc benchmarks score each doc
+# in isolation, so for these models 'experimental' == 'baseline' and is skipped.
+_MULTI_DOC_MASK_TYPES = frozenset({
+    "cross_doc_link",
+    "doc_concat_link",
+    "doc_concatenated",
+})
+
 _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
     "baseline": {
         "mask_type":               "doc_causal",
@@ -332,29 +341,30 @@ def run_benchmarks_on_model(
             if cond.get("_is_annotated"):
                 continue
 
-            # Skip conditions that only make sense for cross_doc_link models.
-            # Doc-causal models ARE the baseline; running the baseline condition
-            # on them gives identical mask_type as experimental — no information.
-            if cond.get("requires_cross_doc_link") and model.mask_type != "cross_doc_link":
+            # Skip the doc_causal 'baseline' condition on models whose own mask
+            # is already doc_causal — it would be identical to experimental, no
+            # information. Multi-doc models (cross_doc_link, doc_concat*) all get
+            # a meaningful doc_causal baseline floor.
+            if cond.get("requires_cross_doc_link") and model.mask_type not in _MULTI_DOC_MASK_TYPES:
                 logger.debug(
-                    "Skipping condition %r for %s/%r: requires cross_doc_link model",
+                    "Skipping condition %r for %s/%r: requires multi-doc model",
                     cname, bname, model.mask_type,
                 )
                 continue
 
             # Skip the experimental condition on single-doc benchmarks when the
-            # model is cross_doc_link. Each document is scored in isolation so
-            # cross-doc grants can never fire — the result is identical to
-            # baseline/doc_causal but pays full BIM construction cost per doc.
+            # model uses a multi-doc mask. Each document is scored in isolation so
+            # cross-doc attention can never fire — the result is identical to
+            # baseline/doc_causal but pays full mask construction cost per doc.
             if (
                 bname in _SINGLE_DOC_BENCHMARKS
                 and cond.get("mask_type") is None
-                and model.mask_type == "cross_doc_link"
+                and model.mask_type in _MULTI_DOC_MASK_TYPES
             ):
                 logger.info(
                     "Skipping condition %r for %s: single-doc benchmark, "
-                    "cross_doc_link mask has no effect (identical to baseline).",
-                    cname, bname,
+                    "%s mask has no effect (identical to baseline).",
+                    cname, bname, model.mask_type,
                 )
                 continue
 

@@ -117,8 +117,14 @@ def _build_cross_doc_masks(
     link_to_target: Dict[int, List[int]],
     device: torch.device,
     max_grants: int = 64,
+    whole_doc_grant: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Returns (dense_mask [T,T], q_bitmasks [n_chunks,T], kv_bitmasks [n_chunks,T])."""
+    """Returns (dense_mask [T,T], q_bitmasks [n_chunks,T], kv_bitmasks [n_chunks,T]).
+
+    When ``whole_doc_grant`` is True (the doc_concat_link condition), each grant
+    spans the entire source document (from ``source.start``) instead of from the
+    link position — mirroring ``CrossDocLinkMaskCreator(whole_doc_grant=True)``.
+    """
     n_chunks = max(1, (max_grants + 63) // 64)
 
     # Dense mask
@@ -134,7 +140,7 @@ def _build_cross_doc_masks(
             if link_span is None or target_span is None:
                 continue
 
-            gs = link_pos
+            gs = max(0, link_span.start) if whole_doc_grant else link_pos
             ge = min(seq_len, link_span.end)
             ts = max(0, target_span.start)
             te = min(seq_len, target_span.end)

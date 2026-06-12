@@ -51,27 +51,6 @@ a redirect title that isn't a first-class node.
 
 ## Training
 
-### doc-concatenated baseline (controls for cross_doc_link FLOP allocation)
-`cross_doc_link` gets more FLOPs than `doc_causal` because BFS-packed batches tend
-to have denser attention patterns (linked docs attend to each other). The existing
-`doc_causal` baseline controls for *architecture* but not for *compute*. Add a
-`doc_concatenated` mask type: connected documents in a BFS batch are treated as a
-single concatenated sequence (full causal attention across their combined tokens) while
-still using BFS traversal. Documents from disjoint sub-graphs within the same batch
-remain causally isolated from each other, so it's *not* simply a lower-triangular
-matrix.
-
-Implementation: reuse the existing varlen/doc-causal kernel infrastructure — just
-merge the `doc_spans` of BFS-connected runs into a single span before passing to the
-mask creator. No new kernel needed.
-
-This lets the comparison table become:
-- `doc_causal` — BFS packing, isolated documents, fewest FLOPs
-- `doc_concatenated` — BFS packing, connected docs merged, more FLOPs, no inference-time
-  linking
-- `cross_doc_link` — BFS packing, connected docs linked via attention mask, most FLOPs,
-  full inference-time linking
-
 ### Parallelized eval in main.py
 `run_benchmarks_on_model` runs serially. Naïve thread-pool parallelism is risky:
 benchmarks vary widely in runtime (HellaSwag ~30s vs. community_pack_perplexity

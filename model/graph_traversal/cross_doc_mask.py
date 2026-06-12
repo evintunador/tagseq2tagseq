@@ -171,12 +171,17 @@ def _kv_block_count_analytical(
     link_to_target: Dict[int, List[int]],
     seq_len: int,
     block_size: int = 128,
+    whole_doc_grant: bool = False,
 ) -> int:
     """Method C: set-based analytical count of non-empty (q_block, kv_block) pairs.
 
     Exact when every target doc ends before the corresponding link_end_pos
     (which holds for standard packing order).  Counts both causal+same_doc
     blocks and cross-doc grant blocks without double-counting.
+
+    When ``whole_doc_grant`` is True (doc_concat_link), the grant region begins
+    at the source doc's start rather than the link position, matching the grant
+    bitmasks built with ``CrossDocLinkMaskCreator(whole_doc_grant=True)``.
     """
     non_empty: Set[Tuple[int, int]] = set()
 
@@ -201,10 +206,11 @@ def _kv_block_count_analytical(
         if q_span is None:
             continue
         grant_end = min(seq_len, q_span.end)
-        if link_pos >= grant_end:
+        grant_start = max(0, q_span.start) if whole_doc_grant else link_pos
+        if grant_start >= grant_end:
             continue
 
-        q_first_blk = link_pos // block_size
+        q_first_blk = grant_start // block_size
         q_last_blk = (grant_end - 1) // block_size
 
         for target_doc_id in target_doc_ids:
@@ -256,6 +262,7 @@ class CrossDocLinkMaskCreator:
         max_grants_warmup_steps: int = 0,
         backend: str = "flex",
         triton_block_size: int = 64,
+        whole_doc_grant: bool = False,
     ):
         """
         Args:
@@ -263,6 +270,15 @@ class CrossDocLinkMaskCreator:
             max_grants:             Maximum cross-doc grants per batch.
             max_grants_start:       Cosine-warmup starting value (None = no warmup).
             max_grants_warmup_steps: Steps over which to ramp max_grants.
+            whole_doc_grant:        When True, a detected link grants attention from
+                                    the *entire source document* (``source.start``
+                                    onward) to the target, instead of only from the
+                                    link position onward. This implements the
+                                    ``doc_concat_link`` condition: connected docs are
+                                    fully concatenated (no link-position gating), a
+                                    strict FLOP-superset of the gated cross_doc_link
+                                    grant. The kernel is unchanged — only the grant
+                                    bitmask construction differs.
             backend:                ``"flex"``   — return FlexAttention ``BlockMask``
                                                    (default, used during training
                                                    with torch.compile + DDP).
@@ -280,6 +296,7 @@ class CrossDocLinkMaskCreator:
         self.max_grants = max_grants
         self.backend = backend
         self.triton_block_size = triton_block_size
+        self.whole_doc_grant = whole_doc_grant
         # Schedule: cosine ascent from max_grants_start → max_grants over
         # max_grants_warmup_steps forward passes.  Disabled when start is None
         # or warmup_steps is 0 (max_grants is used from step 0).
@@ -460,8 +477,11 @@ class CrossDocLinkMaskCreator:
                     continue
 
                 # Grant access: positions from link_pos onward (within source doc)
-                # can attend to all positions in the target doc
-                grant_start = link_pos
+                # can attend to all positions in the target doc. Under
+                # whole_doc_grant (doc_concat_link) the grant instead spans the
+                # entire source doc — full concatenation, no link-position gate.
+                grant_start = link_doc_span.start if self.whole_doc_grant else link_pos
+                grant_start = max(0, grant_start)
                 grant_end = min(seq_len, link_doc_span.end)
                 target_start = max(0, target_doc_span.start)
                 target_end = min(seq_len, target_doc_span.end)
@@ -542,7 +562,11 @@ class CrossDocLinkMaskCreator:
                     logger.warning(f"Target doc {target_doc_id} not found in doc_spans")
                     continue
 
-                grant_start = link_pos
+                # whole_doc_grant (doc_concat_link): grant from the source doc's
+                # start, fully concatenating it onto the target. Otherwise gate
+                # from the link position (cross_doc_link).
+                grant_start = link_doc_span.start if self.whole_doc_grant else link_pos
+                grant_start = max(0, grant_start)
                 grant_end = min(seq_len, link_doc_span.end)
                 target_start = max(0, target_doc_span.start)
                 target_end = min(seq_len, target_doc_span.end)

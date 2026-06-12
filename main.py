@@ -31,6 +31,8 @@ import tiktoken
 from model.graph_traversal.block_mask_creator import (
     make_mask_creator_callable,
     make_mask_creator_callable_from,
+    create_doc_causal_triton_mask,
+    create_doc_concat_triton_mask,
 )
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
@@ -662,12 +664,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             "need to run without compile (e.g. for quick smoke tests)."
         )
 
-    if mask_type == 'cross_doc_link':
+    # cross_doc_link and doc_concat_link both use the link-grant kernel; the
+    # latter sets whole_doc_grant=True so a detected link concatenates the entire
+    # source doc onto the target (no link-position gate, strict FLOP-superset).
+    if mask_type in ('cross_doc_link', 'doc_concat_link'):
         link_detector_name = cfg.get('model', {}).get('link_detector')
         if not link_detector_name:
             raise ValueError(
                 "model.link_detector must be set to 'markdown' or 'python' "
-                "when model.mask_type is 'cross_doc_link'"
+                f"when model.mask_type is '{mask_type}'"
             )
         enc = tiktoken.get_encoding('gpt2')
         if link_detector_name == 'markdown':
@@ -687,12 +692,21 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 max_grants_start=model_cfg.get('max_grants_start'),
                 max_grants_warmup_steps=int(model_cfg.get('max_grants_warmup_steps', 0)),
                 backend=attention_backend,
+                whole_doc_grant=(mask_type == 'doc_concat_link'),
             )
         )
+    elif mask_type == 'doc_concatenated':
+        # Merge each connected document component into one causally-concatenated
+        # super-doc; reuses the doc-causal varlen kernel with component-keyed ids.
+        if use_triton:
+            attention_backend = 'varlen_bim_v2'
+            block_mask_creator = make_mask_creator_callable_from(create_doc_concat_triton_mask)
+        else:
+            attention_backend = 'flex'
+            block_mask_creator = make_mask_creator_callable(mask_type)
     else:
         if use_triton and mask_type == 'doc_causal':
             attention_backend = 'varlen_bim_v2'
-            from model.graph_traversal.block_mask_creator import create_doc_causal_triton_mask
             block_mask_creator = make_mask_creator_callable_from(create_doc_causal_triton_mask)
         else:
             attention_backend = 'flex'
@@ -1096,7 +1110,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 # community dirs  → community_pack_perplexity
                 # random dirs     → held_out_perplexity (split="all" since dir is already filtered)
                 _conditions = ["doceval"]
-                if mask_type == "cross_doc_link":
+                # Multi-doc masks get the dual-mask eval: doc_causal 'baseline'
+                # (apples-to-apples) + the model's own mask 'experimental'.
+                if mask_type in ("cross_doc_link", "doc_concat_link", "doc_concatenated"):
                     _conditions = ["baseline", "experimental"]
 
                 _split_results: Dict[str, Any] = {}
