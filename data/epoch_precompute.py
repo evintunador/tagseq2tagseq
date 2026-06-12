@@ -75,19 +75,27 @@ class PackRecord:
     trim_sides:          List[str]          # "head" or "tail" per doc
     link_end_positions:  List[int]          # keys of link_to_target
     link_target_doc_ids: List[List[int]]    # values of link_to_target
+    component_ids:       List[int] = field(default_factory=list)  # connected-component id per doc
     kv_block_count:      int = -1           # filled by GPU pass
     bucket_id:           int = -1           # filled by bucketing
 
 
 def _record_to_placements(record: PackRecord) -> List[DocPlacement]:
-    """Reconstruct a DocPlacement list from a PackRecord."""
+    """Reconstruct a DocPlacement list from a PackRecord.
+
+    Records written before component_ids existed have an empty list; in that
+    case each doc gets a unique component (its own doc_id), which makes the
+    doc_concatenated mask degenerate to doc_causal — the safe default.
+    """
+    component_ids = record.component_ids or list(record.doc_ids)
     return [
-        DocPlacement(d, e, t, s)
-        for d, e, t, s in zip(
+        DocPlacement(d, e, t, s, component_id=c)
+        for d, e, t, s, c in zip(
             record.doc_ids,
             record.effective_lens,
             record.truncated_flags,
             record.trim_sides,
+            component_ids,
         )
     ]
 
@@ -353,6 +361,7 @@ def _worker_fn(
             trim_sides=[p.doc_trim_side for p in placements],
             link_end_positions=link_end_positions,
             link_target_doc_ids=link_target_doc_ids,
+            component_ids=[p.component_id for p in placements],
             kv_block_count=kv_bc,
             bucket_id=-1,
         ))
@@ -422,12 +431,17 @@ def _records_to_table(records: List[PackRecord]) -> pa.Table:
             [r.link_target_doc_ids for r in records],
             pa.list_(pa.list_(pa.int32())),
         ),
+        "component_ids":       pa.array([r.component_ids       for r in records], pa.list_(pa.int32())),
     })
 
 
 def _table_to_records(table: pa.Table) -> List[PackRecord]:
     cols = table.to_pydict()
     n = len(cols["pack_id"])
+    # Back-compat: parquet written before component_ids existed lacks the
+    # column; leave it empty so _record_to_placements falls back to per-doc
+    # components (doc_concatenated degenerates to doc_causal).
+    has_components = "component_ids" in cols
     return [
         PackRecord(
             pack_id=int(cols["pack_id"][i]),
@@ -440,6 +454,8 @@ def _table_to_records(table: pa.Table) -> List[PackRecord]:
             link_end_positions=[int(x) for x in cols["link_end_positions"][i]],
             link_target_doc_ids=[[int(y) for y in row]
                                  for row in cols["link_target_doc_ids"][i]],
+            component_ids=([int(x) for x in cols["component_ids"][i]]
+                           if has_components else []),
         )
         for i in range(n)
     ]

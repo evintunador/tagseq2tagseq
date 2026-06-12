@@ -35,12 +35,22 @@ class DocPlacement:
             ``"tail"``. For causal language modeling we typically trim from the
             ``"tail"``, but this is recorded explicitly so that collate logic
             can slice tokens correctly.
+        component_id: Index of the weakly-connected component (over the induced
+            subgraph of in-pack docs) this document belongs to. Two packed docs
+            share a ``component_id`` iff connected by a chain of graph edges
+            running through other packed docs; disjoint sub-graphs get distinct
+            ids. Assigned by ``_assign_components`` from graph connectivity — NOT
+            from traversal order, so it is robust to BFS/DFS frontier restarts
+            that pull unrelated repos into one pack. Used by the
+            ``doc_concatenated`` mask to merge a component into one
+            super-document. Defaults to ``-1`` until the sampler assigns it.
     """
 
     doc_id: int
     effective_len: int
     truncated: bool
     doc_trim_side: str
+    component_id: int = -1
 
 
 class PackBatchSampler:
@@ -276,11 +286,70 @@ class PackBatchSampler:
                 break
 
         placements = [p for p in placements if p.effective_len > 0]
+        self._assign_components(placements)
         current_total_tokens = 0
         for p in placements:
             pre, suf = self._layout_lengths(p.doc_id)
             current_total_tokens += pre + p.effective_len + suf
         return placements, current_total_tokens
+
+    def _assign_components(self, placements: List[DocPlacement]) -> None:
+        """Label each placement with its weakly-connected-component id.
+
+        The component is computed structurally from the induced subgraph: two
+        packed docs are in the same component iff they're connected by a chain
+        of graph edges (treated as undirected) running entirely through other
+        packed docs. This is the principled definition of "connected documents"
+        for the ``doc_concatenated`` mask, and it is independent of how the
+        traversal strategy walked the graph — in particular it is robust to
+        BFS/DFS frontier *restarts*, which pull in genuinely disconnected
+        sub-graphs within a single ``_seed_and_grow_subgraph`` call. Without
+        this, an exhausted-frontier restart would merge unrelated repos into
+        one super-document.
+
+        Components are numbered 0, 1, 2, … in order of each component's
+        first-appearance among ``placements`` (insertion order), which keeps
+        ids stable and small for downstream contiguity checks.
+        """
+        if not placements:
+            return
+
+        doc_ids = [p.doc_id for p in placements]
+        doc_set = set(doc_ids)
+
+        # Union-Find over the packed docs, unioning along in-pack graph edges.
+        parent: Dict[int, int] = {d: d for d in doc_ids}
+
+        def find(x: int) -> int:
+            root = x
+            while parent[root] != root:
+                root = parent[root]
+            while parent[x] != root:  # path compression
+                parent[x], x = root, parent[x]
+            return root
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for d in doc_ids:
+            for nbr in self.graph.neighbors_out(d):
+                if nbr in doc_set:
+                    union(d, nbr)
+            # Treat edges as undirected: a target linked-to by an in-pack doc is
+            # in the same component even if its own out-edges miss the linker.
+            for nbr in self.graph.neighbors_in(d):
+                if nbr in doc_set:
+                    union(d, nbr)
+
+        # Map each root to a small sequential id by first appearance.
+        root_to_cid: Dict[int, int] = {}
+        for p in placements:
+            root = find(p.doc_id)
+            if root not in root_to_cid:
+                root_to_cid[root] = len(root_to_cid)
+            p.component_id = root_to_cid[root]
 
     def _seed_and_grow_subgraph(
         self,
@@ -413,12 +482,44 @@ class PackBatchSampler:
         as possible, documents that are linked-to appear before documents that
         link to them. Cycles are broken by falling back to insertion order for
         any remaining nodes.
+
+        The sort is applied **independently within each connected component**
+        (as labelled by ``_assign_components``) and components are emitted as
+        contiguous blocks (ordered by the insertion index of their first
+        document). Edges only exist between docs of the same component (disjoint
+        sub-graphs are graph-disconnected), so sorting per-component is
+        equivalent to the old global sort for ordering purposes, but it
+        guarantees each component stays contiguous in the pack — a hard
+        requirement for the ``doc_concatenated`` mask, whose kernel merges a
+        component only if its positions form a single contiguous run.
         """
         if self.order_mode == "as_traversed" or len(placements) <= 1:
             return placements
 
+        # Group placements by component, preserving insertion order within each
+        # group and ordering the groups by their first-insertion index.
+        component_order: List[int] = []
+        component_members: Dict[int, List[DocPlacement]] = {}
+        for p in placements:
+            if p.component_id not in component_members:
+                component_members[p.component_id] = []
+                component_order.append(p.component_id)
+            component_members[p.component_id].append(p)
+
+        ordered: List[DocPlacement] = []
+        for comp_id in component_order:
+            ordered.extend(self._topo_sort_component(component_members[comp_id]))
+        return ordered
+
+    def _topo_sort_component(
+        self, placements: List[DocPlacement]
+    ) -> List[DocPlacement]:
+        """Kahn-sort a single component's placements (targets before linkers)."""
+        if len(placements) <= 1:
+            return placements
+
         # Build induced adjacency: if u -> v in the original graph and both are
-        # in this pack, we add an edge v -> u so that v is preferred before u.
+        # in this component, we add an edge v -> u so that v is preferred before u.
         doc_ids = [p.doc_id for p in placements]
         doc_set = set(doc_ids)
         insertion_index: Dict[int, int] = {doc_id: i for i, doc_id in enumerate(doc_ids)}

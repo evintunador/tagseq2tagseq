@@ -160,6 +160,110 @@ def test_order_placements_prefer_targets_first():
     assert [p.doc_id for p in ordered] == [2, 1, 0]
 
 
+def test_order_placements_keeps_components_contiguous():
+    """prefer_targets_first must keep each connected component contiguous.
+
+    Two independent chains (10->11->12 and 20->21) are packed together. The
+    targets-first sort reverses each chain internally, but a component's docs
+    must never be interleaved with another component's — the doc_concatenated
+    mask kernel requires each component to be a single contiguous run.
+    """
+    graph = DummyGraph(
+        token_lens={d: 1 for d in (10, 11, 12, 20, 21)},
+        outgoing={10: [11], 11: [12], 12: [], 20: [21], 21: []},
+        incoming={11: [10], 12: [11], 21: [20]},
+    )
+
+    sampler = PackBatchSampler(
+        graph=graph,
+        strategy_factory=lambda: RandomSelectionStrategy(),
+        token_budget=10,
+        order_mode="prefer_targets_first",
+        doc_budget=None,
+        overflow_policy="truncate",
+        doc_level_trim_side="tail",
+        pack_level_trim_side="head",
+        seed=0,
+    )
+
+    # Deliberately interleave the two components in insertion order.
+    placements = [
+        DocPlacement(10, 1, False, "tail", component_id=0),
+        DocPlacement(20, 1, False, "tail", component_id=1),
+        DocPlacement(11, 1, False, "tail", component_id=0),
+        DocPlacement(21, 1, False, "tail", component_id=1),
+        DocPlacement(12, 1, False, "tail", component_id=0),
+    ]
+
+    ordered = sampler._order_placements(placements)
+
+    # Each component appears as one contiguous block; component 0 first since
+    # its first doc was inserted before component 1's.
+    comp_seq = [p.component_id for p in ordered]
+    assert comp_seq == [0, 0, 0, 1, 1]
+    # Within each component, targets precede linkers.
+    assert [p.doc_id for p in ordered] == [12, 11, 10, 21, 20]
+
+
+def _component_sampler(graph):
+    return PackBatchSampler(
+        graph=graph,
+        strategy_factory=lambda: RandomSelectionStrategy(),
+        token_budget=10,
+        doc_budget=None,
+        overflow_policy="truncate",
+        seed=0,
+    )
+
+
+def test_assign_components_groups_by_connectivity():
+    """_assign_components labels weakly-connected components of the induced graph."""
+    # Two disconnected chains: {10->11->12} and {20->21}.
+    graph = DummyGraph(
+        token_lens={d: 1 for d in (10, 11, 12, 20, 21)},
+        outgoing={10: [11], 11: [12], 12: [], 20: [21], 21: []},
+        incoming={11: [10], 12: [11], 21: [20]},
+    )
+    sampler = _component_sampler(graph)
+
+    placements = [DocPlacement(d, 1, False, "tail") for d in (10, 11, 12, 20, 21)]
+    sampler._assign_components(placements)
+    cid = {p.doc_id: p.component_id for p in placements}
+
+    # The two chains are distinct components; members of a chain share an id.
+    assert cid[10] == cid[11] == cid[12]
+    assert cid[20] == cid[21]
+    assert cid[10] != cid[20]
+    # Numbered by first appearance.
+    assert cid[10] == 0 and cid[20] == 1
+
+
+def test_assign_components_robust_to_traversal_restart():
+    """Regression: a single seed-and-grow call that spans DISCONNECTED docs
+    (because the traversal strategy restarts its frontier when exhausted) must
+    still yield one component PER connected sub-graph — not one merged blob.
+
+    Previously component_id was a per-_seed_and_grow_subgraph counter, so a
+    frontier restart merged unrelated docs into one component, causing
+    doc_concatenated to fuse unrelated repos into a single super-document.
+    """
+    # Three singleton docs with NO edges between them — fully disconnected.
+    graph = DummyGraph(
+        token_lens={0: 1, 1: 1, 2: 1},
+        outgoing={0: [], 1: [], 2: []},
+        incoming={0: [], 1: [], 2: []},
+    )
+    sampler = _component_sampler(graph)
+
+    placements = [DocPlacement(d, 1, False, "tail") for d in (0, 1, 2)]
+    sampler._assign_components(placements)
+    comp_ids = [p.component_id for p in placements]
+
+    # Each disconnected doc is its own component.
+    assert len(set(comp_ids)) == 3
+    assert sorted(comp_ids) == [0, 1, 2]
+
+
 def test_pack_level_truncation_head_vs_tail():
     """Pack-level truncation should trim from the configured end of the pack."""
     graph = DummyGraph(

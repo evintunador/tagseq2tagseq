@@ -31,6 +31,11 @@ class DocSpan:
     truncated: bool
     outgoing_identifiers: List[str]
     raw_identifier: str
+    # Index of the connected-component (over the induced graph of in-pack docs)
+    # this doc belongs to; docs sharing a component_id are merged into one
+    # super-document by the doc_concatenated mask. Defaults to the doc's own id
+    # when the producing placement carries no component assignment (== -1).
+    component_id: int = -1
 
 
 def _slice_body_tokens(
@@ -150,6 +155,10 @@ def build_packed_batch(
         doc_tokens = np.concatenate([prefix_arr, body_arr, suffix_arr], axis=0)
         doc_len = int(doc_tokens.shape[0])
 
+        # Fall back to the doc's own id when the placement carries no component
+        # assignment, so a component of one == an isolated doc (doc_causal).
+        component_id = p.component_id if p.component_id >= 0 else p.doc_id
+
         span = DocSpan(
             doc_id=p.doc_id,
             normed_identifier=normed_id,
@@ -158,6 +167,7 @@ def build_packed_batch(
             truncated=p.truncated,
             outgoing_identifiers=outgoing_identifiers,
             raw_identifier=raw_id,
+            component_id=component_id,
         )
 
         segments.append(doc_tokens)

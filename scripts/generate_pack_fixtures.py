@@ -8,7 +8,8 @@ in tests/fixtures/real_packs/.
 Each fixture is a dict:
     tokens          [T] int64 token sequence (1-D, input tokens only)
     doc_spans       list of dicts: {doc_id, start, end, raw_identifier,
-                                    normed_identifier, outgoing_identifiers, truncated}
+                                    normed_identifier, outgoing_identifiers, truncated,
+                                    component_id}
     link_to_target  {link_pos: [target_doc_id, ...]} — pre-resolved grants
     n_grants        int  (total resolved grants in this pack)
     kv_block_count  int  (analytical block count including cross-doc grants)
@@ -103,6 +104,7 @@ def _collect_packs(
                 "normed_identifier":   s.normed_identifier,
                 "outgoing_identifiers": list(s.outgoing_identifiers),
                 "truncated":           s.truncated,
+                "component_id":        getattr(s, "component_id", s.doc_id),
             }
             for s in doc_spans_raw
         ]
