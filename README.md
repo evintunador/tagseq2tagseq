@@ -20,27 +20,55 @@ TAGSeq2TAGSeq exploits this structure in two ways:
 
 ## Attention Masks
 
-The attention pattern is the heart of the method. Two examples are shown below, both on the same 16k-token batch.
+The attention pattern is the heart of the method. The four conditions below are
+**all shown on the same 16k-token batch** (one repository from The Stack), ordered
+by the amount of attention they permit (and thus FLOPs per token):
+`doc_causal` < `cross_doc_link` ≤ `doc_concat_link` ≤ `doc_concatenated`. The two
+`doc_concat_*` masks exist as **compute controls**: they grant *more* attention
+than `cross_doc_link` but with no inference-time linking, so a `cross_doc_link`
+win can be attributed to the linking inductive bias rather than to extra compute.
 
 ### `doc_causal` — document-isolated causal attention
 
 Each document attends only to itself. The mask is a block-diagonal of lower triangles: no information crosses document boundaries. This is the baseline — equivalent to training on independently sampled documents, but with the efficiency benefit of packing many short documents into one long sequence.
 
-![doc_causal mask on SimpleWiki](docs/images/mask_doc_causal.png)
+![doc_causal mask on The Stack](docs/images/mask_doc_causal.png)
 
-*Each diagonal block is one Wikipedia article. Blue dashed lines mark document boundaries. Documents are completely isolated from one another.*
+*Each diagonal block is one Python file. Blue dashed lines mark document boundaries. Documents are completely isolated from one another.*
 
 ---
 
 ### `cross_doc_link` — link-aware cross-document attention
 
-When document A contains a link to document B (and B is present in the batch), all tokens in A are granted read-access to all tokens in B. The causal structure within each document is preserved; the cross-document grants are asymmetric (A can read B, but B cannot read A unless it also links back).
+When document A contains a link to document B (and B is present in the batch), tokens in A *from the link position onward* are granted read-access to all tokens in B. The causal structure within each document is preserved; the cross-document grants are asymmetric (A can read B, but B cannot read A unless it also links back).
 
 ![cross_doc_link mask on The Stack](docs/images/mask_cross_doc_link.png)
 
-*Python files from the same repository. `src/mcts/mcts.py` and `src/self_play.py` import earlier files in the batch — their rows extend leftward as large black blocks. Documents that share no imports remain isolated.*
+*Python files from one repository. Where a file imports an earlier file in the batch, its rows extend leftward as a black block — but only from the import line down, so each grant block's top edge sits below the source file's start.*
 
 This teaches the model a grounded form of cross-document reasoning: when you encounter an import or a hyperlink, the full content of the referenced document is available in your attention context.
+
+---
+
+### `doc_concat_link` — whole-document link concatenation (compute control)
+
+Identical to `cross_doc_link` except a detected link grants attention from the *entire* source document, not just from the link position onward. Equivalent to concatenating the source document onto its target. This strictly enlarges every `cross_doc_link` grant, so it isolates the effect of the precise link-position gating: same connectivity, more attention, no inference-time link prediction.
+
+![doc_concat_link mask on The Stack](docs/images/mask_doc_concat_link.png)
+
+*Same batch as `cross_doc_link` above. Each grant block now extends up to the top of its source file — compare the tall bottom-left block here against the shorter one in the previous figure, which started at the import line.*
+
+---
+
+### `doc_concatenated` — connected-component concatenation (compute control)
+
+Documents that form a connected component in the link graph (e.g. files within a repository that import one another) are merged into a single causally-concatenated super-document: full causal attention across their combined tokens. Components that share no links remain isolated, so the mask is a block-diagonal of *larger* triangles — one per component, not one per document.
+
+![doc_concatenated mask on The Stack](docs/images/mask_doc_concatenated.png)
+
+*All files in this batch are import-connected, so they merge into a single super-document triangle — the per-file boundaries (blue dashed lines) are ignored entirely. Had the batch contained an unrelated, unlinked file, it would sit in its own separate triangle.*
+
+This grants the most attention of the four conditions, with no inference-time linking — the upper compute control.
 
 ---
 
