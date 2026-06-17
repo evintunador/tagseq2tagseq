@@ -45,8 +45,7 @@ from model.graph_traversal.block_mask_creator import (
     make_mask_creator_callable_from,
 )
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
-from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
-from model.graph_traversal.python_import_detector import PythonImportDetector
+from model.graph_traversal.link_detector import make_link_detector
 from data.normalization import normalize_wiki_title
 from model.modules.training_module import TS2TSTrainingModule
 
@@ -139,15 +138,7 @@ def load_inference_model(
     link_detector      = None
 
     if mask_type == "cross_doc_link":
-        if link_detector_name == "markdown":
-            link_detector = MarkdownLinkDetector(decode_fn=enc.decode)
-        elif link_detector_name == "python":
-            link_detector = PythonImportDetector(decode_fn=enc.decode)
-        else:
-            raise ValueError(
-                f"Unknown link_detector {link_detector_name!r}. "
-                "Expected 'markdown' or 'python'."
-            )
+        link_detector = make_link_detector(link_detector_name, enc.decode)
 
     # Training backend — determines which attention kernel was used during training
     use_triton = model_cfg.get("attention_backend", "triton") != "flex"

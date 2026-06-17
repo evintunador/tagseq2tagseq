@@ -55,8 +55,7 @@ from model.graph_traversal.block_mask_creator import (
     make_mask_creator_callable_from,
 )
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
-from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
-from model.graph_traversal.python_import_detector import PythonImportDetector
+from model.graph_traversal.link_detector import make_link_detector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
 from data.layout import make_layout_policy
@@ -176,15 +175,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         link_detector_name = cfg.get('model', {}).get('link_detector')
         if not link_detector_name:
             raise ValueError(
-                "model.link_detector must be set to 'markdown' or 'python' "
+                "model.link_detector must be set to 'markdown', 'python' or 'arxiv' "
                 "when model.mask_type is 'cross_doc_link'"
             )
-        if link_detector_name == 'markdown':
-            detector = MarkdownLinkDetector(decode_fn=enc.decode)
-        elif link_detector_name == 'python':
-            detector = PythonImportDetector(decode_fn=enc.decode)
-        else:
-            raise ValueError(f"Unknown link_detector: {link_detector_name!r}")
+        detector = make_link_detector(link_detector_name, enc.decode)
         _mcfg = cfg.get('model', {})
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(

@@ -16,8 +16,7 @@ from model.graph_traversal.block_mask_creator import (
     make_mask_creator_callable, make_mask_creator_callable_from,
 )
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
-from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
-from model.graph_traversal.python_import_detector import PythonImportDetector
+from model.graph_traversal.link_detector import make_link_detector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
 from data.layout import NullLayoutPolicy
@@ -54,8 +53,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     if mask_type == "cross_doc_link":
         enc = tiktoken.get_encoding("gpt2")
         det_name = cfg["model"]["link_detector"]
-        detector = PythonImportDetector(decode_fn=enc.decode) if det_name == "python" \
-                   else MarkdownLinkDetector(decode_fn=enc.decode)
+        detector = make_link_detector(det_name, enc.decode)
         bmc = make_mask_creator_callable_from(CrossDocLinkMaskCreator(link_detector=detector))
     else:
         bmc = make_mask_creator_callable(mask_type)

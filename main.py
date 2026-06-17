@@ -35,8 +35,10 @@ from model.graph_traversal.block_mask_creator import (
     create_doc_concat_triton_mask,
 )
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+from model.graph_traversal.link_detector import make_link_detector
 from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
 from model.graph_traversal.python_import_detector import PythonImportDetector
+from model.graph_traversal.arxiv_cite_detector import ArxivCiteDetector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
 from data.bucketed_pack_dataset import BucketedPackDataset, BucketState
@@ -236,8 +238,6 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
     device = next(training_module.parameters()).device
 
     # Select prompts that match the actual link detector syntax so links fire.
-    from model.graph_traversal.python_import_detector import PythonImportDetector
-    from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
     if isinstance(link_detector, PythonImportDetector):
         prompts = [
             '"""Sorting utilities."""\nimport heapq\nfrom utils import validate_input\n\ndef quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n',
@@ -247,6 +247,11 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
         prompts = [
             'The [quicksort](Quicksort) algorithm is a divide-and-conquer sorting method. It was developed by [Tony Hoare](Tony_Hoare) in 1959.',
             '[Python](Python_(programming_language)) is a high-level programming language known for its readability. See also [Java](Java_(programming_language)).',
+        ]
+    elif isinstance(link_detector, ArxivCiteDetector):
+        prompts = [
+            '% Title: Attention Mechanisms for Sequence Modeling\n\nThe Transformer architecture \\cite{Attention Is All You Need} replaced recurrence with self-attention. ',
+            '% Title: A Survey of Deep Residual Networks\n\nDeep residual learning \\cite{Deep Residual Learning for Image Recognition} enabled training of very deep networks. ',
         ]
     else:
         # Fallback: no link detection (doc_causal or unknown detector).
@@ -671,19 +676,11 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         link_detector_name = cfg.get('model', {}).get('link_detector')
         if not link_detector_name:
             raise ValueError(
-                "model.link_detector must be set to 'markdown' or 'python' "
+                "model.link_detector must be set to 'markdown', 'python' or 'arxiv' "
                 f"when model.mask_type is '{mask_type}'"
             )
         enc = tiktoken.get_encoding('gpt2')
-        if link_detector_name == 'markdown':
-            detector = MarkdownLinkDetector(decode_fn=enc.decode)
-        elif link_detector_name == 'python':
-            detector = PythonImportDetector(decode_fn=enc.decode)
-        else:
-            raise ValueError(
-                f"Unknown model.link_detector '{link_detector_name}'. "
-                "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
-            )
+        detector = make_link_detector(link_detector_name, enc.decode)
         attention_backend = 'triton_v18' if use_triton else 'flex'
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(

@@ -278,8 +278,7 @@ def _worker_fn(
     from data.layout import make_layout_policy
     from data.pack_sampler import PackBatchSampler
     from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
-    from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
-    from model.graph_traversal.python_import_detector import PythonImportDetector
+    from model.graph_traversal.link_detector import make_link_detector
 
     logging.basicConfig(level=logging.WARNING)
 
@@ -290,10 +289,7 @@ def _worker_fn(
     if hasattr(layout, "set_epoch"):
         layout.set_epoch(config.epoch_idx)
 
-    if config.link_detector == "python":
-        detector = PythonImportDetector(decode_fn=enc.decode)
-    else:
-        detector = MarkdownLinkDetector(decode_fn=enc.decode)
+    detector = make_link_detector(config.link_detector, enc.decode)
 
     creator = CrossDocLinkMaskCreator(link_detector=detector)
 
@@ -603,17 +599,13 @@ class EpochPrecomputer:
         """GPU pass to fill kv_block_count using BlockMask (Method B)."""
         import tiktoken
         from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
-        from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
-        from model.graph_traversal.python_import_detector import PythonImportDetector
+        from model.graph_traversal.link_detector import make_link_detector
 
         backend = PretokShardedBackend(graph)
         enc = tiktoken.get_encoding(graph.metadata.get("tokenizer", "gpt2"))
         layout = make_layout_policy(self.layout_policy_name, encode_fn=enc.encode_ordinary)
 
-        if self.link_detector == "python":
-            detector = PythonImportDetector(decode_fn=enc.decode)
-        else:
-            detector = MarkdownLinkDetector(decode_fn=enc.decode)
+        detector = make_link_detector(self.link_detector, enc.decode)
 
         cross_doc_creator = CrossDocLinkMaskCreator(
             link_detector=detector,

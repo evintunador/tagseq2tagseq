@@ -4,10 +4,14 @@ LinkDetector protocol and shared LinkInfo type.
 All dataset-specific link detectors implement this protocol:
     MarkdownLinkDetector  (markdown_link_detector.py)  — Wikipedia / Markdown
     PythonImportDetector  (python_import_detector.py)  — Python / TheStack
+    ArxivCiteDetector     (arxiv_cite_detector.py)     — ArXiv / unarXive
+
+Use ``make_link_detector(name, decode_fn)`` to construct one by config name
+rather than dispatching on the name at each call site.
 """
 from __future__ import annotations
 
-from typing import Any, List, NamedTuple, Protocol, runtime_checkable
+from typing import Any, Callable, List, NamedTuple, Protocol, runtime_checkable
 
 import torch
 
@@ -82,3 +86,41 @@ class LinkDetector(Protocol):
         sub-component.
         """
         return span.raw_identifier
+
+
+# Valid names accepted by ``make_link_detector`` (and the ``model.link_detector``
+# config key), kept here as the single source of truth for error messages.
+LINK_DETECTOR_NAMES = ("markdown", "python", "arxiv")
+
+
+def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "LinkDetector":
+    """
+    Construct a dataset-specific LinkDetector by config name.
+
+    Single dispatch point for ``model.link_detector`` so adding a dataset means
+    one entry here instead of editing every training/inference/profiling script.
+
+    Args:
+        name: ``'markdown'`` (Wikipedia), ``'python'`` (TheStack), or
+              ``'arxiv'`` (unarXive ``\\cite{Title}`` citations).
+        decode_fn: Token-ids → str callable (typically ``tiktoken_enc.decode``).
+
+    Raises:
+        ValueError: If ``name`` is unknown.
+    """
+    # Imported lazily: the concrete detector modules import LinkInfo from this
+    # module, so importing them at top level would create a circular import.
+    if name == "markdown":
+        from .markdown_link_detector import MarkdownLinkDetector
+        return MarkdownLinkDetector(decode_fn=decode_fn)
+    if name == "python":
+        from .python_import_detector import PythonImportDetector
+        return PythonImportDetector(decode_fn=decode_fn)
+    if name == "arxiv":
+        from .arxiv_cite_detector import ArxivCiteDetector
+        return ArxivCiteDetector(decode_fn=decode_fn)
+    raise ValueError(
+        f"Unknown model.link_detector '{name}'. "
+        f"Valid options: {', '.join(LINK_DETECTOR_NAMES)} "
+        "('markdown'=Wikipedia, 'python'=TheStack, 'arxiv'=unarXive)."
+    )
