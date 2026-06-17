@@ -70,6 +70,7 @@ class _MockGraph:
     def get_raw_identifier(self, nid): return nid
     def get_outgoing_links(self, nid): return []
     def get_incoming_links(self, nid): return []
+    def get_categories(self, nid): return ""
 
 
 class _MockBackend:

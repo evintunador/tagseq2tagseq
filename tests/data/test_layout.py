@@ -4,9 +4,12 @@ from data.layout import (
     EOSLayoutPolicy,
     IdentifierPrefixEOSLayoutPolicy,
     IdentifierPrefixLayoutPolicy,
+    LatexCommentPrefixLayoutPolicy,
     NullLayoutPolicy,
+    StochasticLatexCommentPrefixLayoutPolicy,
     make_layout_policy,
     DocLayoutInfo,
+    _latex_comment_card,
 )
 
 
@@ -14,13 +17,14 @@ from data.layout import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_info(raw="", normed="", outgoing=None, incoming=None, body_tokens=None):
+def make_info(raw="", normed="", outgoing=None, incoming=None, body_tokens=None, categories=""):
     return DocLayoutInfo(
         raw_identifier=raw,
         normed_identifier=normed,
         outgoing_identifiers=outgoing or [],
         incoming_identifiers=incoming or [],
         body_tokens=body_tokens,
+        categories=categories,
     )
 
 
@@ -238,3 +242,128 @@ def test_factory_requires_encode_fn_for_prefix_policies():
 def test_factory_unknown_name_raises():
     with pytest.raises(ValueError, match="Unknown layout_policy"):
         make_layout_policy("banana")
+
+
+# ---------------------------------------------------------------------------
+# _latex_comment_card helper
+# ---------------------------------------------------------------------------
+
+def test_latex_card_with_categories():
+    card = _latex_comment_card(make_info("Attention Is All You Need", categories="cs.CL cs.LG"))
+    assert card == "% Title: Attention Is All You Need\n% Categories: cs.CL cs.LG\n\n"
+
+
+def test_latex_card_without_categories():
+    # No categories line emitted when categories is empty.
+    card = _latex_comment_card(make_info("Some Paper", categories=""))
+    assert card == "% Title: Some Paper\n\n"
+
+
+# ---------------------------------------------------------------------------
+# LatexCommentPrefixLayoutPolicy (deterministic, for inference)
+# ---------------------------------------------------------------------------
+
+def test_latex_comment_prefix_format():
+    p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
+    info = make_info("My Paper", "arxiv_123", categories="cs.LG")
+    assert p.prefix_tokens(info) == _simple_encode("% Title: My Paper\n% Categories: cs.LG\n\n")
+
+
+def test_latex_comment_prefix_no_categories():
+    p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
+    info = make_info("My Paper", "arxiv_123", categories="")
+    assert p.prefix_tokens(info) == _simple_encode("% Title: My Paper\n\n")
+
+
+def test_latex_comment_prefix_suffix_is_eos():
+    p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=42)
+    assert p.suffix_tokens(make_info("x")) == [42]
+    assert p.suffix_length(make_info("x")) == 1
+
+
+def test_latex_comment_prefix_length_matches_tokens():
+    p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
+    info = make_info("Title", "n", categories="cs.AI")
+    assert p.prefix_length(info) == len(p.prefix_tokens(info))
+
+
+def test_latex_comment_prefix_caches():
+    calls = [0]
+    def counting_encode(text):
+        calls[0] += 1
+        return _simple_encode(text)
+    p = LatexCommentPrefixLayoutPolicy(counting_encode, eos_token_id=2)
+    info = make_info("Title", "n", categories="cs.AI")
+    p.prefix_tokens(info)
+    p.prefix_tokens(info)
+    p.prefix_length(info)
+    assert calls[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# StochasticLatexCommentPrefixLayoutPolicy
+# ---------------------------------------------------------------------------
+
+def test_stochastic_latex_prefix_length_matches_tokens_both_branches():
+    # For every doc, in either include/exclude state, prefix_length must equal
+    # len(prefix_tokens) — the shared _include_prefix guarantees agreement.
+    p = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
+    for i in range(50):
+        info = make_info(f"Title {i}", f"arxiv_{i}", categories="cs.LG")
+        assert p.prefix_length(info) == len(p.prefix_tokens(info))
+
+
+def test_stochastic_latex_prefix_deterministic_across_instances():
+    a = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
+    b = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
+    for i in range(30):
+        info = make_info(f"T{i}", f"arxiv_{i}", categories="cs.LG")
+        assert a.prefix_tokens(info) == b.prefix_tokens(info)
+
+
+def test_stochastic_latex_prefix_both_outcomes_occur():
+    # Across many docs, the coin flip should produce both included and omitted cards.
+    p = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
+    lengths = {
+        p.prefix_length(make_info(f"T{i}", f"arxiv_{i}", categories="cs.LG")) > 0
+        for i in range(100)
+    }
+    assert lengths == {True, False}
+
+
+def test_stochastic_latex_prefix_epoch_changes_decision():
+    # The same doc can flip inclusion across epochs (at least one differs over a span).
+    p = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
+    info = make_info("Title", "arxiv_42", categories="cs.LG")
+    p.set_epoch(0)
+    e0 = [p.prefix_length(make_info("T", f"arxiv_{i}", categories="c")) > 0 for i in range(20)]
+    p.set_epoch(1)
+    e1 = [p.prefix_length(make_info("T", f"arxiv_{i}", categories="c")) > 0 for i in range(20)]
+    assert e0 != e1  # epoch participates in the hash, so the pattern shifts
+
+
+def test_stochastic_latex_prefix_always_eos_suffix():
+    p = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=99)
+    # Suffix is EOS regardless of prefix inclusion.
+    for i in range(20):
+        info = make_info(f"T{i}", f"arxiv_{i}")
+        assert p.suffix_tokens(info) == [99]
+
+
+def test_factory_latex_comment_prefix():
+    p = make_layout_policy("latex_comment_prefix", encode_fn=_simple_encode, eos_token_id=2)
+    assert isinstance(p, LatexCommentPrefixLayoutPolicy)
+
+
+def test_factory_stochastic_latex_comment_prefix():
+    p = make_layout_policy(
+        "stochastic_latex_comment_prefix", encode_fn=_simple_encode, eos_token_id=2
+    )
+    assert isinstance(p, StochasticLatexCommentPrefixLayoutPolicy)
+
+
+def test_factory_latex_policies_require_encode_fn():
+    with pytest.raises(ValueError, match="encode_fn"):
+        make_layout_policy("latex_comment_prefix")
+    with pytest.raises(ValueError, match="encode_fn"):
+        make_layout_policy("stochastic_latex_comment_prefix")

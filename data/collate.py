@@ -131,6 +131,7 @@ def build_packed_batch(
             outgoing_identifiers=outgoing_identifiers,
             incoming_identifiers=graph.get_incoming_links(normed_id),
             body_tokens=body_slice.tolist(),
+            categories=graph.get_categories(normed_id),
         )
 
         prefix_ids = layout.prefix_tokens(info)

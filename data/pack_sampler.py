@@ -221,6 +221,7 @@ class PackBatchSampler:
             outgoing_identifiers=self.graph.get_outgoing_links(normed),
             incoming_identifiers=self.graph.get_incoming_links(normed),
             body_tokens=None,  # body not available during length-budgeting
+            categories=self.graph.get_categories(normed),
         )
         return (
             self.layout_policy.prefix_length(info),

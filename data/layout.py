@@ -32,6 +32,10 @@ class DocLayoutInfo:
         body_tokens: The document body token ids (body only, excluding prefix
             and suffix decoration).  None when the body has not yet been
             fetched or generated (e.g. during pack-sampler length budgeting).
+        categories: Space-separated subject categories for the document (e.g.
+            ArXiv's ``"cs.CV eess.IV"``).  Empty string for datasets without
+            categories (Wikipedia, TheStack) and for the generation root.  Used
+            by the LaTeX-comment prefix-card policies.
     """
 
     raw_identifier: str
@@ -39,6 +43,7 @@ class DocLayoutInfo:
     outgoing_identifiers: List[str] = field(default_factory=list)
     incoming_identifiers: List[str] = field(default_factory=list)
     body_tokens: Optional[List[int]] = None
+    categories: str = ""
 
 
 class DocLayoutPolicy(Protocol):
@@ -130,143 +135,166 @@ class EOSLayoutPolicy(DocLayoutPolicy):
         return [self.eos_token_id]
 
 
-class IdentifierPrefixLayoutPolicy(DocLayoutPolicy):
+# ---------------------------------------------------------------------------
+# Prefix-card formatters
+# ---------------------------------------------------------------------------
+# A "format function" maps a DocLayoutInfo to the prefix string for that document.
+# It is the ONLY dataset-specific part of a prefix policy; everything else
+# (caching, the stochastic coin-flip, length/token agreement, the EOS suffix) is
+# shared by PrefixLayoutPolicy below.
+
+def _markdown_heading_format(info: DocLayoutInfo) -> str:
+    """Wikipedia / TheStack style: ``# {raw_identifier}\\n\\n``."""
+    return f"# {info.raw_identifier}\n\n"
+
+
+def _latex_comment_card(info: DocLayoutInfo) -> str:
+    """ArXiv style LaTeX-comment card: ``% Title: ...`` (+ ``% Categories: ...``).
+
+    Title is always included; the categories line is emitted only when categories
+    are present.  The card is valid LaTeX (``%`` begins a comment), keeping the
+    token stream in-distribution for an otherwise-LaTeX ArXiv body.
     """
-    Layout policy that prepends "# {raw_identifier}\\n\\n" as a prefix for each document.
+    lines = [f"% Title: {info.raw_identifier}"]
+    if info.categories:
+        lines.append(f"% Categories: {info.categories}")
+    return "\n".join(lines) + "\n\n"
 
-    Tokens are produced by an external encode function (e.g. a tiktoken encoding's
-    encode_ordinary method) and cached per identifier to avoid repeated tokenization.
-    No suffix is added.
+
+class PrefixLayoutPolicy(DocLayoutPolicy):
     """
+    Unified prefix-card layout policy parameterised over three orthogonal axes:
 
-    def __init__(self, encode_fn: Callable[[str], List[int]]):
-        self._encode = encode_fn
-        self._cache: Dict[str, List[int]] = {}
+    * ``format_fn``    — maps a ``DocLayoutInfo`` to the prefix string (the only
+                         dataset-specific bit; e.g. ``_markdown_heading_format``
+                         or ``_latex_comment_card``).
+    * ``stochastic``   — when True, the prefix is included on a per-(doc, epoch)
+                         50-50 coin flip (so the model is not OOD on benchmark
+                         prompts that lack a prefix); when False the prefix is
+                         always included and tokens are cached per format string.
+    * ``eos_token_id`` — when not None, appended as a 1-token suffix.
 
-    def _get_prefix_tokens(self, raw_identifier: str) -> List[int]:
-        if raw_identifier not in self._cache:
-            self._cache[raw_identifier] = self._encode(f"# {raw_identifier}\n\n")
-        return self._cache[raw_identifier]
+    The coin flip is ``md5(normed_identifier + ":" + epoch) % 2 == 0`` —
+    deterministic across ranks, restarts, and subprocesses (unlike Python's
+    salted ``hash()``), and identical between ``prefix_length`` and
+    ``prefix_tokens`` for a given doc so the two never disagree.  Stochastic mode
+    intentionally does not cache (the decision is cheap and per-epoch); the
+    deterministic mode caches tokens keyed by the formatted string.
 
-    def prefix_length(self, info: DocLayoutInfo) -> int:
-        return len(self._get_prefix_tokens(info.raw_identifier))
-
-    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
-        return 0
-
-    def prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
-        return list(self._get_prefix_tokens(info.raw_identifier))
-
-    def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
-        return []
-
-
-class IdentifierPrefixEOSLayoutPolicy(DocLayoutPolicy):
-    """
-    Layout policy that combines a title prefix with an EOS suffix.
-
-    Each document is laid out as:
-
-        encode("# {raw_identifier}\\n\\n") + [body] + [EOS]
-
-    This gives the model a human-readable identifier before its content
-    (useful for code filenames and article titles) plus a clean EOS stop
-    signal, without a redundant BOS prefix.
-
-    Token counts: prefix = len(encode("# {title}\\n\\n")), suffix = 1.
+    The named subclasses below pin these axes for the config-name factory and
+    preserve the historical class names that callers import directly.
     """
 
     def __init__(
         self,
         encode_fn: Callable[[str], List[int]],
-        eos_token_id: int,
+        format_fn: Callable[[DocLayoutInfo], str],
+        *,
+        stochastic: bool = False,
+        eos_token_id: Optional[int] = None,
     ):
         self._encode = encode_fn
+        self._format = format_fn
+        self._stochastic = stochastic
         self.eos_token_id = eos_token_id
+        self._epoch: int = 0
         self._cache: Dict[str, List[int]] = {}
 
-    def _get_title_tokens(self, raw_identifier: str) -> List[int]:
-        if raw_identifier not in self._cache:
-            self._cache[raw_identifier] = self._encode(f"# {raw_identifier}\n\n")
-        return self._cache[raw_identifier]
+    def set_epoch(self, epoch: int) -> None:
+        """Update the epoch counter (drives the stochastic coin flip).
+
+        Defined unconditionally; harmless for deterministic policies and lets the
+        training loop call it via a single ``hasattr(layout, 'set_epoch')`` check.
+        """
+        self._epoch = epoch
+
+    def _include_prefix(self, info: DocLayoutInfo) -> bool:
+        if not self._stochastic:
+            return True
+        key = f"{info.normed_identifier}:{self._epoch}".encode()
+        return int(hashlib.md5(key).hexdigest(), 16) % 2 == 0
+
+    def _prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
+        text = self._format(info)
+        if self._stochastic:
+            return self._encode(text)  # no cache: decision varies per epoch
+        if text not in self._cache:
+            self._cache[text] = self._encode(text)
+        return self._cache[text]
 
     def prefix_length(self, info: DocLayoutInfo) -> int:
-        return len(self._get_title_tokens(info.raw_identifier))
-
-    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
-        return 1
+        if not self._include_prefix(info):
+            return 0
+        return len(self._prefix_tokens(info))
 
     def prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
-        return list(self._get_title_tokens(info.raw_identifier))
+        if not self._include_prefix(info):
+            return []
+        return list(self._prefix_tokens(info))
+
+    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
+        return 0 if self.eos_token_id is None else 1
 
     def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
-        return [self.eos_token_id]
+        return [] if self.eos_token_id is None else [self.eos_token_id]
 
 
-class StochasticIdentifierPrefixLayoutPolicy(DocLayoutPolicy):
-    """
-    Layout policy that randomly includes or omits the ``"# {raw_identifier}\\n\\n"``
-    identifier prefix on a per-document, per-epoch basis.
+# Named policies: thin wrappers pinning PrefixLayoutPolicy's axes. They preserve
+# the class names that callers (generate.py, demo_traversal.py, eval) import and
+# isinstance-check, while sharing all behaviour with the unified base.
 
-    Inclusion is decided by::
+class IdentifierPrefixLayoutPolicy(PrefixLayoutPolicy):
+    """``# {raw_identifier}\\n\\n`` prefix, no suffix (Wikipedia / TheStack)."""
 
-        hash(normed_identifier + ":" + str(epoch)) % 2 == 0
+    def __init__(self, encode_fn: Callable[[str], List[int]]):
+        super().__init__(encode_fn, _markdown_heading_format)
 
-    This is deterministic: the same ``(doc, epoch)`` pair always produces the
-    same decision across ranks, restarts, and between the ``prefix_length()``
-    and ``prefix_tokens()`` calls for the same document, with no shared state
-    or cache required.
 
-    An EOS token is always appended as suffix so that aux docs can end cleanly
-    during generation regardless of whether the prefix was included.
+class IdentifierPrefixEOSLayoutPolicy(PrefixLayoutPolicy):
+    """``# {raw_identifier}\\n\\n`` prefix + EOS suffix."""
 
-    Use case: train with 50-50 prefix/no-prefix so the model is not OOD on
-    external benchmarks that have no identifier prefix, while still being able
-    to generate aux docs (which need a starting string).  During inference,
-    wire a separate deterministic policy (e.g. ``identifier_prefix_eos``)
-    via the ``data.inference_layout_policy`` config key.
+    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
+        super().__init__(encode_fn, _markdown_heading_format, eos_token_id=eos_token_id)
 
-    Call ``set_epoch(n)`` at the start of each epoch.  The training loop does
-    this automatically via ``hasattr(layout, 'set_epoch')`` check.
+
+class StochasticIdentifierPrefixLayoutPolicy(PrefixLayoutPolicy):
+    """50-50 per-(doc, epoch) ``# {raw_identifier}\\n\\n`` prefix + EOS suffix.
+
+    Train with 50-50 prefix/no-prefix so the model is not OOD on external
+    benchmarks that lack a prefix, while still being able to start aux docs during
+    generation.  Wire a deterministic ``identifier_prefix_eos`` policy for
+    inference via ``data.inference_layout_policy``.
     """
 
     def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
-        self._encode = encode_fn
-        self.eos_token_id = eos_token_id
-        self._epoch: int = 0
+        super().__init__(encode_fn, _markdown_heading_format,
+                         stochastic=True, eos_token_id=eos_token_id)
 
-    def set_epoch(self, epoch: int) -> None:
-        """Update the epoch counter. Called by BucketedPackDataset on epoch advance."""
-        self._epoch = epoch
 
-    def _include_prefix(self, normed_identifier: str) -> bool:
-        """Deterministic per-(doc, epoch) coin flip; no cache, no shared state.
+class LatexCommentPrefixLayoutPolicy(PrefixLayoutPolicy):
+    """Deterministic LaTeX-comment card (title + categories) + EOS suffix.
 
-        Uses hashlib.md5 rather than Python's built-in hash() so the result is
-        stable across processes, interpreter restarts, and subprocesses (Python's
-        hash() is randomized per-process by default via PYTHONHASHSEED).
-        """
-        key = f"{normed_identifier}:{self._epoch}".encode()
-        return int(hashlib.md5(key).hexdigest(), 16) % 2 == 0
+    The inference counterpart to ``StochasticLatexCommentPrefixLayoutPolicy``
+    (wire via ``data.inference_layout_policy``): generation needs a deterministic
+    starting card for aux docs, whereas training randomises card inclusion.
+    """
 
-    def _get_prefix_tokens(self, raw_identifier: str) -> List[int]:
-        return self._encode(f"# {raw_identifier}\n\n")
+    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
+        super().__init__(encode_fn, _latex_comment_card, eos_token_id=eos_token_id)
 
-    def prefix_length(self, info: DocLayoutInfo) -> int:
-        if not self._include_prefix(info.normed_identifier):
-            return 0
-        return len(self._get_prefix_tokens(info.raw_identifier))
 
-    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
-        return 1
+class StochasticLatexCommentPrefixLayoutPolicy(PrefixLayoutPolicy):
+    """50-50 per-(doc, epoch) LaTeX-comment card (title + categories) + EOS suffix.
 
-    def prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
-        if not self._include_prefix(info.normed_identifier):
-            return []
-        return self._get_prefix_tokens(info.raw_identifier)
+    Mirrors ``StochasticIdentifierPrefixLayoutPolicy`` but emits a LaTeX-comment
+    card and surfaces ``categories`` (a conceptual, learnable signal that survives
+    both inference-time corpus-fetch and document-generation).  Train with
+    50-50 card/no-card; wire ``latex_comment_prefix`` for inference.
+    """
 
-    def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
-        return [self.eos_token_id]
+    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
+        super().__init__(encode_fn, _latex_comment_card,
+                         stochastic=True, eos_token_id=eos_token_id)
 
 
 # ---------------------------------------------------------------------------
@@ -286,10 +314,12 @@ def make_layout_policy(
 
     Args:
         name: One of ``"null"``, ``"eos"``, ``"identifier_prefix"``,
-              ``"identifier_prefix_eos"``, ``"stochastic_identifier_prefix"``.
+              ``"identifier_prefix_eos"``, ``"stochastic_identifier_prefix"``,
+              ``"latex_comment_prefix"``, ``"stochastic_latex_comment_prefix"``.
         encode_fn: Required for policies that tokenise the identifier
-            (``"identifier_prefix"``, ``"identifier_prefix_eos"``, and
-            ``"stochastic_identifier_prefix"``).
+            (``"identifier_prefix"``, ``"identifier_prefix_eos"``,
+            ``"stochastic_identifier_prefix"``, ``"latex_comment_prefix"``,
+            ``"stochastic_latex_comment_prefix"``).
         eos_token_id: EOS token id (default: GPT-2 ``<|endoftext|>`` = 50256).
 
     Returns:
@@ -320,8 +350,23 @@ def make_layout_policy(
                 "(a tokeniser callable)."
             )
         return StochasticIdentifierPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
+    if name == "latex_comment_prefix":
+        if encode_fn is None:
+            raise ValueError(
+                "layout_policy='latex_comment_prefix' requires encode_fn "
+                "(a tokeniser callable)."
+            )
+        return LatexCommentPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
+    if name == "stochastic_latex_comment_prefix":
+        if encode_fn is None:
+            raise ValueError(
+                "layout_policy='stochastic_latex_comment_prefix' requires encode_fn "
+                "(a tokeniser callable)."
+            )
+        return StochasticLatexCommentPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
     raise ValueError(
         f"Unknown layout_policy '{name}'. "
         "Valid options: 'null', 'eos', 'identifier_prefix', "
-        "'identifier_prefix_eos', 'stochastic_identifier_prefix'."
+        "'identifier_prefix_eos', 'stochastic_identifier_prefix', "
+        "'latex_comment_prefix', 'stochastic_latex_comment_prefix'."
     )

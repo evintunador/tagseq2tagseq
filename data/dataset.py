@@ -121,6 +121,15 @@ class GraphIndex:
         node = self.get_node(normed_identifier)
         return node.get("raw_identifier") if node else None
 
+    def get_categories(self, normed_identifier: str) -> str:
+        """Returns the node's ``categories`` string (empty if absent).
+
+        Populated for the ArXiv dataset (e.g. ``"cs.CV eess.IV"``); empty for
+        Wikipedia / TheStack nodes that carry no categories field.
+        """
+        node = self.get_node(normed_identifier)
+        return (node.get("categories", "") if node else "") or ""
+
     def get_outgoing_links(self, normed_identifier: str) -> List[str]:
         """Returns the normed_identifiers that the given node links to."""
         node = self.get_node(normed_identifier)

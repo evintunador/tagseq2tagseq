@@ -43,6 +43,9 @@ class DummyGraph:
     def get_incoming_links(self, normed_identifier: str) -> list:
         return []
 
+    def get_categories(self, normed_identifier: str) -> str:
+        return ""
+
 
 class _FixedSeedRng:
     """Deterministic RNG stub that always returns the same value for randrange."""
