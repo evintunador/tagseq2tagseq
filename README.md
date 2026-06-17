@@ -95,14 +95,12 @@ The framework currently supports four pretokenized datasets and has several more
 |---------|-----------|-------|--------|
 | **SimpleWiki** | Markdown hyperlinks | 275k | ~108M |
 | **EnWikiSource** | Markdown hyperlinks | 662k | ~612M |
-| **The Stack (10M)** | Python `import` statements | 2.38M | ~7B |
-| **The Stack (100M)** | Python `import` statements | 3.56M | ~8.7B |
+| **The Stack** | Python `import` statements | 3.56M | ~8.7B |
+| **arXiv (unarXive 2024)** | `\cite{}` citations | 2.20M | ~10B |
 
 ### Planned
 
 **Combined Wikipedia** — multiple language or thematic wiki dumps merged into a single graph. Cross-dump links and redirect edges give the graph richer connectivity than any single dump alone.
-
-**arXiv (LaTeX source)** — papers as nodes; edges from `\cite{}` bibliography references and `\input{}`/`\include{}` file inclusions. Gives the model exposure to structured scientific writing where citations are semantically meaningful dependencies, not just footnotes.
 
 **Obsidian vault** — a personal note-taking graph where `[[wikilink]]` syntax connects notes. Edges reflect the author's own associative structure rather than an editorial or codebase convention, making this a qualitatively different kind of graph: sparse, idiosyncratic, and highly personal.
 
@@ -220,6 +218,8 @@ model/
     cross_doc_mask.py            CrossDocLinkMaskCreator (flex + triton backends)
     markdown_link_detector.py    Detects [[WikiLinks]] in token streams
     python_import_detector.py    Detects `import` statements in token streams
+    arxiv_cite_detector.py       Detects \cite{Title} citations in token streams
+    link_detector.py             LinkDetector protocol + make_link_detector factory
   generation_loop.py             run_generation, link-detection loop
   document_context.py            DocumentContext (inference context window)
 kernels/                         Custom Triton attention kernels
@@ -231,7 +231,7 @@ Full pipeline instructions (data extraction, pretokenization, training, generati
 
 ## TODOs
 in no particular priority order
-- [ ] make ArXiv LaTeX dataset
+- [x] make ArXiv dataset (unarXive 2024 + OpenAlex-enriched citation edges, `\cite{Title}` targets) — see `data/arxiv_graph_extractor/`
 - [ ] pull out actual validation splits
   - [ ] one sparse & random doc
   - [ ] one from dense sub-clusters

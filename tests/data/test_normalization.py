@@ -9,6 +9,8 @@ from data.normalization import (
     normalize_wiki_title,
     normalize_repo_name,
     normalize_package_name,
+    normalize_arxiv,
+    canonical_arxiv_id,
     strip_hash,
 )
 
@@ -128,6 +130,58 @@ class TestNormalizePackageName:
 
     def test_deterministic(self):
         assert normalize_package_name("os.path") == normalize_package_name("os.path")
+
+
+class TestCanonicalArxivId:
+    def test_strips_version(self):
+        assert canonical_arxiv_id("2401.12345v2") == "2401.12345"
+        assert canonical_arxiv_id("2401.12345v10") == "2401.12345"
+
+    def test_no_version_unchanged(self):
+        assert canonical_arxiv_id("2401.12345") == "2401.12345"
+
+    def test_strips_whitespace(self):
+        assert canonical_arxiv_id("  2401.12345v3  ") == "2401.12345"
+
+    def test_old_style_id(self):
+        # hep-th/9901001v2 -> hep-th/9901001 (only the version suffix is removed)
+        assert canonical_arxiv_id("hep-th/9901001v2") == "hep-th/9901001"
+
+
+class TestNormalizeArxiv:
+    def test_basic(self):
+        result = normalize_arxiv("2401.12345")
+        h = _raw_hash("2401.12345")
+        assert result == f"2401_12345_{h}"
+
+    def test_version_canonicalized_before_hash(self):
+        # A paper node ('2401.12345v2') and a citation edge ('2401.12345') must
+        # produce the SAME normed_identifier — hash is of the canonical id.
+        assert normalize_arxiv("2401.12345v2") == normalize_arxiv("2401.12345")
+        assert normalize_arxiv("2401.12345v2") == normalize_arxiv("2401.12345v7")
+
+    def test_hash_is_of_canonical(self):
+        result = normalize_arxiv("2401.12345v2")
+        assert result.endswith(f"_{_raw_hash('2401.12345')}")
+
+    def test_dots_to_underscore(self):
+        assert strip_hash(normalize_arxiv("2401.12345")) == "2401_12345"
+
+    def test_old_style_slash(self):
+        result = normalize_arxiv("hep-th/9901001")
+        h = _raw_hash("hep-th/9901001")
+        assert result == f"hep-th_9901001_{h}"
+
+    def test_uniqueness_independent_of_title(self):
+        # Two different arXiv ids always differ, even if titles were identical.
+        assert normalize_arxiv("2401.00001") != normalize_arxiv("2401.00002")
+
+    def test_deterministic(self):
+        assert normalize_arxiv("2401.12345") == normalize_arxiv("2401.12345")
+
+    def test_six_char_hash(self):
+        result = normalize_arxiv("2401.12345")
+        assert len(result.rsplit("_", 1)[1]) == 6
 
 
 class TestStripHash:

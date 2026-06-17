@@ -51,6 +51,31 @@ a redirect title that isn't a first-class node.
 
 ## Training
 
+### 8-GPU (multi-rank DDP) training hangs (BUG)
+Multi-rank DDP training hangs and is killed by the wall-clock timeout. Observed
+facts only (no diagnosis):
+- **Reproduced** on the arxiv `cross_doc_link` config via `launch_slurm.py`,
+  1 node × 8 GPUs, smoke model (`model_dim=512, num_layers=6, num_heads=4,
+  max_seq_len=8192, mtp_extra_weights=[], ve_layers=[]`), `max_optimizer_steps=200`,
+  `val_interval=50`. Hangs deterministically; rank 0's tqdm bar freezes around
+  step ~152.
+- **1-GPU and 2-GPU** runs of the same config complete 200 steps with decreasing
+  loss and no NaN. The hang appears only at ≥4 ranks (4-GPU also reproduced).
+- With `TORCH_DISTRIBUTED_DEBUG=DETAIL`, ranks report a collective-fingerprint
+  mismatch (e.g. one rank in `ALLREDUCE` while another is in a different op /
+  sequence number) before the timeout. Without it, the job sits until the SLURM
+  wall-clock kills it (`STEP ... CANCELLED ... DUE TO TIME LIMIT`).
+- All GPUs show ~100% utilization during the hang.
+- Not isolated to the data: packs are uniformly `max_seq_len` (verified by CPU
+  audit on both arxiv and thestack splits); the tensor sizes feeding attention
+  are correct.
+
+**Diagnosis blocker:** the run only captures rank-0 logs (`tracking.init` symlinks
+rank-0 stderr/stdout into the run `logs/` dir; non-main ranks' `.err` files are
+empty). To diagnose, first make non-main ranks observable — per-rank file logging
++ `faulthandler` stack dumps on SIGTERM/timeout — then capture each hung rank's
+Python stack (or `py-spy dump` live).
+
 ### Parallelized eval in main.py
 `run_benchmarks_on_model` runs serially. Naïve thread-pool parallelism is risky:
 benchmarks vary widely in runtime (HellaSwag ~30s vs. community_pack_perplexity

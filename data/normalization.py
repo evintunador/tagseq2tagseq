@@ -79,6 +79,39 @@ def normalize_package_name(raw: str) -> str:
     return f"{body}_{h}"
 
 
+_ARXIV_VERSION_RE = re.compile(r"v\d+$")
+
+
+def canonical_arxiv_id(raw: str) -> str:
+    """Strip a trailing version suffix (e.g. 'v2') and surrounding whitespace.
+
+    A paper's node and every citation edge that points to it must derive from the
+    same id, so all arXiv ids are canonicalized to their version-less form before
+    use. New-style ids are 'YYYY.NNNNN'; old-style 'archive/NNNNNNN' canonicalize
+    likewise (the version suffix, if any, is removed).
+    """
+    return _ARXIV_VERSION_RE.sub("", raw.strip())
+
+
+def normalize_arxiv(raw: str) -> str:
+    """
+    Normalize an arXiv id (e.g. '2401.12345' or '2401.12345v2') to a normed_identifier.
+
+    The id is canonicalized (version suffix stripped) first, then dots and slashes
+    are replaced with underscores before _norm_body runs. The hash is of the
+    *canonical* id (not the raw, version-bearing string) so that a paper node and
+    any citation edge that references it always produce the same normed_identifier.
+
+    Because arXiv ids are globally unique, this guarantees a unique normed_identifier
+    per paper even when two papers share an identical title.
+    """
+    canon = canonical_arxiv_id(raw)
+    h = identifier_hash(canon)
+    pre = canon.replace(".", "_").replace("/", "_")
+    body = _norm_body(pre)
+    return f"{body}_{h}"
+
+
 def strip_hash(normed: str) -> str:
     """Remove the trailing '_[0-9a-f]{6}' hash suffix from a normed_identifier."""
     return re.sub(r"_[0-9a-f]{6}$", "", normed)
