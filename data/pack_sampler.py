@@ -563,13 +563,19 @@ class PackBatchSampler:
         total_tokens: int,
     ) -> List[DocPlacement]:
         """
-        Apply final pack-level truncation so that the sum of ``effective_len``
-        across all placements does not exceed ``token_budget``.
+        Trim the pack to hit ``token_budget`` EXACTLY.
 
-        Depending on ``pack_level_trim_side``, truncation walks from the head
-        (earliest documents) or tail (latest documents) of the ordered pack,
-        decreasing ``effective_len`` and marking documents as truncated. If a
-        document's ``effective_len`` reaches zero, it is dropped from the pack.
+        Every pack must be the same length: the Triton attention kernels take
+        the sequence length as a ``tl.constexpr``, so a pack of a different
+        length forces a fresh per-length autotune (~140s) which, on multi-rank
+        DDP, desyncs the collective and hangs the job.  We therefore shed
+        *exactly* ``overshoot`` tokens — never more (under budget) and never
+        fewer (over budget) — by trimming document bodies in
+        ``pack_level_trim_side`` order, carrying any residual to the next
+        document, and fully removing a document only when the overshoot covers
+        its entire size (body + layout decoration).  A document whose body is
+        trimmed to zero but still carries decoration (prefix/suffix) is kept so
+        those tokens stay accounted for.
         """
         if not placements:
             return placements
@@ -584,21 +590,10 @@ class PackBatchSampler:
         else:  # "tail"
             indices = list(reversed(range(len(placements))))
 
-        # ``removed`` marks docs to drop ENTIRELY (body + decoration); docs whose
-        # body is trimmed to 0 but still carry layout decoration (prefix/suffix)
-        # are KEPT so their decoration tokens stay accounted for.  This is the
-        # crux of hitting token_budget EXACTLY: shed exactly ``overshoot`` tokens
-        # and no more.  (The old code body-trimmed a doc to 0 and then a blanket
-        # ``effective_len > 0`` filter dropped it, silently shedding its
-        # decoration too — landing the pack ``decoration`` tokens UNDER budget,
-        # e.g. 8191 instead of 8192 for a 1-token eos suffix.  A pack whose
-        # length differs from the rest forces the Triton attention kernels — which
-        # take seq-len as a ``tl.constexpr`` — to re-autotune (~140s), which on
-        # multi-rank DDP desyncs the collective and hangs the job.)
+        # ``removed`` marks documents to drop entirely; bodies are trimmed in
+        # place. A body trimmed to 0 keeps the doc (its decoration still counts).
         removed = [False] * len(placements)
 
-        # Trim bodies in trim-side order, carrying any residual to the next doc,
-        # and fully remove a doc only when ``overshoot`` covers its entire size.
         for idx in indices:
             if overshoot <= 0:
                 break
@@ -610,32 +605,25 @@ class PackBatchSampler:
             full_doc_tokens = pre + p.effective_len + suf
 
             if overshoot >= full_doc_tokens:
-                # Removing this whole doc closes overshoot by its full size
-                # (body AND decoration).
+                # Drop the whole doc; closes overshoot by body + decoration.
                 overshoot -= full_doc_tokens
                 p.effective_len = 0
                 p.truncated = True
                 removed[idx] = True
             else:
-                # overshoot < full_doc_tokens: shed from the BODY only (keep the
-                # decoration intact and keep the doc).  trim is min(overshoot,
-                # body); if that drives the body to 0 with overshoot remaining
-                # (overshoot was > body but < body+decoration), the small residual
-                # carries to the next doc in trim order — which absorbs it from
-                # its body.  Net: exactly ``overshoot`` tokens shed, budget hit
-                # exactly, decoration never silently dropped.
+                # Shed from the body only, keeping decoration. If this drives the
+                # body to 0 with overshoot left (overshoot exceeded the body but
+                # not body+decoration), the residual carries to the next doc.
                 trim = min(overshoot, p.effective_len)
                 p.effective_len -= trim
                 overshoot -= trim
                 p.truncated = True
 
-        # Pathological fallback (layout decoration alone exceeds the budget, so
-        # body trims can't absorb the full overshoot): drop now-bodyless,
-        # decoration-bearing docs from the trim side to shed their decoration and
-        # get back under budget.  This can dip slightly under budget but never
-        # over (over-budget is the dangerous case — it trips the RoPE cache
-        # assert).  Essentially never reached in practice (would need hundreds of
-        # tiny prefix-heavy docs); logged if it ever is.
+        # Fallback for the degenerate case where layout decoration alone exceeds
+        # the budget (body trims can't absorb it all): drop now-bodyless,
+        # decoration-bearing docs to shed their decoration. Dips slightly under
+        # budget but never over (over budget trips the RoPE cache assert). Needs
+        # hundreds of tiny prefix-heavy docs to reach; logged if it ever does.
         if overshoot > 0:
             for idx in indices:
                 if overshoot <= 0:
@@ -658,12 +646,5 @@ class PackBatchSampler:
                     self.token_budget, overshoot,
                 )
 
-        # Keep every doc not marked for full removal.  Docs left at
-        # effective_len == 0 but carrying decoration are retained (build_packed_batch
-        # still emits their prefix/suffix); a truly empty doc contributes no
-        # tokens and is harmless.
-        final_placements = [p for i, p in enumerate(placements) if not removed[i]]
-        return final_placements
-
-
+        return [p for i, p in enumerate(placements) if not removed[i]]
 

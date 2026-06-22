@@ -51,87 +51,16 @@ a redirect title that isn't a first-class node.
 
 ## Training
 
-### 8-GPU (multi-rank DDP) training hangs — ROOT-CAUSED & FIXED 2026-06-17
-**Root cause:** `PackBatchSampler._apply_pack_truncation` did not enforce
-`token_budget` as a hard cap. Its `else` branch (when `effective_len < overshoot
-< prefix+body+suffix`) skipped the doc and let `overshoot` leak, so a pack made
-of many docs each carrying a non-trimmable prefix (the `*_prefix` layouts) could
-ship ABOVE `max_seq_len`. One oversized pack (observed: 10185 > 8192) trips the
-RoPE cos/sin cache assert (`cos.size(0) >= seq_len`) in the attention forward on
-whichever DDP rank drew it; that AssertionError unwinds into the end-of-run
-`ReproducibilityManager.__exit__` barrier, which hangs because the other ranks
-never reach it — masking the traceback and presenting as a generic collective
-hang. Manifests only at world_size ≥ 2 (a single GPU just raises visibly).
-
-**Fix:** `_apply_pack_truncation` now sheds exactly `overshoot` tokens via body
-trims (carrying residual to the next doc), only fully removing a doc when
-overshoot covers its whole size — so the pack hits `token_budget` EXACTLY,
-never over (which is the dangerous case that trips the RoPE assert) and never
-under. See the "autotune stall" entry below for the full final design and tests;
-the over-budget leak and the under-budget off-by-one were fixed together.
-Verified end-to-end: 4-GPU arxiv smoke completes all 200 steps + 4 validations.
-
-How it was diagnosed (the prior blocker — rank-0-only logs): added opt-in
-`TS2TS_DEBUG=1` per-rank file logging + `faulthandler` watchdog
-(`debug_instrumentation.py`) and a try/except around `smart_train` in `main.py`
-that logs the per-rank traceback before the masking barrier.
-
-### Per-rank Triton-kernel autotune stall at ≥2 ranks — FIXED 2026-06-18
-**Root cause:** the v18 attention kernel (`_attn_fwd_cdb_bim_v10` et al.) takes the
-sequence length as a `tl.constexpr` ``N`` and autotunes with `key=["N",...]`, so
-EVERY distinct sequence length triggers a fresh ~140s 48-config
-autotune+JIT-compile. Packs were occasionally NOT exactly `token_budget`: a
-pack-level-truncation off-by-one trimmed a doc's body to exactly 0 then DROPPED
-the doc, shedding its non-trimmable decoration (e.g. a 1-token eos suffix) too →
-pack landed `decoration` tokens UNDER budget (8191 not 8192). That odd length
-re-fired the autotune on whichever DDP rank drew it while peers raced ahead and
-blocked at the next collective. (Confirmed via `TRITON_PRINT_AUTOTUNING`: key's
-first element is N; measured frequency was ~0.25% on arxiv val_community, 0% on
-train/simplewiki/thestack — rare, but one is enough to desync.)
-
-**Fix (no padding — packs are made EXACTLY token_budget at the source):**
-`_apply_pack_truncation` now sheds exactly `overshoot` tokens via body trims,
-carrying any residual to the next doc and only fully removing a doc when overshoot
-covers its entire size (body+decoration). A body-trimmed-to-0 doc is KEPT so its
-decoration stays accounted for → pack always lands exactly on budget, every doc
-preserved as far as possible, no padding tokens, no wasted attention FLOPs.
-Verified on real arxiv: 600/600 packs exactly 8192 (was: one 8191). Tests:
-`tests/data/test_pack_sampler.py::test_pack_truncation_hits_budget_exactly_with_prefixes`
-(both trim sides), `::test_pack_truncation_body_trim_to_zero_keeps_decoration`
-(the exact off-by-one repro), `::test_pack_truncation_no_overshoot_is_noop`.
-(The earlier padding-based fix — `pad_to_length`/`decoration_trim`/`n_real_tokens`
-— was REVERTED per user preference for dense, padding-free packs.)
-
-**Also fixed — multi-rank Triton/inductor-compile SEGFAULT (the ≥4-rank / 2-node
-blocker):** many ranks JIT-compiling the SAME kernels concurrently corrupts the
-compiler and segfaults a rank during step-0/early-step compilation (crash frames
-in `triton.language.semantic` / `compile_worker.subproc_pool` /
-`static_cuda_launcher` / dynamo `symbolic_convert`). Probability rises with rank
-count: single-GPU never, 4-GPU intermittent, 8-rank near-certain. TWO settings in
-`launch_slurm.py` fix it:
-  1. `TORCHINDUCTOR_COMPILE_THREADS=1` — default is 32 PER PROCESS, so N ranks
-     fork up to 32*N concurrent compiler subprocs (256 at 8 ranks) → corruption.
-     ``1`` = synchronous in-process compile, no subproc pool. This ALONE got
-     single-node 8-GPU through all 200 steps clean.
-  2. A shared, PRE-WARMED compile cache (`TS2TS_SHARED_COMPILE_CACHE` →
-     inductor/ + triton/ subdirs on /fss-data). Because exact-fill makes every
-     pack the same length, all ranks need IDENTICAL kernels — so warm the cache
-     once (a prior run at the SAME world_size, so distributed-Muon shard shapes
-     match), then every rank READS it (0 compilation → 0 concurrent-compile risk
-     + fast startup). Single-GPU warmup is NOT sufficient: the distributed Muon
-     optimizer (`MuonWithAuxAdam`, `@torch.compile(dynamic=False)`) compiles
-     shard-shape-specific kernels a single-GPU (`SingleDeviceMuon`) warmup never
-     produces → warm at the real world_size.
-Also set `TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0` and per-rank `TRITON_CACHE_DIR`
-(defensive). **VERIFIED: 2-node × 4-GPU (8 ranks, GPU-44+GPU-53) ran all 200
-steps + 4 validations, train+val loss decreasing, NO segfault / NaN / NCCL error /
-recompile (0 autotune misses, warmed cache).** See [[ddp-multinode-hang-bug]].
-
-**Operational note:** for a NEW config/model-shape, warm the cache first with a
-short run at the target world_size, then point real runs at the same
-`TS2TS_SHARED_COMPILE_CACHE`. TODO: fold this into `launch_slurm.py` as an
-automatic `--warmup-compile` pre-step (submit a 1-rank-per-distinct-shape warmup
-job, wait, then the real job) so it's not a manual two-step.
+### Automate the compile-cache warmup (TODO)
+Multi-rank/multi-node runs require a pre-warmed shared compile cache to avoid the
+concurrent-compilation segfault (see `launch_slurm.py`: `TS2TS_SHARED_COMPILE_CACHE`
++ `TORCHINDUCTOR_COMPILE_THREADS=1`). Today this is a manual two-step: warm the
+cache once with a short run at the target world_size, then point the real run at
+the same `TS2TS_SHARED_COMPILE_CACHE`. Fold this into `launch_slurm.py` as an
+automatic `--warmup-compile` pre-step (submit a brief warmup job at the target
+world_size, wait, then launch the real job against the warmed cache). The warmup
+must match world_size: the distributed Muon optimizer compiles shard-shape kernels
+a single-GPU warmup never produces.
 
 ### Live PackedSequenceDataset: dedup docs within an epoch (TODO — consider)
 The live `PackedSequenceDataset` / `PackBatchSampler` path samples WITH

@@ -356,24 +356,6 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # leave ranks blocked in a collective operation.
     setup_signal_handlers()
 
-    # Per-rank observability for the multi-rank DDP hang (TODOS.md). Opt-in via
-    # TS2TS_DEBUG=1; no-op otherwise. Installs DEBUG file logging + faulthandler
-    # stack-dump watchdog for EVERY rank (the diagnosis blocker was rank-0-only
-    # logs). Must run before any collective so a hang anywhere is captured.
-    from debug_instrumentation import setup_rank_debug_logging, debug_enabled
-    setup_rank_debug_logging(dist.rank, dist.local_rank)
-    if debug_enabled():
-        # Route torch.compile recompile/guard-failure reasons into our per-rank
-        # log so we can see if one rank recompiles while peers enter a collective.
-        try:
-            torch._logging.set_logs(recompiles=True, graph_breaks=True)
-        except Exception as _e:
-            logger.debug("could not enable dynamo recompile logging: %s", _e)
-        logger.debug(
-            "TS2TS_DEBUG active: rank=%d local_rank=%d world_size=%d device=%s",
-            dist.rank, dist.local_rank, dist.world_size, dist.device,
-        )
-
     # -------------------------------------------------------------------------
     # 1. Setup Logging & Reproducibility
     # -------------------------------------------------------------------------
@@ -1013,32 +995,12 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                     split_step,
                     "yes" if embed_state else "no (cold start)",
                 )
-                # HYPOTHESIS-2 PROBE: the split mutates the module + optimizer
-                # param_groups under static_graph=True DDP. Record the exact
-                # _step_count at which THIS rank performs the split. If ranks
-                # disagree (they shouldn't — step count is collective-driven),
-                # the post-split collective sequence will desync.
-                logger.debug(
-                    "split_fn EXECUTED at split_step=%d; new lm_head id=%x; "
-                    "n_param_groups=%d",
-                    split_step, id(new_lm_head), len(opt.param_groups),
-                )
 
             if dist.is_distributed:
                 def pre_step_fn():
                     # After the split, lm_head is a new param DDP doesn't know about.
                     # Manually all-reduce its gradient before the optimizer step.
                     w = _tm.loss_fn.weight
-                    # HYPOTHESIS-2 PROBE: this all_reduce is GATED on w.grad being
-                    # non-None. If even one rank sees grad=None (or the split itself
-                    # ran on a different step on different ranks), the collective
-                    # counts diverge → fingerprint mismatch. Log the gate on every
-                    # rank so we can confirm/deny symmetric participation.
-                    logger.debug(
-                        "pre_step_fn: split_done, lm_head.grad is %s (id=%x)",
-                        "None" if w.grad is None else "present",
-                        id(w),
-                    )
                     if w.grad is not None:
                         torch.distributed.all_reduce(w.grad)
                         w.grad.div_(dist.world_size)
@@ -1090,27 +1052,13 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     if epoch_dirs:
         atomic_feature_kwargs['bucket_state_fn'] = dataset.get_state
 
-    # DIAGNOSIS PROBE (TODOS.md DDP hang): wrap smart_train so any per-rank
-    # exception inside the training loop (e.g. a data-dependent forward failure
-    # on one rank) is logged with a full traceback BEFORE it unwinds into
-    # ReproducibilityManager.__exit__'s unconditional barrier() — which would
-    # otherwise hang (the other ranks never reach it) and swallow the traceback.
-    try:
-        result = smart_train(
-            model=model,
-            optimizer=optimizer,
-            train_loader=train_loader,
-            llm_client=get_default_llm_client(),
-            **atomic_feature_kwargs
-        )
-    except BaseException:
-        logger.exception(
-            "smart_train raised on rank %d — capturing traceback before the "
-            "ReproducibilityManager.__exit__ barrier masks it.", dist.rank,
-        )
-        import faulthandler as _fh, sys as _sys
-        _fh.dump_traceback(file=_sys.stderr, all_threads=True)
-        raise
+    result = smart_train(
+        model=model,
+        optimizer=optimizer,
+        train_loader=train_loader,
+        llm_client=get_default_llm_client(),
+        **atomic_feature_kwargs
+    )
 
     logger.info("Training complete!")
 

@@ -15,3 +15,7 @@ Never change `model.compile`, `attention_backend`, or any other setting that alt
 ## launch_slurm.py argparse has no defaults
 
 The launcher's `_training_worker` parser is bare (`add_help=False`, no argument definitions). All overrides must use dotted keys (`--data.dataset_dir`, `--model.mask_type`, etc.). Argparse defaults silently clobber YAML — this burned a 3h run at 2k context instead of 32k.
+
+## Multi-rank runs need a pre-warmed compile cache
+
+Many ranks JIT-compiling the same Triton/inductor kernels concurrently corrupts the compiler and segfaults a rank during first-step compilation (rare at 4 GPUs, near-certain at 8). `launch_slurm.py` mitigates this with `TORCHINDUCTOR_COMPILE_THREADS=1` and an optional shared compile cache: set `TS2TS_SHARED_COMPILE_CACHE` to a dir on `/fss-data`, warm it once with a short run **at the same world_size** (the distributed Muon optimizer compiles shard-shape kernels a single-GPU warmup never produces), then point the real run at the same dir so every rank reads the cache instead of compiling.

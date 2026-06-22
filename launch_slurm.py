@@ -64,67 +64,38 @@ def _training_worker(main_argv: list, run_dir: str, script: str = 'main') -> Non
     os.environ.setdefault("NCCL_IB_GDR_LEVEL", "5")
     os.environ.setdefault("NCCL_NET_GDR_LEVEL", "5")
 
-    # Per-rank compile caches on NODE-LOCAL /tmp.  Two separate caches matter:
-    #   * TORCHINDUCTOR_CACHE_DIR — the inductor (backbone) compile cache.
-    #   * TRITON_CACHE_DIR        — the Triton JIT/autotune cache for the custom
-    #     attention kernels.  This defaults to ~/.triton/cache (on shared NFS),
-    #     so without an override ALL ranks on a node hammer the SAME cache files.
-    #     When several ranks autotune the same kernel concurrently they race on
-    #     those files (read/write/rename of the same .json/.cubin), which
-    #     corrupts the cache and SEGFAULTS a rank inside triton/runtime/jit.py
-    #     (source-parse / cache-load) — observed as non-deterministic per-rank
-    #     crashes during step-0/validation compilation on ≥2-GPU runs.  A
-    #     per-rank Triton cache removes the contention.
+    # Compile caches.  Multiple ranks JIT-compiling the same Triton/inductor
+    # kernels concurrently corrupts the compiler and segfaults a rank during
+    # first-step compilation (crash probability rises with rank count).  Two
+    # mitigations, both required for stable multi-rank/multi-node runs:
+    #
+    #   1. TORCHINDUCTOR_COMPILE_THREADS=1 — the default (32 per process) makes
+    #      N ranks fork up to 32*N concurrent compiler subprocesses, which
+    #      oversubscribe CPUs and corrupt the compile-worker subprocess pool.
+    #      Compiling synchronously in-process avoids that.
+    #   2. TS2TS_SHARED_COMPILE_CACHE — a pre-warmed shared cache.  Because
+    #      packs are a fixed length, every rank needs the identical set of
+    #      kernels; warm the cache once (a prior run at the SAME world_size, so
+    #      the distributed-optimizer shard shapes match), then every rank just
+    #      reads it (no compilation, fast startup).  Point it at a dir on
+    #      /fss-data.  Without it, each rank uses its own node-local cache.
     job_id  = os.environ.get("SLURM_JOB_ID",  "local")
     proc_id = os.environ.get("SLURM_PROCID",  "0")
-    # Shared, persistent, PRE-WARMED compile cache (the fix for the multi-rank
-    # compile SEGFAULT).  Many ranks JIT-compiling the SAME Triton/inductor
-    # kernels concurrently corrupts the compiler and crashes (frames in
-    # triton.language.semantic / compile_worker.subproc_pool / static_cuda_
-    # launcher); the crash probability rises with rank count (single-GPU never,
-    # 4-GPU intermittent, 8-rank near-certain).  Because exact-fill makes every
-    # pack the SAME length (constexpr N constant), all ranks need the IDENTICAL
-    # set of compiled kernels — so we compile ONCE on a single GPU into a shared
-    # content-addressed cache (TS2TS_SHARED_COMPILE_CACHE), and every subsequent
-    # rank only READS it (cache hit → no compilation → no crash).  Set the env
-    # var to a dir on /fss-data (high-I/O fs); warm it with a 1-GPU run first.
     shared_cache = os.environ.get("TS2TS_SHARED_COMPILE_CACHE", "").strip()
     if shared_cache:
         inductor_cache = os.path.join(shared_cache, "inductor")
         triton_cache   = os.path.join(shared_cache, "triton")
     else:
-        # Fallback: per-rank node-local caches (cold-compile contention avoidance
-        # for single-rank / debugging; NOT safe for many concurrent ranks).
         inductor_cache = f"/tmp/torchinductor_{job_id}/rank{proc_id}"
         triton_cache   = f"/tmp/triton_{job_id}/rank{proc_id}"
     os.makedirs(inductor_cache, exist_ok=True)
     os.makedirs(triton_cache, exist_ok=True)
     os.environ["TORCHINDUCTOR_CACHE_DIR"] = inductor_cache
     os.environ["TRITON_CACHE_DIR"]        = triton_cache
-
-    # Disable inductor's static CUDA launcher.  Under concurrent multi-rank
-    # compilation (4–8 ranks compiling the same kernels on one node), the
-    # PyTorch 2.10 static CUDA launcher (`torch/_inductor/runtime/
-    # static_cuda_launcher.py`) intermittently SEGFAULTs a rank during the
-    # step-0/validation compile — observed non-deterministically across nodes
-    # (GPU-44/53/142) and ranks, crashing the whole DDP job.  The classic
-    # dynamic launcher path is stable.  Single-GPU and some nodes never hit it,
-    # so it's a concurrency/driver fragility, not a logic bug.
-    os.environ.setdefault("TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER", "0")
-
-    # Cap inductor compile-worker threads.  Default is 32 PER PROCESS, so with N
-    # ranks sharing one node that's up to 32*N concurrent compiler subprocesses
-    # (256 at 8 ranks/node) — they oversubscribe CPUs and the
-    # `_inductor/compile_worker/subproc_pool` machinery corrupts/SEGFAULTs during
-    # the step-0 backbone compile (confirmed crash frame).  ``1`` compiles
-    # synchronously in-process (no subproc pool), trading a slightly slower
-    # first-step compile for stability across multi-rank / multi-node runs.
     os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
-
-    # When TS2TS_DEBUG is on, point per-rank logs + faulthandler crash dumps at
-    # the run dir (shared /fss) so they survive the compute node being released.
-    if os.environ.get("TS2TS_DEBUG", "").strip() in ("1", "true", "yes"):
-        os.environ.setdefault("TS2TS_DEBUG_DIR", os.path.join(run_dir, "debug_logs"))
+    # The PyTorch 2.10 static CUDA launcher is an additional concurrent-compile
+    # crash site; the classic dynamic launcher is stable.
+    os.environ.setdefault("TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER", "0")
 
     # ---- reconstruct sys.argv so compose_config sees the right args ----
     sys.argv = ["main"] + main_argv
