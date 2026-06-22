@@ -584,6 +584,21 @@ class PackBatchSampler:
         else:  # "tail"
             indices = list(reversed(range(len(placements))))
 
+        # ``removed`` marks docs to drop ENTIRELY (body + decoration); docs whose
+        # body is trimmed to 0 but still carry layout decoration (prefix/suffix)
+        # are KEPT so their decoration tokens stay accounted for.  This is the
+        # crux of hitting token_budget EXACTLY: shed exactly ``overshoot`` tokens
+        # and no more.  (The old code body-trimmed a doc to 0 and then a blanket
+        # ``effective_len > 0`` filter dropped it, silently shedding its
+        # decoration too — landing the pack ``decoration`` tokens UNDER budget,
+        # e.g. 8191 instead of 8192 for a 1-token eos suffix.  A pack whose
+        # length differs from the rest forces the Triton attention kernels — which
+        # take seq-len as a ``tl.constexpr`` — to re-autotune (~140s), which on
+        # multi-rank DDP desyncs the collective and hangs the job.)
+        removed = [False] * len(placements)
+
+        # Trim bodies in trim-side order, carrying any residual to the next doc,
+        # and fully remove a doc only when ``overshoot`` covers its entire size.
         for idx in indices:
             if overshoot <= 0:
                 break
@@ -595,22 +610,59 @@ class PackBatchSampler:
             full_doc_tokens = pre + p.effective_len + suf
 
             if overshoot >= full_doc_tokens:
-                # Removing this whole doc closes overshoot by its full size.
+                # Removing this whole doc closes overshoot by its full size
+                # (body AND decoration).
                 overshoot -= full_doc_tokens
                 p.effective_len = 0
                 p.truncated = True
-            elif overshoot <= p.effective_len:
-                # Body alone can absorb the overshoot; partial body trim suffices.
-                p.effective_len -= overshoot
-                overshoot = 0
+                removed[idx] = True
+            else:
+                # overshoot < full_doc_tokens: shed from the BODY only (keep the
+                # decoration intact and keep the doc).  trim is min(overshoot,
+                # body); if that drives the body to 0 with overshoot remaining
+                # (overshoot was > body but < body+decoration), the small residual
+                # carries to the next doc in trim order — which absorbs it from
+                # its body.  Net: exactly ``overshoot`` tokens shed, budget hit
+                # exactly, decoration never silently dropped.
+                trim = min(overshoot, p.effective_len)
+                p.effective_len -= trim
+                overshoot -= trim
                 p.truncated = True
-            # else: overshoot > effective_len but < full_doc_tokens — cannot
-            # fix by trimming body (would go to 0) and cannot drop doc (would
-            # over-correct by removing pre+suf too).  Skip this doc and try
-            # the next one in the trim direction.
 
-        # Drop any documents that have been reduced to zero length.
-        final_placements = [p for p in placements if p.effective_len > 0]
+        # Pathological fallback (layout decoration alone exceeds the budget, so
+        # body trims can't absorb the full overshoot): drop now-bodyless,
+        # decoration-bearing docs from the trim side to shed their decoration and
+        # get back under budget.  This can dip slightly under budget but never
+        # over (over-budget is the dangerous case — it trips the RoPE cache
+        # assert).  Essentially never reached in practice (would need hundreds of
+        # tiny prefix-heavy docs); logged if it ever is.
+        if overshoot > 0:
+            for idx in indices:
+                if overshoot <= 0:
+                    break
+                if removed[idx]:
+                    continue
+                p = placements[idx]
+                if p.effective_len > 0:
+                    continue
+                pre, suf = self._layout_lengths(p.doc_id)
+                deco = pre + suf
+                if deco > 0:
+                    overshoot -= deco
+                    removed[idx] = True
+            if overshoot > 0:
+                logger.warning(
+                    "Pack-level truncation could not reach token_budget=%d "
+                    "(residual overshoot=%d); decoration tokens dominate the pack. "
+                    "This pack will be over budget.",
+                    self.token_budget, overshoot,
+                )
+
+        # Keep every doc not marked for full removal.  Docs left at
+        # effective_len == 0 but carrying decoration are retained (build_packed_batch
+        # still emits their prefix/suffix); a truly empty doc contributes no
+        # tokens and is harmless.
+        final_placements = [p for i, p in enumerate(placements) if not removed[i]]
         return final_placements
 
 

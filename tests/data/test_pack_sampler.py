@@ -330,6 +330,142 @@ def test_pack_level_truncation_head_vs_tail():
     )
 
 
+class _FixedPrefixLayout:
+    """Layout stub that adds a fixed, non-trimmable prefix to every doc.
+
+    Mirrors the real prefix-carrying layouts (identifier_prefix,
+    latex_comment_prefix, etc.) whose prefix tokens cannot be trimmed by
+    pack-level body truncation.
+    """
+
+    def __init__(self, prefix_len: int, suffix_len: int = 0) -> None:
+        self._pre = prefix_len
+        self._suf = suffix_len
+
+    def prefix_length(self, info) -> int:  # noqa: ARG002
+        return self._pre
+
+    def suffix_length(self, info) -> int:  # noqa: ARG002
+        return self._suf
+
+
+def _materialised_len(placements, pre, suf):
+    """Total tokens a trimmed placement list contributes to the pack."""
+    return sum(pre + p.effective_len + suf for p in placements)
+
+
+@pytest.mark.parametrize("trim_side", ["head", "tail"])
+def test_pack_truncation_hits_budget_exactly_with_prefixes(trim_side):
+    """Pack-level truncation must land EXACTLY on token_budget, never under/over.
+
+    Regression for the multi-rank DDP hang (TODOS.md). Two coupled bugs:
+      1. (old) the leak branch skipped a doc → pack shipped ABOVE budget.
+      2. (off-by-one) trimming a doc's body to exactly 0 then dropping it shed
+         the doc's decoration (e.g. a 1-token eos suffix) too, landing the pack
+         `decoration` tokens UNDER budget (8191 vs 8192).
+    Either way the pack length differs from its peers, which forces the Triton
+    attention kernels (seq-len is a tl.constexpr) to re-autotune (~140s) and
+    desyncs DDP ranks. The fix sheds exactly `overshoot` tokens via body trims
+    (carrying residual to the next doc) so the pack is always exactly budget.
+    """
+    # 6 docs × body 20, prefix 10, suffix 1 → per-doc full 31, total 186.
+    # budget 95 → overshoot 91. Whatever the trim side, the result must be
+    # exactly 95 tokens with decoration never silently dropped.
+    n_docs = 6
+    body, pre, suf = 20, 10, 1
+    graph = DummyGraph(
+        token_lens={i: body for i in range(n_docs)},
+        outgoing={i: [] for i in range(n_docs)},
+        incoming={i: [] for i in range(n_docs)},
+    )
+    token_budget = 95
+    sampler = PackBatchSampler(
+        graph=graph,
+        strategy_factory=lambda: RandomSelectionStrategy(),
+        token_budget=token_budget,
+        doc_budget=None,
+        overflow_policy="truncate",
+        doc_level_trim_side="tail",
+        pack_level_trim_side=trim_side,
+        seed=0,
+        layout_policy=_FixedPrefixLayout(prefix_len=pre, suffix_len=suf),
+    )
+    placements = [
+        DocPlacement(doc_id=i, effective_len=body, truncated=False, doc_trim_side="tail")
+        for i in range(n_docs)
+    ]
+    total_tokens = sum(pre + p.effective_len + suf for p in placements)  # 186
+    trimmed = sampler._apply_pack_truncation(placements, total_tokens=total_tokens)
+
+    final_total = _materialised_len(trimmed, pre, suf)
+    assert final_total == token_budget, (
+        f"trim_side={trim_side}: pack landed at {final_total} != budget "
+        f"{token_budget} (deficit {token_budget - final_total})"
+    )
+
+
+def test_pack_truncation_body_trim_to_zero_keeps_decoration():
+    """The exact off-by-one repro: a body trimmed to 0 must NOT shed its suffix.
+
+    doc0: body 8190 + suffix 1 = 8191; doc1: body 5864 + suffix 1 = 5865;
+    total 14056, budget 8192, overshoot 5864. Tail-trim hits doc1 first: body
+    5864 → 0 absorbs exactly 5864. The OLD code then dropped doc1 entirely,
+    shedding its 1-token suffix too → pack 8191 (deficit 1). The fix keeps doc1
+    (body 0, suffix 1) so the pack is exactly 8192.
+    """
+    graph = DummyGraph(
+        token_lens={0: 8190, 1: 5864},
+        outgoing={0: [], 1: []},
+        incoming={0: [], 1: []},
+    )
+    budget = 8192
+    sampler = PackBatchSampler(
+        graph=graph,
+        strategy_factory=lambda: RandomSelectionStrategy(),
+        token_budget=budget,
+        doc_budget=None,
+        overflow_policy="truncate",
+        doc_level_trim_side="tail",
+        pack_level_trim_side="tail",
+        seed=0,
+        layout_policy=_FixedPrefixLayout(prefix_len=0, suffix_len=1),
+    )
+    placements = [
+        DocPlacement(doc_id=0, effective_len=8190, truncated=False, doc_trim_side="tail"),
+        DocPlacement(doc_id=1, effective_len=5864, truncated=False, doc_trim_side="tail"),
+    ]
+    total = sum(0 + p.effective_len + 1 for p in placements)  # 14056
+    trimmed = sampler._apply_pack_truncation(placements, total_tokens=total)
+    assert _materialised_len(trimmed, 0, 1) == budget
+
+
+def test_pack_truncation_no_overshoot_is_noop():
+    """When total <= budget, truncation leaves placements untouched (no trims)."""
+    graph = DummyGraph(
+        token_lens={0: 5, 1: 5},
+        outgoing={0: [], 1: []},
+        incoming={0: [], 1: []},
+    )
+    sampler = PackBatchSampler(
+        graph=graph,
+        strategy_factory=lambda: RandomSelectionStrategy(),
+        token_budget=100,
+        doc_budget=None,
+        overflow_policy="truncate",
+        doc_level_trim_side="tail",
+        pack_level_trim_side="tail",
+        seed=0,
+        layout_policy=_FixedPrefixLayout(prefix_len=3),
+    )
+    placements = [
+        DocPlacement(doc_id=0, effective_len=5, truncated=False, doc_trim_side="tail"),
+        DocPlacement(doc_id=1, effective_len=5, truncated=False, doc_trim_side="tail"),
+    ]
+    trimmed = sampler._apply_pack_truncation(placements, total_tokens=16)
+    assert len(trimmed) == 2
+    assert all(not p.truncated for p in trimmed)
+
+
 class _ChainStrategy:
     """
     Deterministic traversal strategy that walks along outgoing edges in a chain.
