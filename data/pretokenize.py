@@ -12,11 +12,9 @@ import json
 import logging
 import multiprocessing as mp
 import os
-from functools import partial
 from pathlib import Path
 from queue import Empty
 from time import sleep
-from typing import Callable, List
 import pickle
 
 import numpy as np
@@ -49,23 +47,37 @@ def load_custom_tokenizer(tokenizer_path: Path):
     return enc
 
 
-def tokenize_worker(
-    record: tuple,
-    queue: mp.Queue,
-    encode_fn: Callable[[str], List[int]],
-    dtype: np.dtype,
-):
+# Per-worker globals, populated by _worker_init via the Pool initializer.
+# The result queue MUST reach workers by fork-inheritance (initializer args),
+# never by pickling through imap — a plain mp.Queue is not picklable
+# (`RuntimeError: Queue objects should only be shared ... through inheritance`),
+# which is why these are module globals rather than partial() arguments.
+_WORKER_QUEUE = None
+_WORKER_ENCODE_FN = None
+_WORKER_DTYPE = None
+
+
+def _worker_init(queue, encode_fn, dtype):
+    """Pool initializer: stash the (inherited) queue/encoder/dtype in globals."""
+    global _WORKER_QUEUE, _WORKER_ENCODE_FN, _WORKER_DTYPE
+    _WORKER_QUEUE = queue
+    _WORKER_ENCODE_FN = encode_fn
+    _WORKER_DTYPE = dtype
+
+
+def tokenize_worker(record: tuple):
     """
-    Tokenizes a (normed_id, content_str) record and puts the result onto the queue.
+    Tokenizes a (normed_id, content_str) record and puts the result onto the
+    module-global result queue (set by _worker_init).
 
     Content pre-processing (e.g. hash-stripping for Wikipedia) is the
     responsibility of the DocumentSource, not this worker.
     """
     try:
         normed_id, content = record
-        tokens = encode_fn(content)
-        tokens_np = np.asarray(tokens, dtype=dtype)
-        queue.put((normed_id, tokens_np))
+        tokens = _WORKER_ENCODE_FN(content)
+        tokens_np = np.asarray(tokens, dtype=_WORKER_DTYPE)
+        _WORKER_QUEUE.put((normed_id, tokens_np))
     except Exception as e:
         logger.error(f"Could not process record '{record[0] if record else '?'}': {e}")
 
@@ -146,12 +158,14 @@ def writer_process(
                 pbar.update(1)
 
             except Empty:
+                # Drain strictly until the explicit sentinel — never exit on a
+                # count heuristic. The old `pbar.n >= total_files` early-exit
+                # could stop draining while a worker was still mid-`put`, which
+                # blocked that worker and in turn deadlocked the pool's join.
+                # The producer side guarantees a sentinel is sent only after all
+                # workers have finished and flushed (see run_preprocessing), so
+                # waiting here is bounded and safe.
                 logger.info("Queue is empty, waiting for more items...")
-                # This is a simple check to see if all work is done.
-                # A more robust implementation might use a separate signal.
-                if pbar.n >= total_files:
-                    logger.warning("Queue empty and all files processed. Exiting writer loop.")
-                    break
                 sleep(1)
 
     finally:
@@ -290,15 +304,20 @@ def run_preprocessing(args, rep: ReproducibilityManager, source=None):
         logger.info(f"Loaded split assignments for {len(split_lookup):,} nodes.")
 
     # --- Multiprocessing Setup ---
-    manager = mp.Manager()
-    queue = manager.Queue()
+    # Use a plain mp.Queue, NOT mp.Manager().Queue(). The Manager spins up a
+    # server process whose per-connection socket threads (seen blocked in
+    # `unix_stream_data_wait`) do not shut down cleanly, which pinned the writer
+    # child alive after it finished and deadlocked the pool/writer join at the
+    # end of a full run — leaving the dataset without metadata.json and the
+    # pipeline stuck before the split step. A plain mp.Queue has no such server.
+    queue: mp.Queue = mp.Queue()
 
     dataset_metadata = {
         "tokenizer": tokenizer_name,
         "dtype_str": token_dtype.__name__,
         "shard_filenames": [], # Will be populated by the writer
     }
-    
+
     # --- Start Processes ---
     # The writer process gets the unique output directory from the ReproducibilityManager
     writer = mp.Process(
@@ -315,20 +334,38 @@ def run_preprocessing(args, rep: ReproducibilityManager, source=None):
     )
     writer.start()
 
-    with mp.Pool(processes=args.processes) as pool:
-        worker_fn = partial(
-            tokenize_worker,
-            queue=queue,
-            encode_fn=encode_fn,
-            dtype=token_dtype,
-        )
-        list(tqdm(pool.imap_unordered(worker_fn, source), total=len(source), desc="Tokenizing"))
-    
+    # The queue, encoder and dtype reach workers by fork-inheritance via the
+    # Pool initializer — NOT as pickled imap arguments (a plain mp.Queue can't be
+    # pickled). Workers then receive only the record through imap_unordered.
+    #
+    # Teardown ordering matters with a plain mp.Queue: the writer drains the
+    # queue CONCURRENTLY while workers run, so by the time imap is exhausted the
+    # workers have flushed their puts. close()+join() then reaps them cleanly;
+    # terminate() in finally is a hard backstop so a stray worker can never wedge
+    # the join (the deadlock that previously left runs hung after tokenizing).
+    pool = mp.Pool(
+        processes=args.processes,
+        initializer=_worker_init,
+        initargs=(queue, encode_fn, token_dtype),
+    )
+    try:
+        list(tqdm(pool.imap_unordered(tokenize_worker, source),
+                  total=len(source), desc="Tokenizing"))
+        pool.close()
+        pool.join()
+    finally:
+        pool.terminate()
+
     # --- Signal writer to finish and wait ---
     queue.put((None, None)) # Sentinel value
     logger.info("All files sent to workers. Waiting for writer to finish...")
     writer.join()
     logger.info("All processes finished.")
+
+    # Release the queue's own feeder thread / pipe so this process can exit
+    # promptly instead of lingering on interpreter shutdown.
+    queue.close()
+    queue.join_thread()
 
 
 def main():
