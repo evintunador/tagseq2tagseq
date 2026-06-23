@@ -198,6 +198,7 @@ launch_slurm.py                  Multi-node SLURM launcher (submitit)
 generate.py                      Generation CLI
 precompute_epochs.py             Offline epoch pre-computation for density-aware batching
 visualize_epoch.py               Density / mask / timing visualisations for a pre-computed epoch
+visualize_llm_input.py           Decode a packed batch back to the exact text the LLM sees (per-doc prefix/body/suffix + cross-doc links)
 configs/                         YAML training configurations
 schedules/                       Pre-computed epoch directories (packs.parquet + metadata.json)
 data/
