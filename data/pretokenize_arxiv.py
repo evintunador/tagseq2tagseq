@@ -4,10 +4,14 @@ data/arxiv_graph_extractor/extract.py into sharded binary files.
 
 Usage:
     python -m data.pretokenize_arxiv \\
-        /fss-data/.../graphs/arxiv/content.jsonl \\
-        /fss-data/.../graphs/arxiv/graph.jsonl \\
+        /fss-data/.../graphs/<arxiv_run_dir>/content.jsonl \\
+        /fss-data/.../graphs/<arxiv_run_dir>/graph.jsonl \\
         -o /fss-data/.../pretokenized_datasets/arxiv \\
         -p 60
+
+The content/graph inputs come from an extraction run dir produced by
+data/arxiv_graph_extractor/extract.py (each run is its own directory under
+graphs/, e.g. graphs/arxiv_run_legacy_20260616/).
 """
 import argparse
 import json
