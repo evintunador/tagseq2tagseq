@@ -76,7 +76,16 @@ _STOCHASTIC_TO_DETERMINISTIC = {
 
 
 def _build_layout_policy(name: str, enc):
-    """Construct a DocLayoutPolicy from a config name string."""
+    """Construct a DocLayoutPolicy from a config name string.
+
+    TODO: unify with data.layout.make_layout_policy. This is a second, smaller
+    reimplementation of that factory and only handles the identifier_prefix
+    family — it does NOT know the latex_comment_prefix policies, so a checkpoint
+    trained with 'stochastic_latex_comment_prefix' (without an explicit, also-
+    supported inference_layout_policy) raises ValueError here. Replacing this
+    with a call to make_layout_policy (passing enc.encode_ordinary) gives one
+    source of truth and closes that gap.
+    """
     if name == "null":
         return NullLayoutPolicy()
     elif name == "eos":
