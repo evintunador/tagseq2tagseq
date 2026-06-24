@@ -6,23 +6,6 @@ Remaining work, organized by area. All completed items stripped.
 
 ## Data
 
-### Epoch precompute for Wikipedia
-`epoch_precompute.py` currently only supports TheStack (repo-partitioned identifiers).
-Wikipedia needs a **graph-community partitioner** before it can use the precomputed
-path. The TheStack partitioner groups all files in a repo onto one worker so BFS
-traversal stays intra-shard; naive random chunking of Wikipedia would scatter linked
-articles across workers and BFS would immediately hit boundaries, producing
-effectively doc_causal packs with no cross-doc grants.
-
-Design: multi-source BFS Voronoi — pick `n_workers` random seeds, expand round-robin
-with a per-worker size cap (≈ 1.5 × `len(graph) / n_workers`) to prevent hub nodes
-(e.g. "United States") from dominating; re-seed workers that exhaust their queue
-before the cap; assign leftover isolated/overflow docs round-robin. O(n) like the
-existing repo-prefix scan. Full design in `data/epoch_precompute.py` module docstring.
-
-Until this is implemented, simplewiki / Wikipedia training uses the live
-`PackedSequenceDataset` path (no density-aware bucketing).
-
 ### Wikipedia redirect map
 The Wikipedia dump ships a `redirect.sql` table mapping stub redirect titles to
 their canonical targets (e.g. "UK" → "United Kingdom"). Fix at graph construction

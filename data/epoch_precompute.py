@@ -5,37 +5,40 @@ Pre-computes all packs for an epoch, assigns kv_block_count density metrics
 (proxy for FlexAttention backward cost), and groups packs into density buckets
 for load-balanced DDP training.
 
-Supported datasets: TheStack only (repo-partitioned graph with "owner/repo:path"
-identifiers).  Wikipedia / SimpleWiki must use the online PackedSequenceDataset.
+Partitioning across workers (each worker generates packs for its own doc shard,
+and BFS/DFS traversal stays intra-shard because _ShardedEpochView only exposes a
+worker's own doc IDs) is dataset-aware:
 
-TODO — Wikipedia / flat-identifier dataset support:
-    The TheStack restriction exists because _partition_repos groups documents by
-    their "owner/repo" prefix so that all files in a repo land on the same worker.
-    This matters because _ShardedEpochView only exposes each worker's own doc IDs;
-    BFS traversal stops at the shard boundary, so if linked documents scatter across
-    workers the resulting packs are effectively doc_causal (no cross-doc grants fire).
+  - TheStack ("owner/repo:path" identifiers): _partition_repos groups all files
+    in a repo onto one worker — repos are the ground-truth communities.
+  - Wikipedia / ArXiv (flat identifiers): _partition_graph_communities runs a
+    multi-source BFS Voronoi partition so that linked documents land on the same
+    worker.  Without it, naive chunking scatters linked docs across workers, BFS
+    immediately hits a shard boundary, and the packs degenerate to doc_causal
+    (no cross-doc grants fire).
 
-    Wikipedia identifiers have no repo prefix, so _partition_repos degenerates to
-    one singleton "repo" per article — linked articles scatter randomly, defeating
-    the purpose.
+_partition_documents dispatches between the two by inspecting the identifier
+format (presence of the "owner/repo:" prefix).
 
-    The fix is a graph-community partitioner: multi-source BFS Voronoi.
-    High-level algorithm:
-      1. Pick n_workers random seed doc IDs.
-      2. Maintain one BFS queue per worker; initialize each with its seed.
-      3. Interleave expansion round-robin: dequeue one doc from each worker in
-         turn, claim all unclaimed neighbors into that worker's queue.
-         Once a worker's territory reaches ~(len(graph) / n_workers * 1.5) docs,
-         stop expanding it (size cap prevents hub-heavy nodes from dominating).
-         Re-seed any worker that exhausts its queue before the cap from the
-         remaining unclaimed docs.
-      4. Any unclaimed docs after all queues are empty (isolated nodes, capped
-         overflow) are assigned round-robin.
-    This produces n_workers connected subgraphs so BFS traversal stays
-    intra-shard, yielding the same density-scheduling benefits as TheStack.
-    Partitioning is O(n) — same order as the existing _partition_repos scan —
-    and runs in the main process before workers start, so it adds negligible
-    wall time.
+Graph-community partitioner (_partition_graph_communities) — multi-source BFS
+Voronoi over undirected edges:
+  1. Pick n_workers random seed doc IDs.
+  2. Maintain one BFS queue per worker; initialize each with its seed.
+  3. Interleave expansion round-robin: dequeue one doc from each worker in turn,
+     claim all unclaimed (undirected) neighbors into that worker's queue.
+     Once a worker's territory reaches ~(len(graph) / n_workers * 1.5) docs, stop
+     expanding it (size cap prevents hub nodes like "United States" from
+     dominating).  Re-seed any worker that exhausts its queue before the cap from
+     the remaining unclaimed docs.
+  4. Any unclaimed docs after all queues are empty (isolated nodes, capped
+     overflow) are assigned round-robin.
+Undirected expansion (outgoing ∪ incoming) keeps cited-but-not-citing nodes
+attached to their community rather than scattering them as singletons; the
+partition is only used to co-locate docs, so it need not match the traversal's
+outgoing-only edge_mode.  This produces n_workers connected subgraphs so BFS
+traversal stays intra-shard, yielding the same density-scheduling benefits as
+TheStack.  O(V + E) — same order as the _partition_repos scan — and runs in the
+main process before workers start, so it adds negligible wall time.
 """
 
 import collections
@@ -101,25 +104,19 @@ def _record_to_placements(record: PackRecord) -> List[DocPlacement]:
 
 
 # ---------------------------------------------------------------------------
-# TheStack dataset validation
+# Document partitioning across workers
 # ---------------------------------------------------------------------------
 
-def _assert_thestack_dataset(graph: GraphIndex) -> None:
-    """Raise ValueError if graph is not a TheStack (repo-partitioned) dataset.
+def _is_repo_partitioned(graph: GraphIndex) -> bool:
+    """Return True if the graph uses TheStack-style "owner/repo:path" identifiers.
 
-    TODO: remove once the graph-community partitioner is implemented (see module
-    docstring).  The restriction exists solely because _partition_repos relies on
-    the "owner/repo:" prefix; the rest of the pipeline is dataset-agnostic.
+    The repo prefix gives ground-truth communities, so repo-partitioning is exact.
+    Flat-identifier datasets (Wikipedia, ArXiv) lack it and fall back to the
+    graph-community partitioner.
     """
     if len(graph) == 0:
         raise ValueError("Graph is empty.")
-    first_id = graph.get_normed_identifier(0)
-    if ":" not in first_id:
-        raise ValueError(
-            "Density pre-computation currently requires a TheStack dataset (repo-partitioned "
-            "graph with 'owner/repo:path' identifiers). Wikipedia / flat-identifier datasets "
-            "need a graph-community partitioner — see the module-level TODO for the design."
-        )
+    return ":" in graph.get_normed_identifier(0)
 
 
 def _get_repo_prefix(normed_identifier: str) -> str:
@@ -143,6 +140,104 @@ def _partition_repos(
     for i, ids in enumerate(repos):
         shards[i % n_workers].extend(ids)
     return shards
+
+
+def _partition_graph_communities(
+    graph: GraphIndex,
+    n_workers: int,
+    seed: int,
+    cap_factor: float = 1.5,
+) -> List[List[int]]:
+    """Partition flat-identifier graphs into n_workers connected communities.
+
+    Multi-source BFS Voronoi over **undirected** edges (outgoing ∪ incoming).
+    See the module docstring for the algorithm.  Returns one doc-id list per
+    worker; every doc id in ``range(len(graph))`` appears in exactly one shard.
+
+    The size cap (``cap_factor * len(graph) / n_workers``) stops hub nodes from
+    letting one cell swallow the graph; capped/overflow/isolated docs are handed
+    out round-robin at the end so shards stay roughly balanced.
+    """
+    n = len(graph)
+    if n_workers <= 1:
+        return [list(range(n))]
+
+    rng = random.Random(seed)
+    cap = max(1, int(cap_factor * n / n_workers))
+
+    def undirected_neighbors(doc_id: int) -> List[int]:
+        # Dedup so a reciprocal link isn't claimed twice; order is irrelevant
+        # since all unclaimed neighbors are enqueued regardless.
+        return list(set(graph.neighbors_out(doc_id)) | set(graph.neighbors_in(doc_id)))
+
+    owner = [-1] * n                       # worker id that claimed each doc, -1 = unclaimed
+    shards: List[List[int]] = [[] for _ in range(n_workers)]
+    queues: List[collections.deque] = [collections.deque() for _ in range(n_workers)]
+
+    # Pool of doc ids drawn from for seeding / re-seeding, in shuffled order.
+    seed_pool = list(range(n))
+    rng.shuffle(seed_pool)
+    pool_cursor = 0
+
+    def next_unclaimed_seed() -> Optional[int]:
+        nonlocal pool_cursor
+        while pool_cursor < n:
+            d = seed_pool[pool_cursor]
+            pool_cursor += 1
+            if owner[d] == -1:
+                return d
+        return None
+
+    def claim(doc_id: int, w: int) -> None:
+        owner[doc_id] = w
+        shards[w].append(doc_id)
+        queues[w].append(doc_id)
+
+    # 1. Initial seeds.
+    for w in range(n_workers):
+        s = next_unclaimed_seed()
+        if s is not None:
+            claim(s, w)
+
+    # 2 & 3. Round-robin expansion with size cap and re-seeding.
+    active = True
+    while active:
+        active = False
+        for w in range(n_workers):
+            if len(shards[w]) >= cap:
+                continue            # capped — stop expanding this cell
+            if not queues[w]:
+                # Exhausted before the cap: re-seed from a fresh component.
+                s = next_unclaimed_seed()
+                if s is None:
+                    continue        # nothing left to seed this worker with
+                claim(s, w)
+            active = True
+            doc_id = queues[w].popleft()
+            for nbr in undirected_neighbors(doc_id):
+                if owner[nbr] == -1:
+                    claim(nbr, w)
+                    if len(shards[w]) >= cap:
+                        break       # respect cap mid-expansion
+
+    # 4. Round-robin any leftovers (isolated nodes, capped overflow).
+    leftovers = [d for d in range(n) if owner[d] == -1]
+    rng.shuffle(leftovers)
+    for i, d in enumerate(leftovers):
+        shards[i % n_workers].append(d)
+
+    return shards
+
+
+def _partition_documents(
+    graph: GraphIndex,
+    n_workers: int,
+    seed: int,
+) -> List[List[int]]:
+    """Dispatch to the repo (TheStack) or graph-community (flat-id) partitioner."""
+    if _is_repo_partitioned(graph):
+        return _partition_repos(graph, n_workers, seed)
+    return _partition_graph_communities(graph, n_workers, seed)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +279,9 @@ class _ShardedEpochView:
 
     def get_raw_identifier(self, normed_identifier: str) -> Optional[str]:
         return self._graph.get_raw_identifier(normed_identifier)
+
+    def get_categories(self, normed_identifier: str) -> str:
+        return self._graph.get_categories(normed_identifier)
 
     def get_outgoing_links(self, normed_identifier: str) -> List[str]:
         return self._graph.get_outgoing_links(normed_identifier)
@@ -514,13 +612,15 @@ class EpochPrecomputer:
         logger.info("Pre-computing epoch %d → %s (seed=%d)", epoch_idx, epoch_dir, seed)
 
         graph = GraphIndex(self.dataset_dir)
-        _assert_thestack_dataset(graph)
 
-        # 1. Partition repos across workers
-        shards = _partition_repos(graph, self.n_workers, seed)
+        # 1. Partition documents across workers (repo prefix for TheStack,
+        #    graph-community BFS Voronoi for flat-identifier datasets).
+        shards = _partition_documents(graph, self.n_workers, seed)
         logger.info(
-            "Partitioned %d docs into %d shards (sizes: %s)",
-            len(graph), self.n_workers, [len(s) for s in shards],
+            "Partitioned %d docs into %d shards (%s; sizes: %s)",
+            len(graph), self.n_workers,
+            "repo" if _is_repo_partitioned(graph) else "graph-community",
+            [len(s) for s in shards],
         )
 
         # 2. Spawn workers (spawn context avoids CUDA fork issues)
