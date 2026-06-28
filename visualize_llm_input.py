@@ -32,6 +32,22 @@ Run it (must use the mic2 env + data_registry PYTHONPATH, like training):
 By default it reads the small ``val_random`` split (loads in a few seconds vs.
 ~24s for the full corpus) so you get output fast; point --dataset-dir at the
 full dataset or another split for the real thing.
+
+PRECOMPUTED EPOCHS
+------------------
+Pass ``--epoch-dir <schedules>/.../epoch_0`` to inspect the packs a precomputed
+epoch (``packs.parquet``) actually contains, instead of sampling live. Packs are
+materialized exactly as ``BucketedPackDataset`` does at training time (the stored
+``PackRecord`` → ``DocPlacement`` list → ``build_packed_batch`` with the epoch's
+own layout policy from ``metadata.json``), so the rendered text is byte-for-byte
+what training reads from that schedule. ``--strategy`` / ``--token-budget`` /
+``--layout-policy`` are ignored in this mode (they come from the epoch metadata);
+use ``--pack-index`` / ``--pack-id`` to choose which pack(s) to show.
+
+    python visualize_llm_input.py \\
+        --dataset-dir /fss-data/.../pretokenized_datasets/arxiv/splits/train \\
+        --epoch-dir   /fss-data/.../schedules/arxiv_bfs/epoch_0 \\
+        --num-packs 2
 """
 
 import argparse
@@ -80,6 +96,168 @@ def _short(text: str, n: int) -> str:
     return flat[:n] + f" … (+{len(flat) - n} chars)"
 
 
+def _render_pack(placements, label, graph, backend, layout, enc, detector,
+                 args, use_color):
+    """Materialize one pack from a DocPlacement list and print the full breakdown.
+
+    Shared by the live-sampler path and the precomputed ``--epoch-dir`` path, so
+    both render identically for a given pack.  ``label`` is the heading suffix
+    (e.g. ``"PACK 0"`` or ``"PACK pack_id=130000080 bucket=29"``).
+    """
+    batch = build_packed_batch(graph, backend, layout, placements, as_2d=True)
+    tokens = batch["tokens"]            # shape [1, T]
+    spans = batch["doc_spans"]
+    flat = tokens.view(-1)
+    T = flat.shape[0]
+
+    # Causal shift the training_module applies: input = tokens[:-1], target = tokens[1:].
+    n_components = len({s.component_id for s in spans})
+
+    print()
+    print(_c(_rule("#"), "1;36", use_color))
+    print(_c(
+        f"{label}   |   {T:,} tokens   |   {len(spans)} docs   |   "
+        f"{n_components} connected component(s)",
+        "1;36", use_color,
+    ))
+    print(_c(
+        f"  (model sees input_ids = tokens[:-1] = {T-1:,} tokens, "
+        f"predicts labels = tokens[1:])",
+        "36", use_color,
+    ))
+    print(_c(_rule("#"), "1;36", use_color))
+
+    # ---- per-document breakdown ---------------------------------------
+    # Key spans by the SAME string CrossDocLinkMaskCreator matches against:
+    # detector.index_doc_span(span). This is raw_identifier for the arxiv /
+    # markdown detectors but a sub-component (e.g. a file path) for python,
+    # so using it keeps the in-pack grant check correct across datasets.
+    target_key_to_span: Dict[str, list] = {}
+    for span in spans:
+        target_key_to_span.setdefault(detector.index_doc_span(span), []).append(span)
+
+    for i, span in enumerate(spans):
+        normed = span.normed_identifier
+        # Recompute the three segments the layout policy emitted for this doc
+        # so we can label which tokens are decoration vs body. (build_packed_batch
+        # already concatenated them; here we re-derive the lengths.)
+        info = DocLayoutInfo(
+            raw_identifier=span.raw_identifier,
+            normed_identifier=normed,
+            outgoing_identifiers=span.outgoing_identifiers,
+            incoming_identifiers=graph.get_incoming_links(normed),
+            body_tokens=None,
+            categories=graph.get_categories(normed),
+        )
+        prefix_ids = layout.prefix_tokens(info)
+        suffix_ids = layout.suffix_tokens(info)
+        n_pre, n_suf = len(prefix_ids), len(suffix_ids)
+        doc_token_ids = flat[span.start:span.end].tolist()
+        body_ids = doc_token_ids[n_pre: len(doc_token_ids) - n_suf] if n_suf else doc_token_ids[n_pre:]
+
+        header = (
+            f"── doc[{i}]  pos[{span.start}:{span.end}]  "
+            f"({span.end - span.start} tok)  "
+            f"doc_id={span.doc_id}  component={span.component_id}"
+            + ("  TRUNCATED" if span.truncated else "")
+        )
+        print()
+        print(_c(header, "1;33", use_color))
+        print(f"   normed_id : {normed}")
+        print(f"   title     : {span.raw_identifier!r}")
+        print(f"   categories: {graph.get_categories(normed)!r}")
+
+        # PREFIX (the LaTeX-comment card, or empty on a stochastic 'no-card' flip)
+        if n_pre:
+            print(_c(f"   ┌ PREFIX  ({n_pre} tok)  ids={prefix_ids}", "32", use_color))
+            pre_text = enc.decode(prefix_ids)
+            for line in pre_text.splitlines():
+                print(_c(f"   │   {line}", "32", use_color))
+        else:
+            reason = (
+                " (stochastic coin-flip: no card this epoch)"
+                if "stochastic" in args.layout_policy else ""
+            )
+            print(_c(f"   ┌ PREFIX  (none){reason}", "32", use_color))
+
+        # BODY (the rehydrated LaTeX paper text from the pretokenized shard)
+        body_text = enc.decode(body_ids)
+        print(_c(f"   ├ BODY    ({len(body_ids)} tok)", "0", use_color))
+        if args.full_body:
+            for line in body_text.splitlines():
+                print(f"   │   {line}")
+        else:
+            half = args.snippet_chars // 2
+            print(f"   │   head: {_short(body_text[:half], half)!r}")
+            if len(body_text) > args.snippet_chars:
+                print(f"   │   tail: {_short(body_text[-half:], half)!r}")
+
+        # SUFFIX (the EOS doc-boundary token)
+        if n_suf:
+            print(_c(
+                f"   └ SUFFIX  ({n_suf} tok)  ids={suffix_ids}  "
+                f"decoded={enc.decode(suffix_ids)!r}  (EOS / doc boundary)",
+                "35", use_color,
+            ))
+        else:
+            print(_c("   └ SUFFIX  (none)", "35", use_color))
+
+    # ---- cross-doc links ----------------------------------------------
+    # Render the detected link in the surface syntax of the active detector
+    # so the display matches the dataset (arxiv \cite{}, wikipedia/markdown
+    # [](), thestack `import`); detection itself is detector-agnostic.
+    def _fmt_link(target: str) -> str:
+        t = _short(target, 70)
+        if args.link_detector == "arxiv":
+            return f"\\cite{{{t}}}"
+        if args.link_detector == "markdown":
+            return f"[...]({t})"
+        if args.link_detector == "python":
+            return f"import {t}"
+        return f"→ {t!r}"
+
+    print()
+    print(_c(
+        f"── CROSS-DOC LINKS ({args.link_detector} detector; targets matched "
+        f"against in-pack docs)", "1;34", use_color,
+    ))
+    links = detector.detect_links(flat)
+    if not links:
+        print("   (none detected)")
+    else:
+        for ln in links:
+            # Which doc emitted the link (link_end_pos falls in its span)?
+            src = next(
+                (s for s in spans if s.start < ln.link_end_pos <= s.end), None
+            )
+            src_idx = spans.index(src) if src in spans else "?"
+            # Is the target present in this pack? CrossDocLinkMaskCreator
+            # matches target_str against detector.index_doc_span(span). If so,
+            # the model is granted attention to it — a real cross-doc edge.
+            target_spans = target_key_to_span.get(ln.target_str)
+            if target_spans:
+                tgt_idxs = [spans.index(t) for t in target_spans]
+                status = _c(
+                    f"IN-PACK → grants attention to doc{tgt_idxs}", "1;32", use_color
+                )
+            else:
+                status = _c("not in pack (no grant)", "90", use_color)
+            print(
+                f"   @tok {ln.link_end_pos:>6}  from doc[{src_idx}]  "
+                f"{_fmt_link(ln.target_str)}  {status}"
+            )
+
+    # ---- optional raw stream dump -------------------------------------
+    if args.dump_raw:
+        print()
+        print(_c("── RAW DECODED STREAM (full pack, doc boundaries marked ⟦…⟧)", "1;37", use_color))
+        parts = []
+        for i, span in enumerate(spans):
+            seg = enc.decode(flat[span.start:span.end].tolist())
+            parts.append(_c(f"⟦doc{i}⟧", "1;31", use_color) + seg)
+        print("".join(parts))
+
+
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
@@ -97,6 +275,23 @@ def main():
     parser.add_argument(
         "--num-packs", type=int, default=2,
         help="How many packed sequences to render.",
+    )
+    parser.add_argument(
+        "--epoch-dir", default=None,
+        help="Inspect a PRECOMPUTED epoch (packs.parquet) instead of sampling "
+             "live. Packs are materialized exactly as training does, using the "
+             "layout policy from the epoch's metadata.json. --strategy / "
+             "--token-budget / --layout-policy are ignored in this mode.",
+    )
+    parser.add_argument(
+        "--pack-index", type=int, default=0,
+        help="With --epoch-dir: positional index of the first pack to render "
+             "(then --num-packs consecutive packs from there).",
+    )
+    parser.add_argument(
+        "--pack-id", type=int, default=None,
+        help="With --epoch-dir: render exactly this pack_id (overrides "
+             "--pack-index / --num-packs).",
     )
     parser.add_argument(
         "--token-budget", type=int, default=8192,
@@ -163,6 +358,19 @@ def main():
     enc = tiktoken.get_encoding(graph.metadata.get("tokenizer", "gpt2"))
     eos_id = enc.eot_token  # 50256 for gpt2 (<|endoftext|>)
 
+    if args.epoch_dir is not None:
+        _run_precomputed(args, graph, backend, enc, eos_id, use_color)
+    else:
+        _run_live(args, graph, backend, enc, eos_id, use_color)
+
+    backend.close()
+    print()
+    print(_rule())
+    print("done.")
+
+
+def _run_live(args, graph, backend, enc, eos_id, use_color):
+    """Sample packs live from the graph and render them (the default mode)."""
     # Layout policy — same factory + same encode_fn (encode_ordinary) as training.
     layout = make_layout_policy(
         name=args.layout_policy,
@@ -207,7 +415,7 @@ def main():
         f"eos={eos_id}  dtype={graph.token_dtype}"
     )
     print(
-        f"  strategy={args.strategy}  layout={args.layout_policy}  "
+        f"  LIVE sample  |  strategy={args.strategy}  layout={args.layout_policy}  "
         f"order_mode={args.order_mode}  token_budget={args.token_budget}  "
         f"doc_budget={args.doc_budget}  epoch={args.epoch}"
     )
@@ -222,164 +430,73 @@ def main():
             break
         if not placements:
             continue
+        _render_pack(placements, f"PACK {pack_no}", graph, backend, layout,
+                     enc, detector, args, use_color)
 
-        batch = build_packed_batch(graph, backend, layout, placements, as_2d=True)
-        tokens = batch["tokens"]            # shape [1, T]
-        spans = batch["doc_spans"]
-        flat = tokens.view(-1)
-        T = flat.shape[0]
 
-        # Causal shift the training_module applies: input = tokens[:-1], target = tokens[1:].
-        n_components = len({s.component_id for s in spans})
+def _run_precomputed(args, graph, backend, enc, eos_id, use_color):
+    """Render packs from a precomputed epoch's packs.parquet (--epoch-dir mode).
 
-        print()
-        print(_c(_rule("#"), "1;36", use_color))
-        print(_c(
-            f"PACK {pack_no}   |   {T:,} tokens   |   {len(spans)} docs   |   "
-            f"{n_components} connected component(s)",
-            "1;36", use_color,
-        ))
-        print(_c(
-            f"  (model sees input_ids = tokens[:-1] = {T-1:,} tokens, "
-            f"predicts labels = tokens[1:])",
-            "36", use_color,
-        ))
-        print(_c(_rule("#"), "1;36", use_color))
+    Materializes each stored PackRecord exactly as BucketedPackDataset does at
+    training time, using the layout policy named in the epoch's metadata.json (so
+    --layout-policy / --strategy / --token-budget from the CLI are ignored here).
+    """
+    import json
+    import pyarrow.parquet as pq
 
-        # ---- per-document breakdown ---------------------------------------
-        # Key spans by the SAME string CrossDocLinkMaskCreator matches against:
-        # detector.index_doc_span(span). This is raw_identifier for the arxiv /
-        # markdown detectors but a sub-component (e.g. a file path) for python,
-        # so using it keeps the in-pack grant check correct across datasets.
-        target_key_to_span: Dict[str, list] = {}
-        for span in spans:
-            target_key_to_span.setdefault(detector.index_doc_span(span), []).append(span)
+    from data.epoch_precompute import _record_to_placements, _table_to_records
 
-        for i, span in enumerate(spans):
-            normed = span.normed_identifier
-            # Recompute the three segments the layout policy emitted for this doc
-            # so we can label which tokens are decoration vs body. (build_packed_batch
-            # already concatenated them; here we re-derive the lengths.)
-            info = DocLayoutInfo(
-                raw_identifier=span.raw_identifier,
-                normed_identifier=normed,
-                outgoing_identifiers=span.outgoing_identifiers,
-                incoming_identifiers=graph.get_incoming_links(normed),
-                body_tokens=None,
-                categories=graph.get_categories(normed),
-            )
-            prefix_ids = layout.prefix_tokens(info)
-            suffix_ids = layout.suffix_tokens(info)
-            n_pre, n_suf = len(prefix_ids), len(suffix_ids)
-            doc_token_ids = flat[span.start:span.end].tolist()
-            body_ids = doc_token_ids[n_pre: len(doc_token_ids) - n_suf] if n_suf else doc_token_ids[n_pre:]
+    epoch_dir = Path(args.epoch_dir)
+    meta = json.load(open(epoch_dir / "metadata.json"))
+    records = _table_to_records(pq.read_table(str(epoch_dir / "packs.parquet")))
 
-            header = (
-                f"── doc[{i}]  pos[{span.start}:{span.end}]  "
-                f"({span.end - span.start} tok)  "
-                f"doc_id={span.doc_id}  component={span.component_id}"
-                + ("  TRUNCATED" if span.truncated else "")
-            )
-            print()
-            print(_c(header, "1;33", use_color))
-            print(f"   normed_id : {normed}")
-            print(f"   title     : {span.raw_identifier!r}")
-            print(f"   categories: {graph.get_categories(normed)!r}")
+    # Layout policy comes from the epoch metadata — NOT the CLI — so the rendered
+    # decoration matches what was baked into this schedule.
+    layout_name = meta.get("layout_policy", "null")
+    layout = make_layout_policy(
+        name=layout_name, encode_fn=enc.encode_ordinary, eos_token_id=eos_id,
+    )
+    if hasattr(layout, "set_epoch"):
+        layout.set_epoch(meta.get("epoch_idx", 0))
 
-            # PREFIX (the LaTeX-comment card, or empty on a stochastic 'no-card' flip)
-            if n_pre:
-                print(_c(f"   ┌ PREFIX  ({n_pre} tok)  ids={prefix_ids}", "32", use_color))
-                pre_text = enc.decode(prefix_ids)
-                for line in pre_text.splitlines():
-                    print(_c(f"   │   {line}", "32", use_color))
-            else:
-                reason = (
-                    " (stochastic coin-flip: no card this epoch)"
-                    if "stochastic" in args.layout_policy else ""
-                )
-                print(_c(f"   ┌ PREFIX  (none){reason}", "32", use_color))
+    # Link detector also from metadata; reflect it in args so _render_pack's
+    # link-syntax formatting + header label match the schedule.
+    args.link_detector = meta.get("link_detector", args.link_detector)
+    args.layout_policy = layout_name
+    detector = make_link_detector(args.link_detector, enc.decode)
 
-            # BODY (the rehydrated LaTeX paper text from the pretokenized shard)
-            body_text = enc.decode(body_ids)
-            print(_c(f"   ├ BODY    ({len(body_ids)} tok)", "0", use_color))
-            if args.full_body:
-                for line in body_text.splitlines():
-                    print(f"   │   {line}")
-            else:
-                half = args.snippet_chars // 2
-                print(f"   │   head: {_short(body_text[:half], half)!r}")
-                if len(body_text) > args.snippet_chars:
-                    print(f"   │   tail: {_short(body_text[-half:], half)!r}")
-
-            # SUFFIX (the EOS doc-boundary token)
-            if n_suf:
-                print(_c(
-                    f"   └ SUFFIX  ({n_suf} tok)  ids={suffix_ids}  "
-                    f"decoded={enc.decode(suffix_ids)!r}  (EOS / doc boundary)",
-                    "35", use_color,
-                ))
-            else:
-                print(_c("   └ SUFFIX  (none)", "35", use_color))
-
-        # ---- cross-doc links ----------------------------------------------
-        # Render the detected link in the surface syntax of the active detector
-        # so the display matches the dataset (arxiv \cite{}, wikipedia/markdown
-        # [](), thestack `import`); detection itself is detector-agnostic.
-        def _fmt_link(target: str) -> str:
-            t = _short(target, 70)
-            if args.link_detector == "arxiv":
-                return f"\\cite{{{t}}}"
-            if args.link_detector == "markdown":
-                return f"[...]({t})"
-            if args.link_detector == "python":
-                return f"import {t}"
-            return f"→ {t!r}"
-
-        print()
-        print(_c(
-            f"── CROSS-DOC LINKS ({args.link_detector} detector; targets matched "
-            f"against in-pack docs)", "1;34", use_color,
-        ))
-        links = detector.detect_links(flat)
-        if not links:
-            print("   (none detected)")
-        else:
-            for ln in links:
-                # Which doc emitted the link (link_end_pos falls in its span)?
-                src = next(
-                    (s for s in spans if s.start < ln.link_end_pos <= s.end), None
-                )
-                src_idx = spans.index(src) if src in spans else "?"
-                # Is the target present in this pack? CrossDocLinkMaskCreator
-                # matches target_str against detector.index_doc_span(span). If so,
-                # the model is granted attention to it — a real cross-doc edge.
-                target_spans = target_key_to_span.get(ln.target_str)
-                if target_spans:
-                    tgt_idxs = [spans.index(t) for t in target_spans]
-                    status = _c(
-                        f"IN-PACK → grants attention to doc{tgt_idxs}", "1;32", use_color
-                    )
-                else:
-                    status = _c("not in pack (no grant)", "90", use_color)
-                print(
-                    f"   @tok {ln.link_end_pos:>6}  from doc[{src_idx}]  "
-                    f"{_fmt_link(ln.target_str)}  {status}"
-                )
-
-        # ---- optional raw stream dump -------------------------------------
-        if args.dump_raw:
-            print()
-            print(_c("── RAW DECODED STREAM (full pack, doc boundaries marked ⟦…⟧)", "1;37", use_color))
-            parts = []
-            for i, span in enumerate(spans):
-                seg = enc.decode(flat[span.start:span.end].tolist())
-                parts.append(_c(f"⟦doc{i}⟧", "1;31", use_color) + seg)
-            print("".join(parts))
-
-    backend.close()
-    print()
+    print(
+        f"  nodes={len(graph):,}  tokenizer={graph.metadata.get('tokenizer','gpt2')}  "
+        f"eos={eos_id}  dtype={graph.token_dtype}"
+    )
+    print(
+        f"  PRECOMPUTED epoch={epoch_dir}  |  {len(records):,} packs  "
+        f"{meta.get('n_buckets','?')} buckets  layout={layout_name}  "
+        f"link_detector={args.link_detector}  strategy={meta.get('strategy','?')}  "
+        f"token_budget={meta.get('token_budget','?')}"
+    )
     print(_rule())
-    print("done.")
+
+    if not records:
+        print("(epoch has no packs)")
+        return
+
+    # Choose which records to render: an exact pack_id, or a window of num-packs.
+    if args.pack_id is not None:
+        sel = [r for r in records if r.pack_id == args.pack_id]
+        if not sel:
+            print(f"(pack_id {args.pack_id} not found in this epoch)")
+            return
+    else:
+        start = args.pack_index % len(records)
+        sel = records[start: start + args.num_packs]
+
+    for rec in sel:
+        placements = _record_to_placements(rec)
+        label = (f"PACK pack_id={rec.pack_id} bucket={rec.bucket_id} "
+                 f"kv_block_count={rec.kv_block_count}")
+        _render_pack(placements, label, graph, backend, layout,
+                     enc, detector, args, use_color)
 
 
 if __name__ == "__main__":
