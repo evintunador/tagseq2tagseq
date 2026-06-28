@@ -280,23 +280,31 @@ def fig_masks(records, meta, dataset_dir: str, output_path: str,
     for r in records:
         bucket_lists[r.bucket_id].append(r)
 
-    # Pick median pack from sparsest and densest bucket
+    # Pick median pack from a bucket (median kv_block_count = representative).
     def pick_pack(b):
         lst = sorted(bucket_lists[b], key=lambda r: r.kv_block_count)
         return lst[len(lst) // 2]
 
-    packs = [(0, pick_pack(0)), (n_buckets - 1, pick_pack(n_buckets - 1))]
+    # Show LOW / MEDIUM / HIGH density buckets so the multi-doc block structure
+    # (not just the degenerate single-doc full-triangle of the densest bucket)
+    # is visible as a smoke test.
+    low, mid, high = 0, n_buckets // 2, n_buckets - 1
+    selections = [
+        (low, "low density", pick_pack(low)),
+        (mid, "medium density", pick_pack(mid)),
+        (high, "high density", pick_pack(high)),
+    ]
 
-    fig, axes = plt.subplots(1, len(packs), figsize=(7 * len(packs), 7))
-    if len(packs) == 1:
+    fig, axes = plt.subplots(1, len(selections), figsize=(7 * len(selections), 7.6))
+    if len(selections) == 1:
         axes = [axes]
     fig.suptitle(
         f"Block-level attention masks  (each cell = one {block_size}-token block)",
-        fontsize=13, fontweight="bold",
+        fontsize=13, fontweight="bold", y=1.00,
     )
 
-    for ax, (b_idx, rec) in zip(axes, packs):
-        print(f"  building mask for bucket {b_idx} pack {rec.pack_id}...")
+    for ax, (b_idx, label, rec) in zip(axes, selections):
+        print(f"  building mask for bucket {b_idx} ({label}) pack {rec.pack_id}...")
         grid, boundaries, seq_len, n_docs, n_links = compute_block_mask_grid(
             rec, graph, backend, layout, block_size
         )
@@ -308,7 +316,6 @@ def fig_masks(records, meta, dataset_dir: str, output_path: str,
             ax.axvline(bnd - 0.5, color="tomato", linewidth=0.6, alpha=0.9)
         ax.set_xlabel(f"KV block  (0–{n-1}, {seq_len} tokens)")
         ax.set_ylabel(f"Q block   (0–{n-1})")
-        label = "sparsest" if b_idx == 0 else "densest"
         ax.set_title(
             f"Bucket {b_idx} ({label})  —  kv_block_count={rec.kv_block_count:,}\n"
             f"{n_docs} docs, {n_links} cross-doc links, {seq_len} tokens",
@@ -326,7 +333,7 @@ def fig_masks(records, meta, dataset_dir: str, output_path: str,
                       facecolor=colors[b_idx], alpha=0.85),
         )
 
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(output_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"saved {output_path}")
