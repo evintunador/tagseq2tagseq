@@ -27,8 +27,9 @@ Pretokenized datasets live outside all worktrees at `<to/be/generated>/`:
 |---------|-------------|-------|--------|-----------------------|
 | **SimpleWiki** | Markdown hyperlinks | 275k | 1 | `<to/be/generated>/pretokenized_datasets/simplewiki/` |
 | **TheStack** | Python imports | 3.56M | 9 | `<to/be/generated>/pretokenized_datasets/thestack/` |
+| **arXiv** | `\cite{}` citations | 2.20M | — | `/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/` |
 
-SimpleWiki uses `--model.link_detector markdown`; TheStack uses `--model.link_detector python`.
+SimpleWiki uses `--model.link_detector markdown`; TheStack uses `--model.link_detector python`; arXiv uses `--model.link_detector arxiv` (config: `configs/arxiv_cross_doc.yaml`).
 
 Both datasets have been split into train/val/test subdirectories (see [Graph Splitting](#graph-splitting) below).
 
@@ -129,6 +130,69 @@ python -m data.pretokenize_stack \
 ```
 
 Produces 9 binary shards, `tokenized_graph.jsonl`, and `metadata.json`.
+
+---
+
+### arXiv (unarXive 2024)
+
+Four CPU scripts under `data/arxiv_graph_extractor/`, each fully arg-driven (no hard-coded
+paths). They are heavy/long, so run them on a compute node — e.g. wrap any command below in
+`srun --cpus-per-task=32 --mem=64G --time=8:00:00 <cmd>`. Write all outputs under `<artifacts>`
+on a bulk-I/O filesystem (here `/fss-data`), never `/fss`. `<corpus>` below is the extracted
+unarXive directory `<artifacts>/raw/unarxive_2024/extracted/processed_unarxive_extended_data`.
+
+**1. Download + extract unarXive 2024** (105 GB tarball → 371 GB JSONL shards)
+
+```bash
+# HF token in env (e.g. export HF_TOKEN=...); dataset is public (MIT).
+hf download ines-besrour/unarxive_2024 --repo-type dataset \
+    --include "unarXive_2024.tar.gz.part_*" --local-dir <artifacts>/raw/unarxive_2024/parts
+cat <artifacts>/raw/unarxive_2024/parts/unarXive_2024.tar.gz.part_a? \
+    | tar -xzf - -C <artifacts>/raw/unarxive_2024/extracted
+```
+
+**2. Build the arXiv↔OpenAlex map** (enriched citation resolution)
+
+```bash
+python -m data.arxiv_graph_extractor.build_openalex_map \
+    --out <artifacts>/graphs/arxiv_openalex_map.jsonl --workers 32
+```
+
+Streams the OpenAlex works snapshot (~639 GB) over the public S3 **HTTPS** endpoint — no bulk
+download, no credentials (the `aws` CLI is not installed on compute nodes). Writes ~3M
+arxiv↔OpenAlex pairs.
+
+**3. (optional) Measure graph density** before the full extract:
+
+```bash
+python -m data.arxiv_graph_extractor.measure_density \
+    --corpus-dir <corpus> --out <artifacts>/graphs/arxiv_density_report.json --workers 32
+```
+
+**4. Extract graph + rehydrated content**
+
+```bash
+python -m data.arxiv_graph_extractor.extract \
+    --corpus-dir <corpus> \
+    --oa-map <artifacts>/graphs/arxiv_openalex_map.jsonl \
+    --out-dir <artifacts>/graphs/arxiv --workers 32
+```
+
+Two passes + merge: resolves citations (direct arXiv id, then OpenAlex map) to in-corpus
+titles, rewrites `{{cite:...}}` → `\cite{Title}`, rehydrates bodies to faithful LaTeX, and
+writes `graphs/arxiv/{graph.jsonl, content.jsonl}` (~2.20M nodes, mean out-degree 4.3).
+
+**5. Pretokenize**, then split as in [Graph Splitting](#graph-splitting):
+
+```bash
+python -m data.pretokenize_arxiv \
+    <artifacts>/graphs/arxiv/content.jsonl \
+    <artifacts>/graphs/arxiv/graph.jsonl \
+    -o <artifacts>/pretokenized_datasets/arxiv -p 48
+```
+
+arXiv has four condition configs like the other datasets:
+`configs/arxiv_{cross_doc,doc_causal,doc_concat_link,doc_concatenated}.yaml`.
 
 ---
 

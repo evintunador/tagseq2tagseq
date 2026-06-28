@@ -6,6 +6,7 @@ from pathlib import Path
 from data.document_sources import (
     MarkdownDirectorySource,
     StackJSONLSource,
+    ArxivUnarxiveSource,
 )
 from data.normalization import normalize_repo_name as _normalize_repo_name
 
@@ -208,3 +209,56 @@ class TestStackJSONLSource:
         all_titles = {_graph_title("user/repo", "x.py")}
         source = StackJSONLSource(jsonl_path, all_titles)
         assert list(source) == []
+
+
+# ---------------------------------------------------------------------------
+# ArxivUnarxiveSource
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def arxiv_content(tmp_path):
+    records = [
+        {"normed_identifier": "2401_00001_aaa111", "content": "Body of paper one \\cite{Paper Two}."},
+        {"normed_identifier": "2401_00002_bbb222", "content": "Body of paper two."},
+        # Present in JSONL but NOT in the graph — should be skipped.
+        {"normed_identifier": "2401_99999_zzz999", "content": "Orphan body."},
+        # Missing content — should be skipped even if in graph.
+        {"normed_identifier": "2401_00003_ccc333", "content": ""},
+    ]
+    path = tmp_path / "content.jsonl"
+    with open(path, "w", encoding="utf-8") as f:
+        for rec in records:
+            f.write(json.dumps(rec) + "\n")
+    graph_ids = {"2401_00001_aaa111", "2401_00002_bbb222", "2401_00003_ccc333"}
+    return path, graph_ids
+
+
+class TestArxivUnarxiveSource:
+    def test_len_equals_graph_ids(self, arxiv_content):
+        path, graph_ids = arxiv_content
+        assert len(ArxivUnarxiveSource(path, graph_ids)) == 3
+
+    def test_yields_only_graph_members(self, arxiv_content):
+        path, graph_ids = arxiv_content
+        ids = {nid for nid, _ in ArxivUnarxiveSource(path, graph_ids)}
+        # Orphan (not in graph) and empty-content record both excluded.
+        assert ids == {"2401_00001_aaa111", "2401_00002_bbb222"}
+
+    def test_yields_content_verbatim(self, arxiv_content):
+        path, graph_ids = arxiv_content
+        results = dict(ArxivUnarxiveSource(path, graph_ids))
+        assert results["2401_00001_aaa111"] == "Body of paper one \\cite{Paper Two}."
+
+    def test_skips_empty_content(self, arxiv_content):
+        path, graph_ids = arxiv_content
+        ids = {nid for nid, _ in ArxivUnarxiveSource(path, graph_ids)}
+        assert "2401_00003_ccc333" not in ids
+
+    def test_empty_graph_ids_yields_nothing(self, arxiv_content):
+        path, _ = arxiv_content
+        assert list(ArxivUnarxiveSource(path, set())) == []
+
+    def test_iterable_multiple_times(self, arxiv_content):
+        path, graph_ids = arxiv_content
+        source = ArxivUnarxiveSource(path, graph_ids)
+        assert sorted(n for n, _ in source) == sorted(n for n, _ in source)

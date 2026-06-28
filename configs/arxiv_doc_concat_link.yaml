@@ -1,0 +1,97 @@
+data:
+  dataset_dir: <to/be/generated>/pretokenized_datasets/arxiv
+  strategy: 'bfs'
+  layout_policy: 'stochastic_latex_comment_prefix'
+  inference_layout_policy: 'eos'
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+  train_dir:   <to/be/generated>/pretokenized_datasets/arxiv/splits/train
+  val_dirs:
+    val_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/val_community
+    val_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/val_random
+  test_dirs:
+    test_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/test_community
+    test_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/test_random
+
+model:
+  compile: true
+  compile_mode: 'default'
+  attention_backend: 'triton'
+  inference_attention_backend: 'flex'
+  # doc_concat_link: a detected link concatenates the *entire* source doc onto
+  # the target (full causal, no link-position gate) — a strict FLOP-superset of
+  # cross_doc_link with the same connectivity but no inference-time linking.
+  # Reuses the cross-doc grant kernel with whole_doc_grant=True.
+  mask_type: 'doc_concat_link'
+  link_detector: 'arxiv'
+  max_grants: 256
+  # max_grants_start: 64
+  # max_grants_warmup_steps: 5000
+  activation_checkpointing: false
+  model_dim: 1024
+  num_layers: 24
+  num_heads: 8    # 8H × 128Dh = 1024
+  max_seq_len: 32768
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  untie_at_frac: 0.667
+  ignore_index: -100
+  dtype: 'bfloat16'
+  logit_softcap: 30.0
+  mtp_extra_weights: [0.5, 0.25]
+  mtp_decay_steps: 0
+  ve_layers: [1, 2, 21, 22, 23]
+  shared_ve_bank: false
+
+optimizer:
+  type: 'muon'
+  muon_wd: 1.2
+  adamw_wd: 0.005
+  momentum: 0.95
+  muon_beta2: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.001
+  adamw_lr: 0.00001
+  muon_momentum_warmup_steps: 300
+  adamw_embed_beta1: 0.5
+
+train_loop:
+  epochs: 1
+  max_optimizer_steps: null
+  warmup_steps: 300
+  cooldown_frac: 0.4
+  min_lr_ratio: 0.1
+  val_steps: 20
+  val_interval: 100
+  atomic_feature_kwargs:
+    norm_clip_value: 1.0
+    accum_steps: 1
+
+seed: 42
+
+eval:
+  run_on_completion: true
+  benchmarks:
+    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
+    # experimental = the model's own doc_concat_link mask.
+    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
+    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
+    # No 'annotated' condition: link injection at inference is a cross_doc_link
+    # capability; concat conditions train link-aware but eval with eos layout
+    # (no inference-time link prediction — that's their deliberate disadvantage).
+    - {name: hellaswag,   conditions: [doceval]}
+    - {name: boolq,       conditions: [doceval]}
+    - {name: openbookqa,  conditions: [doceval]}
+  max_docs: 500
+  annotator_corpus: <to/be/generated>/pretokenized_datasets/arxiv
+  annotator_mode: corpus_only
+  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+
+# --- Smoke-test overrides (pass on CLI, don't edit here) ---
+# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
+# --model.max_seq_len 2048
+# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
+# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
+# --eval.max_docs 20

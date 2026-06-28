@@ -80,3 +80,42 @@ class StackJSONLSource:
                 normed_id = f"{normalize_repo_name(repo)}:{path}"
                 if normed_id in self._graph_normed_ids:
                     yield normed_id, content
+
+
+class ArxivUnarxiveSource:
+    """
+    Yields (normed_id, content) for ArXiv papers from a pre-built content JSONL.
+
+    Unlike StackJSONLSource, the heavy lifting (normed_id computation, body
+    rehydration into LaTeX, citation rewriting) already happened in the ArXiv
+    extractor (data/arxiv_graph_extractor/extract.py), which emits a content
+    JSONL of one ``{"normed_identifier", "content"}`` object per line alongside
+    graph.jsonl. This source is therefore a thin reader: it yields each record
+    whose normed_id appears in the graph.
+
+    Args:
+        content_jsonl: Path to the extractor's content JSONL.
+        graph_normed_ids: Set of normed_identifier strings from graph.jsonl.
+            Only records whose normed_id appears here are yielded (keeps the
+            tokenized corpus aligned with the graph after any split/filter).
+    """
+
+    def __init__(self, content_jsonl: Path, graph_normed_ids: set[str]):
+        self._content_jsonl = content_jsonl
+        self._graph_normed_ids = graph_normed_ids
+
+    def __len__(self) -> int:
+        # As with StackJSONLSource, the graph size is the expected count; the
+        # writer's sentinel handles the actual termination so minor skew is fine.
+        return len(self._graph_normed_ids)
+
+    def __iter__(self) -> Iterator[tuple[str, str]]:
+        with open(self._content_jsonl, "r", encoding="utf-8") as f:
+            for line in f:
+                record = json.loads(line)
+                normed_id = record.get("normed_identifier", "")
+                content = record.get("content", "")
+                if not (normed_id and content):
+                    continue
+                if normed_id in self._graph_normed_ids:
+                    yield normed_id, content
