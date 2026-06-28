@@ -563,13 +563,19 @@ class PackBatchSampler:
         total_tokens: int,
     ) -> List[DocPlacement]:
         """
-        Apply final pack-level truncation so that the sum of ``effective_len``
-        across all placements does not exceed ``token_budget``.
+        Trim the pack to hit ``token_budget`` EXACTLY.
 
-        Depending on ``pack_level_trim_side``, truncation walks from the head
-        (earliest documents) or tail (latest documents) of the ordered pack,
-        decreasing ``effective_len`` and marking documents as truncated. If a
-        document's ``effective_len`` reaches zero, it is dropped from the pack.
+        Every pack must be the same length: the Triton attention kernels take
+        the sequence length as a ``tl.constexpr``, so a pack of a different
+        length forces a fresh per-length autotune (~140s) which, on multi-rank
+        DDP, desyncs the collective and hangs the job.  We therefore shed
+        *exactly* ``overshoot`` tokens — never more (under budget) and never
+        fewer (over budget) — by trimming document bodies in
+        ``pack_level_trim_side`` order, carrying any residual to the next
+        document, and fully removing a document only when the overshoot covers
+        its entire size (body + layout decoration).  A document whose body is
+        trimmed to zero but still carries decoration (prefix/suffix) is kept so
+        those tokens stay accounted for.
         """
         if not placements:
             return placements
@@ -584,6 +590,10 @@ class PackBatchSampler:
         else:  # "tail"
             indices = list(reversed(range(len(placements))))
 
+        # ``removed`` marks documents to drop entirely; bodies are trimmed in
+        # place. A body trimmed to 0 keeps the doc (its decoration still counts).
+        removed = [False] * len(placements)
+
         for idx in indices:
             if overshoot <= 0:
                 break
@@ -595,23 +605,46 @@ class PackBatchSampler:
             full_doc_tokens = pre + p.effective_len + suf
 
             if overshoot >= full_doc_tokens:
-                # Removing this whole doc closes overshoot by its full size.
+                # Drop the whole doc; closes overshoot by body + decoration.
                 overshoot -= full_doc_tokens
                 p.effective_len = 0
                 p.truncated = True
-            elif overshoot <= p.effective_len:
-                # Body alone can absorb the overshoot; partial body trim suffices.
-                p.effective_len -= overshoot
-                overshoot = 0
+                removed[idx] = True
+            else:
+                # Shed from the body only, keeping decoration. If this drives the
+                # body to 0 with overshoot left (overshoot exceeded the body but
+                # not body+decoration), the residual carries to the next doc.
+                trim = min(overshoot, p.effective_len)
+                p.effective_len -= trim
+                overshoot -= trim
                 p.truncated = True
-            # else: overshoot > effective_len but < full_doc_tokens — cannot
-            # fix by trimming body (would go to 0) and cannot drop doc (would
-            # over-correct by removing pre+suf too).  Skip this doc and try
-            # the next one in the trim direction.
 
-        # Drop any documents that have been reduced to zero length.
-        final_placements = [p for p in placements if p.effective_len > 0]
-        return final_placements
+        # Fallback for the degenerate case where layout decoration alone exceeds
+        # the budget (body trims can't absorb it all): drop now-bodyless,
+        # decoration-bearing docs to shed their decoration. Dips slightly under
+        # budget but never over (over budget trips the RoPE cache assert). Needs
+        # hundreds of tiny prefix-heavy docs to reach; logged if it ever does.
+        if overshoot > 0:
+            for idx in indices:
+                if overshoot <= 0:
+                    break
+                if removed[idx]:
+                    continue
+                p = placements[idx]
+                if p.effective_len > 0:
+                    continue
+                pre, suf = self._layout_lengths(p.doc_id)
+                deco = pre + suf
+                if deco > 0:
+                    overshoot -= deco
+                    removed[idx] = True
+            if overshoot > 0:
+                logger.warning(
+                    "Pack-level truncation could not reach token_budget=%d "
+                    "(residual overshoot=%d); decoration tokens dominate the pack. "
+                    "This pack will be over budget.",
+                    self.token_budget, overshoot,
+                )
 
-
+        return [p for i, p in enumerate(placements) if not removed[i]]
 

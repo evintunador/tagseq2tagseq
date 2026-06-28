@@ -102,6 +102,12 @@ def build_packed_batch(
         4. Concatenates prefix + body_slice + suffix for each doc.
         5. Concatenates all docs into a single packed sequence.
         6. Returns the packed tokens and per-doc ``DocSpan`` metadata.
+
+    The sampler's pack-level truncation hits ``token_budget`` EXACTLY, so every
+    pack is the same length with no padding — the Triton attention kernels take
+    seq-len as a ``tl.constexpr`` (``N``) and a varying length would force a
+    ~140s per-length re-autotune (and desync DDP ranks).  See
+    ``PackBatchSampler._apply_pack_truncation``.
     """
     segments: List[np.ndarray] = []
     spans: List[DocSpan] = []

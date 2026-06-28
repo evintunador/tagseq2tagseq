@@ -47,6 +47,8 @@ import re
 import time
 from multiprocessing import Pool
 
+from tunalab.reproducibility import ReproducibilityManager
+
 from data.normalization import normalize_arxiv, canonical_arxiv_id
 
 logger = logging.getLogger(__name__)
@@ -234,17 +236,15 @@ def _pass2_worker(args):
     return graph_path, content_path, n_nodes, n_edges
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--corpus-dir", required=True)
-    ap.add_argument("--out-dir", required=True, help="output dir for graph.jsonl + content.jsonl")
-    ap.add_argument("--oa-map", default=None, help="arxiv_openalex_map.jsonl (enrichment); omit to skip")
-    ap.add_argument("--workers", type=int, default=os.cpu_count() or 8)
-    ap.add_argument("--limit-shards", type=int, default=0)
-    args = ap.parse_args()
+def run_extraction(args, rep: ReproducibilityManager):
+    """Extract the ArXiv graph + content into the ReproducibilityManager's run dir.
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    os.makedirs(args.out_dir, exist_ok=True)
+    Artifacts (graph.jsonl, content.jsonl, extract_summary.json, and the
+    transient per-shard / index files) are written under ``rep.output_dir`` so
+    every run is captured alongside its git state, environment, and invocation
+    metadata — matching the convention used by data/pretokenize*.py.
+    """
+    out_dir = rep.output_dir
 
     shards = sorted(glob.glob(os.path.join(args.corpus_dir, "**", "*.jsonl"), recursive=True))
     if args.limit_shards:
@@ -254,7 +254,7 @@ def main():
 
     # ---- Pass 1: build the global corpus index (arxiv id -> normed, title, cats). ----
     t0 = time.time()
-    index_path = os.path.join(args.out_dir, "_corpus_index.jsonl")
+    index_path = os.path.join(out_dir, "_corpus_index.jsonl")
     arxiv_to_normed: dict[str, str] = {}
     with Pool(args.workers) as pool, open(index_path, "w", encoding="utf-8") as idxf:
         for i, entries in enumerate(pool.imap_unordered(_pass1_worker, shards, chunksize=8)):
@@ -269,7 +269,7 @@ def main():
 
     # ---- Pass 2: rehydrate + resolve citations, writing per-shard graph/content. ----
     t0 = time.time()
-    tasks = [(shard, args.out_dir, i) for i, shard in enumerate(shards)]
+    tasks = [(shard, out_dir, i) for i, shard in enumerate(shards)]
     graph_shards: list[str] = []
     content_shards: list[str] = []
     total_nodes = total_edges = 0
@@ -288,7 +288,7 @@ def main():
 
     # ---- Merge: concatenate content; compute incoming edges; write final graph.jsonl. ----
     t0 = time.time()
-    content_out = os.path.join(args.out_dir, "content.jsonl")
+    content_out = os.path.join(out_dir, "content.jsonl")
     with open(content_out, "w", encoding="utf-8") as cout:
         for cpath in sorted(content_shards):
             with open(cpath, "r", encoding="utf-8") as cin:
@@ -327,7 +327,7 @@ def main():
         for tgt in node["outgoing"]:
             incoming.setdefault(tgt, []).append(normed)
 
-    graph_out = os.path.join(args.out_dir, "graph.jsonl")
+    graph_out = os.path.join(out_dir, "graph.jsonl")
     with open(graph_out, "w", encoding="utf-8") as gout:
         for normed, node in nodes.items():
             node["incoming"] = incoming.get(normed, [])
@@ -344,9 +344,36 @@ def main():
         "content": content_out,
         "oa_map_used": bool(args.oa_map),
     }
-    with open(os.path.join(args.out_dir, "extract_summary.json"), "w") as f:
+    with open(os.path.join(out_dir, "extract_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
     print(json.dumps(summary, indent=2))
+    return summary
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--corpus-dir", required=True)
+    ap.add_argument(
+        "-o", "--runs-dir", "--out-dir",
+        dest="runs_dir",
+        required=True,
+        help="Root directory to store experiment runs. The ReproducibilityManager "
+             "writes graph.jsonl + content.jsonl + extract_summary.json here, "
+             "alongside a reproducibility/ folder capturing git state and the run "
+             "invocation.",
+    )
+    ap.add_argument("--oa-map", default=None, help="arxiv_openalex_map.jsonl (enrichment); omit to skip")
+    ap.add_argument("--workers", type=int, default=os.cpu_count() or 8)
+    ap.add_argument("--limit-shards", type=int, default=0)
+    args = ap.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+
+    # The ReproducibilityManager creates/owns the output directory, captures git
+    # state + environment + invocation, and refuses to clobber a run that already
+    # has reproducibility artifacts — matching data/pretokenize*.py.
+    with ReproducibilityManager(output_dir=str(args.runs_dir), is_main_process=True) as rep:
+        run_extraction(args, rep)
 
 
 if __name__ == "__main__":

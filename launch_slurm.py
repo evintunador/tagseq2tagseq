@@ -64,12 +64,38 @@ def _training_worker(main_argv: list, run_dir: str, script: str = 'main') -> Non
     os.environ.setdefault("NCCL_IB_GDR_LEVEL", "5")
     os.environ.setdefault("NCCL_NET_GDR_LEVEL", "5")
 
-    # Per-rank compile cache avoids NFS lock contention on first-run compilation.
+    # Compile caches.  Multiple ranks JIT-compiling the same Triton/inductor
+    # kernels concurrently corrupts the compiler and segfaults a rank during
+    # first-step compilation (crash probability rises with rank count).  Two
+    # mitigations, both required for stable multi-rank/multi-node runs:
+    #
+    #   1. TORCHINDUCTOR_COMPILE_THREADS=1 — the default (32 per process) makes
+    #      N ranks fork up to 32*N concurrent compiler subprocesses, which
+    #      oversubscribe CPUs and corrupt the compile-worker subprocess pool.
+    #      Compiling synchronously in-process avoids that.
+    #   2. TS2TS_SHARED_COMPILE_CACHE — a pre-warmed shared cache.  Because
+    #      packs are a fixed length, every rank needs the identical set of
+    #      kernels; warm the cache once (a prior run at the SAME world_size, so
+    #      the distributed-optimizer shard shapes match), then every rank just
+    #      reads it (no compilation, fast startup).  Point it at a dir on
+    #      /fss-data.  Without it, each rank uses its own node-local cache.
     job_id  = os.environ.get("SLURM_JOB_ID",  "local")
     proc_id = os.environ.get("SLURM_PROCID",  "0")
-    cache   = f"/tmp/torchinductor_{job_id}/rank{proc_id}"
-    os.makedirs(cache, exist_ok=True)
-    os.environ["TORCHINDUCTOR_CACHE_DIR"] = cache
+    shared_cache = os.environ.get("TS2TS_SHARED_COMPILE_CACHE", "").strip()
+    if shared_cache:
+        inductor_cache = os.path.join(shared_cache, "inductor")
+        triton_cache   = os.path.join(shared_cache, "triton")
+    else:
+        inductor_cache = f"/tmp/torchinductor_{job_id}/rank{proc_id}"
+        triton_cache   = f"/tmp/triton_{job_id}/rank{proc_id}"
+    os.makedirs(inductor_cache, exist_ok=True)
+    os.makedirs(triton_cache, exist_ok=True)
+    os.environ["TORCHINDUCTOR_CACHE_DIR"] = inductor_cache
+    os.environ["TRITON_CACHE_DIR"]        = triton_cache
+    os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
+    # The PyTorch 2.10 static CUDA launcher is an additional concurrent-compile
+    # crash site; the classic dynamic launcher is stable.
+    os.environ.setdefault("TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER", "0")
 
     # ---- reconstruct sys.argv so compose_config sees the right args ----
     sys.argv = ["main"] + main_argv

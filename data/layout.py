@@ -149,16 +149,19 @@ def _markdown_heading_format(info: DocLayoutInfo) -> str:
 
 
 def _latex_comment_card(info: DocLayoutInfo) -> str:
-    """ArXiv style LaTeX-comment card: ``% Title: ...`` (+ ``% Categories: ...``).
+    """ArXiv style LaTeX-comment card: ``% Title: ...``.
 
-    Title is always included; the categories line is emitted only when categories
-    are present.  The card is valid LaTeX (``%`` begins a comment), keeping the
-    token stream in-distribution for an otherwise-LaTeX ArXiv body.
+    Title-only by design: the citation link ``\\cite{Title}`` carries only the
+    title, so seeding an aux doc at inference can only ever reconstruct the title
+    line.  Emitting ``% Categories: ...`` at training time (where categories are
+    known from the graph) but never at inference (where the cite has no
+    categories) would create a train/inference mismatch — the model would learn
+    to expect a categories line after the title that the inference seed never
+    provides.  Keeping the card title-only matches the identifier-prefix policies
+    used by the other datasets.  The card is valid LaTeX (``%`` begins a comment),
+    keeping the token stream in-distribution for an otherwise-LaTeX ArXiv body.
     """
-    lines = [f"% Title: {info.raw_identifier}"]
-    if info.categories:
-        lines.append(f"% Categories: {info.categories}")
-    return "\n".join(lines) + "\n\n"
+    return f"% Title: {info.raw_identifier}\n\n"
 
 
 class PrefixLayoutPolicy(DocLayoutPolicy):

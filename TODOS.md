@@ -6,23 +6,6 @@ Remaining work, organized by area. All completed items stripped.
 
 ## Data
 
-### Epoch precompute for Wikipedia
-`epoch_precompute.py` currently only supports TheStack (repo-partitioned identifiers).
-Wikipedia needs a **graph-community partitioner** before it can use the precomputed
-path. The TheStack partitioner groups all files in a repo onto one worker so BFS
-traversal stays intra-shard; naive random chunking of Wikipedia would scatter linked
-articles across workers and BFS would immediately hit boundaries, producing
-effectively doc_causal packs with no cross-doc grants.
-
-Design: multi-source BFS Voronoi — pick `n_workers` random seeds, expand round-robin
-with a per-worker size cap (≈ 1.5 × `len(graph) / n_workers`) to prevent hub nodes
-(e.g. "United States") from dominating; re-seed workers that exhaust their queue
-before the cap; assign leftover isolated/overflow docs round-robin. O(n) like the
-existing repo-prefix scan. Full design in `data/epoch_precompute.py` module docstring.
-
-Until this is implemented, simplewiki / Wikipedia training uses the live
-`PackedSequenceDataset` path (no density-aware bucketing).
-
 ### Wikipedia redirect map
 The Wikipedia dump ships a `redirect.sql` table mapping stub redirect titles to
 their canonical targets (e.g. "UK" → "United Kingdom"). Fix at graph construction
@@ -75,6 +58,29 @@ rank-0 stderr/stdout into the run `logs/` dir; non-main ranks' `.err` files are
 empty). To diagnose, first make non-main ranks observable — per-rank file logging
 + `faulthandler` stack dumps on SIGTERM/timeout — then capture each hung rank's
 Python stack (or `py-spy dump` live).
+
+### Automate the compile-cache warmup (TODO)
+Multi-rank/multi-node runs require a pre-warmed shared compile cache to avoid the
+concurrent-compilation segfault (see `launch_slurm.py`: `TS2TS_SHARED_COMPILE_CACHE`
++ `TORCHINDUCTOR_COMPILE_THREADS=1`). Today this is a manual two-step: warm the
+cache once with a short run at the target world_size, then point the real run at
+the same `TS2TS_SHARED_COMPILE_CACHE`. Fold this into `launch_slurm.py` as an
+automatic `--warmup-compile` pre-step (submit a brief warmup job at the target
+world_size, wait, then launch the real job against the warmed cache). The warmup
+must match world_size: the distributed Muon optimizer compiles shard-shape kernels
+a single-GPU warmup never produces.
+
+### Live PackedSequenceDataset: dedup docs within an epoch (TODO — consider)
+The live `PackedSequenceDataset` / `PackBatchSampler` path samples WITH
+replacement: seeds are drawn via `self._rng.randrange(num_nodes)` and dedup is
+only *within* a pack (`pack_doc_ids`), with no cross-pack/epoch visited set. So a
+doc can appear in many packs and some may never appear in a given pass. The
+precomputed path already dedups per epoch (`epoch_precompute.py` `epoch_visited`
+set → visited docs read as tok_len=0). Consider giving the live path the same
+"each doc at most once per epoch" guarantee (a persistent visited set on the
+sampler, reset per epoch) so the two paths match and data usage is even. Note the
+interaction with truncation: a doc dropped/partially-used by pack-level trimming
+should arguably remain eligible until its body is actually consumed.
 
 ### Parallelized eval in main.py
 `run_benchmarks_on_model` runs serially. Naïve thread-pool parallelism is risky:

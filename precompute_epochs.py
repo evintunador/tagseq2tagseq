@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 """Pre-compute packed epochs for density-aware batch scheduling.
 
-Each epoch pre-computes all packs from a TheStack dataset, assigns them
+Each epoch pre-computes all packs from a pre-tokenized dataset, assigns them
 kv_block_count density metrics, and groups them into density buckets for
-load-balanced DDP training.
+load-balanced DDP training.  Works for TheStack (repo-partitioned) and for
+flat-identifier datasets (Wikipedia, ArXiv) via the graph-community partitioner;
+the dataset type is auto-detected from the identifier format.
 
 Usage
 -----
@@ -53,8 +55,8 @@ def main() -> None:
     parser.add_argument("--seed",           type=int, default=42,
                         help="Base seed; epoch i uses seed+i.")
     parser.add_argument("--link-detector",  type=str, default="python",
-                        choices=["python", "markdown"],
-                        help="Link detector type.")
+                        choices=["python", "markdown", "arxiv"],
+                        help="Link detector type (python=TheStack, markdown=Wikipedia, arxiv=ArXiv).")
     parser.add_argument("--layout-policy",  type=str, default="null",
                         help="Layout policy name (null, bos_eos, etc.).")
     parser.add_argument("--max-grants",     type=int, default=64,

@@ -248,13 +248,17 @@ def test_factory_unknown_name_raises():
 # _latex_comment_card helper
 # ---------------------------------------------------------------------------
 
-def test_latex_card_with_categories():
+def test_latex_card_is_title_only():
+    # Title-only by design: the card never emits a "% Categories:" line, even when
+    # categories are known. The \cite{Title} link carries only the title, so seeding
+    # an aux doc at inference can only reconstruct the title — emitting categories at
+    # training time would create a train/inference mismatch.
     card = _latex_comment_card(make_info("Attention Is All You Need", categories="cs.CL cs.LG"))
-    assert card == "% Title: Attention Is All You Need\n% Categories: cs.CL cs.LG\n\n"
+    assert card == "% Title: Attention Is All You Need\n\n"
 
 
-def test_latex_card_without_categories():
-    # No categories line emitted when categories is empty.
+def test_latex_card_ignores_categories():
+    # Same output whether or not categories are present.
     card = _latex_comment_card(make_info("Some Paper", categories=""))
     assert card == "% Title: Some Paper\n\n"
 
@@ -266,7 +270,8 @@ def test_latex_card_without_categories():
 def test_latex_comment_prefix_format():
     p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
     info = make_info("My Paper", "arxiv_123", categories="cs.LG")
-    assert p.prefix_tokens(info) == _simple_encode("% Title: My Paper\n% Categories: cs.LG\n\n")
+    # Title-only: categories are ignored even when present.
+    assert p.prefix_tokens(info) == _simple_encode("% Title: My Paper\n\n")
 
 
 def test_latex_comment_prefix_no_categories():
