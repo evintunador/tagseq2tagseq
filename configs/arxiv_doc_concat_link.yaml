@@ -6,6 +6,7 @@ data:
   order_mode: 'prefer_targets_first'
   doc_budget: null
   train_dir:   <to/be/generated>/pretokenized_datasets/arxiv/splits/train
+  epoch_dirs:  <to/be/generated>/schedules/arxiv_bfs/epoch_0
   val_dirs:
     val_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/val_community
     val_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/val_random
