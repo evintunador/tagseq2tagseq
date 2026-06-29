@@ -27,6 +27,7 @@ python visualize_epoch.py \\
 
 import argparse
 import collections
+import copy
 import csv
 import json
 import math
@@ -39,6 +40,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
 import pyarrow.parquet as pq
 
@@ -99,67 +101,122 @@ def compute_block_mask_grid(
     backend,
     layout,
     block_size: int = 128,
-) -> Tuple[np.ndarray, List[int], int, int, int]:
+    seq_limit: int = None,
+) -> Tuple[np.ndarray, List[int], int, int, int, bool]:
     """
-    Reconstruct the block-level attention mask for one PackRecord.
+    Reconstruct the block-level attention mask for one PackRecord, classifying
+    each ``block_size`` × ``block_size`` tile as empty / partial / full.
+
+    The classification is derived from the EXACT token-level mask
+    (causal & (same_doc | cross_doc_grant), the same composition the kernel
+    uses), then reduced per tile, so it faithfully reflects what the kernel
+    computes:
+
+      * 0 = empty  — no token pair in the tile may attend (kernel skips it);
+      * 1 = partial — some but not all token pairs attend (e.g. the causal
+            triangle edge, or a grant region that starts mid-block); and
+      * 2 = full   — every token pair in the tile attends (kernel can skip the
+            per-element mask_mod entirely — this is FlexAttention's
+            ``full_kv_num_blocks``).
+
+    Partial tiles are exactly where the token-level structure (causal diagonal,
+    grant rectangle edges) lives, so colouring them distinctly recovers the
+    detail a pure non-empty/empty block view hides.
+
+    ``seq_limit`` optionally crops the pack to its first N tokens (and the docs
+    that fall within) so a real 32k pack can be visualised at a legible
+    resolution without recomputing a smaller-seq-len epoch.
 
     Returns
     -------
-    grid        : (n_blocks, n_blocks) bool ndarray  (True = non-empty block pair)
+    grid        : (n_blocks, n_blocks) int8 ndarray with values {0, 1, 2}
     boundaries  : list of block indices where doc boundaries occur
-    seq_len     : token count for this pack
-    n_docs      : number of documents in pack
-    n_links     : number of cross-doc links
+    seq_len     : token count actually rendered (after any seq_limit crop)
+    n_docs      : number of documents within the rendered span
+    n_links     : number of cross-doc links within the rendered span
+    stale       : True if the pack materialized shorter than its recorded body
+                  budget (schedule is stale vs the on-disk dataset)
     """
+    import torch
+
     from data.epoch_precompute import _record_to_placements
     from data.collate import build_packed_batch
+    from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 
     placements = _record_to_placements(record)
     batch = build_packed_batch(graph, backend, layout, placements)
+    tokens = batch["tokens"]            # [1, T]
     doc_spans = batch["doc_spans"]
-    seq_len = batch["tokens"].shape[-1]
+    full_seq_len = tokens.shape[-1]
+
+    # Staleness check: a record's effective_lens are body-token budgets decided at
+    # precompute time. If the on-disk dataset was re-pretokenized since (shorter
+    # bodies, or doc_ids now out of range), build_packed_batch silently clips and
+    # the pack materializes short. Detect that here so the figure can flag it
+    # rather than rendering a misleadingly tiny pack. (effective_lens exclude
+    # layout decoration, so the materialized length is normally >= their sum.)
+    stale = full_seq_len < sum(record.effective_lens)
+
+    # Cross-doc grants come from the STORED record links (link_end_positions →
+    # link_target_doc_ids), exactly as BucketedPackDataset feeds the kernel at
+    # training time. We deliberately do NOT re-run the link detector here: the
+    # precompute worker already resolved links to in-pack doc ids, and
+    # re-detecting + re-matching does not reproduce that (it can silently yield
+    # zero matches, collapsing the mask to doc_causal).
     link_to_target = dict(zip(record.link_end_positions, record.link_target_doc_ids))
 
+    # Optional crop: render only the first seq_limit tokens. Keep doc_spans that
+    # begin within the crop, clipping their end so per-doc triangles stay exact,
+    # and drop grants whose source link position falls past the crop.
+    seq_len = full_seq_len if seq_limit is None else min(seq_limit, full_seq_len)
+    if seq_limit is not None and seq_len < full_seq_len:
+        tokens = tokens[:, :seq_len]
+        cropped = []
+        for s in doc_spans:
+            if s.start >= seq_len:
+                continue
+            if s.end <= seq_len:
+                cropped.append(s)
+            else:
+                # Shallow copy with a clipped end so the dense mask matches.
+                cs = copy.copy(s)
+                cs.end = seq_len
+                cropped.append(cs)
+        doc_spans = cropped
+        link_to_target = {p: t for p, t in link_to_target.items() if p < seq_len}
+
+    n_links = len(link_to_target)
+
+    # Build the EXACT token-level mask = causal & (same_doc | cross_doc_grant),
+    # the same composition CrossDocLinkMaskCreator.__call__ uses for the kernel.
+    creator = CrossDocLinkMaskCreator(link_detector=None)
+    device = torch.device("cpu")
+    cross = creator._build_cross_doc_mask(seq_len, doc_spans, link_to_target, device)
+
+    document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
+    for s in doc_spans:
+        a, b = max(0, s.start), min(seq_len, s.end)
+        if a < b:
+            document_ids[a:b] = s.doc_id
+    q_idx = torch.arange(seq_len, device=device).unsqueeze(1)
+    k_idx = torch.arange(seq_len, device=device).unsqueeze(0)
+    causal = q_idx >= k_idx
+    same_doc = document_ids.unsqueeze(1) == document_ids.unsqueeze(0)
+    dense = causal & (same_doc | cross)  # [T, T] bool
+
+    # Reduce the dense token mask to a per-tile {empty, partial, full} grid.
     n_blocks = math.ceil(seq_len / block_size)
-    non_empty: set = set()
-
-    # causal + same_doc: lower-triangular blocks per doc
-    for span in doc_spans:
-        if span.end <= span.start:
-            continue
-        fb = span.start // block_size
-        lb = (span.end - 1) // block_size
-        for q in range(fb, lb + 1):
-            for k in range(fb, q + 1):
-                non_empty.add((q, k))
-
-    # cross-doc grant rectangles
-    span_by_id = {s.doc_id: s for s in doc_spans}
-    for link_pos, tgts in link_to_target.items():
-        q_span = next((s for s in doc_spans if s.start < link_pos <= s.end), None)
-        if q_span is None:
-            continue
-        grant_end = min(seq_len, q_span.end)
-        if link_pos >= grant_end:
-            continue
-        q_fb = link_pos // block_size
-        q_lb = (grant_end - 1) // block_size
-        for tid in tgts:
-            kv_span = span_by_id.get(tid)
-            if kv_span is None:
+    grid = np.zeros((n_blocks, n_blocks), dtype=np.int8)
+    dense_np = dense.numpy()
+    for qb in range(n_blocks):
+        q0, q1 = qb * block_size, min((qb + 1) * block_size, seq_len)
+        for kb in range(qb + 1):  # lower triangle only (causal)
+            k0, k1 = kb * block_size, min((kb + 1) * block_size, seq_len)
+            tile = dense_np[q0:q1, k0:k1]
+            n_attend = int(tile.sum())
+            if n_attend == 0:
                 continue
-            ts = max(0, kv_span.start)
-            te = min(seq_len, kv_span.end)
-            if ts >= te:
-                continue
-            for qb in range(q_fb, q_lb + 1):
-                for kb in range(ts // block_size, (te - 1) // block_size + 1):
-                    non_empty.add((qb, kb))
-
-    grid = np.zeros((n_blocks, n_blocks), dtype=bool)
-    for q, k in non_empty:
-        if 0 <= q < n_blocks and 0 <= k < n_blocks:
-            grid[q, k] = True
+            grid[qb, kb] = 2 if n_attend == tile.size else 1
 
     boundaries = sorted({
         span.start // block_size
@@ -167,7 +224,7 @@ def compute_block_mask_grid(
         if span.start > 0
     })
 
-    return grid, boundaries, seq_len, len(doc_spans), len(link_to_target)
+    return grid, boundaries, seq_len, len(doc_spans), n_links, stale
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +318,7 @@ def fig_density_overview(records, meta, output_path: str):
 # ---------------------------------------------------------------------------
 
 def fig_masks(records, meta, dataset_dir: str, output_path: str,
-              block_size: int = 128):
+              block_size: int = 128, seq_limit: int = None, pack_ids=None):
     import tiktoken
     from data.dataset import GraphIndex, PretokShardedBackend
     from data.layout import make_layout_policy
@@ -274,66 +331,123 @@ def fig_masks(records, meta, dataset_dir: str, output_path: str,
     )
 
     n_buckets = meta["n_buckets"]
-    colors = bucket_colors(n_buckets)
 
     bucket_lists: Dict[int, list] = collections.defaultdict(list)
     for r in records:
         bucket_lists[r.bucket_id].append(r)
 
-    # Pick median pack from a bucket (median kv_block_count = representative).
-    def pick_pack(b):
+    def pick_pack(b, seq_lim=None):
+        """Pick the most link-rich pack in bucket b (in-crop links first, median fallback)."""
         lst = sorted(bucket_lists[b], key=lambda r: r.kv_block_count)
-        return lst[len(lst) // 2]
+        limit = seq_lim or (1 << 30)
+        # Count links whose source position falls within the crop window.
+        def in_crop_links(r):
+            return sum(1 for p in r.link_end_positions if p < limit)
+        best = max(lst, key=in_crop_links)
+        if in_crop_links(best) > 0:
+            return best
+        return lst[len(lst) // 2]  # fallback: median by density
 
-    # Show LOW / MEDIUM / HIGH density buckets so the multi-doc block structure
-    # (not just the degenerate single-doc full-triangle of the densest bucket)
-    # is visible as a smoke test.
-    low, mid, high = 0, n_buckets // 2, n_buckets - 1
-    selections = [
-        (low, "low density", pick_pack(low)),
-        (mid, "medium density", pick_pack(mid)),
-        (high, "high density", pick_pack(high)),
-    ]
+    if pack_ids:
+        # Explicit pack selection (e.g. to showcase packs with cross-doc grants).
+        by_id = {r.pack_id: r for r in records}
+        selections = []
+        for pid in pack_ids:
+            if pid not in by_id:
+                print(f"  (pack_id {pid} not found; skipping)")
+                continue
+            r = by_id[pid]
+            selections.append((r.bucket_id, f"bucket {r.bucket_id}", r))
+    else:
+        # Five percentile buckets: 0 / 25 / 50 / 75 / 100.
+        # Within each bucket, prefer the pack with the most in-crop cross-doc
+        # links so the off-diagonal grant rectangles are visible where they exist.
+        pcts = [0, 25, 50, 75, 100]
+        labels = ["p0 (lowest)", "p25", "p50 (median)", "p75", "p100 (highest)"]
+        def pct_bucket(p):
+            return int(round(p / 100 * (n_buckets - 1)))
+        selections = [
+            (pct_bucket(p), f"{lbl} density", pick_pack(pct_bucket(p), seq_lim=seq_limit))
+            for p, lbl in zip(pcts, labels)
+        ]
 
-    fig, axes = plt.subplots(1, len(selections), figsize=(7 * len(selections), 7.6))
+    # 3-state colormap: 0=empty (white), 1=partial (light), 2=full (dark).
+    # Partial tiles are where the token-level structure (causal edge / grant
+    # boundary) lives — distinguishing them recovers the detail a binary
+    # non-empty/empty view hides at block resolution.
+    cmap = ListedColormap(["#f5f8ff", "#7fb3e6", "#0b2a5b"])
+    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap.N)
+
+    fig, axes = plt.subplots(1, len(selections), figsize=(6.5 * len(selections), 7.9))
     if len(selections) == 1:
         axes = [axes]
+    crop_note = f", first {seq_limit} tok shown" if seq_limit else ""
+    mode_note = "5 percentile buckets; link-richest pack per bucket" if not pack_ids else "explicit pack selection"
     fig.suptitle(
-        f"Block-level attention masks  (each cell = one {block_size}-token block)",
-        fontsize=13, fontweight="bold", y=1.00,
+        f"Block-level attention masks  ({mode_note}{crop_note})\n"
+        f"each cell = one {block_size}-token block  ·  partial vs full distinguished",
+        fontsize=12, fontweight="bold", y=1.01,
     )
 
+    any_stale = False
     for ax, (b_idx, label, rec) in zip(axes, selections):
         print(f"  building mask for bucket {b_idx} ({label}) pack {rec.pack_id}...")
-        grid, boundaries, seq_len, n_docs, n_links = compute_block_mask_grid(
-            rec, graph, backend, layout, block_size
+        grid, boundaries, seq_len, n_docs, n_links, stale = compute_block_mask_grid(
+            rec, graph, backend, layout,
+            block_size=block_size, seq_limit=seq_limit,
         )
+        any_stale = any_stale or stale
         n = grid.shape[0]
         ax.imshow(grid, origin="upper", aspect="equal",
-                  cmap="Blues", vmin=0, vmax=1, interpolation="nearest")
+                  cmap=cmap, norm=norm, interpolation="nearest")
         for bnd in boundaries:
             ax.axhline(bnd - 0.5, color="tomato", linewidth=0.6, alpha=0.9)
             ax.axvline(bnd - 0.5, color="tomato", linewidth=0.6, alpha=0.9)
         ax.set_xlabel(f"KV block  (0–{n-1}, {seq_len} tokens)")
         ax.set_ylabel(f"Q block   (0–{n-1})")
+        stale_tag = "  ⚠ STALE (clipped)" if stale else ""
+        title_color = "crimson" if stale else "black"
         ax.set_title(
-            f"Bucket {b_idx} ({label})  —  kv_block_count={rec.kv_block_count:,}\n"
+            f"Bucket {b_idx} ({label})  —  kv_block_count={rec.kv_block_count:,}{stale_tag}\n"
             f"{n_docs} docs, {n_links} cross-doc links, {seq_len} tokens",
-            fontsize=10,
+            fontsize=10, color=title_color,
         )
         total_causal = n * (n + 1) // 2
-        nnz = int(grid.sum())
+        n_full = int((grid == 2).sum())
+        n_partial = int((grid == 1).sum())
+        nnz = n_full + n_partial
         sparsity = 1.0 - nnz / max(total_causal, 1)
         ax.text(
-            0.97, 0.97,
-            f"non-empty: {nnz:,}\nsparsity:  {sparsity:.1%}",
-            transform=ax.transAxes, ha="right", va="top", fontsize=8,
-            color="white",
-            bbox=dict(boxstyle="round,pad=0.3",
-                      facecolor=colors[b_idx], alpha=0.85),
+            0.97, 0.03,
+            f"full: {n_full:,}   partial: {n_partial:,}\n"
+            f"non-empty: {nnz:,}   sparsity: {sparsity:.1%}",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=8,
+            color="black",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85),
         )
 
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    # Shared legend for the 3 tile states.
+    handles = [
+        mpatches.Patch(color="#0b2a5b", label="full block (all token pairs attend)"),
+        mpatches.Patch(color="#7fb3e6", label="partial block (some token pairs attend)"),
+        mpatches.Patch(facecolor="#f5f8ff", edgecolor="gray",
+                       label="empty block (skipped by kernel)"),
+    ]
+    fig.legend(handles=handles, loc="lower center", ncol=3, fontsize=9,
+               frameon=False, bbox_to_anchor=(0.5, -0.02))
+
+    if any_stale:
+        warning = (
+            "⚠ At least one pack materialized SHORTER than its recorded body budget — "
+            "the schedule is STALE vs the on-disk dataset (re-pretokenized since precompute). "
+            "Regenerate with precompute_epochs.py."
+        )
+        fig.text(0.5, 0.965, warning, ha="center", va="top", fontsize=9.5,
+                 color="white", fontweight="bold",
+                 bbox=dict(boxstyle="round,pad=0.4", facecolor="crimson", alpha=0.92))
+        print(f"  WARNING: {warning}")
+
+    fig.tight_layout(rect=[0, 0.03, 1, 0.96])
     fig.savefig(output_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"saved {output_path}")
@@ -529,6 +643,14 @@ def main():
                         help="Directory to write PNG figures.")
     parser.add_argument("--block-size", type=int, default=128,
                         help="FlexAttention block size (default 128).")
+    parser.add_argument("--seq-limit", type=int, default=None,
+                        help="Crop each pack to its first N tokens for the mask "
+                             "figure (e.g. 8192) so a real 32k pack renders at a "
+                             "legible resolution without recomputing a smaller epoch.")
+    parser.add_argument("--pack-ids", type=str, default=None,
+                        help="Comma-separated pack_ids to render in the mask figure "
+                             "instead of the default low/medium/high bucket medians "
+                             "(e.g. to showcase packs with cross-doc grants).")
     parser.add_argument("--timing-rank", type=int, default=0,
                         help="Which rank's CSV to use for timing plots.")
     args = parser.parse_args()
@@ -549,11 +671,16 @@ def main():
     # ---- Figure 2: masks (requires dataset_dir) -----------------------------
     if args.dataset_dir:
         print("Building block-level attention masks ...")
+        pack_ids = (
+            [int(x) for x in args.pack_ids.split(",")] if args.pack_ids else None
+        )
         fig_masks(
             records, meta,
             dataset_dir=args.dataset_dir,
             output_path=os.path.join(args.output_dir, "masks.png"),
             block_size=args.block_size,
+            seq_limit=args.seq_limit,
+            pack_ids=pack_ids,
         )
     else:
         print("Skipping masks (pass --dataset-dir to enable).")

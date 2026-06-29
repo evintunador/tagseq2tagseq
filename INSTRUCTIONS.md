@@ -478,7 +478,7 @@ python visualize_epoch.py \
 | File | Contents |
 |------|---------|
 | `density_overview.png` | kv_block_count histogram (stacked by bucket) + per-bucket violin. Shows the density spread and confirms bucket boundaries are well-separated. |
-| `masks.png` | Block-level attention mask (256×256 grid of 128-token blocks) for the median pack from the sparsest and densest bucket. Each cell = one block pair; blue = non-empty; red lines = document boundaries. |
+| `masks.png` | Block-level attention masks for the link-richest pack in each of five density-percentile buckets (p0/p25/p50/p75/p100). Each cell = one 128-token block pair: dark = full (all token pairs attend), light blue = partial (causal edge / grant boundary), white = empty (skipped); red lines = document boundaries. A pack that materialised shorter than its recorded body budget is flagged in red as stale (regenerate the schedule). `--seq-limit N` crops each pack to its first N tokens for legibility at 32k; `--pack-ids a,b,c` renders specific packs instead of the percentile default. |
 | `step_timing.png` | Per-step wall-clock time. Live steps are uniform steel-blue; pre-computed steps are colour-coded by which density bucket was drawn — sparse buckets (dark) are fast, dense buckets (yellow) are slow. |
 | `step_timing_by_bucket.png` | Breakdown panel. Live: histogram of all step times with percentile markers (shows the broad random distribution). Precomputed: per-bucket mean ± 1 std with within-bucket CoV annotated (should be ≪ overall CoV — confirms ranks are well-matched within each step). |
 
