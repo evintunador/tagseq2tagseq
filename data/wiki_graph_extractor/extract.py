@@ -8,7 +8,7 @@ _project_root = Path(__file__).resolve().parents[2]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from data.normalization import normalize_wiki_title
+from data.normalization import normalize_title
 
 # ======================================================================
 # Main Processing Pipeline
@@ -554,7 +554,7 @@ def raw_link_target(raw: str) -> str:
 
 def normalize_identifier(raw):
     """Produce a normed_identifier from a raw Wikipedia article title."""
-    return normalize_wiki_title(raw)
+    return normalize_title(raw)
 
 def convert_bold_and_italics(text):
     """Converts wikitext bold/italics to Markdown."""

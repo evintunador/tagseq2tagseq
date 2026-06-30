@@ -32,12 +32,7 @@ import torch.nn.functional as F
 
 from data.collate import DocSpan
 from data.dataset import GraphIndex, PretokShardedBackend
-from data.layout import (
-    EOSLayoutPolicy,
-    IdentifierPrefixEOSLayoutPolicy,
-    IdentifierPrefixLayoutPolicy,
-    NullLayoutPolicy,
-)
+from data.layout import make_layout_policy
 from model.generation_config import GenerationConfig
 from model.generation_result import GeneratedDocument, GenerationResult
 from model.graph_traversal.block_mask_creator import (
@@ -46,7 +41,6 @@ from model.graph_traversal.block_mask_creator import (
 )
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 from model.graph_traversal.link_detector import make_link_detector
-from data.normalization import normalize_wiki_title
 from model.modules.training_module import TS2TSTrainingModule
 
 
@@ -71,44 +65,16 @@ def _c(text: str, code: str, use_color: bool) -> str:
 # Stochastic policies must never be used at inference — they produce different
 # prefix tokens each call, breaking stable generation and eval comparisons.
 _STOCHASTIC_TO_DETERMINISTIC = {
-    'stochastic_identifier_prefix': 'identifier_prefix_eos',
+    'stochastic_identifier_prefix':   'identifier_prefix_eos',
+    'stochastic_latex_comment_prefix': 'latex_comment_prefix',
 }
-
-
-def _build_layout_policy(name: str, enc):
-    """Construct a DocLayoutPolicy from a config name string.
-
-    TODO: unify with data.layout.make_layout_policy. This is a second, smaller
-    reimplementation of that factory and only handles the identifier_prefix
-    family — it does NOT know the latex_comment_prefix policies, so a checkpoint
-    trained with 'stochastic_latex_comment_prefix' (without an explicit, also-
-    supported inference_layout_policy) raises ValueError here. Replacing this
-    with a call to make_layout_policy (passing enc.encode_ordinary) gives one
-    source of truth and closes that gap.
-    """
-    if name == "null":
-        return NullLayoutPolicy()
-    elif name == "eos":
-        return EOSLayoutPolicy(eos_token_id=50256)
-    elif name == "identifier_prefix":
-        return IdentifierPrefixLayoutPolicy(encode_fn=enc.encode_ordinary)
-    elif name in ("identifier_prefix_eos", "identifier_prefix_bos_eos"):
-        # 'identifier_prefix_bos_eos' is a legacy alias from before BOS was removed.
-        return IdentifierPrefixEOSLayoutPolicy(
-            encode_fn=enc.encode_ordinary, eos_token_id=50256
-        )
-    else:
-        raise ValueError(
-            f"Unknown layout_policy {name!r}. "
-            "Expected 'null', 'eos', 'identifier_prefix', "
-            "'identifier_prefix_eos', or 'stochastic_identifier_prefix'."
-        )
 
 
 def load_inference_model(
     checkpoint_path: str | Path,
     device: str = "cuda",
     inference_attention_backend: str = "flex",
+    max_seq_len_override: Optional[int] = None,
 ):
     """
     Load a trained checkpoint and return (inference_model, hyperparams_dict).
@@ -125,6 +91,14 @@ def load_inference_model(
             vs 1.6s) because it compiles a single dynamic kernel rather than
             JIT-compiling per unique sequence length. Use 'triton' to keep the
             training backend (e.g. for batched multi-doc eval pipelines).
+        max_seq_len_override: If set, build the model with this max_seq_len
+            instead of the training value from hyperparameters.json. Safe to
+            enlarge because position encoding is pure RoPE (no learned position
+            params): only the rotary cos/sin buffer is resized, all loaded
+            weights are unchanged. Used to run inference at a longer context
+            (e.g. 32768) than the checkpoint was trained at (e.g. 8192). The
+            returned hp dict reflects the override so downstream context sizing
+            uses it. Shrinking below the training length is also allowed.
     """
     checkpoint_path = Path(checkpoint_path)
     run_dir = checkpoint_path.parent.parent   # .../runs/YYYYMMDD/checkpoints/best.pt
@@ -137,6 +111,13 @@ def load_inference_model(
 
     model_cfg = hp["model"]
     data_cfg  = hp.get("data", {})
+
+    # Optionally run at a longer (or shorter) context than training. Pure RoPE
+    # position encoding means only the rotary buffer size depends on max_seq_len;
+    # all loaded weights are length-agnostic. Mutate hp in place so downstream
+    # context sizing (max_context_length) picks up the override too.
+    if max_seq_len_override is not None:
+        model_cfg["max_seq_len"] = int(max_seq_len_override)
 
     # Tokenizer (GPT-2 only for now)
     enc = tiktoken.get_encoding("gpt2")
@@ -192,8 +173,8 @@ def load_inference_model(
         training_layout_name, training_layout_name
     )
 
-    training_layout_policy  = _build_layout_policy(training_layout_name_resolved, enc)
-    inference_layout_policy = _build_layout_policy(inference_layout_name, enc)
+    training_layout_policy  = make_layout_policy(training_layout_name_resolved, enc.encode_ordinary)
+    inference_layout_policy = make_layout_policy(inference_layout_name, enc.encode_ordinary)
 
     # Reconstruct architecture (dropout=0 at inference).
     # Infer vocab_size from the checkpoint embedding weight so that both
@@ -273,8 +254,8 @@ class PretokCorpus:
         self._graph   = GraphIndex(dataset_dir)
         self._backend = PretokShardedBackend(self._graph)
         # Build a raw_identifier → normed_identifier map from the graph for O(1)
-        # lookup in has_document / get_document. Falls back to normalize_wiki_title
-        # for titles not in the graph (e.g. free-generated titles that missed the corpus).
+        # lookup in has_document / get_document. A miss means the raw_identifier
+        # is not in the corpus (e.g. hallucinated title) → has_document returns False.
         self._raw_to_normed: dict[str, str] = {
             node["raw_identifier"]: node["normed_identifier"]
             for node in self._graph.nodes.values()
@@ -288,11 +269,12 @@ class PretokCorpus:
         # dataset like thestack. Fix: either (a) build a single-repo corpus so identifiers
         # match, or (b) make the import detector emit repo-qualified identifiers when a repo
         # context is available.
-        normed = self._raw_to_normed.get(raw_identifier) or normalize_wiki_title(raw_identifier)
-        return normed in self._graph
+        return raw_identifier in self._raw_to_normed
 
     def get_document(self, raw_identifier: str):
-        normed = self._raw_to_normed.get(raw_identifier) or normalize_wiki_title(raw_identifier)
+        normed = self._raw_to_normed.get(raw_identifier)
+        if normed is None:
+            return iter([])
         tokens = self._backend.get_tokens(normed)
         if tokens is None:
             return iter([])
@@ -429,18 +411,23 @@ def compute_metrics(
 # Rendering
 # ─────────────────────────────────────────────────────────────────────────────
 
-_LINK_RE = re.compile(r'(\[[^\]\n]{1,80}\]\([^)\n]{1,100}\))')
+# Markdown links: [text](target)
+_MARKDOWN_LINK_RE = re.compile(r'(\[[^\]\n]{1,80}\]\([^)\n]{1,100}\))')
+# LaTeX \cite{...} (and \citep, \citet, etc.)
+_CITE_RE = re.compile(r'(\\cite[a-zA-Z]*(?:\[[^\]]*\])*\{[^}]*\})')
 
 
 def _highlight_links(text: str, use_color: bool) -> str:
     if not use_color:
         return text
-    return _LINK_RE.sub(lambda m: _c(m.group(1), CYAN, True), text)
+    text = _MARKDOWN_LINK_RE.sub(lambda m: _c(m.group(1), CYAN, True), text)
+    text = _CITE_RE.sub(lambda m: _c(m.group(1), CYAN, True), text)
+    return text
 
 
 def _extract_links(text: str) -> List[str]:
-    """Return list of full '[text](target)' strings found in text."""
-    return _LINK_RE.findall(text)
+    """Return list of link strings found in text (markdown or LaTeX \\cite)."""
+    return _MARKDOWN_LINK_RE.findall(text) + _CITE_RE.findall(text)
 
 
 def _render_doc(
@@ -591,6 +578,20 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=300)
     parser.add_argument("--max-link-depth", type=int, default=2)
     parser.add_argument(
+        "--max-corpus-doc-tokens", type=int, default=None,
+        help="Head-truncate fetched corpus documents to this many tokens before "
+             "insertion. Essential for arXiv, where a cited paper (~70k tokens) "
+             "exceeds the context window and would otherwise be silently dropped. "
+             "Default: None (insert full doc).",
+    )
+    parser.add_argument(
+        "--max-seq-len", type=int, default=None,
+        help="Override the model's context length for inference (e.g. 32768 for "
+             "a checkpoint trained at 8192). Safe to enlarge — position encoding "
+             "is pure RoPE, so only the rotary buffer grows. Default: use the "
+             "training value from hyperparameters.json.",
+    )
+    parser.add_argument(
         "--link-retrieval-mode",
         choices=["corpus_only", "generate_only", "corpus_then_generate",
                  "link_but_skip", "full_skip"],
@@ -614,7 +615,10 @@ def main():
 
     # ── Load model ────────────────────────────────────────────────────────────
     print(f"Loading checkpoint: {args.checkpoint} ...", file=sys.stderr)
-    model, hp = load_inference_model(args.checkpoint, device=args.device)
+    model, hp = load_inference_model(
+        args.checkpoint, device=args.device,
+        max_seq_len_override=args.max_seq_len,
+    )
     enc        = model.tokenizer
 
     # ── Load corpus ───────────────────────────────────────────────────────────
@@ -643,6 +647,7 @@ def main():
         link_retrieval_mode=link_retrieval_mode,
         max_context_length=hp["model"]["max_seq_len"],
         max_tokens_per_document=max_tokens_per_document,
+        max_corpus_doc_tokens=args.max_corpus_doc_tokens,
         device=args.device,
     )
 

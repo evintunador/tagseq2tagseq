@@ -9,7 +9,7 @@ import torch
 
 from data.layout import DocLayoutInfo
 from model.document_context import DocumentContext, _DocEntry
-from data.normalization import normalize_wiki_title
+from data.normalization import normalize_title
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ def test_add_root_layout_policy_receives_identifier():
     assert len(received) == 1
     info = received[0]
     assert info.raw_identifier == "Python (programming language)"
-    assert info.normed_identifier == normalize_wiki_title("Python (programming language)")
+    assert info.normed_identifier == normalize_title("Python (programming language)")
     assert info.body_tokens == [1]  # prompt tokens available at prefix time
 
 
@@ -350,6 +350,23 @@ def test_add_corpus_doc_metadata():
     assert entry.raw_identifier == "Python"
     assert entry.parent_raw_identifier == ""
     assert entry.depth == 1
+
+
+def test_add_corpus_doc_truncated_flag():
+    """truncated=True is recorded on the entry when the caller passes it."""
+    ctx = make_context()
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    entry = ctx.add_corpus_doc(
+        raw_identifier="BigPaper",
+        corpus_tokens=[10, 11, 12],
+        layout_policy=None,
+        parent_raw_identifier="",
+        depth=1,
+        before_entry=root,
+        truncated=True,
+    )
+    assert entry.truncated is True
+    assert entry.source == "corpus"
 
 
 def test_add_corpus_doc_inserted_before_root():

@@ -25,9 +25,10 @@ Two index classes, different use cases:
 HashNormTitleIndex strategies (tried in caller-specified order, first hit wins):
 
   "exact"                  — exact (case-insensitive): raw.lower() == generated.lower()
-  "norm"                   — normalized: strip_hash(normalize_wiki_title(s)) — reuses
-                             the training normalization pipeline so casing/hyphenation/
-                             punctuation variants resolve.
+  "norm"                   — normalized: strip_hash(normalize_title(s)) applied to
+                             both the generated string and all corpus raw_identifiers at
+                             construction time. Works for any plain-text title (wiki or
+                             arxiv) since the normalization is just lowercase+underscore+hash.
   "word_overlap_ordered"   — all words of the generated title must appear as a contiguous
                              subsequence in the candidate's word list (split on
                              non-alphanumeric chars); tiebreaks by shortest candidate.
@@ -69,7 +70,7 @@ Future HashNormTitleIndex strategies (not yet implemented):
 import re as _re
 from typing import Dict, Iterable, List, Optional, Protocol, Sequence, runtime_checkable
 
-from data.normalization import normalize_wiki_title, strip_hash
+from data.normalization import normalize_title, strip_hash
 
 
 @runtime_checkable
@@ -96,7 +97,8 @@ class HashNormTitleIndex:
 
     * ``"exact"``                  — case-insensitive verbatim match.
     * ``"norm"``                   — normalization-based match; handles punctuation,
-      casing, and hyphen variants that survive ``normalize_wiki_title``.
+      casing, and hyphen variants (applies ``normalize_title``, which works
+      for any plain-text title including arXiv paper titles).
     * ``"word_overlap_ordered"``   — query words must appear as a contiguous subsequence
       in the candidate's word list; tiebreak by shortest candidate. Good for truncated
       titles ("Russian Civil" → "Russian Civil War").
@@ -158,7 +160,7 @@ class HashNormTitleIndex:
             if lower not in self._exact:
                 self._exact[lower] = raw
 
-            key = strip_hash(normalize_wiki_title(raw))
+            key = strip_hash(normalize_title(raw))
             if key and key not in self._index:
                 self._index[key] = raw
 
@@ -171,7 +173,7 @@ class HashNormTitleIndex:
                     self._word_index[word].append(raw)
 
             if _need_ed:
-                ed_key = strip_hash(normalize_wiki_title(raw))
+                ed_key = strip_hash(normalize_title(raw))
                 if ed_key:
                     self._ed_keys.append(ed_key)
                     self._ed_raws.append(raw)
@@ -194,7 +196,7 @@ class HashNormTitleIndex:
         if strategy == "exact":
             return self._exact.get(generated_str.lower())
         if strategy == "norm":
-            key = strip_hash(normalize_wiki_title(generated_str))
+            key = strip_hash(normalize_title(generated_str))
             return self._index.get(key) if key else None
         if strategy == "word_overlap_ordered":
             return self._word_overlap(generated_str, ordered=True)
@@ -255,7 +257,7 @@ class HashNormTitleIndex:
             raise ImportError(
                 "edit_distance strategy requires rapidfuzz: pip install rapidfuzz"
             )
-        query_norm = strip_hash(normalize_wiki_title(generated_str))
+        query_norm = strip_hash(normalize_title(generated_str))
         if not query_norm or len(query_norm) < self._ed_min_chars:
             return None
         if not self._ed_keys:

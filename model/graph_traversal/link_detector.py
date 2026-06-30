@@ -29,32 +29,14 @@ class LinkDetector(Protocol):
     Protocol for dataset-specific link detection in packed token sequences.
 
     Implementations scan a 1D input_ids tensor and return structured information
-    about each link they find. Different datasets need different implementations:
-    - Wikipedia / Markdown:  [text](target) syntax          → MarkdownLinkDetector
-    - Python / TheStack:     import statements              → PythonImportDetector
-    - LaTeX / ArXiv:         \\cite{key} or \\ref{label}   → not yet implemented (see below)
-    - Other languages:       Ruby require, JS/TS import,
-                             Rust use, etc.                 → not yet implemented (see below)
+    about each link they find. Different datasets have different implementations:
+    - Wikipedia / Markdown:  [text](target) syntax     → MarkdownLinkDetector
+    - Python / TheStack:     import statements         → PythonImportDetector
+    - LaTeX / ArXiv:         \\cite{Title} citations   → ArxivCiteDetector
 
-    # TODO(@jamesljr): a LaTeX detector will be needed for the ArXiv dataset.
-    # The exact abstraction is still TBD — this is a rough sketch, not a
-    # confident design.  LaTeX cross-references can take many forms
-    # (\\cite, \\citep, \\citet, \\ref, \\hyperref, \\input, \\include, and
-    # others depending on the document class and packages used), and it is not
-    # yet clear which of these should create attention links, what target_str
-    # should look like, or how index_doc_span should map ArXiv identifiers.
-    # Requires deeper understanding of the ArXiv graph structure before
-    # committing to an implementation.
-
-    # TODO(@jamesljr): additional programming languages (Ruby require, JS/TS
-    # import, Rust use, Go import, etc.) will each need their own detector if
-    # those datasets are added.  The right abstraction here is uncertain — the
-    # examples below are illustrative guesses, not a confident design.  Open
-    # questions include: one detector per language vs. a dispatch wrapper,
-    # whether to identify language from the file extension in raw_identifier or
-    # store it as metadata, and how import semantics differ enough across
-    # languages to require fundamentally different logic vs. just different
-    # regex patterns.  Revisit once a second code dataset is being added.
+    # TODO: additional programming languages (Ruby require, JS/TS import,
+    # Rust use, etc.) will each need their own detector if those datasets are
+    # added. Revisit once a second code dataset is being added.
 
     The detector is responsible for all decoding; it returns already-decoded
     target strings rather than token spans, so CrossDocLinkMaskCreator has no

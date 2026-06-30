@@ -25,6 +25,13 @@ class GenerationConfig:
     max_context_length: int = 4096
     max_auxiliary_documents: int = 6
     max_link_depth: int = 1
+
+    # Corpus-doc truncation: when set, a fetched corpus document's body is
+    # truncated (head, i.e. abstract + intro first) to this many tokens before
+    # insertion. None = insert the full document. Essential for arXiv, where a
+    # cited paper (~70k tokens) far exceeds the context window and would
+    # otherwise be silently dropped by the can_add_document check.
+    max_corpus_doc_tokens: Optional[int] = None
     
     # Corpus integration / link retrieval
     # Modes:
@@ -88,6 +95,11 @@ class GenerationConfig:
         
         if self.max_link_depth < 0:
             raise ValueError(f"max_link_depth must be non-negative, got {self.max_link_depth}")
+
+        if self.max_corpus_doc_tokens is not None and self.max_corpus_doc_tokens <= 0:
+            raise ValueError(
+                f"max_corpus_doc_tokens must be positive if specified, got {self.max_corpus_doc_tokens}"
+            )
         
         if self.eviction_policy not in ["drop_oldest", "stop_new"]:
             raise ValueError(f"eviction_policy must be 'drop_oldest' or 'stop_new', got {self.eviction_policy}")

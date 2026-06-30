@@ -6,7 +6,7 @@ import pytest
 
 from data.normalization import (
     identifier_hash,
-    normalize_wiki_title,
+    normalize_title,
     normalize_repo_name,
     normalize_package_name,
     normalize_arxiv,
@@ -38,45 +38,45 @@ class TestIdentifierHash:
 
 class TestNormalizeWikiTitle:
     def test_basic(self):
-        result = normalize_wiki_title("Python programming")
+        result = normalize_title("Python programming")
         h = _raw_hash("Python programming")
         assert result == f"python_programming_{h}"
 
     def test_html_entities_decoded(self):
-        result = normalize_wiki_title("C&amp;C Studio")
+        result = normalize_title("C&amp;C Studio")
         h = _raw_hash("C&amp;C Studio")
         assert result == f"c_c_studio_{h}"
 
     def test_hyphens_preserved(self):
-        result = normalize_wiki_title("Python-3")
+        result = normalize_title("Python-3")
         h = _raw_hash("Python-3")
         assert result == f"python-3_{h}"
 
     def test_special_chars_become_underscore(self):
-        result = normalize_wiki_title("C++ Tutorial")
+        result = normalize_title("C++ Tutorial")
         h = _raw_hash("C++ Tutorial")
         assert result == f"c_tutorial_{h}"
 
     def test_underscores_collapsed(self):
-        result = normalize_wiki_title("Multiple   Spaces")
+        result = normalize_title("Multiple   Spaces")
         h = _raw_hash("Multiple   Spaces")
         assert result == f"multiple_spaces_{h}"
 
     def test_leading_trailing_stripped(self):
-        result = normalize_wiki_title("  Title  ")
+        result = normalize_title("  Title  ")
         h = _raw_hash("  Title  ")
         assert result == f"title_{h}"
 
     def test_length_cap(self):
         long_raw = "A" * 300
-        result = normalize_wiki_title(long_raw)
+        result = normalize_title(long_raw)
         body = strip_hash(result)
         assert len(body) <= 193
 
     def test_hash_of_raw_not_normalized(self):
         # Two titles that normalize to the same body must differ by hash
-        r1 = normalize_wiki_title("A+B")
-        r2 = normalize_wiki_title("A-B")
+        r1 = normalize_title("A+B")
+        r2 = normalize_title("A-B")
         h1 = _raw_hash("A+B")
         h2 = _raw_hash("A-B")
         assert r1.endswith(f"_{h1}")

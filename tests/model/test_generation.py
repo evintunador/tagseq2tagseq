@@ -539,6 +539,97 @@ def test_handle_link_corpus_doc_inserted_before_active():
     assert ctx._docs[1].is_root is True
 
 
+# --- _handle_link: corpus-doc truncation (max_corpus_doc_tokens) ---
+
+def test_handle_link_truncates_oversized_corpus_doc():
+    """A corpus doc longer than max_corpus_doc_tokens is head-truncated and fetched."""
+    from collections import namedtuple
+    LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
+    big = list(range(100, 100 + 5000))   # 5000-token doc
+    corpus = make_corpus({"BigPaper": big})
+    ctx = make_context_obj(max_context_length=10000)
+    root = ctx.add_root("", [1], None)
+    _handle_link(
+        LinkInfo(link_end_pos=1, target_str="BigPaper"),
+        root, ctx, None, None, corpus,
+        base_config(max_link_depth=1, max_context_length=10000, max_corpus_doc_tokens=512),
+        None, depth=0,
+    )
+    assert ctx.num_aux_docs == 1
+    aux = ctx._docs[0]
+    assert aux.raw_identifier == "BigPaper"
+    assert aux.truncated is True
+    assert aux.tokens == big[:512]   # head-truncated
+
+
+def test_handle_link_no_truncation_when_doc_fits():
+    """max_corpus_doc_tokens leaves a short doc untouched (truncated=False)."""
+    from collections import namedtuple
+    LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
+    corpus = make_corpus({"Small": [10, 20, 30]})
+    ctx = make_context_obj()
+    root = ctx.add_root("", [1], None)
+    _handle_link(
+        LinkInfo(link_end_pos=1, target_str="Small"),
+        root, ctx, None, None, corpus,
+        base_config(max_link_depth=1, max_corpus_doc_tokens=512),
+        None, depth=0,
+    )
+    aux = ctx._docs[0]
+    assert aux.tokens == [10, 20, 30]
+    assert aux.truncated is False
+
+
+def test_handle_link_oversized_doc_dropped_without_truncation():
+    """Without max_corpus_doc_tokens, an oversized doc fails can_add_document and is skipped."""
+    from collections import namedtuple
+    LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
+    big = list(range(100, 100 + 5000))
+    corpus = make_corpus({"BigPaper": big})
+    # context smaller than the doc, stop_new so it can't evict the root
+    ctx = make_context_obj(max_context_length=1000, eviction_policy="stop_new")
+    root = ctx.add_root("", [1], None)
+    _handle_link(
+        LinkInfo(link_end_pos=1, target_str="BigPaper"),
+        root, ctx, None, None, corpus,
+        base_config(max_link_depth=1, max_context_length=1000, eviction_policy="stop_new"),
+        None, depth=0,
+    )
+    assert ctx.num_aux_docs == 0   # silently dropped (the bug max_corpus_doc_tokens fixes)
+
+
+# --- _process_existing_doc_links: counts links in the trace (fix A) ---
+
+def test_process_existing_doc_links_counts_in_trace():
+    """Links found in an existing doc increment trace.links_detected (prompt links)."""
+    from collections import namedtuple
+    from model.generation_result import GenerationTrace
+    LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
+
+    # Fires two links only on the root's exact tokens; fetched aux docs ([10]/[20])
+    # produce nothing, so recursion doesn't inflate the count.
+    class RootOnlyDetector:
+        def detect_links(self, tokens):
+            if tokens.tolist() == [1, 2, 3]:
+                return [
+                    LinkInfo(link_end_pos=2, target_str="A"),
+                    LinkInfo(link_end_pos=5, target_str="B"),
+                ]
+            return []
+        def index_doc_span(self, span):
+            return span.raw_identifier
+
+    corpus = make_corpus({"A": [10], "B": [20]})
+    ctx = make_context_obj()
+    root = ctx.add_root("", [1, 2, 3], None)
+    trace = GenerationTrace()
+    _process_existing_doc_links(
+        root, ctx, None, RootOnlyDetector(), corpus,
+        base_config(max_link_depth=1), None, depth=0, trace=trace,
+    )
+    assert trace.links_detected == 2   # both prompt links counted
+
+
 # --- _handle_link: generation fallback ---
 
 def test_handle_link_generates_when_not_in_corpus():

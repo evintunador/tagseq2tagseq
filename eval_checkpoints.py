@@ -597,8 +597,10 @@ def run_benchmarks_on_model(
     # ── Annotated condition pass ──────────────────────────────────────────────
     # Benchmarks that include "annotated" in their conditions list are dispatched
     # here rather than in the main loop, because they require building a
-    # MarkdownPromptAnnotator (which needs a corpus and is model-specific).
-    # Guard: cross_doc_link model with MarkdownLinkDetector only.
+    # Prompt annotators inject dataset-specific link syntax into benchmark prompts.
+    # MarkdownPromptAnnotator: [display](Title) for wiki/markdown models.
+    # ArxivPromptAnnotator:   \cite{Title}      for arxiv models.
+    # Guard: cross_doc_link models with a supported link detector.
     annotated_specs = [
         spec for spec in benchmark_specs
         if "annotated" in spec.get("conditions", [])
@@ -606,23 +608,27 @@ def run_benchmarks_on_model(
     ]
     if annotated_specs:
         from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector as _MLD
-        _is_annotatable = (
-            getattr(model, "mask_type", None) == "cross_doc_link"
-            and isinstance(getattr(model, "link_detector", None), _MLD)
-        )
+        from model.graph_traversal.arxiv_cite_detector import ArxivCiteDetector as _ACD
+        _detector = getattr(model, "link_detector", None)
+        _mask_type = getattr(model, "mask_type", None)
+        _is_markdown = _mask_type == "cross_doc_link" and isinstance(_detector, _MLD)
+        _is_arxiv    = _mask_type == "cross_doc_link" and isinstance(_detector, _ACD)
+        _is_annotatable = _is_markdown or _is_arxiv
         if not _is_annotatable:
             logger.info(
                 "Skipping annotated condition: requires cross_doc_link model with "
-                "MarkdownLinkDetector (mask_type=%r, link_detector=%r).",
-                getattr(model, "mask_type", None),
-                type(getattr(model, "link_detector", None)).__name__,
+                "MarkdownLinkDetector or ArxivCiteDetector (mask_type=%r, link_detector=%r).",
+                _mask_type,
+                type(_detector).__name__,
             )
         else:
             annotator_corpus_dir = cfg.get("annotator_corpus") or str(dataset_dir)
             annotator_mode = cfg.get("annotator_mode", "corpus_only")
             try:
                 from generate import PretokCorpus
-                from eval.link_annotator import MarkdownPromptAnnotator, TrieTitleIndex
+                from eval.link_annotator import (
+                    MarkdownPromptAnnotator, ArxivPromptAnnotator, TrieTitleIndex,
+                )
                 from eval.title_index import HashNormTitleIndex
                 _corpus = PretokCorpus(annotator_corpus_dir)
                 _raw_ids = [
@@ -638,7 +644,7 @@ def run_benchmarks_on_model(
                     ),
                     edit_distance_threshold=cfg.get("annotator_ed_threshold", 0.2),
                 )
-                if cfg.get("annotator_use_trie", False):
+                if _is_markdown and cfg.get("annotator_use_trie", False):
                     _title_index = TrieTitleIndex(
                         _raw_ids,
                         model.tokenizer,
@@ -649,15 +655,23 @@ def run_benchmarks_on_model(
                     )
                 else:
                     _title_index = _fallback
-                _annotator = MarkdownPromptAnnotator(
-                    corpus=_corpus,
-                    title_index=_title_index,
-                    link_retrieval_mode=annotator_mode,
-                    layout_policy=getattr(model, "inference_layout_policy", None),
-                )
+                if _is_arxiv:
+                    _annotator = ArxivPromptAnnotator(
+                        corpus=_corpus,
+                        title_index=_title_index,
+                        link_retrieval_mode=annotator_mode,
+                        layout_policy=getattr(model, "inference_layout_policy", None),
+                    )
+                else:
+                    _annotator = MarkdownPromptAnnotator(
+                        corpus=_corpus,
+                        title_index=_title_index,
+                        link_retrieval_mode=annotator_mode,
+                        layout_policy=getattr(model, "inference_layout_policy", None),
+                    )
                 logger.info(
-                    "Annotated eval: corpus=%s, mode=%s",
-                    annotator_corpus_dir, annotator_mode,
+                    "Annotated eval: annotator=%s corpus=%s mode=%s",
+                    type(_annotator).__name__, annotator_corpus_dir, annotator_mode,
                 )
                 for spec in annotated_specs:
                     bname = spec["name"]
