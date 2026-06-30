@@ -16,7 +16,7 @@ from torch import Tensor
 from data.collate import DocSpan
 from data.layout import DocLayoutInfo
 from model.generation_result import GeneratedDocument
-from data.normalization import normalize_wiki_title
+from data.normalization import normalize_title
 
 
 @dataclass
@@ -93,7 +93,7 @@ class DocumentContext:
         doc_id = self._next_doc_id
         self._next_doc_id += 1
 
-        normed = normalize_wiki_title(raw_identifier) if raw_identifier else ""
+        normed = normalize_title(raw_identifier) if raw_identifier else ""
         if layout_policy is not None:
             info = DocLayoutInfo(
                 raw_identifier=raw_identifier,
@@ -237,6 +237,7 @@ class DocumentContext:
         parent_raw_identifier: Optional[str],
         depth: int,
         before_entry: _DocEntry,
+        truncated: bool = False,
     ) -> _DocEntry:
         """
         Insert a completed corpus document before before_entry in the context.
@@ -246,10 +247,13 @@ class DocumentContext:
 
         The caller is responsible for ensuring space exists (via can_add_document
         or make_room) before calling this method.
+
+        truncated: set True when corpus_tokens is a head-truncated slice of the
+        full corpus document (caller applied config.max_corpus_doc_tokens).
         """
         doc_id = self._next_doc_id
         self._next_doc_id += 1
-        normed = normalize_wiki_title(raw_identifier)
+        normed = normalize_title(raw_identifier)
 
         if layout_policy is not None:
             info = DocLayoutInfo(
@@ -270,7 +274,7 @@ class DocumentContext:
             tokens=list(corpus_tokens),
             suffix_tokens=suffix,
             done=True,
-            truncated=False,
+            truncated=truncated,
             doc_id=doc_id,
             source="corpus",
             is_root=False,
@@ -300,7 +304,7 @@ class DocumentContext:
         """
         doc_id = self._next_doc_id
         self._next_doc_id += 1
-        normed = normalize_wiki_title(raw_identifier)
+        normed = normalize_title(raw_identifier)
 
         if layout_policy is not None:
             info = DocLayoutInfo(

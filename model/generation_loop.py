@@ -10,7 +10,7 @@ from data.layout import DocLayoutInfo
 from model.document_context import DocumentContext, _DocEntry
 from model.generation_config import GenerationConfig
 from model.generation_result import GeneratedDocument, GenerationResult, GenerationTrace
-from data.normalization import normalize_wiki_title
+from data.normalization import normalize_title
 from model.sampling import sample_token
 
 logger = logging.getLogger(__name__)
@@ -287,7 +287,18 @@ def _handle_link(
     # Corpus fetch — skipped when generate_only.
     if config.link_retrieval_mode != "generate_only" and corpus is not None and corpus.has_document(target):
         corpus_tokens = list(corpus.get_document(target))
-        normed_target = normalize_wiki_title(target)
+        # Truncate over-long corpus docs (head-first: keeps abstract + intro) so
+        # they fit the context window. Without this, a large cited doc (e.g. a
+        # ~70k-token arXiv paper) fails can_add_document and the link silently
+        # no-ops. truncated=True is recorded on the inserted entry below.
+        corpus_doc_truncated = False
+        if (
+            config.max_corpus_doc_tokens is not None
+            and len(corpus_tokens) > config.max_corpus_doc_tokens
+        ):
+            corpus_tokens = corpus_tokens[:config.max_corpus_doc_tokens]
+            corpus_doc_truncated = True
+        normed_target = normalize_title(target)
         if layout_policy is not None:
             info = DocLayoutInfo(
                 raw_identifier=target,
@@ -315,14 +326,17 @@ def _handle_link(
             parent_raw_identifier=active_entry.raw_identifier,
             depth=depth + 1,
             before_entry=active_entry,
+            truncated=corpus_doc_truncated,
         )
         if trace is not None:
             trace.links_resolved += 1
             trace.corpus_fetches += 1
             trace.max_depth_reached = max(trace.max_depth_reached, depth + 1)
         logger.debug(
-            "Corpus fetch: '%s' (%d tokens) at depth %d",
-            target, len(corpus_tokens), depth + 1,
+            "Corpus fetch: '%s' (%d tokens%s) at depth %d",
+            target, len(corpus_tokens),
+            ", truncated" if corpus_doc_truncated else "",
+            depth + 1,
         )
         if depth + 1 <= config.max_link_depth:
             _process_existing_doc_links(
@@ -385,6 +399,12 @@ def _process_existing_doc_links(
         torch.tensor(entry.tokens, dtype=torch.long)
     )
     for link in all_links:
+        if trace is not None:
+            trace.links_detected += 1
+        logger.debug(
+            "Link detected (existing doc): '%s' at depth %d in doc '%s'",
+            link.target_str, depth, entry.raw_identifier,
+        )
         _handle_link(
             link, entry, context, model, link_detector,
             corpus, config, layout_policy, depth, trace=trace,

@@ -330,10 +330,245 @@ class TrieTitleIndex:
 
 
 # ---------------------------------------------------------------------------
+# _AnnotatorBase — shared helpers for all PromptAnnotator implementations
+# ---------------------------------------------------------------------------
+
+class _AnnotatorBase:
+    """Shared helpers for MarkdownPromptAnnotator and ArxivPromptAnnotator.
+
+    Subclasses supply the dataset-specific link syntax via three hooks:
+      * ``_opener_probs(model, tokens, device) -> [T]`` — P(start-of-link-opener)
+        at each position (markdown ' [' vs LaTeX '\\').
+      * ``_title_stop_regex`` — compiled regex whose first match in the decoded
+        title marks the end of the title (markdown ')' vs LaTeX '}').
+      * ``max_title_tokens`` — generation budget for the title.
+    The shared ``scan_prob`` and ``_generate_title`` (free, autoregressive) are
+    defined here; subclasses override only where behaviour genuinely diverges
+    (e.g. MarkdownPromptAnnotator adds trie-constrained title generation).
+    """
+
+    # Subclasses must set these in __init__
+    corpus = None
+    title_index = None
+    link_retrieval_mode: str = "corpus_only"
+    generation_config: "GenerationConfig"
+    layout_policy = None
+    eos_token_id: int = 50256
+    max_title_tokens: int = 50
+
+    # Subclasses must set this to the compiled stop regex for title generation.
+    _title_stop_regex = None
+
+    def _run_fwd(self, model, tok_tensor: torch.Tensor, device: str) -> torch.Tensor:
+        """Single doc_causal forward pass. Returns logits [T, V]."""
+        span = DocSpan(
+            doc_id=0,
+            normed_identifier="",
+            raw_identifier="",
+            start=0,
+            end=tok_tensor.shape[0],
+            truncated=False,
+            outgoing_identifiers=[],
+        )
+        logits = model.forward_inference(
+            tok_tensor.unsqueeze(0).to(device),
+            [span],
+            mask_type='doc_causal',
+        )
+        return logits[0]   # [T, V]
+
+    # --- link-opener scan (shared) ---
+
+    def _opener_probs(self, model, context_tokens: List[int], device: str) -> torch.Tensor:
+        """Return P(link opener) at each position, shape [T]. Subclass hook."""
+        raise NotImplementedError
+
+    def scan_prob(self, model, context_tokens: List[int], device: str = "cuda") -> float:
+        """Phase-1 scan: return max P(link opener) across all positions.
+
+        Cheap — one forward pass, no generation. Called for all examples during
+        threshold calibration before any full annotation.
+        """
+        if not context_tokens:
+            return 0.0
+        probs = self._opener_probs(model, context_tokens, device)
+        return float(probs.max().item())
+
+    # --- title generation (shared free-generation core) ---
+
+    def _generate_title_free(
+        self,
+        model,
+        prefix_tokens: List[int],
+        device: str,
+    ) -> Tuple[str, List[int]]:
+        """Autoregressively generate a link-target title (free, unconstrained).
+
+        Stops when EOS is sampled, ``_title_stop_regex`` matches the decoded
+        accumulation (handles BPE merges that absorb the closing delimiter), or
+        ``max_title_tokens`` is exhausted. Returns (target_str, title_token_ids)
+        where title_token_ids is the clean re-encoding of target_str.
+        """
+        tokenizer = getattr(model, "tokenizer", None)
+        current_tokens = list(prefix_tokens)
+        title_tokens: List[int] = []
+        cfg = self.generation_config
+        stop_re = self._title_stop_regex
+
+        for _ in range(self.max_title_tokens):
+            tok_tensor = torch.tensor(current_tokens, dtype=torch.long, device=device)
+            logits = self._run_fwd(model, tok_tensor, device)
+            next_token = sample_token(
+                logits[-1], temperature=cfg.temperature, top_k=cfg.top_k, top_p=cfg.top_p,
+            )
+            if next_token == self.eos_token_id:
+                break
+            title_tokens.append(next_token)
+            current_tokens.append(next_token)
+            if tokenizer is not None:
+                try:
+                    decoded_so_far = tokenizer.decode(title_tokens)
+                    if "\n" in decoded_so_far or (stop_re is not None and stop_re.search(decoded_so_far)):
+                        break
+                except Exception:
+                    pass
+
+        if title_tokens:
+            try:
+                raw = tokenizer.decode(title_tokens) if tokenizer is not None else (
+                    "".join(chr(t % 256) for t in title_tokens)
+                )
+            except Exception:
+                raw = ""
+        else:
+            raw = ""
+
+        # Trim at the first stop delimiter or newline, whichever comes first.
+        trim_pat = r'\n' if stop_re is None else (stop_re.pattern + r'|\n')
+        m = _re.search(trim_pat, raw)
+        if m:
+            raw = raw[:m.start()]
+        target_str = raw.strip()
+
+        # Re-encode so title_tokens exactly matches what goes into context_tokens.
+        if target_str and tokenizer is not None:
+            try:
+                title_tokens = list(tokenizer.encode(target_str))
+            except Exception:
+                pass
+        return target_str, title_tokens
+
+    def _fetch_aux(
+        self,
+        model,
+        target_str: str,
+        device: str,
+    ) -> Tuple[List[List[int]], List[str], bool]:
+        """Fetch or generate the aux document according to link_retrieval_mode.
+
+        Returns (aux_token_lists, aux_raw_identifiers, link_fired).
+        """
+        if not target_str or self.link_retrieval_mode == "no_op":
+            return [], [], False
+
+        if self.link_retrieval_mode in ("corpus_only", "corpus_then_generate"):
+            if self.corpus is not None:
+                if self.title_index is not None:
+                    resolved = self.title_index.lookup(target_str)
+                    if resolved is None:
+                        resolved = target_str if self.corpus.has_document(target_str) else None
+                else:
+                    resolved = target_str if self.corpus.has_document(target_str) else None
+                if resolved is not None and self.corpus.has_document(resolved):
+                    aux_tokens = list(self.corpus.get_document(resolved))
+                    if aux_tokens:
+                        logger.debug(
+                            "Annotator corpus hit: %r -> %r (%d tokens)",
+                            target_str, resolved, len(aux_tokens),
+                        )
+                        return [aux_tokens], [resolved], True
+            if self.link_retrieval_mode == "corpus_only":
+                logger.debug("Annotator corpus miss (corpus_only): %r", target_str)
+                return [], [], False
+
+        if self.link_retrieval_mode in ("generate", "corpus_then_generate"):
+            aux_tokens = self._generate_aux_doc(model, target_str, device)
+            if aux_tokens:
+                logger.debug("Annotator generated aux doc: %r (%d tokens)", target_str, len(aux_tokens))
+                return [aux_tokens], [target_str], True
+
+        return [], [], False
+
+    def _generate_aux_doc(
+        self,
+        model,
+        target_str: str,
+        device: str,
+    ) -> List[int]:
+        """Generate an aux document for target_str using the full generation loop."""
+        from model.generation_loop import run_generation
+
+        cfg = self.generation_config
+        gen_cfg = GenerationConfig(
+            max_new_tokens=cfg.max_new_tokens,
+            temperature=cfg.temperature,
+            top_k=cfg.top_k,
+            top_p=cfg.top_p,
+            max_tokens_per_document=cfg.max_tokens_per_document,
+            max_context_length=cfg.max_context_length,
+            max_auxiliary_documents=0,
+            max_link_depth=0,
+            link_retrieval_mode="full_skip",
+            eviction_policy="stop_new",
+            process_prompt_links=False,
+            repetition_penalty=cfg.repetition_penalty,
+            eos_token_id=self.eos_token_id,
+            record_trace=False,
+            device=device,
+        )
+
+        try:
+            tokenizer = getattr(model, "tokenizer", None)
+            decode_fn = tokenizer.decode if tokenizer is not None else None
+
+            _lp = self.layout_policy
+            _has_prefix = False
+            if _lp is not None and target_str:
+                try:
+                    from data.layout import DocLayoutInfo
+                    _info = DocLayoutInfo(raw_identifier=target_str, normed_identifier=target_str)
+                    _has_prefix = len(_lp.prefix_tokens(_info)) > 0
+                except Exception:
+                    pass
+            if _has_prefix:
+                prompt_tokens: List[int] = []
+            else:
+                prompt_tokens = list(tokenizer.encode(target_str)) if (tokenizer and target_str) else []
+
+            result = run_generation(
+                model=model,
+                prompt_tokens=prompt_tokens,
+                corpus=None,
+                config=gen_cfg,
+                link_detector=None,
+                tokenizer_decode=decode_fn,
+                layout_policy=self.layout_policy,
+                root_identifier=target_str,
+            )
+            doc = result.root_document
+            if doc.tokens is not None:
+                return doc.tokens.tolist()
+        except Exception as exc:
+            logger.warning("Annotator aux doc generation failed for %r: %s", target_str, exc)
+
+        return []
+
+
+# ---------------------------------------------------------------------------
 # MarkdownPromptAnnotator
 # ---------------------------------------------------------------------------
 
-class MarkdownPromptAnnotator:
+class MarkdownPromptAnnotator(_AnnotatorBase):
     """
     Injects a Wikipedia-style [display](Title) link into a prompt.
 
@@ -408,25 +643,15 @@ class MarkdownPromptAnnotator:
         self.eos_token_id = eos_token_id
         self.show_beam_candidates = show_beam_candidates
 
+    # Title ends at a link-closing ')' — one NOT immediately followed by a word
+    # character, so a mid-word paren like ")iani" or "U2)" doesn't trigger.
+    _title_stop_regex = _re.compile(r'\)(?!\w)')
+
+    # scan_prob is inherited from _AnnotatorBase (uses _opener_probs below).
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
-    def scan_prob(
-        self,
-        model,
-        context_tokens: List[int],
-        device: str = "cuda",
-    ) -> float:
-        """Phase-1 scan: return max P('[') across all positions.
-
-        Cheap — one forward pass, no generation. Called for all examples
-        during threshold calibration before any full annotation.
-        """
-        if not context_tokens:
-            return 0.0
-        probs = self._link_opener_probs(model, context_tokens, device)
-        return float(probs.max().item())
 
     def annotate(
         self,
@@ -453,7 +678,7 @@ class MarkdownPromptAnnotator:
             )
 
         # ── Step 1: forward pass 1, pick link opener position ──────────
-        opener_probs = self._link_opener_probs(model, context_tokens, device)
+        opener_probs = self._opener_probs(model, context_tokens, device)
         link_opener_prob = float(opener_probs.max().item())
         link_opener_pos = int(opener_probs.argmax().item())
 
@@ -571,25 +796,7 @@ class MarkdownPromptAnnotator:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _run_fwd(self, model, tok_tensor: torch.Tensor, device: str) -> torch.Tensor:
-        """Single forward pass. Returns logits [T, V] (no batch dim)."""
-        span = DocSpan(
-            doc_id=0,
-            normed_identifier="",
-            raw_identifier="",
-            start=0,
-            end=tok_tensor.shape[0],
-            truncated=False,
-            outgoing_identifiers=[],
-        )
-        logits = model.forward_inference(
-            tok_tensor.unsqueeze(0).to(device),
-            [span],
-            mask_type='doc_causal',
-        )
-        return logits[0]   # [T, V]
-
-    def _link_opener_probs(
+    def _opener_probs(
         self,
         model,
         context_tokens: List[int],
@@ -608,24 +815,14 @@ class MarkdownPromptAnnotator:
         model,
         prefix_tokens: List[int],
         device: str,
-    ) -> Tuple[str, List[int]]:
-        """Autoregressively generate the link target title.
+    ):
+        """Generate the link target title.
 
-        Stops when any of the following are true:
-          - EOS token ID is sampled (token-level: fixed single token)
-          - ')' appears in the decoded accumulation (string-level: catches
-            multi-character BPE tokens like ')', ').\n', 'imperial)', etc.)
-          - '\n' appears in the decoded accumulation (titles never span lines)
-          - max_title_tokens is exhausted
-
-        String-level stop mirrors the approach used by MarkdownLinkDetector:
-        decode the growing window each step and check for the stop character.
-        This handles BPE merges that absorb ')' or '\n' into larger tokens
-        that would be missed by a bare token-ID comparison.
-
-        Returns (target_str, title_token_ids) or, when show_beam_candidates is
-        set and TrieTitleIndex is used, (target_str, title_token_ids, beam_candidates)
-        where beam_candidates is List[Tuple[raw_identifier, score]] sorted best-first.
+        First tries trie-constrained generation when the title_index provides a
+        ``generate_title`` (TrieTitleIndex) — this guarantees a valid corpus title
+        and, with show_beam_candidates, returns (target_str, tokens, beam_candidates).
+        Otherwise falls back to free autoregressive generation
+        (``_generate_title_free`` in the base, stopping at the ')' link-close).
         """
         # Delegate to a constrained generation loop if the title_index provides one.
         if self.title_index is not None and hasattr(self.title_index, "generate_title"):
@@ -642,73 +839,7 @@ class MarkdownPromptAnnotator:
                 return result
             # None → fall through to free generation below.
 
-        tokenizer = getattr(model, "tokenizer", None)
-        current_tokens = list(prefix_tokens)
-        title_tokens: List[int] = []
-        cfg = self.generation_config
-
-        for _ in range(self.max_title_tokens):
-            tok_tensor = torch.tensor(current_tokens, dtype=torch.long, device=device)
-            logits = self._run_fwd(model, tok_tensor, device)    # [T, V]
-            next_token = sample_token(
-                logits[-1],
-                temperature=cfg.temperature,
-                top_k=cfg.top_k,
-                top_p=cfg.top_p,
-            )
-
-            # Token-level EOS stop — always a single fixed token
-            if next_token == self.eos_token_id:
-                break
-
-            title_tokens.append(next_token)
-            current_tokens.append(next_token)
-
-            # String-level stop: decode accumulated tokens and check for
-            # a link-closing ')' (not a mid-word paren like ")iani") or '\n'.
-            # Re-decode the whole accumulation each step for BPE correctness.
-            # A ')' stops generation only when it is not immediately followed
-            # by a word character — i.e. it closes the link rather than being
-            # embedded inside a word like "Trigiani" or "U2)".
-            if tokenizer is not None:
-                try:
-                    decoded_so_far = tokenizer.decode(title_tokens)
-                    if "\n" in decoded_so_far:
-                        break
-                    if _re.search(r'\)(?!\w)', decoded_so_far):
-                        break
-                except Exception:
-                    pass
-
-        # Decode accumulated tokens and trim to clean title string.
-        if title_tokens:
-            try:
-                raw = tokenizer.decode(title_tokens) if tokenizer is not None else (
-                    "".join(chr(t % 256) for t in title_tokens)
-                )
-            except Exception:
-                raw = ""
-        else:
-            raw = ""
-
-        # Trim at the first link-closing ')' or '\n', whichever comes first.
-        # Use the same regex so we trim at the same boundary we stopped on.
-        m = _re.search(r'\)(?!\w)|\n', raw)
-        if m:
-            raw = raw[:m.start()]
-
-        target_str = raw.strip()
-
-        # Re-encode the clean title string so title_tokens exactly matches
-        # what will appear in context_tokens (no trailing garbage from a
-        # stop-trigger BPE token like ")iani").
-        if target_str and tokenizer is not None:
-            try:
-                title_tokens = list(tokenizer.encode(target_str))
-            except Exception:
-                pass
-
-        return target_str, title_tokens
+        return self._generate_title_free(model, prefix_tokens, device)
 
     def _get_close_paren_id(self, model) -> Optional[int]:
         """Return the token ID for ')' using the model's tokenizer."""
@@ -721,126 +852,161 @@ class MarkdownPromptAnnotator:
         except Exception:
             return None
 
-    def _fetch_aux(
+
+# ---------------------------------------------------------------------------
+# ArxivPromptAnnotator
+# ---------------------------------------------------------------------------
+
+# GPT-2 token IDs for the LaTeX \cite{ opener sequence and } closer.
+# \cite{ tokenizes as [59, 66, 578, 90] → ['\\', 'c', 'ite', '{']
+_CITE_OPENER_TOKENS: Tuple[int, ...] = (59, 66, 578, 90)
+_CITE_CLOSE_TOKEN: int = 92   # '}'
+
+
+class ArxivPromptAnnotator(_AnnotatorBase):
+    """
+    Injects a LaTeX ``\\cite{Title}`` link into a prompt for arXiv-trained models.
+
+    Unlike MarkdownPromptAnnotator (which has a display-text phase and two
+    forward passes to find '[(display)]('), this annotator has a simpler two-step
+    injection: find the best position to insert ``\\`` (the start of ``\\cite{``),
+    then autoregressively generate the paper title until ``}`` is sampled or EOS.
+
+    Algorithm
+    ---------
+    1. Forward pass (doc_causal, original tokens).
+       Find position i with highest P('\\') — the first token of ``\\cite{``.
+    2. Build prefix: ``context[:i] + ['\\', 'c', 'ite', '{']``.
+    3. Autoregressively generate title tokens until ``}`` is sampled.
+       target_str = decoded title tokens (strip leading/trailing whitespace).
+    4. Build final context: ``context[:i] + cite_opener + title_tokens + ['}'] + context[i:]``.
+       The original suffix starts at i (nothing consumed — pure insertion).
+    5. Aux doc acquisition via _fetch_aux (shared with MarkdownPromptAnnotator).
+
+    Args:
+        corpus: Optional corpus with has_document/get_document.
+        title_index: Optional TitleIndex for fuzzy title matching.
+        link_retrieval_mode: "no_op", "corpus_only", "generate", "corpus_then_generate".
+        generation_config: Sampling settings for title generation and aux doc generation.
+        layout_policy: Layout policy for aux doc generation (None = NullLayoutPolicy).
+        max_title_tokens: Maximum tokens to generate for the title. Default 60.
+        eos_token_id: EOS token id. Default 50256.
+    """
+
+    _VALID_MODES = frozenset({
+        "no_op", "corpus_only", "generate", "corpus_then_generate",
+    })
+
+    def __init__(
+        self,
+        corpus=None,
+        title_index: Optional[TitleIndex] = None,
+        link_retrieval_mode: str = "corpus_only",
+        generation_config: Optional[GenerationConfig] = None,
+        layout_policy=None,
+        max_title_tokens: int = 60,
+        eos_token_id: int = 50256,
+    ):
+        if link_retrieval_mode not in self._VALID_MODES:
+            raise ValueError(
+                f"link_retrieval_mode must be one of {sorted(self._VALID_MODES)}, "
+                f"got {link_retrieval_mode!r}"
+            )
+        self.corpus = corpus
+        self.title_index = title_index
+        self.link_retrieval_mode = link_retrieval_mode
+        self.generation_config = generation_config or GenerationConfig(repetition_penalty=1.3)
+        self.layout_policy = layout_policy
+        self.max_title_tokens = max_title_tokens
+        self.eos_token_id = eos_token_id
+
+    # Title ends at the '}' that closes \cite{...}.
+    _title_stop_regex = _re.compile(r'\}')
+
+    # scan_prob is inherited from _AnnotatorBase (uses _opener_probs below).
+
+    # ------------------------------------------------------------------
+    # Public API (PromptAnnotator protocol)
+    # ------------------------------------------------------------------
+
+    def annotate(
         self,
         model,
-        target_str: str,
-        device: str,
-    ) -> Tuple[List[List[int]], List[str], bool]:
-        """Fetch or generate the aux document according to link_retrieval_mode.
+        context_tokens: List[int],
+        device: str = "cuda",
+    ) -> AnnotatedPrompt:
+        """Full annotation pipeline: inject \\cite{Title} and fetch aux doc."""
+        if not context_tokens:
+            return AnnotatedPrompt(
+                context_tokens=list(context_tokens),
+                aux_token_lists=[],
+                aux_raw_identifiers=[],
+                target_str="",
+                link_opener_pos=0,
+                link_mid_pos=0,
+                link_opener_prob=0.0,
+                link_fired=False,
+            )
 
-        Returns (aux_token_lists, aux_raw_identifiers, link_fired).
-        """
-        if not target_str or self.link_retrieval_mode == "no_op":
-            return [], [], False
+        # ── Step 1: find best '\' position ──────────────────────────────
+        backslash_probs = self._opener_probs(model, context_tokens, device)
+        link_opener_prob = float(backslash_probs.max().item())
+        link_opener_pos = int(backslash_probs.argmax().item())
 
-        # Try corpus — resolve generated title to a corpus raw_identifier.
-        # If a TitleIndex is provided, use it (hash-norm fuzzy match) so that
-        # casing/punctuation variants of valid titles still hit. Fall back to
-        # verbatim has_document only when no index is available.
-        if self.link_retrieval_mode in ("corpus_only", "corpus_then_generate"):
-            if self.corpus is not None:
-                if self.title_index is not None:
-                    resolved = self.title_index.lookup(target_str)
-                    # TrieTitleIndex.lookup() returns None without a fallback_index,
-                    # but target_str may already be a valid corpus raw_identifier
-                    # (guaranteed when generate_title constrained generation to the trie).
-                    if resolved is None:
-                        resolved = target_str if self.corpus.has_document(target_str) else None
-                else:
-                    resolved = target_str if self.corpus.has_document(target_str) else None
-                if resolved is not None and self.corpus.has_document(resolved):
-                    aux_tokens = list(self.corpus.get_document(resolved))
-                    if aux_tokens:
-                        logger.debug(
-                            "Annotator corpus hit: %r -> %r (%d tokens)",
-                            target_str, resolved, len(aux_tokens),
-                        )
-                        return [aux_tokens], [resolved], True
-            if self.link_retrieval_mode == "corpus_only":
-                logger.debug("Annotator corpus miss (corpus_only): %r", target_str)
-                return [], [], False
+        # ── Step 2: build title-generation prefix ────────────────────────
+        # Inject the full \cite{ opener (4 tokens) at link_opener_pos.
+        # link_mid_pos points to the '{' token (last opener token).
+        cite_opener = list(_CITE_OPENER_TOKENS)
+        title_prefix = list(context_tokens[:link_opener_pos]) + cite_opener
+        link_mid_pos = link_opener_pos + len(cite_opener) - 1   # position of '{'
 
-        # Generate
-        if self.link_retrieval_mode in ("generate", "corpus_then_generate"):
-            aux_tokens = self._generate_aux_doc(model, target_str, device)
-            if aux_tokens:
-                logger.debug("Annotator generated aux doc: %r (%d tokens)", target_str, len(aux_tokens))
-                return [aux_tokens], [target_str], True
+        # ── Step 3: autoregressive title generation ───────────────────────
+        target_str, title_tokens = self._generate_title(model, title_prefix, device)
 
-        return [], [], False
-
-    def _generate_aux_doc(
-        self,
-        model,
-        target_str: str,
-        device: str,
-    ) -> List[int]:
-        """Generate an aux document for target_str using the full generation loop.
-
-        Uses GenerationConfig with max_link_depth=0 and link_retrieval_mode="full_skip"
-        so the generated doc itself never spawns sub-links.
-        """
-        from model.generation_loop import run_generation
-
-        cfg = self.generation_config
-        gen_cfg = GenerationConfig(
-            max_new_tokens=cfg.max_new_tokens,
-            temperature=cfg.temperature,
-            top_k=cfg.top_k,
-            top_p=cfg.top_p,
-            max_tokens_per_document=cfg.max_tokens_per_document,
-            max_context_length=cfg.max_context_length,
-            max_auxiliary_documents=0,
-            max_link_depth=0,
-            link_retrieval_mode="full_skip",
-            eviction_policy="stop_new",
-            process_prompt_links=False,
-            repetition_penalty=cfg.repetition_penalty,
-            eos_token_id=self.eos_token_id,
-            record_trace=False,
-            device=device,
+        # ── Step 4: build final context_tokens ───────────────────────────
+        # Pure insertion — no original tokens consumed.
+        # Structure: context[:i] + \cite{ + title_tokens + } + context[i:]
+        final_context = (
+            title_prefix
+            + title_tokens
+            + [_CITE_CLOSE_TOKEN]
+            + list(context_tokens[link_opener_pos:])
         )
 
-        try:
-            tokenizer = getattr(model, "tokenizer", None)
-            decode_fn = tokenizer.decode if tokenizer is not None else None
+        # ── Step 5: aux doc acquisition ───────────────────────────────────
+        aux_token_lists, aux_raw_identifiers, link_fired = self._fetch_aux(
+            model, target_str, device
+        )
 
-            # Determine whether the layout policy provides a non-empty prefix
-            # (e.g. IdentifierPrefixEOSLayoutPolicy prepends "# target\n\n").
-            # If not (NullLayoutPolicy), fall back to encoding target_str as the
-            # prompt so the model has something to condition on.
-            _lp = self.layout_policy
-            _has_prefix = False
-            if _lp is not None and target_str:
-                try:
-                    from data.layout import DocLayoutInfo
-                    _info = DocLayoutInfo(raw_identifier=target_str, normed_identifier=target_str)
-                    _has_prefix = len(_lp.prefix_tokens(_info)) > 0
-                except Exception:
-                    pass
-            if _has_prefix:
-                prompt_tokens: List[int] = []
-            else:
-                prompt_tokens = list(tokenizer.encode(target_str)) if (tokenizer and target_str) else []
+        return AnnotatedPrompt(
+            context_tokens=final_context,
+            aux_token_lists=aux_token_lists,
+            aux_raw_identifiers=aux_raw_identifiers,
+            target_str=target_str,
+            link_opener_pos=link_opener_pos,
+            link_mid_pos=link_mid_pos,
+            link_opener_prob=link_opener_prob,
+            link_fired=link_fired,
+        )
 
-            result = run_generation(
-                model=model,
-                prompt_tokens=prompt_tokens,
-                corpus=None,
-                config=gen_cfg,
-                link_detector=None,
-                tokenizer_decode=decode_fn,
-                layout_policy=self.layout_policy,
-                root_identifier=target_str,
-            )
-            doc = result.root_document
-            if doc.tokens is not None:
-                return doc.tokens.tolist()
-        except Exception as exc:
-            logger.warning("Annotator aux doc generation failed for %r: %s", target_str, exc)
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
-        return []
+    def _opener_probs(
+        self,
+        model,
+        context_tokens: List[int],
+        device: str,
+    ) -> torch.Tensor:
+        """Forward pass; return P('\\') (first token of \\cite{) at each position. Shape [T]."""
+        tok_tensor = torch.tensor(context_tokens, dtype=torch.long, device=device)
+        logits = self._run_fwd(model, tok_tensor, device)   # [T, V]
+        probs = F.softmax(logits.float(), dim=-1)            # [T, V]
+        return probs[:, _CITE_OPENER_TOKENS[0]]              # [T] — P('\')
+
+    # Title generation (free, stop at '}') is inherited: _generate_title_free.
+    _generate_title = _AnnotatorBase._generate_title_free
 
 
 # ─── Visualization ────────────────────────────────────────────────────────────

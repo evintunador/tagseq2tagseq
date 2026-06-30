@@ -5,14 +5,17 @@ All normed_identifier values written to graph.jsonl and used in the pretokenized
 corpus are produced by the functions here. Use these at both data-extraction time
 and model inference time so that lookup keys always match.
 
-Three flavors cover the three corpus types:
-  normalize_wiki_title    — Wikipedia article titles
-  normalize_repo_name     — GitHub repository names (user/repo)
-  normalize_package_name  — Python package/module names (dot-separated)
+Flavors by identifier type:
+  normalize_title         — free-text titles (Wikipedia articles, ArXiv papers);
+                            also the runtime identifier normalizer in generation.
+  normalize_repo_name     — GitHub repository names (user/repo); splits '-' and '/'
+  normalize_package_name  — Python package/module names (dot-separated); splits '.'
+  normalize_arxiv         — ArXiv ids (version-stripped, '.'/'/' split)
 
-All three append a 6-char MD5 hash of the *original raw string* so that titles
-that differ only in punctuation (e.g. "A+B" vs "A-B", both body → "a_b") remain
-distinguishable.
+All append a 6-char MD5 hash of the *original raw string* so that titles that
+differ only in punctuation (e.g. "A+B" vs "A-B", both body → "a_b") remain
+distinguishable. normalize_title and normalize_arxiv produce identical output for
+plain-text titles; they differ only on id-shaped inputs containing '.' or '/'.
 """
 import hashlib
 import html
@@ -38,12 +41,18 @@ def _norm_body(text: str) -> str:
     return text
 
 
-def normalize_wiki_title(raw: str) -> str:
+def normalize_title(raw: str) -> str:
     """
-    Normalize a Wikipedia article title to a normed_identifier string.
+    Normalize a free-text title (Wikipedia article, ArXiv paper, ...) to a
+    normed_identifier string.
 
     Pipeline: HTML-unescape → _norm_body → cap body at 193 chars →
     append '_' + identifier_hash(original raw).
+
+    This is the generic title/identifier normalizer: it makes no dataset-specific
+    assumptions and is used both for plain-text titles and as the runtime
+    identifier normalizer during generation. For id-shaped inputs with '.'/'/' use
+    normalize_arxiv / normalize_package_name / normalize_repo_name instead.
     """
     h = identifier_hash(raw)
     decoded = html.unescape(raw)

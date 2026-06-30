@@ -32,6 +32,35 @@ a redirect title that isn't a first-class node.
 
 ---
 
+## Generation / Inference
+
+### TheStack (Python) link resolution in generation is unsupported
+`generate.py` / `model/generation_loop.py` resolve a detected link to a corpus doc
+via an exact `corpus.has_document(target)` lookup. This works for Wikipedia
+(`[text](Title)`) and ArXiv (`\cite{Title}`) because the detector's `target_str`
+equals the corpus `raw_identifier`. It does **not** work for TheStack: the
+`PythonImportDetector` emits *relative* import paths (e.g. `"Phaedra/Notebook.py"`)
+while corpus `raw_identifier`s are repo-qualified (`"000alen/Phaedra:Phaedra/Notebook.py"`),
+so corpus hits never fire on a multi-repo dataset. See the NOTE in
+`generate.py::PretokCorpus.has_document`. Fix options: (a) build a single-repo
+corpus so identifiers match, or (b) make the import detector emit repo-qualified
+identifiers when a repo context is available. Until then, Python-link generation
+falls back to generate/skip per `link_retrieval_mode` (no corpus fetch).
+
+### Corpus-match cascade is eval-only, not used in generation
+The successive title-matching algorithms (`HashNormTitleIndex`: exact → norm →
+word_overlap → edit_distance) are only used by the eval annotators
+(`MarkdownPromptAnnotator` / `ArxivPromptAnnotator`). Generation
+(`generation_loop._handle_link`) resolves links with a single exact
+`corpus.has_document()` lookup and no fuzzy fallback, for all datasets. A model
+that emits a near-miss title (casing/punctuation variant of a real corpus title)
+will fail to fetch during generation even though eval would have matched it.
+Consider threading a `TitleIndex` through `run_generation` so generation gets the
+same recovery cascade. (Wiki/ArXiv both benefit; orthogonal to the Python-path
+issue above.)
+
+---
+
 ## Training
 
 ### 8-GPU (multi-rank DDP) training hangs (BUG)

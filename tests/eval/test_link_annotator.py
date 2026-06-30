@@ -11,9 +11,14 @@ import torch.nn as nn
 from typing import List
 from unittest.mock import MagicMock, patch
 
-from eval.link_annotator import AnnotatedPrompt, MarkdownPromptAnnotator, PromptAnnotator
+from eval.link_annotator import (
+    AnnotatedPrompt, MarkdownPromptAnnotator, ArxivPromptAnnotator, PromptAnnotator,
+    _CITE_OPENER_TOKENS, _CITE_CLOSE_TOKEN,
+)
 
 VOCAB_SIZE = 17000  # must cover GPT-2 token IDs up to 16151 ('](')
+# Must also cover \cite{ tokens: max is 578 ('ite'); GPT-2 '}' = 92
+assert VOCAB_SIZE > max(_CITE_OPENER_TOKENS)
 
 
 # ─── Mock model helpers ──────────────────────────────────────────────────────
@@ -474,3 +479,124 @@ def test_generate_title_no_delegation_without_generate_title_attr():
     target_str, title_tokens = ann._generate_title(model, [1, 2, 3], "cpu")
     assert isinstance(target_str, str)
     assert isinstance(title_tokens, list)
+
+
+# ─── ArxivPromptAnnotator tests ──────────────────────────────────────────────
+
+def _make_arxiv_model(
+    backslash_hot_pos: int = 4,
+    title_tok: int = 65,   # 'A'
+    close_brace_tok: int = _CITE_CLOSE_TOKEN,   # '}'
+):
+    r"""Mock model for ArxivPromptAnnotator.
+
+    - backslash_hot_pos: position with high P('\\') (first \cite{ opener token)
+    - title_tok: token emitted during title generation
+    - close_brace_tok: emitted one step after title_tok to stop generation
+    """
+    model = MagicMock()
+    model.mask_type = "cross_doc_link"
+    model.backbone.parameters.return_value = iter([nn.Parameter(torch.zeros(1))])
+
+    enc = MagicMock()
+    enc.encode.side_effect = lambda s, **kw: [ord(c) % 256 for c in s]
+    enc.decode.side_effect = lambda toks: "".join(chr(t % 256) for t in toks)
+    model.tokenizer = enc
+
+    _title_generated = [False]
+
+    def _fwd(tokens, doc_spans, mask_type=None, **kwargs):
+        T = tokens.shape[1]
+        logits = torch.zeros(1, T, VOCAB_SIZE)
+        # High P('\\') at backslash_hot_pos
+        if backslash_hot_pos < T:
+            logits[0, backslash_hot_pos, _CITE_OPENER_TOKENS[0]] = 10.0
+        # Title generation: emit title_tok once, then close_brace_tok
+        if not _title_generated[0]:
+            logits[0, -1, title_tok] = 8.0
+            _title_generated[0] = True
+        else:
+            logits[0, -1, close_brace_tok] = 10.0
+        return logits
+
+    model.forward_inference.side_effect = _fwd
+    return model
+
+
+def test_arxiv_annotator_satisfies_protocol():
+    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    assert isinstance(ann, PromptAnnotator)
+
+
+def test_arxiv_scan_prob_returns_float_in_unit_interval():
+    model = _make_arxiv_model(backslash_hot_pos=2)
+    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    p = ann.scan_prob(model, [1, 2, 3, 4, 5], "cpu")
+    assert isinstance(p, float)
+    assert 0.0 <= p <= 1.0
+
+
+def test_arxiv_scan_prob_empty_tokens_returns_zero():
+    model = _make_arxiv_model()
+    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    assert ann.scan_prob(model, [], "cpu") == 0.0
+
+
+def test_arxiv_annotate_empty_returns_safely():
+    model = _make_arxiv_model()
+    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    result = ann.annotate(model, [], "cpu")
+    assert result.link_fired is False
+    assert result.context_tokens == []
+
+
+def test_arxiv_annotate_injects_cite_opener():
+    r"""Final context must contain the \cite{ opener tokens at link_opener_pos."""
+    model = _make_arxiv_model(backslash_hot_pos=2)
+    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op", max_title_tokens=5)
+    ctx = [10, 20, 30, 40, 50]
+    result = ann.annotate(model, ctx, "cpu")
+    # The opener tokens (\cite{) should appear at link_opener_pos
+    i = result.link_opener_pos
+    assert list(result.context_tokens[i:i + len(_CITE_OPENER_TOKENS)]) == list(_CITE_OPENER_TOKENS)
+
+
+def test_arxiv_annotate_context_longer_than_original():
+    """Injection always lengthens the context."""
+    model = _make_arxiv_model(backslash_hot_pos=1)
+    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op", max_title_tokens=5)
+    ctx = [1, 2, 3, 4, 5, 6]
+    result = ann.annotate(model, ctx, "cpu")
+    assert len(result.context_tokens) > len(ctx)
+
+
+def test_arxiv_no_op_mode_returns_empty_aux():
+    model = _make_arxiv_model()
+    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    result = ann.annotate(model, [1, 2, 3, 4, 5], "cpu")
+    assert result.aux_token_lists == []
+    assert result.aux_raw_identifiers == []
+    assert result.link_fired is False
+
+
+def test_arxiv_corpus_hit_returns_aux_tokens():
+    corpus = MagicMock()
+    corpus.has_document.return_value = True
+    corpus.get_document.return_value = iter([100, 200, 300])
+
+    model = _make_arxiv_model(backslash_hot_pos=2, title_tok=65)
+    ann = ArxivPromptAnnotator(corpus=corpus, link_retrieval_mode="corpus_only", max_title_tokens=5)
+    result = ann.annotate(model, [1, 2, 3, 4, 5], "cpu")
+    assert result.link_fired is True
+    assert result.aux_token_lists == [[100, 200, 300]]
+
+
+def test_arxiv_corpus_miss_in_corpus_only_mode():
+    corpus = MagicMock()
+    corpus.has_document.return_value = False
+
+    model = _make_arxiv_model(backslash_hot_pos=2)
+    ann = ArxivPromptAnnotator(corpus=corpus, link_retrieval_mode="corpus_only", max_title_tokens=5)
+    result = ann.annotate(model, [1, 2, 3, 4, 5], "cpu")
+    assert result.link_fired is False
+    assert result.aux_token_lists == []
