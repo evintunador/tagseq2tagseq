@@ -362,11 +362,12 @@ class CrossDocLinkMaskCreator:
                         target_str=lk.target_str,
                     )
                 )
-        logger.info(
-            "_collect_links_per_doc: %d total LinkInfos across %d spans",
-            len(all_links),
-            len(doc_spans),
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "_collect_links_per_doc: %d total LinkInfos across %d spans",
+                len(all_links),
+                len(doc_spans),
+            )
         return all_links
 
     def _match_links_to_docs(
@@ -428,9 +429,10 @@ class CrossDocLinkMaskCreator:
                 f"doc {target_doc_id} ('{link.target_str}')"
             )
 
-        logger.info(
-            f"Matched {matched}/{len(links)} links to documents in batch"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Matched %d/%d links to documents in batch", matched, len(links)
+            )
         return link_to_target
 
     def _build_cross_doc_mask(
@@ -585,10 +587,11 @@ class CrossDocLinkMaskCreator:
                     )
                     grant_idx += 1
 
-        logger.info(
-            f"Built {grant_idx} cross-doc attention grants "
-            f"across {self._n_chunks} chunk(s)"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Built %d cross-doc attention grants across %d chunk(s)",
+                grant_idx, self._n_chunks,
+            )
         return q_bitmasks, kv_bitmasks
 
     def _build_block_interaction_mask(
@@ -902,11 +905,12 @@ class CrossDocLinkMaskCreator:
             bwd_q_kv_indices=bwd_q_kv_indices,
             bwd_q_kv_n_full=bwd_q_kv_n_full,
         )
-        logger.info(
-            f"Built BlockInteractionMask: {n_blocks} blocks, "
-            f"{int(q_kv_counts.sum())} non-empty fwd pairs, "
-            f"sparsity={bim.sparsity:.1%} (block_size={bs})"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Built BlockInteractionMask: %d blocks, %d non-empty fwd pairs, "
+                "sparsity=%.1f%% (block_size=%d)",
+                n_blocks, int(q_kv_counts.sum()), bim.sparsity * 100, bs,
+            )
         return bim
 
     def __call__(
@@ -943,12 +947,15 @@ class CrossDocLinkMaskCreator:
                 links = self._collect_links_per_doc(tokens, doc_spans)
             else:
                 links = self.link_detector.detect_links(tokens[0])
-                logger.info(f"Found {len(links)} links in batch")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Found %d links in batch", len(links))
             link_to_target = self._match_links_to_docs(links, doc_spans)
         else:
-            logger.info(
-                f"Using pre-computed link_to_target with {len(link_to_target)} entries"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Using pre-computed link_to_target with %d entries",
+                    len(link_to_target),
+                )
 
         # Build document_ids tensor for base doc_causal mask
         document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
@@ -1029,7 +1036,8 @@ class CrossDocLinkMaskCreator:
             device=device
         )
 
-        logger.info(f"Created cross-document link mask for sequence length {seq_len}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Created cross-document link mask for sequence length %d", seq_len)
         return block_mask
 
     def build_dense_mask_for_visualization(
