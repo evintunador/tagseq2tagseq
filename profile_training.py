@@ -53,11 +53,14 @@ from model import TS2TSTrainingModule
 from model.graph_traversal.block_mask_creator import (
     make_mask_creator_callable,
     make_mask_creator_callable_from,
+    create_doc_causal_triton_mask,
+    create_doc_concat_triton_mask,
 )
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 from model.graph_traversal.link_detector import make_link_detector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
+from data.bucketed_pack_dataset import BucketedPackDataset
 from data.layout import make_layout_policy
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
@@ -154,14 +157,32 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         order_mode=cfg.get('data', {}).get('order_mode', 'prefer_targets_first'),
         layout_policy=layout_policy,
     )
-    # TODO: BucketedPackDataset path (pre-computed epoch) for profiling density-aware packing.
-    dataset = PackedSequenceDataset(
-        graph=graph_index,
-        backend=backend,
-        pack_sampler=pack_sampler,
-        layout_policy=layout_policy,
-        as_2d=True,
-    )
+    # Use the precomputed BucketedPackDataset when epoch_dirs is given — that is
+    # the real production training regime (density-bucketed packs, per-rank draws
+    # in world_size lockstep).  Fall back to the live PackedSequenceDataset only
+    # when no precomputed schedule is supplied.
+    _epoch_dirs = cfg.get('data', {}).get('epoch_dirs')
+    if isinstance(_epoch_dirs, str):
+        _epoch_dirs = [p.strip() for p in _epoch_dirs.strip('[]').split(',') if p.strip()]
+    if _epoch_dirs:
+        _log(dist.rank, f"using BucketedPackDataset ({len(_epoch_dirs)} epoch dir(s))")
+        dataset = BucketedPackDataset(
+            epoch_dirs=_epoch_dirs,
+            graph=graph_index,
+            backend=backend,
+            layout=layout_policy,
+            rank=dist.rank,
+            world_size=dist.world_size,
+        )
+    else:
+        _log(dist.rank, "using live PackedSequenceDataset")
+        dataset = PackedSequenceDataset(
+            graph=graph_index,
+            backend=backend,
+            pack_sampler=pack_sampler,
+            layout_policy=layout_policy,
+            as_2d=True,
+        )
     data_iter = iter(dataset)
     _log(dist.rank, "dataset ready")
 
@@ -171,25 +192,44 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     seq_len    = cfg['model']['max_seq_len']
     mask_type  = cfg.get('model', {}).get('mask_type', 'doc_causal')
 
-    if mask_type == 'cross_doc_link':
-        link_detector_name = cfg.get('model', {}).get('link_detector')
+    # Mask-creator wiring MUST mirror main.py exactly so the profile reflects the
+    # real training regime (triton kernels per mask_type), not the flex fallback.
+    _mcfg = cfg.get('model', {})
+    use_triton = _mcfg.get('attention_backend', 'triton') != 'flex'
+    detector = None
+    if mask_type in ('cross_doc_link', 'doc_concat_link'):
+        link_detector_name = _mcfg.get('link_detector')
         if not link_detector_name:
             raise ValueError(
-                "model.link_detector must be set to 'markdown', 'python' or 'arxiv' "
-                "when model.mask_type is 'cross_doc_link'"
+                "model.link_detector must be set ('markdown'|'python'|'arxiv') "
+                f"when model.mask_type is '{mask_type}'"
             )
         detector = make_link_detector(link_detector_name, enc.decode)
-        _mcfg = cfg.get('model', {})
+        attention_backend = 'triton_v18' if use_triton else 'flex'
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=detector,
                 max_grants=_mcfg.get('max_grants', 64),
                 max_grants_start=_mcfg.get('max_grants_start'),
                 max_grants_warmup_steps=int(_mcfg.get('max_grants_warmup_steps', 0)),
+                backend=attention_backend,
+                whole_doc_grant=(mask_type == 'doc_concat_link'),
             )
         )
+    elif mask_type == 'doc_concatenated':
+        if use_triton:
+            attention_backend = 'varlen_bim_v2'
+            block_mask_creator = make_mask_creator_callable_from(create_doc_concat_triton_mask)
+        else:
+            attention_backend = 'flex'
+            block_mask_creator = make_mask_creator_callable(mask_type)
     else:
-        block_mask_creator = make_mask_creator_callable(mask_type)
+        if use_triton and mask_type == 'doc_causal':
+            attention_backend = 'varlen_bim_v2'
+            block_mask_creator = make_mask_creator_callable_from(create_doc_causal_triton_mask)
+        else:
+            attention_backend = 'flex'
+            block_mask_creator = make_mask_creator_callable(mask_type)
 
     tokenizer_name = graph_index.metadata.get('tokenizer', 'gpt2')
     vocab_size = 50304 if tokenizer_name == 'gpt2' else cfg['model'].get('vocab_size', 50304)
@@ -201,7 +241,6 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         model_dim=cfg['model']['model_dim'],
         num_heads=cfg['model']['num_heads'],
         max_seq_len=seq_len,
-        dropout=cfg['model'].get('dropout', 0.0),
         drop_path_rate=cfg['model'].get('drop_path_rate', 0.0),
         block_mask_creator=block_mask_creator,
         fp8=cfg['model'].get('fp8', False),
@@ -209,6 +248,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         ignore_index=cfg['model'].get('ignore_index', -100),
         dtype=getattr(torch, cfg['model'].get('dtype', 'bfloat16')),
         activation_checkpointing=cfg['model'].get('activation_checkpointing', False),
+        attention_backend=attention_backend,   # resolved above to match mask creator
+        logit_softcap=cfg['model'].get('logit_softcap', None),
+        mtp_extra_weights=cfg['model'].get('mtp_extra_weights', None),
+        ve_layers=cfg['model'].get('ve_layers', None),
     ).to(dist.device)
     _log(dist.rank, "model built")
 
