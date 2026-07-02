@@ -1,27 +1,22 @@
 """
-Atomic feature: checkpoint_best_model + bucket_state persistence + optional
-per-step timing.
+Atomic feature (ts2-local): checkpoint_best_model + BucketedPackDataset resume.
 
-Extends checkpoint_best_model by:
+A strict superset of ``checkpoint_best_model`` (single ``val_loader``): identical
+best-val-loss checkpointing, plus persistence of the BucketedPackDataset schedule
+position so a precomputed-epoch run resumes at the exact pack it left off.
 
-  1. Writing the current BucketedPackDataset position into every checkpoint's
-     metadata dict under ``"bucket_state"``, enabling exact resume.
+This is the *single-val-loader* counterpart to ``multi_val_bucketed`` (plural
+``val_loaders``, the production path).  Both keep bucket knowledge in ts2: the
+position is stored as a lazy callable under ``metadata["bucket_state"]`` and
+resolved at save time by ``checkpointer.save_checkpoint``, so the persisted value
+reflects the actual checkpoint moment rather than when the loop was assembled.
 
-  2. Optionally measuring per-step wall-clock time broken down into:
-       backward_s  — fwd+bwd including DDP allreduce overlap
-       wait_s      — stall at dist.barrier() waiting for slower ranks
-       total_s     — backward_s + wait_s
-     Results are printed per-step (no rolling average) and saved to
-     ``step_timing_rank{N}.csv`` in output_dir.
-
-``step_timing_all_ranks`` and ``step_timing_csv`` are optional and passed
-via **kwargs; they are not registered as feature-selection kwargs so that
-smart_train selects this feature purely on the presence of ``bucket_state_fn``.
+For per-step timing use the standalone ``step_timer`` atomic feature — this
+feature does checkpointing only (atomic features stay atomic).
 
 Usage in main.py
 ----------------
     atomic_feature_kwargs['bucket_state_fn'] = dataset.get_state
-    # Also add step_timing_all_ranks=True to enable timing (optional).
 
 Resume path (main.py)
 ---------------------
@@ -31,13 +26,10 @@ Resume path (main.py)
     dataset = BucketedPackDataset(..., start_state=start_state)
 """
 
-import csv
 import os
-import time
 from typing import Any, Callable, Dict, Optional
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 
 import tunalab.checkpointer as checkpointer
@@ -50,70 +42,36 @@ def run_training(
     optimizer: torch.optim.Optimizer,
     train_loader,
     *,
-    # ---- checkpoint_best_model kwargs ----------------------------------------
     save_best_model: bool = False,
     output_dir: Optional[str] = None,
     val_loader=None,
     val_interval: int = 10,
-    # ---- bucket_state extension ----------------------------------------------
     bucket_state_fn: Optional[Callable] = None,
-    device: str = "cpu",
     **kwargs,
 ) -> Dict[str, Any]:
-    """Training loop with bucket_state checkpointing and optional step timing.
+    """Best-val-loss checkpointing that also persists BucketedPackDataset position.
 
     Args:
-        model:                  nn.Module; forward(batch) returns scalar loss.
-        optimizer:              PyTorch optimizer.
-        train_loader:           Training data iterable.
-        save_best_model:        Enable best-val-loss checkpoint saving.
-        output_dir:             Directory for checkpoint and timing CSV files.
-        val_loader:             Validation iterable (required when save_best_model).
-        val_interval:           Steps between validation runs.
-        bucket_state_fn:        Zero-arg callable → object with ``__dict__``
-                                (typically ``BucketedPackDataset.get_state``).
-                                When provided, its result is embedded in every
-                                saved checkpoint's metadata for exact resume.
-        device:                 Device string used for cuda.synchronize().
-        **kwargs:               step_timing_all_ranks (bool, default False) — if
-                                True every DDP rank prints timing and writes CSV;
-                                otherwise only rank 0.  step_timing_csv (bool,
-                                default True) — write per-step timing CSV.
-        **kwargs:               Forwarded to checkpoint metadata["config"].
+        model:            nn.Module; forward(batch) returns scalar loss.
+        optimizer:        PyTorch optimizer.
+        train_loader:     Training data iterable.
+        save_best_model:  Enable best-val-loss checkpoint saving.
+        output_dir:       Directory for checkpoint files.
+        val_loader:       Validation iterable (required when save_best_model=True).
+        val_interval:     Steps between validation runs.
+        bucket_state_fn:  Zero-arg callable → object with ``__dict__`` (typically
+                          ``BucketedPackDataset.get_state``).  When provided, the
+                          dataset position is embedded (lazily, resolved at save
+                          time) in every saved checkpoint's metadata for exact
+                          resume.
+        **kwargs:         Forwarded to checkpoint metadata["config"] via "config".
     """
-    step_timing_all_ranks: bool = kwargs.get('step_timing_all_ranks', False)
-    step_timing_csv: bool = kwargs.get('step_timing_csv', True)
-    is_distributed = dist.is_available() and dist.is_initialized()
-    rank = dist.get_rank() if is_distributed else 0
-    _dev = torch.device(device)
-    timing_enabled = step_timing_all_ranks or rank == 0
-
     model.train()
     best_val_loss = float("inf")
     result: Dict[str, Any] = {"model": model}
     optimizer.zero_grad(set_to_none=True)
     step_count = 0
 
-    # ---- timing CSV setup ---------------------------------------------------
-    csv_file = None
-    csv_writer = None
-    if step_timing_csv and output_dir is not None:
-        os.makedirs(output_dir, exist_ok=True)
-        csv_path = os.path.join(output_dir, f"step_timing_rank{rank}.csv")
-        csv_file = open(csv_path, "w", newline="")
-        csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(
-            ["step", "total_s", "backward_s", "wait_s", "it_per_s", "loss"]
-        )
-
-    if timing_enabled:
-        print(
-            f"\n{'step':>6}  {'total_s':>8}  {'bwd_s':>7}  {'wait_s':>7}  "
-            f"{'it/s':>7}  loss",
-            flush=True,
-        )
-
-    # ---- checkpoint helper --------------------------------------------------
     def _maybe_save():
         nonlocal best_val_loss
         if not save_best_model:
@@ -134,7 +92,9 @@ def run_training(
                     "config": kwargs.get("config", {}),
                 }
                 if bucket_state_fn is not None:
-                    metadata["bucket_state"] = bucket_state_fn().__dict__
+                    # Lazy: checkpointer resolves the callable at save time so the
+                    # persisted position reflects this exact checkpoint moment.
+                    metadata["bucket_state"] = lambda: bucket_state_fn().__dict__
                 checkpointer.save_checkpoint(
                     filepath=os.path.join(output_dir, "checkpoints", "best_model.pt"),
                     metadata=metadata,
@@ -143,59 +103,19 @@ def run_training(
                 )
             cpu_barrier()
 
-    # ---- training loop ------------------------------------------------------
     for batch in train_loader:
-        t_start = time.perf_counter()
-
         loss = model(batch)
         loss.backward()
-
-        # Sync after backward: waits for this rank's CUDA work + DDP allreduce
-        torch.cuda.synchronize(_dev)
-        t_after_bwd = time.perf_counter()
-
-        # Barrier: waits until ALL ranks have completed allreduce.
-        # Time spent here is stall from slower ranks (density imbalance on live
-        # training; near-zero on density-bucketed precomputed training).
-        if is_distributed:
-            dist.barrier()
-        t_after_barrier = time.perf_counter()
-
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
 
         if save_best_model and step_count % val_interval == 0:
             _maybe_save()
 
-        # ---- record timing --------------------------------------------------
-        bwd_s = t_after_bwd - t_start
-        wait_s = t_after_barrier - t_after_bwd
-        total_s = t_after_barrier - t_start
-        it_per_s = 1.0 / total_s if total_s > 0 else float("inf")
-        loss_val = float(loss.detach().cpu().item())
-
-        if csv_writer is not None:
-            csv_writer.writerow(
-                [step_count, f"{total_s:.4f}", f"{bwd_s:.4f}",
-                 f"{wait_s:.4f}", f"{it_per_s:.3f}", f"{loss_val:.4f}"]
-            )
-
-        if timing_enabled:
-            print(
-                f"{step_count:>6}  {total_s:>8.3f}  {bwd_s:>7.3f}  "
-                f"{wait_s:>7.3f}  {it_per_s:>7.2f}  {loss_val:.4f}",
-                flush=True,
-            )
-
         step_count += 1
 
-    # Final validation if the last step wasn't a val step
+    # Final validation if the last step wasn't a val step.
     if save_best_model and step_count % val_interval != 0:
         _maybe_save()
-
-    if csv_file is not None:
-        csv_file.close()
-        if timing_enabled:
-            print(f"\nStep timing saved → {csv_path}", flush=True)
 
     return result

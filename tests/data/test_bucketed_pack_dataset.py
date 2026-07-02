@@ -261,3 +261,97 @@ class TestBucketedPackDataset:
             it = iter(ds)
             with pytest.raises(AssertionError, match="token_budget"):
                 next(it)
+
+
+class TestBucketStateCheckpointPersistence:
+    """The ts2-local checkpoint save helper must embed BucketState so the
+    precomputed data-schedule position survives a save/resume cycle.
+
+    Regression for the silent data-position loss: production uses plural
+    ``val_loaders`` → the ``multi_val_bucketed`` feature.  That feature declares
+    ``bucket_state_fn`` and stores the position as a lazy callable under
+    ``metadata["bucket_state"]``, which ``checkpointer.save_checkpoint`` resolves
+    at save time.  Bucket knowledge stays in ts2; tunalab only learned that a
+    metadata value may be callable.  Previously bucket_state was wired only into
+    the never-selected (singular ``val_loader``) ``bucket_state_checkpoint``
+    feature, so every resume restarted the epoch schedule from the beginning.
+    """
+
+    @staticmethod
+    def _save_best():
+        # Imported lazily so the test is skipped cleanly if tunalab is absent.
+        from tunalab.train_loops.multi_val_bucketed import _save_best
+        return _save_best
+
+    def test_save_best_persists_bucket_state(self):
+        """_save_best embeds bucket_state in metadata when bucket_state_fn is given,
+        and the saved dict round-trips back into a BucketState."""
+        import torch.nn as nn
+
+        _save_best = self._save_best()
+        model = nn.Linear(4, 4)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        live_state = BucketState(epoch_idx=2, global_accum_step=4170,
+                                 bucket_consumed={0: 33, 1: 33})
+
+        with tempfile.TemporaryDirectory() as d:
+            _save_best(model, opt, val_loss=1.23, step=4170, output_dir=d,
+                       bucket_state_fn=lambda: live_state, config={})
+            ckpt = torch.load(os.path.join(d, "checkpoints", "best_model.pt"),
+                              map_location="cpu", weights_only=False)
+            md = ckpt["metadata"]
+            assert "bucket_state" in md, "bucket_state missing from checkpoint metadata"
+            # checkpointer resolved the lazy callable to a plain dict at save time.
+            assert isinstance(md["bucket_state"], dict), "bucket_state not resolved to dict"
+            # Round-trips exactly back into a BucketState matching the live position.
+            restored = BucketState(**md["bucket_state"])
+            assert restored.epoch_idx == 2
+            assert restored.global_accum_step == 4170
+            assert restored.bucket_consumed == {0: 33, 1: 33}
+
+    def test_save_best_omits_bucket_state_without_fn(self):
+        """Back-compat: no bucket_state_fn → no bucket_state key (old behaviour)."""
+        import torch.nn as nn
+
+        _save_best = self._save_best()
+        model = nn.Linear(4, 4)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        with tempfile.TemporaryDirectory() as d:
+            _save_best(model, opt, val_loss=1.23, step=10, output_dir=d,
+                       bucket_state_fn=None, config={})
+            ckpt = torch.load(os.path.join(d, "checkpoints", "best_model.pt"),
+                              map_location="cpu", weights_only=False)
+            assert "bucket_state" not in ckpt["metadata"]
+
+    def test_dataset_resumes_from_persisted_state(self):
+        """End-to-end: get_state() → _save_best → reload → BucketedPackDataset
+        resumes at the exact same pack position."""
+        import torch.nn as nn
+
+        _save_best = self._save_best()
+        with tempfile.TemporaryDirectory() as tmp:
+            epoch_dir = _make_epoch_dir(tmp, n_buckets=2, packs_per_bucket=20)
+            epoch_dirs = [epoch_dir]
+
+            # Consume 5 accum steps, capture state, persist via the checkpoint helper.
+            ds1 = _make_dataset(epoch_dirs)
+            packs_first5 = _collect_pack_ids(ds1, 5)
+            live_state = ds1.get_state()
+
+            model = nn.Linear(4, 4)
+            opt = torch.optim.SGD(model.parameters(), lr=0.1)
+            _save_best(model, opt, val_loss=0.5, step=5, output_dir=tmp,
+                       bucket_state_fn=ds1.get_state, config={})
+
+            ckpt = torch.load(os.path.join(tmp, "checkpoints", "best_model.pt"),
+                              map_location="cpu", weights_only=False)
+            restored = BucketState(**ckpt["metadata"]["bucket_state"])
+            assert restored.__dict__ == live_state.__dict__
+
+            # A fresh dataset resumed from the persisted state continues, not restarts.
+            ds2 = _make_dataset(epoch_dirs, start_state=restored)
+            packs_next5 = _collect_pack_ids(ds2, 5)
+            # No overlap with the first 5 — i.e. it did NOT replay from the top.
+            assert set(packs_first5).isdisjoint(set(packs_next5)), (
+                f"resume replayed already-consumed packs:\n  first5={packs_first5}\n  next5={packs_next5}"
+            )

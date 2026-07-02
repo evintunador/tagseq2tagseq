@@ -1046,9 +1046,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         'use_tqdm': dist.is_main_process,  # only rank 0 shows the progress bar
         'num_epochs': cfg['train_loop'].get('epochs', 1),
     })
-    # When using BucketedPackDataset, inject bucket_state_fn so the
-    # bucket_state_checkpoint atomic feature saves dataset position alongside
-    # every best-val-loss checkpoint for exact resume capability.
+    # When using BucketedPackDataset, inject bucket_state_fn.  With plural
+    # val_loaders this selects the ts2-local multi_val_bucketed feature, which
+    # saves the dataset schedule position alongside every best-val-loss
+    # checkpoint for exact resume capability.
     if epoch_dirs:
         atomic_feature_kwargs['bucket_state_fn'] = dataset.get_state
 
