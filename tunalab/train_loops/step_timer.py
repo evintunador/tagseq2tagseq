@@ -1,17 +1,20 @@
 """
 Atomic feature: per-step timing log — standalone version.
 
-Records per-step wall-clock time broken down into backward_s / wait_s /
-total_s and writes a CSV per rank.  Useful for profiling live (non-precomputed)
-training runs where bucket_state checkpointing is not needed.
+Records per-step wall-clock time broken down into data_load_s / backward_s /
+wait_s / total_s and writes a CSV per rank.  Useful for profiling training
+throughput and diagnosing data starvation on the real training path (bucketed
+or live dataset + backend I/O).
 
+    data_load_s — wall time blocked on next(loader) before compute (starvation)
     backward_s  — fwd-start → cuda.synchronize (backward + DDP allreduce)
     wait_s      — dist.barrier stall waiting for slower ranks
-    total_s     — backward_s + wait_s
+    total_s     — data_load_s + backward_s + wait_s (true end-to-end step time)
 
-For precomputed training (when ``bucket_state_fn`` is also provided), use
-the ``bucket_state_checkpoint`` feature instead — it subsumes this feature
-and also persists dataset position in checkpoints.
+This feature is timing-only — atomic features stay atomic.  For persisting the
+BucketedPackDataset schedule position in checkpoints, use the
+``bucket_state_checkpoint`` (single val_loader) or ``multi_val_bucketed``
+(multiple val_loaders) features.
 
 Unique trigger kwarg
 --------------------
@@ -48,9 +51,10 @@ def run_training(
     rather than only rank 0.
 
     Each step measures:
-      backward_s — fwd-start → cuda.synchronize (backward + DDP allreduce)
-      wait_s     — dist.barrier stall (how long this rank waits for others)
-      total_s    — backward_s + wait_s
+      data_load_s — wall time blocked on next(loader) before compute (starvation)
+      backward_s  — fwd-start → cuda.synchronize (backward + DDP allreduce)
+      wait_s      — dist.barrier stall (how long this rank waits for others)
+      total_s     — data_load_s + backward_s + wait_s (true end-to-end step time)
     """
     is_distributed = dist.is_available() and dist.is_initialized()
     rank = dist.get_rank() if is_distributed else 0
@@ -72,19 +76,30 @@ def run_training(
         csv_path = os.path.join(output_dir, f"step_timing_rank{rank}.csv")
         csv_file = open(csv_path, "w", newline="")
         csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(["step", "total_s", "backward_s", "wait_s", "it_per_s", "loss"])
+        csv_writer.writerow(
+            ["step", "total_s", "data_load_s", "backward_s", "wait_s", "it_per_s", "loss"]
+        )
 
     if should_print:
         print(
-            f"\n{'step':>6}  {'total_s':>8}  {'bwd_s':>7}  {'wait_s':>7}  "
+            f"\n{'step':>6}  {'total_s':>8}  {'data_s':>7}  {'bwd_s':>7}  {'wait_s':>7}  "
             f"{'it/s':>7}  loss",
             flush=True,
         )
 
+    # Iterate manually so the data-fetch (iterator next) is timed separately from
+    # compute — the true data-starvation signal on the real training path.
+    _loader_iter = iter(train_loader)
     step = 0
-    for batch in train_loader:
-        # ---- start ----
+    while True:
+        # ---- data fetch ----
+        t_data0 = time.perf_counter()
+        try:
+            batch = next(_loader_iter)
+        except StopIteration:
+            break
         t_start = time.perf_counter()
+        data_load_s = t_start - t_data0   # wall time blocked on the dataloader
 
         loss = model(batch)
         loss.backward()
@@ -103,20 +118,23 @@ def run_training(
         optimizer.zero_grad(set_to_none=True)
 
         # ---- timings ----
+        # total_s spans the full step including the data fetch, so it_per_s
+        # reflects true end-to-end throughput.
         bwd_s = t_after_bwd - t_start
         wait_s = t_after_barrier - t_after_bwd
-        total_s = t_after_barrier - t_start
+        total_s = t_after_barrier - t_data0
         it_per_s = 1.0 / total_s if total_s > 0 else float("inf")
         loss_val = float(loss.detach().cpu().item())
 
         if csv_writer is not None:
-            csv_writer.writerow([step, f"{total_s:.4f}", f"{bwd_s:.4f}",
-                                  f"{wait_s:.4f}", f"{it_per_s:.3f}", f"{loss_val:.4f}"])
+            csv_writer.writerow(
+                [step, f"{total_s:.4f}", f"{data_load_s:.4f}", f"{bwd_s:.4f}",
+                 f"{wait_s:.4f}", f"{it_per_s:.3f}", f"{loss_val:.4f}"])
 
         if should_print:
             print(
-                f"{step:>6}  {total_s:>8.3f}  {bwd_s:>7.3f}  {wait_s:>7.3f}  "
-                f"{it_per_s:>7.2f}  {loss_val:.4f}",
+                f"{step:>6}  {total_s:>8.3f}  {data_load_s:>7.3f}  {bwd_s:>7.3f}  "
+                f"{wait_s:>7.3f}  {it_per_s:>7.2f}  {loss_val:.4f}",
                 flush=True,
             )
 
