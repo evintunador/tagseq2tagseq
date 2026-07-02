@@ -1,18 +1,18 @@
 data:
-  dataset_dir: <to/be/generated>/pretokenized_datasets/arxiv
+  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
   strategy: 'bfs'
   layout_policy: 'stochastic_latex_comment_prefix'
   inference_layout_policy: 'eos'
   order_mode: 'prefer_targets_first'
   doc_budget: null
-  train_dir:   <to/be/generated>/pretokenized_datasets/arxiv/splits/train
-  epoch_dirs:  <to/be/generated>/schedules/arxiv_bfs/epoch_0
+  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
+  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
   val_dirs:
-    val_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/val_community
-    val_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/val_random
+    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
+    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
   test_dirs:
-    test_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/test_community
-    test_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/test_random
+    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
+    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
 
 model:
   compile: true
@@ -86,7 +86,7 @@ eval:
     - {name: boolq,       conditions: [doceval]}
     - {name: openbookqa,  conditions: [doceval]}
   max_docs: 500
-  annotator_corpus: <to/be/generated>/pretokenized_datasets/arxiv
+  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
   annotator_mode: corpus_only
   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
 
