@@ -71,6 +71,7 @@ class TS2TSModel:
         inference_layout_policy=None,
         ignore_index: int = -100,
         tokenizer=None,
+        logit_softcap: Optional[float] = None,
     ):
         from data.layout import NullLayoutPolicy
 
@@ -87,6 +88,7 @@ class TS2TSModel:
         self.inference_layout_policy = inference_layout_policy or self.training_layout_policy
         self.ignore_index = ignore_index
         self.tokenizer = tokenizer
+        self.logit_softcap = logit_softcap
         self._is_training = False  # default to eval mode
         self._creators = self._build_creators()
 
@@ -349,6 +351,9 @@ class TS2TSModel:
         x = self.backbone(x, block_mask=block_mask, ve_map=ve_map, bigram=bigram)  # [1, T, D]
         x = self.norm(x)
         logits = F.linear(x, self.lm_head_weight)        # [1, T, V]
+        if self.logit_softcap:
+            cap = self.logit_softcap
+            logits = cap * torch.tanh(logits / cap)
         return logits
 
     def generate(

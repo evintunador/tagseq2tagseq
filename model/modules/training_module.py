@@ -188,6 +188,7 @@ class TS2TSTrainingModule(nn.Module):
         inference_backend: str = 'flex',
         training_layout_policy=None,
         inference_layout_policy=None,
+        logit_softcap=None,
     ):
         """
         Convert this training module to an inference-ready TS2TSModel.
@@ -243,6 +244,7 @@ class TS2TSTrainingModule(nn.Module):
             inference_layout_policy=inference_layout_policy,
             ignore_index=self.ignore_index,
             tokenizer=tokenizer,
+            logit_softcap=logit_softcap,
         )
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Type[Tensor] | Any]:

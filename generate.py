@@ -222,6 +222,7 @@ def load_inference_model(
         inference_backend=inference_attention_backend,
         training_layout_policy=training_layout_policy,
         inference_layout_policy=inference_layout_policy,
+        logit_softcap=model_cfg.get("logit_softcap"),
     )
     inference_model.to(torch.device(device), torch.bfloat16)
 
