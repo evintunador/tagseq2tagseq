@@ -1228,11 +1228,29 @@ def main() -> None:
                 out_path = _default_run_output_path(ckpt_path)
 
             out_path.parent.mkdir(parents=True, exist_ok=True)
+            # Merge into any existing results rather than clobbering them, so a
+            # later run of a *different* benchmark/condition subset doesn't wipe
+            # earlier keys. Same "{benchmark}/{condition}" keys are overwritten
+            # with the fresh values (intended: re-running updates in place).
+            merged = results
+            if out_path.exists():
+                try:
+                    prior = json.loads(out_path.read_text(encoding="utf-8"))
+                    if isinstance(prior, dict):
+                        merged = {**prior, **results}
+                except (json.JSONDecodeError, OSError) as _exc:
+                    logger.warning(
+                        "Could not read existing %s to merge (%s); overwriting.",
+                        out_path, _exc,
+                    )
             out_path.write_text(
-                json.dumps(results, ensure_ascii=False, indent=2),
+                json.dumps(merged, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            logger.info("Results written to %s", out_path)
+            logger.info(
+                "Results written to %s (%d total benchmark/condition keys)",
+                out_path, len(merged),
+            )
 
             if multi:
                 all_entries.append(
