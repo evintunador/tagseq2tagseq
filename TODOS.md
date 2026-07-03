@@ -18,6 +18,17 @@ a redirect title that isn't a first-class node.
 
 ## Model
 
+### Profile training throughput — even plain doc_causal may be leaving speed on the table
+thestack_doc_causal runs ~6.6s/it at 262144 tok/step on 4 GPUs (~26 GPU-s/step);
+the cross-doc-link mask is NOT the bottleneck (thestack_doc_concat_link is actually
+cheaper per GPU-s, and arxiv's slowness is just its long docs filling the T×T matrix).
+But 6s/it for this model size/context still feels high — plausibly 1-2s/it is
+achievable. Profile the doc_causal path to find where time goes: dataloader / pack
+build / collate (CPU-bound, starving GPU?), the varlen_bim Triton kernel, optimizer
+(distributed Muon Newton-Schulz), grad-accum sync, or activation checkpointing / recompute.
+Check GPU utilization (is it <90%? → input-bound). Use profile_training.py. Flagged
+2026-07-02; user suspects headroom to 1-2s/it.
+
 ### Additional datasets
 - **EnWiki / full Wikipedia**: expand beyond SimpleWiki to the other available Wikipedia
   dumps (enwiki, etc.). Same markdown link graph pipeline; main cost is graph build +

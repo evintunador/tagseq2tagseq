@@ -161,12 +161,28 @@ def assign_splits(
     community_size_min: int,
     community_size_max: int,
     seed: int,
+    stratify_by_source: bool = False,
 ) -> Dict[str, List[int]]:
-    """Return a dict mapping split name -> list of node indices."""
+    """Return a dict mapping split name -> list of node indices.
+
+    When ``stratify_by_source`` is set, communities AND random splits are drawn
+    proportionally from each node's ``source`` (provenance stamped by
+    merge_datasets.py). This prevents one densely-interconnected source (e.g.
+    enwiktionary) from dominating the community-val/test splits, which would
+    otherwise make the val-loss signal reflect mostly that one source's
+    distribution. Cross-source edges stay in train for the model to learn from.
+    """
     import random
 
     n = len(nodes)
     rng = random.Random(seed)
+
+    if stratify_by_source:
+        return _assign_splits_stratified(
+            nodes, out_adj, in_adj, val_frac, test_frac,
+            community_size_min, community_size_max, rng,
+        )
+
     assigned: Set[int] = set()
 
     community_target = int(round(n * (val_frac + test_frac)))
@@ -214,6 +230,85 @@ def assign_splits(
     counts = {k: len(v) for k, v in split_map.items()}
     assert sum(counts.values()) == n, f"Sum {sum(counts.values())} != {n}"
     logger.info("Split counts: %s", counts)
+    return split_map
+
+
+def _assign_splits_stratified(
+    nodes: List[dict],
+    out_adj: Dict[int, List[int]],
+    in_adj: Dict[int, List[int]],
+    val_frac: float,
+    test_frac: float,
+    community_size_min: int,
+    community_size_max: int,
+    rng,
+) -> Dict[str, List[int]]:
+    """Source-stratified variant of assign_splits.
+
+    For each distinct ``source``: extract communities restricted to that
+    source's induced subgraph (BFS can't leave the source because every
+    other-source node is pre-marked excluded), targeting
+    ``(val_frac+test_frac) × |source|`` nodes; then take proportional random
+    splits from that source's leftovers. Per-source contributions are unioned
+    into the global splits. Nodes lacking a ``source`` field share one implicit
+    bucket (``"__nosource__"``), so this degrades gracefully on unmerged data.
+    """
+    n = len(nodes)
+
+    # Group node indices by source.
+    by_source: Dict[str, List[int]] = collections.defaultdict(list)
+    for idx, node in enumerate(nodes):
+        by_source[node.get("source", "__nosource__")].append(idx)
+
+    logger.info(
+        "Source-stratified split over %d source(s): %s",
+        len(by_source),
+        {s: len(ids) for s, ids in sorted(by_source.items())},
+    )
+
+    split_map: Dict[str, List[int]] = {k: [] for k in ALL_SPLITS}
+
+    for source in sorted(by_source):
+        src_ids = by_source[source]
+        src_set = set(src_ids)
+        n_src = len(src_ids)
+
+        # Pre-exclude every node not in this source so BFS stays intra-source.
+        # (excluded is consumed AND mutated by _extract_communities.)
+        excluded: Set[int] = set(range(n)) - src_set
+
+        community_target = int(round(n_src * (val_frac + test_frac)))
+        communities = _extract_communities(
+            n_nodes=n,
+            out_adj=out_adj,
+            in_adj=in_adj,
+            target_node_count=community_target,
+            community_size_min=community_size_min,
+            community_size_max=community_size_max,
+            rng=rng,
+            excluded=excluded,
+        )
+
+        rng.shuffle(communities)
+        comm_ids = [idx for comm in communities for idx in comm]
+        midpoint = len(comm_ids) // 2
+        split_map["val_community"].extend(comm_ids[:midpoint])
+        split_map["test_community"].extend(comm_ids[midpoint:])
+
+        # Random splits from this source's leftovers (community nodes are in
+        # `excluded`; subtract the pre-seeded other-source exclusions back out).
+        comm_assigned = excluded - (set(range(n)) - src_set)
+        remaining = [i for i in src_ids if i not in comm_assigned]
+        rng.shuffle(remaining)
+        val_n  = int(round(n_src * val_frac))
+        test_n = int(round(n_src * test_frac))
+        split_map["val_random"].extend(remaining[:val_n])
+        split_map["test_random"].extend(remaining[val_n : val_n + test_n])
+        split_map["train"].extend(remaining[val_n + test_n:])
+
+    counts = {k: len(v) for k, v in split_map.items()}
+    assert sum(counts.values()) == n, f"Sum {sum(counts.values())} != {n}"
+    logger.info("Stratified split counts: %s", counts)
     return split_map
 
 
@@ -320,6 +415,12 @@ def main() -> None:
         "--seed", type=int, default=42,
     )
     parser.add_argument(
+        "--stratify-by-source", action="store_true",
+        help="Draw community/random splits proportionally from each node's "
+             "'source' provenance (stamped by merge_datasets.py) so no single "
+             "source dominates val/test. No-op field-wise on unmerged data.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print split counts without writing any files.",
     )
@@ -339,6 +440,7 @@ def main() -> None:
         community_size_min=args.community_size_min,
         community_size_max=args.community_size_max,
         seed=args.seed,
+        stratify_by_source=args.stratify_by_source,
     )
 
     n = len(nodes)

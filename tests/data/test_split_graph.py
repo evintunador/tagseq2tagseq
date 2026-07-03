@@ -240,3 +240,67 @@ def test_graphindex_can_load_split_dir(tmp_path):
     train_dir = dataset_dir / "splits" / "train"
     graph = GraphIndex(train_dir)
     assert len(graph) == len(split_map["train"])
+
+
+# ---------------------------------------------------------------------------
+# Source-stratified split tests (merge_datasets provenance)
+# ---------------------------------------------------------------------------
+
+def _two_source_clusters(cluster_size: int, n_per_source: int) -> list:
+    """n_per_source cliques tagged source 'a' then the same for source 'b'.
+
+    Sources are disjoint (no cross-source edges), so a fair stratified split
+    must draw community nodes from BOTH, not just the larger/denser one.
+    """
+    nodes = []
+    idx = 0
+    for source, count in (("a", n_per_source), ("b", n_per_source)):
+        for _ in range(count):
+            cluster_ids = list(range(idx, idx + cluster_size))
+            for i in cluster_ids:
+                nodes.append({
+                    "normed_identifier": str(i),
+                    "raw_identifier": str(i),
+                    "source": source,
+                    "outgoing": [str(j) for j in cluster_ids if j != i],
+                    "incoming": [str(j) for j in cluster_ids if j != i],
+                    "tok_shard_idx": 0,
+                    "tok_offset_bytes": i * 10,
+                    "tok_len": 5,
+                })
+            idx += cluster_size
+    return nodes
+
+
+def test_stratified_all_assigned_and_disjoint(tmp_path):
+    nodes = _two_source_clusters(cluster_size=100, n_per_source=4)
+    split_map, _, _ = _run_assign(
+        tmp_path, nodes, stratify_by_source=True,
+        val_frac=0.05, test_frac=0.05, community_size_min=50,
+    )
+    total = sum(len(v) for v in split_map.values())
+    assert total == len(nodes)
+    sets = [set(v) for v in split_map.values()]
+    for i, s1 in enumerate(sets):
+        for j, s2 in enumerate(sets):
+            if i != j:
+                assert s1.isdisjoint(s2)
+
+
+def test_stratified_community_draws_from_both_sources(tmp_path):
+    nodes = _two_source_clusters(cluster_size=100, n_per_source=4)
+    split_map, dataset_dir, loaded = _run_assign(
+        tmp_path, nodes, stratify_by_source=True,
+        val_frac=0.05, test_frac=0.05, community_size_min=50,
+    )
+    _, normed_ids, _, _, _ = loaded
+    # Map each community node back to its source.
+    src_of = {n["normed_identifier"]: n["source"] for n in nodes}
+    comm_sources = {
+        src_of[normed_ids[idx]]
+        for split in ("val_community", "test_community")
+        for idx in split_map[split]
+    }
+    assert comm_sources == {"a", "b"}, (
+        "stratified community split must include both sources"
+    )
