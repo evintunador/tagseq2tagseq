@@ -229,22 +229,3 @@ docs/images/                     Committed mask and density visualisations
 ```
 
 Full pipeline instructions (data extraction, pretokenization, training, generation) are in [INSTRUCTIONS.md](INSTRUCTIONS.md).
-
-## TODOs
-in no particular priority order
-- [x] make ArXiv dataset (unarXive 2024 + OpenAlex-enriched citation edges, `\cite{Title}` targets) — see `data/arxiv_graph_extractor/`
-- [ ] pull out actual validation splits
-  - [ ] one sparse & random doc
-  - [ ] one from dense sub-clusters
-- [ ] integrate in easy LLM benchmarks (likely specific sub-tasks from larger benchmarks like MMLU; whatever i think these models can handle & preferably stuff that'd benefit from cross-document understanding)
-- [ ] write custom cross-doc-link FA2 kernel since FlexAttention's backward pass is so absurdly slow
-- [x] build batch mask density pre-computation system to ensure ranks spend less time waiting for whichever rank has the densest mask
-- [ ] finish inference generation logic
-- [ ] preprocess code data to make imports lazy & thus save on computation
-- [ ] make a more complicated python-linter-based mask that allows only the relevant scope of the code in a given doc to attend to what it's importing rather than
-- [ ] update to the latest methods from the `kellerjordan/modded-nanogpt/` repo
-- [ ] check for feasability of integrating `karpathy/nanochat/` RL & chat pipeline and how we might edit that pipeline to take advantage of this model's new features
-- [ ] actually train reasonable sized models for each ablation: (random, random-walk, dfs, bfs) x (doc-causal, cross-doc-link)
-- [ ] softmax flattening: a real concern for `cross_doc_link` specifically at long sequences — `doc_causal` is unaffected since attention is scoped per-document regardless of total sequence length. with `cross_doc_link`, a well-connected node can end up attending to hundreds of thousands of tokens (own doc + all linked docs), which is where entropy degrades. **don't implement anything until empirically confirmed at whatever sequence length we're actually targeting.** possible mitigations to evaluate when needed:
-  - **NSA (Native Sparse Attention)** — combines compression attention (coarse global context) → LSE-based top-K block selection → selection attention on chosen blocks + sliding window. would compose on top of `cross_doc_link` rather than replace it: graph edges give document-level routing, NSA gives block-level content-based selection within the permitted region. the composition is clean. NSA *does* address flattening: compression reduces the attended token count, selection attention operates on K×blocksize tokens (sharp weights). a simple Triton implementation on A100 gets the algorithmic gain but misses Blackwell's warp specialization/TMA async prefetch — realistic ~2-3x speedup vs the paper's 9x. cuDNN NSA API requires SM100+ (Blackwell), unavailable on A100s. refs: [cuDNN NSA API](https://docs.nvidia.com/deeplearning/cudnn/frontend/v1.19.1/fe-oss-apis/nsa.html), [NSA paper (arxiv 2502.11089)](https://arxiv.org/abs/2502.11089)
-  - **Differential Attention** — subtracts two softmax attention maps to cancel out noise/uniform background; directly targets entropy inflation. worth looking into as a potentially simpler alternative to NSA.

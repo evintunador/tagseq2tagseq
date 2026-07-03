@@ -1,25 +1,29 @@
 data:
-  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
   strategy: 'bfs'
   layout_policy: 'stochastic_identifier_prefix'
   inference_layout_policy: 'eos'
   order_mode: 'prefer_targets_first'
   doc_budget: null
-  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/train
-  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/simplewiki_bfs/epoch_0
+  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
+  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0
   val_dirs:
-    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_community
-    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_random
+    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
+    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
   test_dirs:
-    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_community
-    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_random
+    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
+    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
 
 model:
   compile: true
   compile_mode: 'default'
   attention_backend: 'triton'
   inference_attention_backend: 'flex'
-  mask_type: 'doc_causal'
+  # doc_concatenated: merge each BFS traversal component into one causally-
+  # concatenated super-doc (full causal attention across connected docs). FLOP
+  # control for cross_doc_link — more FLOPs than doc_causal, no inference-time
+  # link prediction. Reuses the doc-causal varlen kernel via component ids.
+  mask_type: 'doc_concatenated'
   activation_checkpointing: false
   model_dim: 1024
   num_layers: 24
@@ -69,15 +73,17 @@ seed: 42
 eval:
   run_on_completion: true
   benchmarks:
-    - {name: held_out_perplexity,       conditions: [doceval]}
-    - {name: community_pack_perplexity, conditions: [doceval]}
+    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
+    # experimental = the model's own doc_concatenated mask.
+    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
+    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
     - {name: wiki_qa,     conditions: [doceval]}
     - {name: hellaswag,   conditions: [doceval]}
     - {name: boolq,       conditions: [doceval]}
     - {name: openbookqa,  conditions: [doceval]}
     - {name: hotpotqa,    conditions: [doceval]}
   max_docs: 500
-  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
   annotator_mode: corpus_only
   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
 

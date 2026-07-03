@@ -8,7 +8,7 @@ render_annotated_example panels.
 Usage:
     python visualize_annotated.py \
         --checkpoint runs/20260308_012516/checkpoints/best_model.pt \
-        --config configs/simplewiki_cross_doc.yaml \
+        --config configs/wiki_merged_cross_doc.yaml \
         [--n 1] [--no-color] [--device cuda]
 """
 
@@ -41,7 +41,7 @@ def main():
     )
     parser.add_argument(
         "--config", required=True, metavar="PATH",
-        help="Eval config YAML (e.g. configs/simplewiki_cross_doc.yaml). "
+        help="Eval config YAML (e.g. configs/wiki_merged_cross_doc.yaml). "
              "Reads eval.benchmarks, eval.annotator_corpus, eval.annotator_mode.",
     )
     parser.add_argument(

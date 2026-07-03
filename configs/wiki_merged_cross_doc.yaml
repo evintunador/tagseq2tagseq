@@ -1,29 +1,25 @@
 data:
-  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
   strategy: 'bfs'
   layout_policy: 'stochastic_identifier_prefix'
-  inference_layout_policy: 'eos'
+  inference_layout_policy: 'identifier_prefix_eos'
   order_mode: 'prefer_targets_first'
   doc_budget: null
-  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/train
-  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/simplewiki_bfs/epoch_0
+  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
+  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0
   val_dirs:
-    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_community
-    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_random
+    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
+    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
   test_dirs:
-    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_community
-    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_random
+    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
+    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
 
 model:
   compile: true
   compile_mode: 'default'
   attention_backend: 'triton'
   inference_attention_backend: 'flex'
-  # doc_concat_link: a detected link concatenates the *entire* source doc onto
-  # the target (full causal, no link-position gate) — a strict FLOP-superset of
-  # cross_doc_link with the same connectivity but no inference-time linking.
-  # Reuses the cross-doc grant kernel with whole_doc_grant=True.
-  mask_type: 'doc_concat_link'
+  mask_type: 'cross_doc_link'
   link_detector: 'markdown'
   max_grants: 256
   # max_grants_start: 64
@@ -77,20 +73,16 @@ seed: 42
 eval:
   run_on_completion: true
   benchmarks:
-    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
-    # experimental = the model's own doc_concat_link mask.
     - {name: held_out_perplexity,       conditions: [baseline, experimental]}
     - {name: community_pack_perplexity, conditions: [baseline, experimental]}
-    # No 'annotated' condition: link injection at inference is a cross_doc_link
-    # capability; concat conditions train link-aware but eval with eos layout
-    # (no inference-time link prediction — that's their deliberate disadvantage).
-    - {name: wiki_qa,            conditions: [doceval]}
-    - {name: hellaswag,          conditions: [doceval]}
-    - {name: boolq,              conditions: [doceval]}
-    - {name: openbookqa,         conditions: [doceval]}
+    - {name: wiki_qa,            conditions: [doceval, annotated]}
+    - {name: hellaswag,          conditions: [doceval, annotated]}
+    - {name: boolq,              conditions: [doceval, annotated]}
+    - {name: openbookqa,         conditions: [doceval, annotated]}
     - {name: hotpotqa,           conditions: [doceval]}
+    - {name: hotpotqa_cross_doc, conditions: [experimental]}
   max_docs: 500
-  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
   annotator_mode: corpus_only
   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
 
