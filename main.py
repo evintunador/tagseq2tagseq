@@ -1046,6 +1046,25 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         'use_tqdm': dist.is_main_process,  # only rank 0 shows the progress bar
         'num_epochs': cfg['train_loop'].get('epochs', 1),
     })
+    # Profiling: inject profile_* knobs into the shared kwargs so profile_training
+    # is selected and composed alongside the other atomic features (grad_accum,
+    # val, checkpointing, etc.) by the LLM compiler.  profile_run=False is the
+    # default and is a no-op, so this is safe to include unconditionally.
+    _profile_cfg = cfg.get('train_loop', {}).get('profile', {}) or {}
+    if _profile_cfg.get('enabled', False):
+        logger.info("Profiling mode enabled (world=%d) — will compose with other features.",
+                    dist.world_size)
+        atomic_feature_kwargs.update({
+            'profile_run':              True,
+            'profile_warmup_steps':     _profile_cfg.get('warmup_steps', 3),
+            'profile_no_sync_steps':    _profile_cfg.get('no_sync_steps', 0),
+            'profile_active_steps':     _profile_cfg.get('active_steps', 20),
+            'profile_model_internals':  _profile_cfg.get('model_internals', True),
+            'profile_trace':            _profile_cfg.get('trace', False),
+            'profile_trace_steps':      _profile_cfg.get('trace_steps', 6),
+            'profile_nccl_bench_steps': _profile_cfg.get('nccl_bench_steps', 0),
+            'profile_all_ranks':        _profile_cfg.get('all_ranks', False),
+        })
     # When using BucketedPackDataset, inject bucket_state_fn.  With plural
     # val_loaders this selects the ts2-local multi_val_bucketed feature, which
     # saves the dataset schedule position alongside every best-val-loss
