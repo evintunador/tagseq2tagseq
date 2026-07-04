@@ -55,8 +55,9 @@ def main() -> None:
     parser.add_argument("--seed",           type=int, default=42,
                         help="Base seed; epoch i uses seed+i.")
     parser.add_argument("--link-detector",  type=str, default="python",
-                        choices=["python", "markdown", "arxiv"],
-                        help="Link detector type (python=TheStack, markdown=Wikipedia, arxiv=ArXiv).")
+                        choices=["python", "markdown", "arxiv", "null"],
+                        help="Link detector type (python=TheStack, markdown=Wikipedia, "
+                             "arxiv=ArXiv, null=edgeless/FineWeb).")
     parser.add_argument("--layout-policy",  type=str, default="null",
                         help="Layout policy name (null, bos_eos, etc.).")
     parser.add_argument("--max-grants",     type=int, default=64,

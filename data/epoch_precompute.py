@@ -420,6 +420,13 @@ def _worker_fn(
         tokens = batch["tokens"]
         doc_spans = batch["doc_spans"]
 
+        # Mark visited before the under-budget drop: the sampler draws with
+        # replacement and only terminates once epoch_visited covers the shard,
+        # so dropping the under-budget tail pack without marking it would
+        # re-sample the same docs forever.
+        for p in placements:
+            epoch_visited.add(p.doc_id)
+
         if tokens.shape[-1] != config.token_budget:
             logger.debug(
                 "Worker %d: dropping pack with T=%d (expected %d).",
@@ -427,9 +434,6 @@ def _worker_fn(
             )
             pack_id += 1
             continue
-
-        for p in placements:
-            epoch_visited.add(p.doc_id)
 
         if hasattr(detector, "detect_links_for_doc"):
             links = creator._collect_links_per_doc(tokens, doc_spans)

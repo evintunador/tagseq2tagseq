@@ -119,3 +119,37 @@ class ArxivUnarxiveSource:
                     continue
                 if normed_id in self._graph_normed_ids:
                     yield normed_id, content
+
+
+class FineWebSource:
+    """
+    Yields (normed_id, content) for FineWeb docs from a pre-built content JSONL.
+
+    Identical reader contract to ArxivUnarxiveSource: the builder
+    (data/fineweb_graph_extractor/build_fineweb.py) already streamed FineWeb,
+    assigned normed ids, and wrote content.jsonl + an edgeless graph.jsonl. This
+    source is a thin reader that yields each record whose normed_id is in the
+    graph (keeps the tokenized corpus aligned with the graph after any filter).
+
+    Args:
+        content_jsonl: Path to the builder's content JSONL.
+        graph_normed_ids: Set of normed_identifier strings from graph.jsonl.
+    """
+
+    def __init__(self, content_jsonl: Path, graph_normed_ids: set[str]):
+        self._content_jsonl = content_jsonl
+        self._graph_normed_ids = graph_normed_ids
+
+    def __len__(self) -> int:
+        return len(self._graph_normed_ids)
+
+    def __iter__(self) -> Iterator[tuple[str, str]]:
+        with open(self._content_jsonl, "r", encoding="utf-8") as f:
+            for line in f:
+                record = json.loads(line)
+                normed_id = record.get("normed_identifier", "")
+                content = record.get("content", "")
+                if not (normed_id and content):
+                    continue
+                if normed_id in self._graph_normed_ids:
+                    yield normed_id, content

@@ -72,7 +72,7 @@ class LinkDetector(Protocol):
 
 # Valid names accepted by ``make_link_detector`` (and the ``model.link_detector``
 # config key), kept here as the single source of truth for error messages.
-LINK_DETECTOR_NAMES = ("markdown", "python", "arxiv")
+LINK_DETECTOR_NAMES = ("markdown", "python", "arxiv", "null")
 
 
 def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "LinkDetector":
@@ -101,8 +101,12 @@ def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "Lin
     if name == "arxiv":
         from .arxiv_cite_detector import ArxivCiteDetector
         return ArxivCiteDetector(decode_fn=decode_fn)
+    if name == "null":
+        from .null_link_detector import NullLinkDetector
+        return NullLinkDetector(decode_fn=decode_fn)
     raise ValueError(
         f"Unknown model.link_detector '{name}'. "
         f"Valid options: {', '.join(LINK_DETECTOR_NAMES)} "
-        "('markdown'=Wikipedia, 'python'=TheStack, 'arxiv'=unarXive)."
+        "('markdown'=Wikipedia, 'python'=TheStack, 'arxiv'=unarXive, "
+        "'null'=edgeless/FineWeb)."
     )
