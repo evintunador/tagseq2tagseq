@@ -14,12 +14,6 @@ and drop redirect stub nodes entirely. Downstream benefit: `HashNormTitleIndex`
 hits these titles directly, fixing the class of eval misses where the model generates
 a redirect title that isn't a first-class node.
 
-### Link-less FineWeb dataset
-Implement a flat (edgeless) FineWeb dataset — high-quality web text as a
-baseline/control corpus and to bulk up token count for larger training runs.
-Runs through the same pretokenization pipeline with an empty edge set
-(`doc_causal` only; no cross-doc-link since there are no links).
-
 ### Merge all datasets into one combined corpus
 Merge wiki + thestack + arxiv + fineweb into a single corpus for one bigger
 model training run. Reuse `data/merge_datasets.py` + source-stratified splitting
