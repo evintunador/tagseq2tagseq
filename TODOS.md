@@ -25,111 +25,20 @@ Rewrite The Stack code so imports are lazy, saving compute (fewer/later-resolved
 import edges to traverse and attend to). Investigate whether this meaningfully
 shrinks the link closure for cross_doc_link packing.
 
+### Make thestack datasets of other programming languages
+expand TheStack beyond Python to include all available 
+coding languages. Grab more languages and build link detectors + import-graph
+extractors for each (JS/TS `import`/`require`, Ruby `require`, Go imports, etc.),
+extending the Python-only import graph in `model/graph_traversal/link_detector.py`
+— or use a language-agnostic call-graph approach.
+
 ---
 
 ## Model
 
-### Profile training throughput — even plain doc_causal may be leaving speed on the table
-thestack_doc_causal runs ~6.6s/it at 262144 tok/step on 4 GPUs (~26 GPU-s/step);
-the cross-doc-link mask is NOT the bottleneck (thestack_doc_concat_link is actually
-cheaper per GPU-s, and arxiv's slowness is just its long docs filling the T×T matrix).
-But 6s/it for this model size/context still feels high — plausibly 1-2s/it is
-achievable. Profile the doc_causal path to find where time goes: dataloader / pack
-build / collate (CPU-bound, starving GPU?), the varlen_bim Triton kernel, optimizer
-(distributed Muon Newton-Schulz), grad-accum sync, or activation checkpointing / recompute.
-Check GPU utilization (is it <90%? → input-bound). Profile via the
-`profile_training` atomic feature: set `train_loop.profile.enabled: true` (plus a
-small `train_loop.max_optimizer_steps`) on any config and launch normally — it
-reports per-phase timing (data / mask / fwd / bwd / opt), an NCCL-isolation
-estimate, a model-internal component breakdown (embedding / backbone / norm /
-loss_fn), and an optional chrome trace (`train_loop.profile.trace: true`) for
-per-kernel detail inside the compiled backbone. Flagged 2026-07-02; user suspects
-headroom to 1-2s/it.
-
-**First profile (job 43951, arxiv_cross_doc 1024d/24L/32k, 1 node × 8 A100,
-2026-07-03):** wall=4444ms/step; **bwd=3190ms (72%)**, fwd=1221ms (27%),
-mask=48ms (1%), data=10ms (0.2% — NOT input-bound), opt=23ms. Model-internal:
-backbone=822ms, loss_fn=116ms (embedding/norm ~0). NCCL grad-sync est=635ms (via
-no_sync isolation) — real but not dominant. The bottleneck is the attention
-**backward** (bwd ≈ 2.6× fwd).
-
-**Backend comparison (thestack, 1024d/24L/32k, 1×A100, 7 active steps,
-2026-07-03)** — {doc_causal, cross_doc_link} × {triton, flex}, fwd / bwd / wall ms:
-
-| config | fwd | bwd | wall |
-|--------|-----|-----|------|
-| doc_causal · triton (varlen_bim_v2) | 773 | **1694** | **2597** |
-| doc_causal · flex                   | 778 | **2403** | 3263 |
-| cross_doc · triton (triton_v18)     | 892 | **1582** | **2555** |
-| cross_doc · flex                    | 1037| **2916** | 4035 |
-
-Takeaways: (1) the custom triton kernels win entirely in the **backward** —
-doc_causal varlen_bim bwd is 1.4× faster than flex (1694 vs 2403), cross_doc
-triton_v18 bwd is 1.8× faster than flex (1582 vs 2916); forward is ~tied. (2)
-bwd dominates every config (~2× fwd) — this is where any further speedup must
-come from (bespoke FA2 backward, see the "Custom cross-doc-link FA2 kernel" TODO).
-(3) data≈0 and mask≤42ms everywhere → NOT input- or mask-bound. (4) Even the best
-config is ~2.5s/step at 1 GPU; the 6.6s/it figure was 4-GPU (DDP sync + smaller
-per-GPU batch). Remaining knob: chrome trace (`profile.trace: true`) for
-per-kernel attribution inside the backward, + the Muon Newton-Schulz cost
-(opt=82ms single-GPU, but distributed MuonWithAuxAdam differs).
-
-### Additional datasets
-- **EnWiki / full Wikipedia**: expand beyond SimpleWiki to the other available Wikipedia
-  dumps (enwiki, etc.). Same markdown link graph pipeline; main cost is graph build +
-  pretokenization at larger scale.
-- **ArXiv LaTeX**: add an ArXiv dataset using LaTeX citation/reference links as graph
-  edges. Requires implementing the LaTeX link detector sketched in
-  `model/graph_traversal/link_detector.py` (the `# TODO(@jamesljr)` comment there).
-- **TheStack all languages**: expand TheStack beyond Python to include all available
-  coding languages. Grab more languages and build link detectors + import-graph
-  extractors for each (JS/TS `import`/`require`, Ruby `require`, Go imports, etc.),
-  extending the Python-only import graph in `model/graph_traversal/link_detector.py`
-  — or use a language-agnostic call-graph approach.
-
-### Custom cross-doc-link FA2 kernel
-Write a custom FA2-style forward+backward kernel for the cross_doc_link mask,
-because FlexAttention's backward pass is absurdly slow. NOTE: partially addressed
-— the triton BIM kernels (v12/v18) already beat flex fwd+bwd at 32k (see
-kernels memory). This TODO now means: confirm whether the remaining backward cost
-in the throughput profile (bwd ≈ 2.6× fwd, dominates the step) is inherent or has
-more headroom vs. a bespoke FA2 backward. Cross-reference the profiling finding
-in the Model section above.
-
-### Linter-scoped Python mask
-Build a more precise, python-linter-based mask that lets only the *relevant
-scope* of the code in a given doc attend to what it imports (e.g. the specific
-imported symbol's definition), rather than granting attention to the whole
-imported document.
-
-### Update to latest modded-nanogpt methods
-Pull the newest techniques from `kellerjordan/modded-nanogpt/` into the model /
-optimizer (the architecture already borrows from it: skip connections, x0
-injection, value embeddings, bigram hash, Muon).
-
 ### nanochat RL & chat pipeline feasibility
 Check feasibility of integrating `karpathy/nanochat/`'s RL + chat pipeline, and
 how it might be edited to take advantage of this model's graph-aware features.
-
-### Softmax flattening at long sequences (cross_doc_link only)
-A real concern for `cross_doc_link` specifically: a well-connected node can attend
-to hundreds of thousands of tokens (own doc + all linked docs), degrading
-attention entropy. `doc_causal` is unaffected (attention is scoped per-document
-regardless of total sequence length). **Do NOT implement anything until
-empirically confirmed at the sequence length actually targeted.** Mitigations to
-evaluate when needed:
-- **NSA (Native Sparse Attention)** — compression attention (coarse global
-  context) → LSE-based top-K block selection → selection attention on chosen
-  blocks + sliding window. Composes on top of cross_doc_link (graph edges give
-  document-level routing; NSA gives block-level content selection within the
-  permitted region). Addresses flattening: compression reduces attended token
-  count, selection operates on K×blocksize tokens (sharp weights). A simple Triton
-  impl on A100 gets the algorithmic gain but misses Blackwell warp
-  specialization/TMA (realistic ~2-3× vs. the paper's 9×; cuDNN NSA API needs
-  SM100+, unavailable on A100). Refs: [cuDNN NSA](https://docs.nvidia.com/deeplearning/cudnn/frontend/v1.19.1/fe-oss-apis/nsa.html),
-  [NSA paper 2502.11089](https://arxiv.org/abs/2502.11089).
-- **Differential Attention** — subtracts two softmax maps to cancel uniform
-  background noise; directly targets entropy inflation. Possibly simpler than NSA.
 
 ---
 
@@ -168,28 +77,6 @@ issue above.)
 ---
 
 ## Training
-
-### 8-GPU (multi-rank DDP) training hangs — RESOLVED (2026-06-17, re-confirmed 2026-07-03)
-Root cause (traceback captured, job 42245): a pack could exceed `max_seq_len`
-(one rank built 10185 tokens > 8192), tripping the RoPE cache assert
-(`assert self.cos.size(0) >= x_BTHD.size(-3)`) in that single rank's forward. The
-exception unwound into `reproducibility.py __exit__ → barrier()`, which hung
-waiting for peers that never arrive — masking the traceback so it *looked* like a
-generic DDP collective-fingerprint hang. Manifests only at world_size≥2 (a single
-GPU just raises visibly).
-
-Fix: `data/pack_sampler.py::_apply_pack_truncation` now trims document bodies to
-hit `token_budget` EXACTLY (never over budget; a fallback drops decoration-only
-docs to stay ≤ budget). Regression tests:
-`test_pack_truncation_hits_budget_exactly_with_prefixes` (both trim sides) +
-`test_pack_truncation_body_trim_to_zero_keeps_decoration`. Multi-rank compile
-segfault (separate ≥4-rank blocker) fixed by `launch_slurm.py`'s
-`TORCHINDUCTOR_COMPILE_THREADS=1` + pre-warmed `TS2TS_SHARED_COMPILE_CACHE`.
-
-Verified: 2-node×4-GPU clean run (2026-06-22); 1-node×8-GPU arxiv_cross_doc
-(full 1024d/24L/32k) profiling run job 43951 completed all steps, zero rank
-variance (all 8 ranks mean wall 4444–4445ms), no segfault/hang/RoPE-assert
-(2026-07-03).
 
 ### Train the ablation matrix
 Actually train reasonable-sized models for each ablation:
@@ -262,36 +149,6 @@ identifiers. Options: precompute/persist the title index once (not per doc),
 vectorize/batch the annotation phase, cap corpus size, or memoize matches.
 Until fixed, run `annotated` at small `--max-docs` (≤2000) and expect it to be
 the long pole of any eval sweep.
-
-### Perplexity metric was broken — mean_nll ≈ 404 (RESOLVED 2026-07-03)
-Root cause: the model trains with a **logit softcap** (`logit_softcap: 30.0`,
-applied as `cap * tanh(logits/cap)` inside `FusedLinearCELoss`), but
-`TS2TSModel.forward_inference` returned **raw uncapped logits** (range observed
-[-156, 248]). `eval/scoring.py:score_doc` then took `log_softmax` over uncapped
-logits → per-token NLL up to ~186, mean ~404. The MC/code benchmarks looked sane
-only because relative scoring across choices partially cancels the scale error;
-absolute per-doc NLL (perplexity) did not.
-
-Fix (all in ts2, no tunalab change needed — softcap read from
-`hyperparameters.json` which `load_inference_model` already parses):
-`forward_inference` now replays `cap * tanh(logits/cap)` when `logit_softcap` is
-set. Threaded via `TS2TSModel.__init__(logit_softcap=)` ←
-`training_module.to_inference_model(logit_softcap=)` ←
-`generate.py:load_inference_model` (`model_cfg["logit_softcap"]`).
-
-Verified: wiki doc_causal held-out perplexity went from `mean_nll≈404 / ppl≈1e175`
-to **`mean_nll=4.97 / ppl=143.5`** (n=192, split=all). Diagnostic in
-`debug_perplexity_softcap.py` (temporary; delete when done).
-
-Follow-ups:
-- **Re-run every perplexity/hotpot eval** produced before this fix — their
-  `*_perplexity` and `hotpotqa*` NLL numbers are from the broken path.
-- The checkpoint's `metadata.config` is empty `{}` (softcap only survives in
-  `hyperparameters.json`). Consider persisting the resolved config into the
-  checkpoint so it's self-describing.
-- Optional (reference): expose `softcap` as an attribute on tunalab's
-  `FusedLinearCELoss` so inference can read it from the loss module directly
-  rather than re-reading the config.
 
 ### Integrate easy LLM benchmarks
 Wire in easy LLM benchmarks — likely specific sub-tasks from larger suites (e.g.
