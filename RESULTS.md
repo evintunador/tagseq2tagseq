@@ -116,7 +116,7 @@ other three are n≈19k. Re-run doc_causal at full n for a clean comparison.
 | **doc_causal**    | **0.610** [.537,.683] n=164 | 10.42 (n=2000) | 4.39 (n=2000) | n/a |
 | **cross_doc_link**| **0.610** [.530,.683] n=164 | 12.44 (n=2000) | 3.80 (n=2000) | **2.321 / 2.418 = −4.0%** (n=1750) |
 | doc_concatenated  | - | - | - | - |
-| doc_concat_link   | - | - | - | - |
+| **doc_concat_link**| 0.561 [.488,.640] n=164 | 9.46 (n=2000) | 6.20 (n=2000) | n/a — no inference-time link prediction |
 
 *🟢 thestack doc_causal humaneval_buggy 0.61 (CI floor .537 > .50) — genuinely
 distinguishes correct vs buggy code. Code-benchmark perplexity is SANE here
