@@ -1089,10 +1089,10 @@ def main() -> None:
     parser.add_argument(
         "--annotator-mode", default="full_skip",
         choices=["full_skip", "link_but_skip", "corpus_only", "generate_only",
-                 "corpus_then_generate", "no_op", "generate"],
+                 "corpus_then_generate"],
         help="Link retrieval mode for the prompt annotator (used when 'annotated' "
-             "is in --conditions). Unified with GenerationConfig; default full_skip "
-             "(no link injected — the no-link baseline). Legacy no_op/generate accepted.",
+             "is in --conditions). Shared with GenerationConfig; default full_skip "
+             "(no link injected — the no-link baseline).",
     )
     parser.add_argument(
         "--annotator-strategies", nargs="+",

@@ -73,7 +73,7 @@ def _make_mock_model(
     return model
 
 
-def _make_annotator(corpus=None, mode="no_op", decay_factor=0.95):
+def _make_annotator(corpus=None, mode="link_but_skip", decay_factor=0.95):
     return MarkdownPromptAnnotator(
         corpus=corpus,
         link_retrieval_mode=mode,
@@ -114,7 +114,7 @@ def test_scan_prob_empty_tokens_returns_zero():
 
 def test_link_opener_inserted_at_max_prob_position():
     model = _make_mock_model(opener_hot_pos=2, opener_hot_tok=685)
-    ann = _make_annotator(mode="no_op")
+    ann = _make_annotator(mode="link_but_skip")
     ctx = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     result = ann.annotate(model, ctx, device="cpu")
     # The inserted opener should be at index link_opener_pos in context_tokens
@@ -123,7 +123,7 @@ def test_link_opener_inserted_at_max_prob_position():
 
 def test_link_opener_prob_matches_scan_prob():
     model = _make_mock_model(opener_hot_pos=3)
-    ann = _make_annotator(mode="no_op")
+    ann = _make_annotator(mode="link_but_skip")
     ctx = [1, 2, 3, 4, 5]
     scan = ann.scan_prob(model, ctx, device="cpu")
     result = ann.annotate(model, ctx, device="cpu")
@@ -134,7 +134,7 @@ def test_link_opener_prob_matches_scan_prob():
 
 def test_link_mid_within_display_window():
     model = _make_mock_model(opener_hot_pos=1, mid_hot_pos=4)
-    ann = _make_annotator(mode="no_op", decay_factor=0.99)
+    ann = _make_annotator(mode="link_but_skip", decay_factor=0.99)
     ctx = list(range(20))
     result = ann.annotate(model, ctx, device="cpu")
     distance = result.link_mid_pos - result.link_opener_pos
@@ -165,7 +165,7 @@ def test_distance_decay_prefers_nearby_link_mid():
 
     # Strong decay: 0.5^18 = negligible, so pos 2 wins
     ann = MarkdownPromptAnnotator(
-        link_retrieval_mode="no_op",
+        link_retrieval_mode="link_but_skip",
         max_display_tokens=100,
         decay_factor=0.5,
         max_title_tokens=3,
@@ -181,9 +181,9 @@ def test_distance_decay_prefers_nearby_link_mid():
 
 # ─── link retrieval modes ────────────────────────────────────────────────────
 
-def test_no_op_mode_returns_empty_aux():
+def test_link_but_skip_returns_empty_aux():
     model = _make_mock_model()
-    ann = _make_annotator(mode="no_op")
+    ann = _make_annotator(mode="link_but_skip")
     result = ann.annotate(model, list(range(15)), device="cpu")
     assert result.aux_token_lists == []
     assert result.aux_raw_identifiers == []
@@ -213,17 +213,24 @@ def test_link_but_skip_injects_link_but_no_aux():
     assert result.link_fired is False
 
 
-def test_legacy_mode_aliases_are_accepted_and_mapped():
-    """no_op -> link_but_skip, generate -> generate_only (backward compat)."""
-    ann_noop = _make_annotator(mode="no_op")
-    assert ann_noop.link_retrieval_mode == "link_but_skip"
-    ann_gen = _make_annotator(mode="generate")
-    assert ann_gen.link_retrieval_mode == "generate_only"
+def test_canonical_modes_are_stored_verbatim():
+    for mode in ("full_skip", "link_but_skip", "corpus_only",
+                 "generate_only", "corpus_then_generate"):
+        ann = _make_annotator(mode=mode)
+        assert ann.link_retrieval_mode == mode
 
 
 def test_invalid_mode_rejected():
     with pytest.raises(ValueError, match="link_retrieval_mode"):
         _make_annotator(mode="bogus_mode")
+
+
+def test_legacy_mode_names_rejected():
+    """Legacy no_op/generate names are no longer accepted."""
+    with pytest.raises(ValueError, match="link_retrieval_mode"):
+        _make_annotator(mode="no_op")
+    with pytest.raises(ValueError, match="link_retrieval_mode"):
+        _make_annotator(mode="generate")
 
 
 def test_generate_only_always_generates(monkeypatch):
@@ -303,7 +310,7 @@ def test_corpus_miss_in_corpus_then_generate_falls_back(monkeypatch):
 
 def test_annotated_context_longer_than_original():
     model = _make_mock_model()
-    ann = _make_annotator(mode="no_op")
+    ann = _make_annotator(mode="link_but_skip")
     ctx = list(range(10))
     result = ann.annotate(model, ctx, device="cpu")
     # At minimum we inserted '[' and '](' — at least 2 new tokens
@@ -312,7 +319,7 @@ def test_annotated_context_longer_than_original():
 
 def test_empty_context_returns_safely():
     model = _make_mock_model()
-    ann = _make_annotator(mode="no_op")
+    ann = _make_annotator(mode="link_but_skip")
     result = ann.annotate(model, [], device="cpu")
     assert result.link_fired is False
     assert result.context_tokens == []
@@ -488,7 +495,7 @@ def test_generate_title_delegates_to_trie_on_success():
 
     ann = MarkdownPromptAnnotator(
         title_index=trie,
-        link_retrieval_mode="no_op",
+        link_retrieval_mode="link_but_skip",
         max_title_tokens=10,
     )
     model = _make_mock_model()
@@ -512,7 +519,7 @@ def test_generate_title_falls_back_when_trie_returns_none():
 
     ann = MarkdownPromptAnnotator(
         title_index=trie,
-        link_retrieval_mode="no_op",
+        link_retrieval_mode="link_but_skip",
         max_title_tokens=5,
     )
     model = _make_mock_model(title_tok=65, close_paren_tok=8)
@@ -530,7 +537,7 @@ def test_generate_title_no_delegation_without_generate_title_attr():
     idx = HashNormTitleIndex(["Python"])
     ann = MarkdownPromptAnnotator(
         title_index=idx,
-        link_retrieval_mode="no_op",
+        link_retrieval_mode="link_but_skip",
         max_title_tokens=5,
     )
     model = _make_mock_model(title_tok=65, close_paren_tok=8)
@@ -582,13 +589,13 @@ def _make_arxiv_model(
 
 
 def test_arxiv_annotator_satisfies_protocol():
-    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip")
     assert isinstance(ann, PromptAnnotator)
 
 
 def test_arxiv_scan_prob_returns_float_in_unit_interval():
     model = _make_arxiv_model(backslash_hot_pos=2)
-    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip")
     p = ann.scan_prob(model, [1, 2, 3, 4, 5], "cpu")
     assert isinstance(p, float)
     assert 0.0 <= p <= 1.0
@@ -596,13 +603,13 @@ def test_arxiv_scan_prob_returns_float_in_unit_interval():
 
 def test_arxiv_scan_prob_empty_tokens_returns_zero():
     model = _make_arxiv_model()
-    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip")
     assert ann.scan_prob(model, [], "cpu") == 0.0
 
 
 def test_arxiv_annotate_empty_returns_safely():
     model = _make_arxiv_model()
-    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip")
     result = ann.annotate(model, [], "cpu")
     assert result.link_fired is False
     assert result.context_tokens == []
@@ -611,7 +618,7 @@ def test_arxiv_annotate_empty_returns_safely():
 def test_arxiv_annotate_injects_cite_opener():
     r"""Final context must contain the \cite{ opener tokens at link_opener_pos."""
     model = _make_arxiv_model(backslash_hot_pos=2)
-    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op", max_title_tokens=5)
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip", max_title_tokens=5)
     ctx = [10, 20, 30, 40, 50]
     result = ann.annotate(model, ctx, "cpu")
     # The opener tokens (\cite{) should appear at link_opener_pos
@@ -622,15 +629,15 @@ def test_arxiv_annotate_injects_cite_opener():
 def test_arxiv_annotate_context_longer_than_original():
     """Injection always lengthens the context."""
     model = _make_arxiv_model(backslash_hot_pos=1)
-    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op", max_title_tokens=5)
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip", max_title_tokens=5)
     ctx = [1, 2, 3, 4, 5, 6]
     result = ann.annotate(model, ctx, "cpu")
     assert len(result.context_tokens) > len(ctx)
 
 
-def test_arxiv_no_op_mode_returns_empty_aux():
+def test_arxiv_link_but_skip_returns_empty_aux():
     model = _make_arxiv_model()
-    ann = ArxivPromptAnnotator(link_retrieval_mode="no_op")
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip")
     result = ann.annotate(model, [1, 2, 3, 4, 5], "cpu")
     assert result.aux_token_lists == []
     assert result.aux_raw_identifiers == []
