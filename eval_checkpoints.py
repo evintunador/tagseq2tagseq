@@ -623,7 +623,7 @@ def run_benchmarks_on_model(
             )
         else:
             annotator_corpus_dir = cfg.get("annotator_corpus") or str(dataset_dir)
-            annotator_mode = cfg.get("annotator_mode", "corpus_only")
+            annotator_mode = cfg.get("annotator_mode", "full_skip")
             try:
                 from generate import PretokCorpus
                 from eval.link_annotator import (
@@ -1087,10 +1087,12 @@ def main() -> None:
              "dir (not splits/train) so all articles are searchable.",
     )
     parser.add_argument(
-        "--annotator-mode", default="corpus_only",
-        choices=["no_op", "corpus_only", "generate", "corpus_then_generate"],
-        help="Link retrieval mode for the MarkdownPromptAnnotator "
-             "(used when 'annotated' is in --conditions).",
+        "--annotator-mode", default="full_skip",
+        choices=["full_skip", "link_but_skip", "corpus_only", "generate_only",
+                 "corpus_then_generate", "no_op", "generate"],
+        help="Link retrieval mode for the prompt annotator (used when 'annotated' "
+             "is in --conditions). Unified with GenerationConfig; default full_skip "
+             "(no link injected — the no-link baseline). Legacy no_op/generate accepted.",
     )
     parser.add_argument(
         "--annotator-strategies", nargs="+",

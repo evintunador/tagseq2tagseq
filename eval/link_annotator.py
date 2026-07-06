@@ -67,6 +67,44 @@ from model.sampling import sample_token
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Link-retrieval vocabulary (unified with model/generation_config.py)
+# ---------------------------------------------------------------------------
+# The annotator historically used its own mode names (no_op / generate). We now
+# speak the same five-value vocabulary as GenerationConfig.link_retrieval_mode so
+# a single condition name selects the same behaviour in generation and in eval:
+#
+#   full_skip            — no link at all: skip injection entirely (no-link baseline)
+#   link_but_skip        — inject link syntax, but acquire no aux doc
+#   corpus_only          — inject link, fetch aux from corpus, no-op on miss
+#   generate_only        — inject link, always generate the aux doc
+#   corpus_then_generate — inject link, corpus first, generate on miss
+#
+# Legacy annotator names are still accepted and mapped for backward compatibility.
+VALID_LINK_RETRIEVAL_MODES = frozenset({
+    "full_skip", "link_but_skip", "corpus_only", "generate_only", "corpus_then_generate",
+})
+
+_LEGACY_MODE_ALIASES = {
+    "no_op": "link_but_skip",
+    "generate": "generate_only",
+}
+
+
+def canonicalize_link_retrieval_mode(mode: str) -> str:
+    """Map a (possibly legacy) mode string to the canonical vocabulary.
+
+    Raises ValueError if the mode is unrecognised even after alias resolution.
+    """
+    canonical = _LEGACY_MODE_ALIASES.get(mode, mode)
+    if canonical not in VALID_LINK_RETRIEVAL_MODES:
+        raise ValueError(
+            f"link_retrieval_mode must be one of {sorted(VALID_LINK_RETRIEVAL_MODES)} "
+            f"(or a legacy alias {sorted(_LEGACY_MODE_ALIASES)}), got {mode!r}"
+        )
+    return canonical
+
+
+# ---------------------------------------------------------------------------
 # AnnotatedPrompt
 # ---------------------------------------------------------------------------
 
@@ -350,7 +388,7 @@ class _AnnotatorBase:
     # Subclasses must set these in __init__
     corpus = None
     title_index = None
-    link_retrieval_mode: str = "corpus_only"
+    link_retrieval_mode: str = "full_skip"
     generation_config: "GenerationConfig"
     layout_policy = None
     eos_token_id: int = 50256
@@ -468,7 +506,7 @@ class _AnnotatorBase:
 
         Returns (aux_token_lists, aux_raw_identifiers, link_fired).
         """
-        if not target_str or self.link_retrieval_mode == "no_op":
+        if not target_str or self.link_retrieval_mode in ("link_but_skip", "full_skip"):
             return [], [], False
 
         if self.link_retrieval_mode in ("corpus_only", "corpus_then_generate"):
@@ -491,7 +529,7 @@ class _AnnotatorBase:
                 logger.debug("Annotator corpus miss (corpus_only): %r", target_str)
                 return [], [], False
 
-        if self.link_retrieval_mode in ("generate", "corpus_then_generate"):
+        if self.link_retrieval_mode in ("generate_only", "corpus_then_generate"):
             aux_tokens = self._generate_aux_doc(model, target_str, device)
             if aux_tokens:
                 logger.debug("Annotator generated aux doc: %r (%d tokens)", target_str, len(aux_tokens))
@@ -580,10 +618,12 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
         corpus: Optional corpus object with has_document/get_document (e.g.
             PretokCorpus from generate.py). Required for corpus_only and
             corpus_then_generate modes.
-        link_retrieval_mode: How to obtain the aux doc.
-            "no_op"               — inject link syntax only, no aux doc.
-            "corpus_only"         — corpus lookup; no-op on miss.
-            "generate"            — always generate aux doc autoregressively.
+        link_retrieval_mode: How to handle the link (unified vocabulary; see
+            VALID_LINK_RETRIEVAL_MODES). Legacy names no_op/generate still accepted.
+            "full_skip"           — no link at all: skip injection entirely.
+            "link_but_skip"       — inject link syntax only, no aux doc.
+            "corpus_only"         — corpus lookup; no aux on miss.
+            "generate_only"       — always generate aux doc autoregressively.
             "corpus_then_generate"— corpus first, generate on miss.
         generation_config: Sampling settings (temperature, top_k, top_p) used
             for title generation and (when mode includes generate) aux doc
@@ -606,15 +646,11 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
 
     """
 
-    _VALID_MODES = frozenset({
-        "no_op", "corpus_only", "generate", "corpus_then_generate",
-    })
-
     def __init__(
         self,
         corpus=None,
         title_index: Optional[TitleIndex] = None,
-        link_retrieval_mode: str = "corpus_only",
+        link_retrieval_mode: str = "full_skip",
         generation_config: Optional[GenerationConfig] = None,
         layout_policy=None,
         max_display_tokens: int = 100,
@@ -625,11 +661,7 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
         eos_token_id: int = 50256,
         show_beam_candidates: bool = False,
     ):
-        if link_retrieval_mode not in self._VALID_MODES:
-            raise ValueError(
-                f"link_retrieval_mode must be one of {sorted(self._VALID_MODES)}, "
-                f"got {link_retrieval_mode!r}"
-            )
+        link_retrieval_mode = canonicalize_link_retrieval_mode(link_retrieval_mode)
         self.corpus = corpus
         self.title_index = title_index
         self.link_retrieval_mode = link_retrieval_mode
@@ -664,8 +696,11 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
         Returns an AnnotatedPrompt whose context_tokens has the link syntax
         spliced in. aux_token_lists / aux_raw_identifiers are populated iff
         link_fired is True.
+
+        In full_skip mode (the no-link baseline) no link is injected at all: the
+        original context is returned unchanged with link_fired=False.
         """
-        if not context_tokens:
+        if not context_tokens or self.link_retrieval_mode == "full_skip":
             return AnnotatedPrompt(
                 context_tokens=list(context_tokens),
                 aux_token_lists=[],
@@ -886,32 +921,25 @@ class ArxivPromptAnnotator(_AnnotatorBase):
     Args:
         corpus: Optional corpus with has_document/get_document.
         title_index: Optional TitleIndex for fuzzy title matching.
-        link_retrieval_mode: "no_op", "corpus_only", "generate", "corpus_then_generate".
+        link_retrieval_mode: unified vocab (full_skip / link_but_skip / corpus_only /
+            generate_only / corpus_then_generate); legacy no_op/generate accepted.
         generation_config: Sampling settings for title generation and aux doc generation.
         layout_policy: Layout policy for aux doc generation (None = NullLayoutPolicy).
         max_title_tokens: Maximum tokens to generate for the title. Default 60.
         eos_token_id: EOS token id. Default 50256.
     """
 
-    _VALID_MODES = frozenset({
-        "no_op", "corpus_only", "generate", "corpus_then_generate",
-    })
-
     def __init__(
         self,
         corpus=None,
         title_index: Optional[TitleIndex] = None,
-        link_retrieval_mode: str = "corpus_only",
+        link_retrieval_mode: str = "full_skip",
         generation_config: Optional[GenerationConfig] = None,
         layout_policy=None,
         max_title_tokens: int = 60,
         eos_token_id: int = 50256,
     ):
-        if link_retrieval_mode not in self._VALID_MODES:
-            raise ValueError(
-                f"link_retrieval_mode must be one of {sorted(self._VALID_MODES)}, "
-                f"got {link_retrieval_mode!r}"
-            )
+        link_retrieval_mode = canonicalize_link_retrieval_mode(link_retrieval_mode)
         self.corpus = corpus
         self.title_index = title_index
         self.link_retrieval_mode = link_retrieval_mode
@@ -935,8 +963,12 @@ class ArxivPromptAnnotator(_AnnotatorBase):
         context_tokens: List[int],
         device: str = "cuda",
     ) -> AnnotatedPrompt:
-        """Full annotation pipeline: inject \\cite{Title} and fetch aux doc."""
-        if not context_tokens:
+        """Full annotation pipeline: inject \\cite{Title} and fetch aux doc.
+
+        In full_skip mode no citation is injected: the original context is
+        returned unchanged with link_fired=False.
+        """
+        if not context_tokens or self.link_retrieval_mode == "full_skip":
             return AnnotatedPrompt(
                 context_tokens=list(context_tokens),
                 aux_token_lists=[],

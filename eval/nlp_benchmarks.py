@@ -1985,8 +1985,8 @@ def run_benchmark_annotated(
                     )
                 return nll, None
         else:
-            # Link injected but no aux doc (no_op or corpus miss) — score on
-            # annotated context_tokens under doc_causal
+            # Link injected but no aux doc (link_but_skip or corpus miss) — score
+            # on annotated context_tokens under doc_causal
             if is_mc:
                 nlls = score_completions_batched(
                     model, ann.context_tokens, item["completion_token_lists"], device=device,

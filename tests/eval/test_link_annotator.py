@@ -190,6 +190,64 @@ def test_no_op_mode_returns_empty_aux():
     assert result.link_fired is False
 
 
+def test_full_skip_injects_no_link():
+    """full_skip is the no-link baseline: context unchanged, nothing injected."""
+    model = _make_mock_model()
+    ann = _make_annotator(mode="full_skip")
+    ctx = list(range(15))
+    result = ann.annotate(model, ctx, device="cpu")
+    assert result.context_tokens == ctx          # untouched, no '[' / '](' spliced
+    assert result.link_fired is False
+    assert result.aux_token_lists == []
+    assert result.target_str == ""
+
+
+def test_link_but_skip_injects_link_but_no_aux():
+    """link_but_skip DOES inject link syntax (context grows) but fetches no aux."""
+    model = _make_mock_model()
+    ann = _make_annotator(mode="link_but_skip")
+    ctx = list(range(15))
+    result = ann.annotate(model, ctx, device="cpu")
+    assert len(result.context_tokens) > len(ctx)  # link syntax was injected
+    assert result.aux_token_lists == []
+    assert result.link_fired is False
+
+
+def test_legacy_mode_aliases_are_accepted_and_mapped():
+    """no_op -> link_but_skip, generate -> generate_only (backward compat)."""
+    ann_noop = _make_annotator(mode="no_op")
+    assert ann_noop.link_retrieval_mode == "link_but_skip"
+    ann_gen = _make_annotator(mode="generate")
+    assert ann_gen.link_retrieval_mode == "generate_only"
+
+
+def test_invalid_mode_rejected():
+    with pytest.raises(ValueError, match="link_retrieval_mode"):
+        _make_annotator(mode="bogus_mode")
+
+
+def test_generate_only_always_generates(monkeypatch):
+    """generate_only produces an aux doc without consulting the corpus."""
+    generated_tokens = [7, 8, 9]
+
+    def _fake_run_generation(model, prompt_tokens, corpus, config, link_detector,
+                              tokenizer_decode, layout_policy, root_identifier=""):
+        doc = MagicMock()
+        doc.tokens = torch.tensor(generated_tokens)
+        result = MagicMock()
+        result.root_document = doc
+        return result
+
+    monkeypatch.setattr("model.generation_loop.run_generation", _fake_run_generation)
+    corpus = MagicMock()
+    model = _make_mock_model()
+    ann = _make_annotator(corpus=corpus, mode="generate_only")
+    result = ann.annotate(model, list(range(15)), device="cpu")
+    assert result.link_fired is True
+    assert result.aux_token_lists == [generated_tokens]
+    corpus.has_document.assert_not_called()   # generate_only never touches corpus
+
+
 def test_corpus_hit_returns_aux_tokens():
     corpus = MagicMock()
     corpus.has_document.return_value = True
