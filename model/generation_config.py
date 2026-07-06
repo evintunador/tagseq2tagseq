@@ -60,6 +60,12 @@ class GenerationConfig:
     # Stopping
     eos_token_id: int = 50256  # GPT-2 <|endoftext|>
 
+    # Vocabulary bound: forbid sampling token ids >= this value. The lm_head is
+    # often padded past the tokenizer's real vocab for GPU alignment (e.g. 50304
+    # vs GPT-2's 50257); those padded slots decode to invalid tokens. None = no
+    # bound (allow the full logit width). Defaults to GPT-2's real vocab.
+    allowed_vocab_size: Optional[int] = 50257
+
     # Trace
     record_trace: bool = True  # Whether to populate GenerationResult.trace
     

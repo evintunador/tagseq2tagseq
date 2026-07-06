@@ -154,7 +154,8 @@ def _generate_doc(
                 else:
                     next_logits[tid] *= config.repetition_penalty
 
-        next_token = sample_token(next_logits, config.temperature, config.top_k, config.top_p)
+        next_token = sample_token(next_logits, config.temperature, config.top_k, config.top_p,
+                                  allowed_vocab_size=config.allowed_vocab_size)
 
         # EOS handling: in training, the model predicts the layout suffix
         # token (e.g. EOS) as the next token after the last body token.

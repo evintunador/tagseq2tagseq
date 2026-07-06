@@ -179,11 +179,39 @@ class TestEdgeCases:
     def test_reproducibility_with_seed(self):
         """Test that setting seed makes sampling reproducible."""
         logits = torch.tensor([1.0, 2.0, 3.0, 4.0])
-        
+
         torch.manual_seed(123)
         token1 = sample_token(logits.clone(), temperature=1.0)
-        
+
         torch.manual_seed(123)
         token2 = sample_token(logits.clone(), temperature=1.0)
-        
+
         assert token1 == token2
+
+    def test_allowed_vocab_size_masks_padded_tail_greedy(self):
+        """Padded lm_head slots must never be sampled even if they have the max logit."""
+        # Token 5 (in the padded region) has the highest logit, but allowed_vocab_size=4
+        # forbids it, so greedy must pick the best allowed token (index 3).
+        logits = torch.tensor([1.0, 2.0, 3.0, 4.0, 100.0, 100.0])
+        token = sample_token(logits, temperature=0.0, allowed_vocab_size=4)
+        assert token == 3
+
+    def test_allowed_vocab_size_masks_padded_tail_sampled(self):
+        """Under temperature sampling, no padded token is ever returned."""
+        torch.manual_seed(0)
+        logits = torch.tensor([1.0, 1.0, 1.0, 1.0, 100.0, 100.0])
+        samples = [
+            sample_token(logits.clone(), temperature=1.0, allowed_vocab_size=4)
+            for _ in range(200)
+        ]
+        assert all(0 <= t < 4 for t in samples)
+
+    def test_allowed_vocab_size_does_not_mutate_caller_logits(self):
+        logits = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+        _ = sample_token(logits, temperature=0.0, allowed_vocab_size=3)
+        assert not torch.isinf(logits).any()   # caller's tensor untouched
+
+    def test_allowed_vocab_size_none_allows_full_width(self):
+        logits = torch.tensor([1.0, 2.0, 3.0, 4.0, 100.0])
+        token = sample_token(logits, temperature=0.0, allowed_vocab_size=None)
+        assert token == 4   # no masking → highest logit wins

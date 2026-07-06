@@ -447,6 +447,7 @@ class _AnnotatorBase:
             logits = self._run_fwd(model, tok_tensor, device)
             next_token = sample_token(
                 logits[-1], temperature=cfg.temperature, top_k=cfg.top_k, top_p=cfg.top_p,
+                allowed_vocab_size=cfg.allowed_vocab_size,
             )
             if next_token == self.eos_token_id:
                 break

@@ -33,34 +33,47 @@ def sample_token(
     temperature: float = 1.0,
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
+    allowed_vocab_size: Optional[int] = None,
 ) -> int:
     """
     Sample a token from logits using temperature scaling and optional filtering.
-    
+
     Applies the following transformations in order:
-    1. Temperature scaling
-    2. Top-k filtering (if specified)
-    3. Nucleus (top-p) sampling (if specified)
-    4. Multinomial sampling from resulting distribution
-    
+    1. Mask padded/out-of-vocab logits (if allowed_vocab_size given)
+    2. Temperature scaling
+    3. Top-k filtering (if specified)
+    4. Nucleus (top-p) sampling (if specified)
+    5. Multinomial sampling from resulting distribution
+
     Args:
         logits: Logits tensor of shape [vocab_size] or [1, vocab_size]
         temperature: Temperature for scaling logits. Use 0.0 for greedy sampling.
         top_k: If specified, only sample from top k tokens
         top_p: If specified, sample from smallest set of tokens whose cumulative
                probability mass exceeds p (nucleus sampling)
-               
+        allowed_vocab_size: If specified, forbid sampling any token id >=
+               allowed_vocab_size. The lm_head vocab is often padded past the
+               tokenizer's real vocab for GPU alignment (e.g. 50304 vs GPT-2's
+               50257); those padded slots were never real training targets and
+               decode to invalid tokens, so they must be masked out.
+
     Returns:
         Token ID as an integer
-        
+
     Examples:
-        >>> logits = torch.randn(50257)  # GPT-2 vocab size
-        >>> token = sample_token(logits, temperature=0.8, top_k=50)
+        >>> logits = torch.randn(50304)  # padded lm_head vocab
+        >>> token = sample_token(logits, temperature=0.8, top_k=50, allowed_vocab_size=50257)
     """
     # Handle both [vocab_size] and [1, vocab_size] shapes
     if logits.dim() == 2:
         logits = logits.squeeze(0)
-    
+
+    # Mask padded / out-of-vocab logits so they can never be sampled. Clone first
+    # so we never mutate the caller's tensor in place.
+    if allowed_vocab_size is not None and allowed_vocab_size < logits.size(-1):
+        logits = logits.clone()
+        logits[allowed_vocab_size:] = float('-inf')
+
     # Temperature = 0 means greedy sampling
     if temperature == 0.0:
         return greedy_sample(logits)
