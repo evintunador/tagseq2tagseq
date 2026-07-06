@@ -594,6 +594,68 @@ def test_make_room_no_op_when_already_fits():
     assert ctx.num_aux_docs == 0  # nothing was evicted
 
 
+def test_make_room_leaves_context_intact_when_impossible():
+    """Regression: a doomed make_room must NOT evict on its way to failing.
+
+    Previously make_room evicted docs one at a time and only reported failure
+    after wiping every aux doc; a request that can never fit destroyed the
+    whole window for nothing.
+    """
+    ctx = make_context(max_context_length=10)
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2, 3])  # 3 tokens
+    ctx.add_corpus_doc("A", [10, 11], None, "", 1, root)             # +2 = 5
+    ctx.add_corpus_doc("B", [20, 21], None, "", 1, root)            # +2 = 7
+    # Even after evicting both aux docs (freeing 4), root=3 leaves only 7 free,
+    # so a 20-token request can never fit.
+    assert ctx.make_room(20) is False
+    assert ctx.num_aux_docs == 2          # nothing evicted
+    assert len(ctx._evicted) == 0
+
+
+def test_can_make_room_is_non_mutating():
+    ctx = make_context(max_context_length=10)
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2, 3])
+    ctx.add_corpus_doc("A", [10, 11, 12], None, "", 1, root)  # total 6
+    # Feasible only by evicting A; can_make_room must report True without evicting.
+    assert ctx.can_make_room(4) is True
+    assert ctx.num_aux_docs == 1
+    assert len(ctx._evicted) == 0
+
+
+def test_make_room_respects_exclude():
+    """exclude protects one aux doc (the active one) from eviction."""
+    ctx = make_context(max_context_length=10)
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2, 3])  # 3
+    a = ctx.add_corpus_doc("A", [10, 11, 12], None, "", 1, root)     # +3 = 6
+    active = ctx.add_corpus_doc("ACTIVE", [20, 21, 22], None, "", 1, root)  # +3 = 9
+    # Need 4 more (9+4=13 > 10). Only A may be evicted (frees 3 → 6+4=10 ok);
+    # ACTIVE is excluded and must survive.
+    assert ctx.make_room(4, exclude=active) is True
+    ids = [e.raw_identifier for e in ctx._docs]
+    assert "A" not in ids
+    assert "ACTIVE" in ids
+
+
+def test_make_room_false_when_only_excluded_aux_left():
+    """If the only evictable aux is excluded, make_room fails without evicting it."""
+    ctx = make_context(max_context_length=6)
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1, 2, 3])  # 3
+    active = ctx.add_corpus_doc("ACTIVE", [20, 21], None, "", 1, root)  # +2 = 5
+    assert ctx.make_room(4, exclude=active) is False
+    assert "ACTIVE" in [e.raw_identifier for e in ctx._docs]
+
+
+def test_evict_oldest_aux_skips_excluded():
+    ctx = make_context()
+    root = ctx.add_root(raw_identifier="", prompt_tokens=[1])
+    a = ctx.add_corpus_doc("A", [10], None, "", 1, root)
+    b = ctx.add_corpus_doc("B", [20], None, "", 1, root)
+    # A is leftmost but excluded → B is evicted instead.
+    evicted = ctx.evict_oldest_aux(exclude=a)
+    assert evicted.raw_identifier == "B"
+    assert "A" in [e.raw_identifier for e in ctx._docs]
+
+
 # ---------------------------------------------------------------------------
 # build_sequence with multiple documents
 # ---------------------------------------------------------------------------

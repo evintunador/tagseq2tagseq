@@ -305,18 +305,13 @@ def test_model_generate_requires_tokenizer():
 # CUDA integration tests
 # ---------------------------------------------------------------------------
 
-def simple_causal_mask_creator(**batch):
-    tokens = batch["tokens"]
-    seq_len = tokens.shape[-1]
-    def causal(b, h, q, kv):
-        return q >= kv
-    return create_block_mask(causal, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len,
-                              device=tokens.device)
-
-
 @pytest.fixture
 def small_inference_model(device):
-    """A tiny TS2TSModel with random weights, no tokenizer."""
+    """A tiny TS2TSModel with random weights, no tokenizer.
+
+    Uses the default mask_type='doc_causal', whose 'doc_causal_flex' creator
+    is always built by from_config and requires no link_detector.
+    """
     if device != "cuda":
         pytest.skip("FlexAttention requires CUDA")
 
@@ -328,7 +323,6 @@ def small_inference_model(device):
         num_heads=2,
         max_seq_len=128,
         drop_path_rate=0.0,
-        block_mask_creator=simple_causal_mask_creator,
         weight_tying=True,
     )
     model.to(torch.device(device))
@@ -373,7 +367,6 @@ def test_generate_with_tokenizer_terminates(device):
         num_heads=2,
         max_seq_len=128,
         drop_path_rate=0.0,
-        block_mask_creator=simple_causal_mask_creator,
         weight_tying=True,
         tokenizer=make_mock_tokenizer([10, 20]),
     )
@@ -408,7 +401,6 @@ def test_generate_result_has_text(device):
         num_heads=2,
         max_seq_len=128,
         drop_path_rate=0.0,
-        block_mask_creator=simple_causal_mask_creator,
         weight_tying=True,
         tokenizer=make_mock_tokenizer([10, 20]),
     )
@@ -713,6 +705,63 @@ def test_handle_link_drop_oldest_evicts_to_make_room():
     active_ids = [e.raw_identifier for e in ctx._docs]
     assert "A" not in active_ids
     assert "B" in active_ids
+
+
+def test_handle_link_reeviction_never_evicts_active_entry():
+    """Regression: restoring an evicted doc must not evict the active doc itself.
+
+    The active document is often the oldest aux doc, so a naive drop_oldest
+    make_room used to evict it and then crash in restore_evicted's
+    _docs.index(active_entry). exclude=active_entry must protect it.
+    """
+    from collections import namedtuple
+    LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
+    ctx = make_context_obj(max_context_length=100, eviction_policy="drop_oldest")
+    root = ctx.add_root("", list(range(30)), None)                 # 30 tokens
+    active = ctx.add_generated_doc("A", None, "", depth=1, before_entry=root)
+    active.tokens = list(range(60))                                # A body 60 → 90
+    b = ctx.add_generated_doc("B", None, "", depth=1, before_entry=active)
+    b.tokens = list(range(20))                                     # B body 20
+    ctx.evict_oldest_aux()                                         # evicts B
+    assert [e.raw_identifier for e in ctx._evicted] == ["B"]
+    cfg = base_config(eviction_policy="drop_oldest", max_context_length=100,
+                      max_tokens_per_document=100, max_new_tokens=100,
+                      max_link_depth=3)
+    # A (active, 60 tok) links to evicted B (20 tok): 90+20=110 > 100, so make_room
+    # must free space — but must NOT evict A. With only root+A active and A excluded,
+    # there is nothing else to evict, so the restore is skipped (no crash).
+    _handle_link(LinkInfo(link_end_pos=1, target_str="B"),
+                 active, ctx, None, None, None, cfg, None, depth=1)
+    active_ids = [e.raw_identifier for e in ctx._docs]
+    assert "A" in active_ids            # active doc survived
+    assert "B" not in active_ids        # couldn't fit; restore correctly skipped
+    assert "B" in [e.raw_identifier for e in ctx._evicted]
+
+
+def test_handle_link_reeviction_updates_restored_depth():
+    """Regression (Bug 3): a restored doc's depth reflects its new position.
+
+    Previously restore reused the doc's stale creation depth for both the trace
+    and the doc's reported .depth. It should be depth+1 of the active doc.
+    """
+    from collections import namedtuple
+    from model.generation_result import GenerationTrace
+    LinkInfo = namedtuple("LinkInfo", ["link_end_pos", "target_str"])
+    ctx = make_context_obj(max_context_length=1000, eviction_policy="drop_oldest")
+    root = ctx.add_root("", [1], None)
+    # B was originally created deep (depth 3) then evicted.
+    b = ctx.add_generated_doc("B", None, "", depth=3, before_entry=root)
+    b.tokens = [10, 11]
+    ctx.evict_oldest_aux()  # evicts B
+    trace = GenerationTrace()
+    cfg = base_config(eviction_policy="drop_oldest", max_context_length=1000,
+                      max_link_depth=3, record_trace=True)
+    # Root (depth 0) re-links B → restored as a depth-1 child.
+    _handle_link(LinkInfo(link_end_pos=1, target_str="B"),
+                 root, ctx, None, None, None, cfg, None, depth=0, trace=trace)
+    restored = next(e for e in ctx._docs if e.raw_identifier == "B")
+    assert restored.depth == 1                 # new position, not stale 3
+    assert trace.max_depth_reached == 1        # trace matches
 
 
 # --- link detection fires during _generate_doc ---

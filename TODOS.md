@@ -44,10 +44,14 @@ how it might be edited to take advantage of this model's graph-aware features.
 
 ## Generation / Inference
 
-### Finish inference generation logic
-Complete the generation feature (Stage 3 items): `find_evicted` / `restore_evicted`
-re-eviction, `process_prompt_links`, and `GenerationTrace`. See the generation
-memory / `GENERATION_WORK_BREAKDOWN.md`.
+### Prompt-link resolution can fabricate cited docs (design decision — consider)
+With defaults (`process_prompt_links=True` and a `link_retrieval_mode` that allows
+generation), a link merely *cited* in the prompt that isn't in the corpus (or with
+`corpus=None`) falls through `_handle_link` to the recursive-generation branch and
+*hallucinates* a whole document for that identifier, inserting it before the root
+so root generation attends to fabricated content. If the intent is "resolve
+existing citations, don't fabricate them", prompt-link processing should force
+`corpus_only` semantics. Confirm intended behavior before changing.
 
 ### TheStack (Python) link resolution in generation is unsupported
 `generate.py` / `model/generation_loop.py` resolve a detected link to a corpus doc

@@ -185,31 +185,73 @@ class DocumentContext:
         """Total number of eviction events since this context was created."""
         return self._eviction_count
 
-    def evict_oldest_aux(self) -> _DocEntry:
-        """Remove and return the leftmost non-root entry; append to evicted list."""
+    def evict_oldest_aux(self, exclude: Optional[_DocEntry] = None) -> _DocEntry:
+        """Remove and return the leftmost evictable entry; append to evicted list.
+
+        The root is never evictable. `exclude` protects one additional entry
+        (typically the document currently being generated) so eviction can
+        never remove the doc a caller is about to insert relative to.
+        """
         for i, entry in enumerate(self._docs):
-            if not entry.is_root:
-                self._docs.pop(i)
-                self._evicted.append(entry)
-                self._eviction_count += 1
-                return entry
+            if entry.is_root or entry is exclude:
+                continue
+            self._docs.pop(i)
+            self._evicted.append(entry)
+            self._eviction_count += 1
+            return entry
         raise RuntimeError("No auxiliary documents to evict")
 
-    def make_room(self, num_tokens_needed: int) -> bool:
+    def can_make_room(
+        self, num_tokens_needed: int, exclude: Optional[_DocEntry] = None
+    ) -> bool:
+        """
+        True if evicting oldest aux docs (never root, never `exclude`) could free
+        enough space for num_tokens_needed tokens.
+
+        Non-mutating: simulates the eviction `make_room` would perform so callers
+        can bail out *before* any doc is actually evicted. This prevents the
+        "mutate then fail" flaw where a doomed request still destroys the window.
+        """
+        if self.can_add_document(num_tokens_needed):
+            return True
+        projected_total = self.total_tokens
+        projected_aux = self.num_aux_docs
+        for entry in self._docs:
+            if entry.is_root or entry is exclude:
+                continue
+            projected_total -= (
+                len(entry.prefix_tokens) + len(entry.tokens) + len(entry.suffix_tokens)
+            )
+            projected_aux -= 1
+            if (
+                projected_total + num_tokens_needed <= self.max_context_length
+                and projected_aux < self.max_auxiliary_documents
+            ):
+                return True
+        return False
+
+    def make_room(
+        self, num_tokens_needed: int, exclude: Optional[_DocEntry] = None
+    ) -> bool:
         """
         Evict oldest aux docs until there is room for num_tokens_needed tokens.
 
-        Returns True if room was successfully made, False if impossible (only
-        root remains or root alone already exceeds the budget).
+        Returns True if room was successfully made, False if impossible. When it
+        returns False it evicts NOTHING — feasibility is checked up front via
+        can_make_room, so a request that can never fit leaves the context intact
+        rather than wiping every aux doc on the way to failing.
+
+        `exclude` protects one entry (typically the active document being
+        generated) from eviction, so callers can safely insert relative to it
+        afterwards.
 
         Only call when eviction_policy == 'drop_oldest'; caller is responsible
         for checking the policy.
-
         """
+        if not self.can_make_room(num_tokens_needed, exclude=exclude):
+            return False
         while not self.can_add_document(num_tokens_needed):
-            if self.num_aux_docs == 0:
-                return False
-            self.evict_oldest_aux()
+            self.evict_oldest_aux(exclude=exclude)
         return True
 
     def has_identifier(self, raw_identifier: str) -> bool:

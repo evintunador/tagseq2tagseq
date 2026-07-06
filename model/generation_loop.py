@@ -265,14 +265,18 @@ def _handle_link(
     if evicted is not None:
         exact_tokens = len(evicted.prefix_tokens) + len(evicted.tokens) + len(evicted.suffix_tokens)
         if config.eviction_policy == "drop_oldest":
-            if not context.make_room(exact_tokens):
+            if not context.make_room(exact_tokens, exclude=active_entry):
                 return
         elif not context.can_add_document(exact_tokens):
             return
+        # The restored doc re-enters the traversal as a child of active_entry, so
+        # its position is depth + 1 — not its stale creation depth. Rewrite it so
+        # the trace and the doc's reported depth match where it now sits.
+        evicted.depth = depth + 1
         context.restore_evicted(evicted, before_entry=active_entry)
         if trace is not None:
             trace.links_resolved += 1
-            trace.max_depth_reached = max(trace.max_depth_reached, evicted.depth)
+            trace.max_depth_reached = max(trace.max_depth_reached, depth + 1)
         logger.debug(
             "Re-eviction: restored '%s' (depth %d) before '%s'",
             target, evicted.depth, active_entry.raw_identifier,
@@ -314,7 +318,7 @@ def _handle_link(
             expected_tokens = len(corpus_tokens)
 
         if config.eviction_policy == "drop_oldest":
-            if not context.make_room(expected_tokens):
+            if not context.make_room(expected_tokens, exclude=active_entry):
                 return
         elif not context.can_add_document(expected_tokens):
             return
@@ -353,7 +357,7 @@ def _handle_link(
     # For non-null layout policies this under-estimates slightly (omits prefix/suffix),
     # but is acceptable since over-eviction is preferable to OOM.
     if config.eviction_policy == "drop_oldest":
-        if not context.make_room(config.max_tokens_per_document):
+        if not context.make_room(config.max_tokens_per_document, exclude=active_entry):
             return
     elif not context.can_add_document(config.max_tokens_per_document):
         return
