@@ -144,29 +144,37 @@ perplexity not yet re-run on the fixed path; code-benchmark ppl above IS valid.*
 
 ### Single-doc MC accuracy (condition = `doceval`; chance in header)
 
+Runs were RETIRED early (nodes reclaimed 2026-07-07) at partial training — and
+the hyperparameters (LR/schedule from moddedNanoGPT, tuned for first-hour
+learning) were mis-scaled for this dataset. Evaluated from best-val checkpoints
+just to check for above-chance signal. n=2000/split=all, doceval.
+
 | Condition | hellaswag (0.25) | boolq (0.50) | openbookqa (0.25) |
 |-----------|:----------------:|:------------:|:-----------------:|
-| doc_causal        | - | - | - |
-| cross_doc_link    | - | - | - |
-| doc_concatenated  | - | - | - |
-| doc_concat_link   | - | - | - |
+| doc_causal        | 0.288 [.27,.31] ✓ | 0.374 [.35,.40] ↓ | 0.262 [.22,.30] |
+| cross_doc_link    | 0.280 [.26,.30] ✓ | 0.378 [.36,.40] ↓ | 0.266 [.23,.30] |
+| doc_concatenated  | 0.284 [.27,.31] ✓ | 0.374 [.35,.39] ↓ | 0.264 [.23,.30] |
+| doc_concat_link   | 0.285 [.26,.31] ✓ | 0.376 [.35,.40] ↓ | 0.248 [.21,.28] |
 
-*(all arxiv models still training)*
+*✓ = CI floor above chance; ↓ = below. All 4 conditions barely-above-chance on
+hellaswag (~.28 vs .25), at/below on openbookqa, and BELOW chance on boolq
+(~.37 vs .50 — common for tiny/undertrained models on yes-no). Conditions are
+statistically indistinguishable from each other. Undertrained + mis-tuned; not a
+real capability signal.*
 
-### Link-injection MC accuracy (condition = `annotated`; cross_doc_link only)
+### Held-out perplexity (POST-softcap-fix; ppl sane)
 
-| Condition | hellaswag | boolq | openbookqa |
-|-----------|:---------:|:-----:|:----------:|
-| cross_doc_link | - | - | - |
+| Condition | held_out ppl (split=all, n=2000) | mean_nll |
+|-----------|:--------------------------------:|:--------:|
+| doc_causal        | 16.6 | 2.75 |
+| cross_doc_link    | 39.8 | 3.61 |
+| doc_concatenated  | 22.0 | 3.03 |
+| doc_concat_link   | 15.1 | 2.66 |
 
-### Held-out / community perplexity (BROKEN — graph path)
-
-| Condition | held_out val_random | held_out test_random | community val | community test |
-|-----------|:-------------------:|:--------------------:|:-------------:|:--------------:|
-| doc_causal        | - | - | - | - |
-| cross_doc_link    | - | - | - | - |
-| doc_concatenated  | - | - | - | - |
-| doc_concat_link   | - | - | - | - |
+*doc_concat_link (15.1) and doc_causal (16.6) best; cross_doc_link worst (39.8)
+— but cross_doc resumed from step 5,800 (val-plateau; ~45k live steps lost when
+nodes died), so it's the least-trained here. Perplexity gaps mostly reflect
+training progress, not architecture, given the mis-tuned run.*
 
 ---
 
