@@ -130,7 +130,8 @@ def main():
     sys.path.insert(0, ".")
 
     logger.info("Loading model from %s ...", args.checkpoint)
-    from generate import load_inference_model, PretokCorpus
+    from generate import load_inference_model
+    from model.document_corpus import PretokCorpus
     model, _ = load_inference_model(args.checkpoint, device=args.device)
     logger.info("mask_type=%s", getattr(model, "mask_type", "?"))
 
@@ -146,7 +147,7 @@ def main():
         sys.exit(1)
 
     logger.info("Loading corpus from %s ...", args.dataset)
-    corpus = PretokCorpus(args.dataset)
+    corpus = PretokCorpus(args.dataset, link_detector=model.link_detector)
     raw_ids = [
         node["raw_identifier"]
         for node in corpus._graph.nodes.values()

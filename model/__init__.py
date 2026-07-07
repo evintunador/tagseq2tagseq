@@ -2,7 +2,7 @@ from .modules import TS2TSTrainingModule, TS2TSBackbone
 from .model import TS2TSModel
 from .sampling import greedy_sample, sample_token
 from .generation_config import GenerationConfig
-from .document_corpus import DocumentCorpus
+from .document_corpus import PretokCorpus
 from .generation_result import GeneratedDocument, GenerationResult
 from .document_context import DocumentContext
 from .generation_loop import run_generation
@@ -14,7 +14,7 @@ __all__ = [
     "greedy_sample",
     "sample_token",
     "GenerationConfig",
-    "DocumentCorpus",
+    "PretokCorpus",
     "GeneratedDocument",
     "GenerationResult",
     "DocumentContext",

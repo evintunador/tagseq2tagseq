@@ -110,7 +110,8 @@ def main():
 
     # Load model
     print(f"Loading checkpoint: {args.checkpoint}", flush=True)
-    from generate import load_inference_model, PretokCorpus
+    from generate import load_inference_model
+    from model.document_corpus import PretokCorpus
     model, _ = load_inference_model(args.checkpoint, device=args.device)
     tokenizer = getattr(model, "tokenizer", None)
     if tokenizer is None:
@@ -123,7 +124,7 @@ def main():
         print("ERROR: no annotator_corpus in config.", file=sys.stderr)
         sys.exit(1)
     print(f"Loading corpus: {corpus_dir}", flush=True)
-    corpus = PretokCorpus(corpus_dir)
+    corpus = PretokCorpus(corpus_dir, link_detector=model.link_detector)
     raw_ids = [
         node["raw_identifier"]
         for node in corpus._graph.nodes.values()

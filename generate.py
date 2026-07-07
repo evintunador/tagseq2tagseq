@@ -31,8 +31,8 @@ import torch
 import torch.nn.functional as F
 
 from data.collate import DocSpan
-from data.dataset import GraphIndex, PretokShardedBackend
 from data.layout import make_layout_policy
+from model.document_corpus import PretokCorpus
 from model.generation_config import GenerationConfig
 from model.generation_result import GeneratedDocument, GenerationResult
 from model.graph_traversal.block_mask_creator import (
@@ -237,53 +237,6 @@ def load_inference_model(
         os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", _cache_dir)
 
     return inference_model, hp
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Corpus wrapper
-# ─────────────────────────────────────────────────────────────────────────────
-
-class PretokCorpus:
-    """
-    Thin wrapper around GraphIndex + PretokShardedBackend that satisfies the
-    corpus protocol expected by the generation loop:
-        has_document(raw_identifier) -> bool
-        get_document(raw_identifier) -> Iterator[int]
-    """
-
-    def __init__(self, dataset_dir: str | Path):
-        dataset_dir   = Path(dataset_dir)
-        self._graph   = GraphIndex(dataset_dir)
-        self._backend = PretokShardedBackend(self._graph)
-        # Build a raw_identifier → normed_identifier map from the graph for O(1)
-        # lookup in has_document / get_document. A miss means the raw_identifier
-        # is not in the corpus (e.g. hallucinated title) → has_document returns False.
-        self._raw_to_normed: dict[str, str] = {
-            node["raw_identifier"]: node["normed_identifier"]
-            for node in self._graph.nodes.values()
-            if "raw_identifier" in node and "normed_identifier" in node
-        }
-
-    def has_document(self, raw_identifier: str) -> bool:
-        # NOTE: Python import detector emits relative paths (e.g. "Phaedra/Notebook.py")
-        # but corpus identifiers are repo-qualified ("000alen/Phaedra:Phaedra/Notebook.py").
-        # This means corpus hits will never fire for Python imports when using a multi-repo
-        # dataset like thestack. Fix: either (a) build a single-repo corpus so identifiers
-        # match, or (b) make the import detector emit repo-qualified identifiers when a repo
-        # context is available.
-        return raw_identifier in self._raw_to_normed
-
-    def get_document(self, raw_identifier: str):
-        normed = self._raw_to_normed.get(raw_identifier)
-        if normed is None:
-            return iter([])
-        tokens = self._backend.get_tokens(normed)
-        if tokens is None:
-            return iter([])
-        return iter(tokens.tolist())
-
-    def close(self):
-        self._backend.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -627,7 +580,11 @@ def main():
     corpus = None
     if args.dataset:
         print(f"Loading corpus: {args.dataset} ...", file=sys.stderr)
-        corpus = PretokCorpus(args.dataset)
+        # Pass the model's link_detector so detector-emitted targets that differ
+        # from raw_identifier (e.g. bare Python import paths) resolve. For a code
+        # dataset, point --dataset at a single-repo corpus dir (see
+        # data/make_repo_corpus.py); wiki/arxiv use the full dataset dir.
+        corpus = PretokCorpus(args.dataset, link_detector=model.link_detector)
 
     # ── Generation config ─────────────────────────────────────────────────────
     # Default mode: corpus_only when a dataset is provided (no generation fallback),

@@ -625,12 +625,14 @@ def run_benchmarks_on_model(
             annotator_corpus_dir = cfg.get("annotator_corpus") or str(dataset_dir)
             annotator_mode = cfg.get("annotator_mode", "full_skip")
             try:
-                from generate import PretokCorpus
+                from model.document_corpus import PretokCorpus
                 from eval.link_annotator import (
                     MarkdownPromptAnnotator, ArxivPromptAnnotator, TrieTitleIndex,
                 )
                 from eval.title_index import HashNormTitleIndex
-                _corpus = PretokCorpus(annotator_corpus_dir)
+                _corpus = PretokCorpus(
+                    annotator_corpus_dir, link_detector=model.link_detector
+                )
                 _raw_ids = [
                     node["raw_identifier"]
                     for node in _corpus._graph.nodes.values()

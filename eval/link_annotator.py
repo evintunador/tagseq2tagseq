@@ -606,7 +606,7 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
 
     Args:
         corpus: Optional corpus object with has_document/get_document (e.g.
-            PretokCorpus from generate.py). Required for corpus_only and
+            PretokCorpus from model.document_corpus). Required for corpus_only and
             corpus_then_generate modes.
         link_retrieval_mode: How to handle the link (see VALID_LINK_RETRIEVAL_MODES).
             "full_skip"           — no link at all: skip injection entirely.

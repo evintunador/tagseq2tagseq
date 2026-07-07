@@ -367,7 +367,7 @@ class TS2TSModel:
 
         Args:
             prompt:          Text prompt to condition on. Encoded using self.tokenizer.
-            corpus:          Optional DocumentCorpus for cross-doc link resolution.
+            corpus:          Optional PretokCorpus for cross-doc link resolution.
             config:          GenerationConfig. Defaults to GenerationConfig() if None.
             root_identifier: Filename / identifier prefix for the root document.
 

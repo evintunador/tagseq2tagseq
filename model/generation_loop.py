@@ -45,7 +45,7 @@ def run_generation(
     Args:
         model: TS2TSModel with forward_inference implemented.
         prompt_tokens: Initial token IDs for the root document.
-        corpus: Optional DocumentCorpus for link resolution.
+        corpus: Optional PretokCorpus for link resolution.
         config: Generation configuration.
         link_detector: Link detector for cross-doc link detection.
         tokenizer_decode: Optional fn(List[int]) -> str for populating
