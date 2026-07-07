@@ -9,6 +9,7 @@ Usage:
         [--max-new-tokens 300] \\
         [--max-link-depth 2] \\
         [--link-retrieval-mode {corpus_only,generate_only,corpus_then_generate,link_but_skip,full_skip}] \\
+        [--fuzzy-link-match | --no-fuzzy-link-match] \\
         [--temperature 0.8] \\
         [--top-k 50] \\
         [--max-display-tokens 200] \\
@@ -554,6 +555,30 @@ def main():
         help="How to resolve links during generation. Default: 'corpus_only' when "
              "--dataset is provided, 'corpus_then_generate' otherwise.",
     )
+    parser.add_argument(
+        "--fuzzy-link-match", dest="fuzzy_link_match", action="store_true", default=True,
+        help="Resolve near-miss link targets (casing/punctuation/word-order/typo "
+             "variants of a real corpus title) via the same HashNormTitleIndex "
+             "cascade the eval annotators use. Only fires after exact lookup misses, "
+             "so it can only add corpus fetches, never change an exact hit. Requires "
+             "--dataset. Default: on.",
+    )
+    parser.add_argument(
+        "--no-fuzzy-link-match", dest="fuzzy_link_match", action="store_false",
+        help="Disable fuzzy link matching; resolve links by exact key only.",
+    )
+    parser.add_argument(
+        "--fuzzy-strategies", nargs="+", default=None,
+        help="Ordered HashNormTitleIndex strategy cascade for --fuzzy-link-match. "
+             "Choices: exact norm word_overlap_ordered word_overlap_unordered "
+             "edit_distance. Default: exact norm word_overlap_ordered edit_distance.",
+    )
+    parser.add_argument(
+        "--edit-distance-threshold", type=float, default=0.2,
+        help="Max normalized edit distance for the 'edit_distance' fuzzy strategy "
+             "(0.2 = ≥80%% of chars must match). Only used if edit_distance is in "
+             "--fuzzy-strategies.",
+    )
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--repetition-penalty", type=float, default=1.3,
@@ -584,7 +609,18 @@ def main():
         # from raw_identifier (e.g. bare Python import paths) resolve. For a code
         # dataset, point --dataset at a single-repo corpus dir (see
         # data/make_repo_corpus.py); wiki/arxiv use the full dataset dir.
-        corpus = PretokCorpus(args.dataset, link_detector=model.link_detector)
+        # fuzzy_match adds a HashNormTitleIndex cascade so near-miss titles the
+        # model emits still fetch (matches eval annotator behavior).
+        _fuzzy_kwargs = {}
+        if args.fuzzy_strategies is not None:
+            _fuzzy_kwargs["fuzzy_strategies"] = tuple(args.fuzzy_strategies)
+        corpus = PretokCorpus(
+            args.dataset,
+            link_detector=model.link_detector,
+            fuzzy_match=args.fuzzy_link_match,
+            edit_distance_threshold=args.edit_distance_threshold,
+            **_fuzzy_kwargs,
+        )
 
     # ── Generation config ─────────────────────────────────────────────────────
     # Default mode: corpus_only when a dataset is provided (no generation fallback),

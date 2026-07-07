@@ -81,6 +81,13 @@ eval:
   annotator_mode: corpus_only
   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
 
+  # Generation-time link resolution: fuzzy fallback (near-miss title recovery)
+  # via the same HashNormTitleIndex cascade the annotator uses. Consumed by
+  # generation-path corpus construction (generate.py / generation benchmarks).
+  link_fuzzy_match: true
+  link_fuzzy_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+  link_ed_threshold: 0.2
+
 # --- Smoke-test overrides (pass on CLI, don't edit here) ---
 # --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
 # --model.max_seq_len 2048

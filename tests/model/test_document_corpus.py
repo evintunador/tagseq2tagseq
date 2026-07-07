@@ -9,7 +9,8 @@ a trivial decode_fn.
 """
 import pytest
 
-from model.document_corpus import _build_indexes, _NodeSpan
+from eval.title_index import HashNormTitleIndex
+from model.document_corpus import _build_indexes, _NodeSpan, _resolve_target
 from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
 from model.graph_traversal.arxiv_cite_detector import ArxivCiteDetector
 from model.graph_traversal.python_import_detector import PythonImportDetector
@@ -29,13 +30,14 @@ def _nodes(*pairs):
     return {normed: _node(raw, normed) for raw, normed in pairs}
 
 
-# --- resolution helper mirroring PretokCorpus._resolve (exact then key) ---
+# --- resolution helper: call the real PretokCorpus._resolve implementation ---
+# _resolve_target is the exact single source of truth used by PretokCorpus, so
+# tests exercise real resolution ordering without on-disk shards.
 
-def _resolve(exact, key, target, has_detector):
-    n = exact.get(target)
-    if n is not None:
-        return n
-    return key.get(target) if has_detector else None
+def _resolve(exact, key, target, has_detector, title_index=None):
+    return _resolve_target(
+        target, exact, key, has_detector=has_detector, title_index=title_index
+    )
 
 
 # ─── wiki / markdown: exact match, detector-key mirrors it ───────────────────
@@ -123,3 +125,72 @@ def test_detector_key_first_wins_on_collision():
     exact, key = _build_indexes(nodes, det)
     assert key["setup.py"] == "a1"                # first inserted wins
     assert exact["repoA:setup.py"] == "a1" and exact["repoB:setup.py"] == "b1"
+
+
+# ─── fuzzy tier: near-miss recovery via HashNormTitleIndex ───────────────────
+# The fuzzy tier fires ONLY after both exact indexes miss, so it can only add
+# resolutions (near-miss titles) — never override or change an exact hit.
+
+def _wiki_indexes():
+    det = MarkdownLinkDetector(decode_fn=_decode)
+    nodes = _nodes(
+        ("Russian Civil War", "rcw"),
+        ("Python (programming language)", "py"),
+        ("France", "fr"),
+    )
+    return _build_indexes(nodes, det)
+
+
+def test_fuzzy_off_by_default_near_miss_misses():
+    """Without a title_index, a near-miss target still returns None (unchanged)."""
+    exact, key = _wiki_indexes()
+    # Casing/punctuation variant: not an exact or detector-key hit.
+    assert _resolve(exact, key, "russian civil war", True) is None
+    assert _resolve(exact, key, "Python programming language", True) is None
+
+
+def test_fuzzy_norm_recovers_casing_variant():
+    exact, key = _wiki_indexes()
+    idx = HashNormTitleIndex(exact.keys(), strategies=("exact", "norm"))
+    # "norm" strategy normalizes casing/punctuation → resolves to the corpus doc.
+    assert _resolve(exact, key, "russian civil war", True, title_index=idx) == "rcw"
+
+
+def test_fuzzy_word_overlap_recovers_truncated_title():
+    exact, key = _wiki_indexes()
+    idx = HashNormTitleIndex(
+        exact.keys(), strategies=("exact", "norm", "word_overlap_ordered")
+    )
+    # Model emitted only a prefix of the real title.
+    assert _resolve(exact, key, "Russian Civil", True, title_index=idx) == "rcw"
+
+
+def test_fuzzy_edit_distance_recovers_typo():
+    exact, key = _wiki_indexes()
+    idx = HashNormTitleIndex(
+        exact.keys(),
+        strategies=("exact", "norm", "edit_distance"),
+        edit_distance_threshold=0.2,
+    )
+    # Single-char typo in a long title → within edit-distance threshold.
+    assert _resolve(exact, key, "Russian Civil Waer", True, title_index=idx) == "rcw"
+
+
+def test_fuzzy_exact_hit_short_circuits_before_fuzzy():
+    """An exact/detector-key hit never consults the fuzzy index."""
+    exact, key = _wiki_indexes()
+    # A title_index that would (wrongly) map everything to 'fr' if consulted.
+    class _Trap:
+        def lookup(self, _s):
+            raise AssertionError("fuzzy index consulted despite an exact hit")
+    assert _resolve(exact, key, "France", True, title_index=_Trap()) == "fr"
+
+
+def test_fuzzy_hallucinated_title_still_misses():
+    """A target with no plausible corpus match returns None even with fuzzy on."""
+    exact, key = _wiki_indexes()
+    idx = HashNormTitleIndex(
+        exact.keys(), strategies=("exact", "norm", "word_overlap_ordered", "edit_distance")
+    )
+    assert _resolve(exact, key, "Completely Fabricated Nonsense Topic", True,
+                    title_index=idx) is None

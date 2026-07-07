@@ -55,9 +55,11 @@ existing citations, don't fabricate them", prompt-link processing should force
 
 ### TheStack (Python) link resolution in generation is unsupported
 `generate.py` / `model/generation_loop.py` resolve a detected link to a corpus doc
-via an exact `corpus.has_document(target)` lookup. This works for Wikipedia
-(`[text](Title)`) and ArXiv (`\cite{Title}`) because the detector's `target_str`
-equals the corpus `raw_identifier`. It does **not** work for TheStack: the
+via `corpus.has_document(target)` (exact → detector-key → optional fuzzy cascade).
+This works for Wikipedia (`[text](Title)`) and ArXiv (`\cite{Title}`) because the
+detector's `target_str` equals the corpus `raw_identifier`. Fuzzy matching does not
+help here — the mismatch is a structural key-format difference, not a near-miss.
+It does **not** work for TheStack: the
 `PythonImportDetector` emits *relative* import paths (e.g. `"Phaedra/Notebook.py"`)
 while corpus `raw_identifier`s are repo-qualified (`"000alen/Phaedra:Phaedra/Notebook.py"`),
 so corpus hits never fire on a multi-repo dataset. See the NOTE in
@@ -66,21 +68,27 @@ corpus so identifiers match, or (b) make the import detector emit repo-qualified
 identifiers when a repo context is available. Until then, Python-link generation
 falls back to generate/skip per `link_retrieval_mode` (no corpus fetch).
 
-### Corpus-match cascade is eval-only, not used in generation
-The successive title-matching algorithms (`HashNormTitleIndex`: exact → norm →
-word_overlap → edit_distance) are only used by the eval annotators
-(`MarkdownPromptAnnotator` / `ArxivPromptAnnotator`). Generation
-(`generation_loop._handle_link`) resolves links with a single exact
-`corpus.has_document()` lookup and no fuzzy fallback, for all datasets. A model
-that emits a near-miss title (casing/punctuation variant of a real corpus title)
-will fail to fetch during generation even though eval would have matched it.
-Consider threading a `TitleIndex` through `run_generation` so generation gets the
-same recovery cascade. (Wiki/ArXiv both benefit; orthogonal to the Python-path
-issue above.)
-
 ---
 
 ## Training
+
+### Retune LR / schedule for this dataset scale (before next ablation run)
+Current optimizer/schedule values (muon_lr, adamw_lr, warmup, cooldown_frac,
+total_steps) are inherited from ../ModdedNanoGPT, which tunes for how much a
+model learns in ~the first hour of training — mis-scaled for our dataset sizes
+and multi-day runs. The 2026-07-01..07 arxiv/thestack/wiki ablation runs were all
+undertrained/poorly-tuned as a result (see RESULTS.md — barely-above-chance).
+Retune before spending GPU-time on the next matrix.
+
+### Periodic "latest" checkpointing (only best-val is saved → node death loses ~all progress)
+The `multi_val_bucketed` loop saves a checkpoint ONLY when val improves
+(best_model.pt). When Oracle reclaimed the down-nodes 2026-07-07, every run could
+only resume from its last val-improvement, not where it actually was — e.g. arxiv
+cross_doc_link had trained to ~step 50,491 but its newest checkpoint was step
+5,800 (~44.7k steps lost); doc_concatenated lost ~21.6k. Add periodic
+latest-checkpoint saving (every N optimizer steps, overwriting a single
+`latest.pt`, independent of val) so preemption loses at most N steps. Resume
+should prefer latest.pt over best_model.pt when newer.
 
 ### Train the ablation matrix
 Actually train reasonable-sized models for each ablation:

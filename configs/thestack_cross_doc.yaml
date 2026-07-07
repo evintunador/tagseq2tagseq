@@ -81,6 +81,14 @@ eval:
     - {name: humaneval_buggy,           conditions: [doceval]}
   max_docs: 500
 
+  # Generation-time link resolution: fuzzy fallback (near-miss identifier
+  # recovery) via a HashNormTitleIndex cascade. Consumed by generation-path
+  # corpus construction (generate.py / generation benchmarks). Note: Python
+  # link resolution needs a single-repo corpus (see data/make_repo_corpus.py).
+  link_fuzzy_match: true
+  link_fuzzy_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+  link_ed_threshold: 0.2
+
 # --- Smoke-test overrides (pass on CLI, don't edit here) ---
 # --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
 # --model.max_seq_len 2048
