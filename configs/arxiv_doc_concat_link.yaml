@@ -88,7 +88,7 @@ eval:
   max_docs: 500
   annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
   annotator_mode: corpus_only
-  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+  annotator_strategies: [exact, norm, word_overlap_ordered]
 
   # Generation-time link resolution: fuzzy fallback (near-miss title recovery)
   # via the same HashNormTitleIndex cascade the annotator uses. Consumed by

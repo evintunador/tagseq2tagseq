@@ -79,7 +79,7 @@ eval:
   max_docs: 500
   annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
   annotator_mode: corpus_only
-  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+  annotator_strategies: [exact, norm, word_overlap_ordered]
 
 # --- Smoke-test overrides (pass on CLI, don't edit here) ---
 # --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
