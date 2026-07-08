@@ -986,6 +986,14 @@ class ArxivPromptAnnotator(_AnnotatorBase):
         layout_policy: Layout policy for aux doc generation (None = NullLayoutPolicy).
         max_title_tokens: Maximum tokens to generate for the title. Default 60.
         eos_token_id: EOS token id. Default 50256.
+        opener_refine_top_k: Number of top backslash-probability positions to
+            re-rank by the high-precision citation signal
+            P(bslash)*P(c|bslash)*P(ite|bslash,c) in one extra packed forward
+            pass. Bare backslash (token 59) prefixes every LaTeX macro so raw
+            P(backslash) is a noisy citation signal; conditioning on the c+ite
+            continuation is ~800x more citation-specific. Default 8. Set to 0/1
+            to disable refinement and place at the raw P(backslash) argmax
+            (cheaper, one fewer forward).
     """
 
     def __init__(
@@ -997,6 +1005,7 @@ class ArxivPromptAnnotator(_AnnotatorBase):
         layout_policy=None,
         max_title_tokens: int = 60,
         eos_token_id: int = 50256,
+        opener_refine_top_k: int = 8,
     ):
         link_retrieval_mode = validate_link_retrieval_mode(link_retrieval_mode)
         self.corpus = corpus
@@ -1006,6 +1015,9 @@ class ArxivPromptAnnotator(_AnnotatorBase):
         self.layout_policy = layout_policy
         self.max_title_tokens = max_title_tokens
         self.eos_token_id = eos_token_id
+        # >1 enables the top-K citation-intent refinement (one extra forward);
+        # <=1 uses the raw P(backslash) argmax position (commit-1 behavior).
+        self.opener_refine_top_k = opener_refine_top_k
 
     # Title ends at the '}' that closes \cite{...}.
     _title_stop_regex = _re.compile(r'\}')
@@ -1041,16 +1053,19 @@ class ArxivPromptAnnotator(_AnnotatorBase):
 
         # ── Step 1: find best opener position AND which backslash form ─────
         # _opener_probs returns [T, n_openers] over self._opener_first_tokens
-        # (bare '\' 59 and space '\' 3467). From one forward we pick both the
-        # position (argmax over per-position maxima) and which backslash token
-        # the model preferred there, so we inject '\cite{' vs ' \cite{' to match.
+        # (bare '\' 59 and space '\' 3467): per position, P(each backslash form).
         opener_probs = self._opener_probs(model, context_tokens, device)  # [T, n_openers]
         per_pos_max = opener_probs.max(dim=-1).values                     # [T]
-        link_opener_prob = float(per_pos_max.max().item())
-        link_opener_pos = int(per_pos_max.argmax().item())
-        best_first = self._opener_first_tokens[
-            int(opener_probs[link_opener_pos].argmax().item())
-        ]
+
+        # Raw P(backslash) is a noisy citation signal ('\' opens every LaTeX
+        # macro). When opener_refine_top_k > 1, re-rank the top-K positions by
+        # the high-precision joint signal P(\)·P(c|\)·P(ite|\c) using ONE extra
+        # packed forward; otherwise place at the raw P(backslash) argmax.
+        link_opener_pos, best_col = self._refine_opener_position(
+            model, context_tokens, opener_probs, per_pos_max, device
+        )
+        link_opener_prob = float(per_pos_max[link_opener_pos].item())
+        best_first = self._opener_first_tokens[best_col]
 
         # ── Step 2: build title-generation prefix ────────────────────────
         # Inject the full \cite{ opener sequence matching the chosen backslash
@@ -1112,6 +1127,99 @@ class ArxivPromptAnnotator(_AnnotatorBase):
         logits = self._run_fwd(model, tok_tensor, device)   # [T, V]
         probs = F.softmax(logits.float(), dim=-1)            # [T, V]
         return probs[:, list(self._opener_first_tokens)]     # [T, n_openers]
+
+    def _refine_opener_position(
+        self,
+        model,
+        context_tokens: List[int],
+        opener_probs: torch.Tensor,   # [T, n_openers]
+        per_pos_max: torch.Tensor,    # [T]
+        device: str,
+    ) -> Tuple[int, int]:
+        """Pick the (position, backslash-form) to inject at.
+
+        Bare '\\' (59) opens every LaTeX macro, so the raw P(backslash) argmax
+        is a noisy citation-placement signal. This re-ranks the top-K positions
+        by the high-precision joint citation signal
+
+            score = P(backslash) · P('c' | backslash) · P('ite' | backslash 'c')
+
+        which is ~800x more citation-specific than P(backslash) alone. Both
+        conditional factors come from ONE extra forward: for each candidate we
+        pack ``context[:pos] + [backslash, 'c']`` as a doc_causal DocSpan (the
+        score_completions_batched pattern), then read P('c') from the backslash
+        token's logits and P('ite') from the 'c' token's logits. The opener is a
+        FIXED token sequence, so there is exactly one continuation to score per
+        candidate — linear in K, no combinatorial fan-out.
+
+        Returns (position, column-into-self._opener_first_tokens). Falls back to
+        the raw per_pos_max argmax when refinement is disabled (top_k <= 1), the
+        context is empty, or the packed forward fails.
+        """
+        n_pos = per_pos_max.shape[0]
+        # Column of the best backslash form at each position (for injection choice).
+        best_cols = opener_probs.argmax(dim=-1)   # [T]
+
+        def _raw_argmax() -> Tuple[int, int]:
+            pos = int(per_pos_max.argmax().item())
+            return pos, int(best_cols[pos].item())
+
+        k = self.opener_refine_top_k
+        if k is None or k <= 1 or n_pos == 0:
+            return _raw_argmax()
+
+        c_tok = _CITE_OPENER_TOKENS[1]     # 'c'  (66)
+        ite_tok = _CITE_OPENER_TOKENS[2]   # 'ite' (578)
+
+        k = min(k, n_pos)
+        top_pos = torch.topk(per_pos_max, k).indices.tolist()   # K candidate positions
+
+        # Pack one doc_causal span per candidate: context[:pos] + [backslash, 'c'].
+        # backslash token = the winning opener form's first token at that pos.
+        all_tokens: List[int] = []
+        spans: List[DocSpan] = []
+        meta: List[Tuple[int, int, int]] = []   # (pos, col, span_start)
+        offset = 0
+        for pos in top_pos:
+            col = int(best_cols[pos].item())
+            bslash = self._opener_first_tokens[col]
+            seq = list(context_tokens[:pos]) + [bslash, c_tok]
+            if len(seq) < 2:
+                continue
+            spans.append(DocSpan(
+                doc_id=len(spans), normed_identifier="", raw_identifier="",
+                start=offset, end=offset + len(seq),
+                truncated=False, outgoing_identifiers=[],
+            ))
+            meta.append((pos, col, offset))
+            all_tokens.extend(seq)
+            offset += len(seq)
+
+        if not spans:
+            return _raw_argmax()
+
+        try:
+            tokens_tensor = torch.tensor(all_tokens, dtype=torch.long, device=device).unsqueeze(0)
+            logits = model.forward_inference(tokens_tensor, spans, mask_type="doc_causal")  # [1, tot, V]
+            log_probs = F.log_softmax(logits[0].float(), dim=-1)   # [tot, V]
+        except Exception as exc:
+            logger.warning("Arxiv opener refinement forward failed (%s); using raw argmax.", exc)
+            return _raw_argmax()
+
+        best_score = -math.inf
+        best = _raw_argmax()
+        for (pos, col, span_start) in meta:
+            seq_len = len(context_tokens[:pos]) + 2   # ... + [backslash, 'c']
+            bslash_logit_idx = span_start + seq_len - 2   # backslash token position → predicts 'c'
+            c_logit_idx = span_start + seq_len - 1         # 'c' token position → predicts 'ite'
+            log_p_backslash = math.log(max(float(per_pos_max[pos].item()), 1e-12))
+            log_p_c = float(log_probs[bslash_logit_idx, c_tok].item())
+            log_p_ite = float(log_probs[c_logit_idx, ite_tok].item())
+            score = log_p_backslash + log_p_c + log_p_ite
+            if score > best_score:
+                best_score = score
+                best = (pos, col)
+        return best
 
     # Title generation (free, stop at '}') is inherited: _generate_title_free.
     _generate_title = _AnnotatorBase._generate_title_free

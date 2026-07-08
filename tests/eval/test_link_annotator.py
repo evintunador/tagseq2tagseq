@@ -639,6 +639,74 @@ def test_arxiv_annotate_injects_space_cite_opener():
     assert list(result.context_tokens[i:i + len(_CITE_OPENER_TOKENS_SPACE)]) == list(_CITE_OPENER_TOKENS_SPACE)
 
 
+def test_arxiv_opener_refinement_prefers_real_cite_position():
+    r"""Refinement re-ranks by P(\)·P(c|\)·P(ite|\c), so it should pick a
+    lower-P(\) position that actually continues into 'c'+'ite' over a
+    higher-P(\) position that is a non-cite backslash (e.g. \alpha)."""
+    noise_pos = 2   # very high P('\') but NOT a cite (no c/ite continuation)
+    cite_pos = 5    # lower P('\') but a real \cite (backslash→c→ite)
+    c_tok, ite_tok = _CITE_OPENER_TOKENS[1], _CITE_OPENER_TOKENS[2]
+    title_tok, close_tok = 65, _CITE_CLOSE_TOKEN
+
+    model = MagicMock()
+    model.mask_type = "cross_doc_link"
+    model.backbone.parameters.return_value = iter([nn.Parameter(torch.zeros(1))])
+    enc = MagicMock()
+    enc.encode.side_effect = lambda s, **kw: [ord(c) % 256 for c in s]
+    enc.decode.side_effect = lambda toks: "".join(chr(t % 256) for t in toks)
+    model.tokenizer = enc
+    bslash = _CITE_OPENER_TOKENS[0]
+
+    _title = [False]
+
+    def _fwd(tokens, doc_spans, mask_type=None, **kwargs):
+        T = tokens.shape[1]
+        logits = torch.zeros(1, T, VOCAB_SIZE)
+        if len(doc_spans) <= 1:
+            # Step-1 opener scan (single span): noise_pos has the highest P('\').
+            if noise_pos < T:
+                logits[0, noise_pos, bslash] = 12.0
+            if cite_pos < T:
+                logits[0, cite_pos, bslash] = 8.0
+            # Title-gen fallback for single-span title forwards.
+            if not _title[0]:
+                logits[0, -1, title_tok] = 8.0; _title[0] = True
+            else:
+                logits[0, -1, close_tok] = 10.0
+            return logits
+        # Refinement forward (K packed spans of context[:pos]+[bslash,'c']):
+        # reward c/ite continuation ONLY for the span whose prefix length == cite_pos.
+        for sp in doc_spans:
+            seq_len = sp.end - sp.start
+            prefix_len = seq_len - 2            # we appended [bslash, 'c']
+            bslash_idx = sp.end - 2             # predicts 'c'
+            c_idx = sp.end - 1                  # predicts 'ite'
+            if prefix_len == cite_pos:
+                logits[0, bslash_idx, c_tok] = 10.0
+                logits[0, c_idx, ite_tok] = 10.0
+        return logits
+
+    model.forward_inference.side_effect = _fwd
+
+    ctx = list(range(10))
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip",
+                               max_title_tokens=5, opener_refine_top_k=8)
+    result = ann.annotate(model, ctx, "cpu")
+    assert result.link_opener_pos == cite_pos, (
+        f"refinement should pick real-cite pos {cite_pos}, got {result.link_opener_pos}"
+    )
+
+
+def test_arxiv_opener_refinement_disabled_uses_raw_argmax():
+    r"""With opener_refine_top_k<=1, placement is the raw P('\') argmax (no
+    refinement forward), i.e. commit-1 behavior."""
+    model = _make_arxiv_model(backslash_hot_pos=3)
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip",
+                               max_title_tokens=5, opener_refine_top_k=1)
+    result = ann.annotate(model, [1, 2, 3, 4, 5, 6], "cpu")
+    assert result.link_opener_pos == 3
+
+
 def test_arxiv_annotate_context_longer_than_original():
     """Injection always lengthens the context."""
     model = _make_arxiv_model(backslash_hot_pos=1)
