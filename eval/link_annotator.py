@@ -631,19 +631,18 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
             decay_factor^(j - link_opener_pos). Default 0.95.
         max_title_tokens: Maximum tokens to generate autoregressively for
             the target title. Default 50.
-        link_opener_token_ids: Token IDs considered as valid link openers
-            (' [' in GPT-2). Default (685,). Bare '[' (58) is excluded from
-            the default — the space is part of the token, keeping the prefix
-            text clean before the bracket.
-            TODO(opener-coverage): we likely under-count openers. For markdown we
-            should probably scan both ' [' (685) and bare '[' (58); for arxiv both
-            '\\cite{' and ' \\cite{'. Before expanding: (a) check the GPT-2
-            tokenizer for whether each opener decomposes into smaller pieces
-            (e.g. '\\cite{' -> ' \\','cite','{') so we scan the correct token(s),
-            and (b) scan the dataset for other opener contexts worth recognising
-            (e.g. '. [', '\\n['). Selection across multiple openers is already
-            wired (annotate() picks best_opener from the [T, n_openers] tensor);
-            this is about which token IDs to feed in.
+        link_opener_token_ids: Token IDs considered as valid link openers.
+            Default (58, 685) — bare '[' and ' [' (space-bracket) in GPT-2,
+            matching MarkdownLinkDetector.link_start_token_ids. A scan of 125k+
+            real simplewiki links found ' [' (685) opens ~92% and bare '[' (58)
+            ~8% (the latter after newlines, ']', list markers, and doc starts),
+            so together they cover ~97% of real links. Both are clean single
+            tokens, so annotate()'s [T, n_openers] scan-and-inject handles them
+            unchanged. The remaining ~3% open with merged-punctuation tokens
+            (' ([' 29565, ' "[' 12878, ...) that are deliberately NOT included:
+            they'd add <2% coverage and, since annotate() *inserts* best_opener
+            as a literal token, injecting e.g. ' ([' would splice malformed
+            markdown (' ([display](Title)') into the prompt.
         link_mid_token_id: Token ID for the '](' bigram. Default 16151.
         eos_token_id: EOS token ID. Default 50256 (GPT-2).
 
@@ -659,7 +658,7 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
         max_display_tokens: int = 100,
         decay_factor: float = 0.95,
         max_title_tokens: int = 50,
-        link_opener_token_ids: Tuple[int, ...] = (685,),
+        link_opener_token_ids: Tuple[int, ...] = (58, 685),
         link_mid_token_id: int = 16151,
         eos_token_id: int = 50256,
         show_beam_candidates: bool = False,
@@ -730,9 +729,9 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
         opener_ids = list(self.link_opener_token_ids)
         best_opener = opener_ids[int(opener_probs[link_opener_pos].argmax().item())]
 
-        # ── Step 2: insert ' [', forward pass 2, pick '](' position ──────
-        # best_opener is always ' [' (685) — the space is part of the token,
-        # so prefix_text ends cleanly before the bracket.
+        # ── Step 2: insert the chosen opener, forward pass 2, pick '](' position ──
+        # best_opener is whichever configured opener token scored highest at
+        # link_opener_pos — ' [' (685, the common case) or bare '[' (58).
         toks_with_opener = (
             context_tokens[:link_opener_pos]
             + [best_opener]
@@ -904,6 +903,27 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
 # \cite{ tokenizes as [59, 66, 578, 90] → ['\\', 'c', 'ite', '{']
 _CITE_OPENER_TOKENS: Tuple[int, ...] = (59, 66, 578, 90)
 _CITE_CLOSE_TOKEN: int = 92   # '}'
+
+# TODO(arxiv-opener-coverage): _opener_probs currently scans P(token 59, '\\')
+# to place the citation, but a scan of 7k+ real arxiv cites shows this is wrong
+# on two counts:
+#   1. Wrong dominant token: ~77% of real \cite occurrences begin with token
+#      3467 (' \\', space+backslash), NOT bare '\\' (59). So the current scan
+#      targets the ~23% minority form.
+#   2. Noisy signal: '\\' (59) is ~2.5% of ALL arxiv tokens (it prefixes every
+#      LaTeX macro: \alpha, \ref, \frac, ...). P('\\') at a position is a poor
+#      proxy for "wants a citation" (~0.06% precision).
+# Correct opener sequences: '\\cite{' = (59,66,578,90); ' \\cite{' =
+# (3467,66,578,90). Since annotate() *injects* the opener, we must inject the
+# WHOLE (' \\'/'\\')+c+ite+{ sequence matching whichever backslash-first-token
+# scored highest — not just the c+ite bigram. A higher-precision position
+# signal is the 'ite' (578) / c+ite (66,578) bigram (~800x better SNR), but
+# scoring a two-token-ahead signal means a second forward pass per candidate
+# position — UNLESS we exploit the model's multi-token-prediction (MTP) head to
+# read P(c) and P(ite) from a single forward. Resolve the MTP angle before
+# implementing. (\citep/\citet are absent from this corpus — the unarXive
+# extractor normalises all citations to bare \cite{ — so no variant handling
+# needed unless pointed at raw LaTeX.)
 
 
 class ArxivPromptAnnotator(_AnnotatorBase):
