@@ -407,7 +407,12 @@ class _AnnotatorBase:
     # --- link-opener scan (shared) ---
 
     def _opener_probs(self, model, context_tokens: List[int], device: str) -> torch.Tensor:
-        """Return P(link opener) at each position, shape [T]. Subclass hook."""
+        """Return P(link opener) per position per opener token, shape [T, n_openers].
+
+        The trailing opener dimension lets annotate() pick both the best position
+        and the best opener token at that position from a single forward pass —
+        do NOT collapse it here. Subclass hook.
+        """
         raise NotImplementedError
 
     def scan_prob(self, model, context_tokens: List[int], device: str = "cuda") -> float:
@@ -418,7 +423,7 @@ class _AnnotatorBase:
         """
         if not context_tokens:
             return 0.0
-        probs = self._opener_probs(model, context_tokens, device)
+        probs = self._opener_probs(model, context_tokens, device)   # [T, n_openers]
         return float(probs.max().item())
 
     # --- title generation (shared free-generation core) ---
@@ -630,6 +635,15 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
             (' [' in GPT-2). Default (685,). Bare '[' (58) is excluded from
             the default — the space is part of the token, keeping the prefix
             text clean before the bracket.
+            TODO(opener-coverage): we likely under-count openers. For markdown we
+            should probably scan both ' [' (685) and bare '[' (58); for arxiv both
+            '\\cite{' and ' \\cite{'. Before expanding: (a) check the GPT-2
+            tokenizer for whether each opener decomposes into smaller pieces
+            (e.g. '\\cite{' -> ' \\','cite','{') so we scan the correct token(s),
+            and (b) scan the dataset for other opener contexts worth recognising
+            (e.g. '. [', '\\n['). Selection across multiple openers is already
+            wired (annotate() picks best_opener from the [T, n_openers] tensor);
+            this is about which token IDs to feed in.
         link_mid_token_id: Token ID for the '](' bigram. Default 16151.
         eos_token_id: EOS token ID. Default 50256 (GPT-2).
 
@@ -701,19 +715,20 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
                 link_fired=False,
             )
 
-        # ── Step 1: forward pass 1, pick link opener position ──────────
-        opener_probs = self._opener_probs(model, context_tokens, device)
-        link_opener_prob = float(opener_probs.max().item())
-        link_opener_pos = int(opener_probs.argmax().item())
-
-        # Which opener token was preferred at that position?
-        tok_tensor = torch.tensor(context_tokens, dtype=torch.long, device=device)
-        full_logits = self._run_fwd(model, tok_tensor, device)   # [T, V]
-        probs_at_pos = F.softmax(full_logits[link_opener_pos].float(), dim=-1)
-        best_opener = max(
-            self.link_opener_token_ids,
-            key=lambda t: probs_at_pos[t].item(),
-        )
+        # ── Step 1: forward pass 1, pick link opener position + token ──────
+        # _opener_probs returns [T, n_openers] — the per-position probability of
+        # each configured opener token. From this single forward we get both the
+        # best position (argmax over the per-position maxima) and the best opener
+        # token at that position (argmax over openers). This used to re-run
+        # _run_fwd on the *identical* context_tokens purely to recover the second
+        # value, which _opener_probs had already computed and then collapsed away
+        # with a max(dim=-1). That second forward was pure waste and is gone.
+        opener_probs = self._opener_probs(model, context_tokens, device)  # [T, n_openers]
+        per_pos_max = opener_probs.max(dim=-1).values                      # [T]
+        link_opener_prob = float(per_pos_max.max().item())
+        link_opener_pos = int(per_pos_max.argmax().item())
+        opener_ids = list(self.link_opener_token_ids)
+        best_opener = opener_ids[int(opener_probs[link_opener_pos].argmax().item())]
 
         # ── Step 2: insert ' [', forward pass 2, pick '](' position ──────
         # best_opener is always ' [' (685) — the space is part of the token,
@@ -826,13 +841,17 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
         context_tokens: List[int],
         device: str,
     ) -> torch.Tensor:
-        """Run forward pass 1; return max P(opener) at each position. Shape [T]."""
+        """Run forward pass 1; return P(opener) per position per opener. Shape [T, n_openers].
+
+        The opener dimension is preserved (not reduced with max) so annotate() can
+        recover the best opener token at the chosen position without a second
+        forward pass. scan_prob reduces it to a scalar itself.
+        """
         tok_tensor = torch.tensor(context_tokens, dtype=torch.long, device=device)
         logits = self._run_fwd(model, tok_tensor, device)    # [T, V]
         probs = F.softmax(logits.float(), dim=-1)            # [T, V]
         opener_ids = list(self.link_opener_token_ids)
-        opener_probs = probs[:, opener_ids]                   # [T, n_openers]
-        return opener_probs.max(dim=-1).values                # [T]
+        return probs[:, opener_ids]                           # [T, n_openers]
 
     def _generate_title(
         self,
@@ -970,9 +989,10 @@ class ArxivPromptAnnotator(_AnnotatorBase):
             )
 
         # ── Step 1: find best '\' position ──────────────────────────────
-        backslash_probs = self._opener_probs(model, context_tokens, device)
-        link_opener_prob = float(backslash_probs.max().item())
-        link_opener_pos = int(backslash_probs.argmax().item())
+        backslash_probs = self._opener_probs(model, context_tokens, device)  # [T, 1]
+        per_pos_max = backslash_probs.max(dim=-1).values                      # [T]
+        link_opener_prob = float(per_pos_max.max().item())
+        link_opener_pos = int(per_pos_max.argmax().item())
 
         # ── Step 2: build title-generation prefix ────────────────────────
         # Inject the full \cite{ opener (4 tokens) at link_opener_pos.
@@ -1020,11 +1040,15 @@ class ArxivPromptAnnotator(_AnnotatorBase):
         context_tokens: List[int],
         device: str,
     ) -> torch.Tensor:
-        """Forward pass; return P('\\') (first token of \\cite{) at each position. Shape [T]."""
+        """Forward pass; return P('\\') (first token of \\cite{) per position. Shape [T, 1].
+
+        Single opener token, but the trailing dim matches the base [T, n_openers]
+        contract so scan_prob / annotate() reduce uniformly across annotators.
+        """
         tok_tensor = torch.tensor(context_tokens, dtype=torch.long, device=device)
         logits = self._run_fwd(model, tok_tensor, device)   # [T, V]
         probs = F.softmax(logits.float(), dim=-1)            # [T, V]
-        return probs[:, _CITE_OPENER_TOKENS[0]]              # [T] — P('\')
+        return probs[:, [_CITE_OPENER_TOKENS[0]]]            # [T, 1] — P('\')
 
     # Title generation (free, stop at '}') is inherited: _generate_title_free.
     _generate_title = _AnnotatorBase._generate_title_free
