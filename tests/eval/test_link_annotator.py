@@ -13,12 +13,12 @@ from unittest.mock import MagicMock, patch
 
 from eval.link_annotator import (
     AnnotatedPrompt, MarkdownPromptAnnotator, ArxivPromptAnnotator, PromptAnnotator,
-    _CITE_OPENER_TOKENS, _CITE_CLOSE_TOKEN,
+    _CITE_OPENER_TOKENS, _CITE_OPENER_TOKENS_SPACE, _CITE_CLOSE_TOKEN,
 )
 
 VOCAB_SIZE = 17000  # must cover GPT-2 token IDs up to 16151 ('](')
-# Must also cover \cite{ tokens: max is 578 ('ite'); GPT-2 '}' = 92
-assert VOCAB_SIZE > max(_CITE_OPENER_TOKENS)
+# Must also cover \cite{ tokens: max is 3467 (' \' first token of ' \cite{')
+assert VOCAB_SIZE > max(*_CITE_OPENER_TOKENS, *_CITE_OPENER_TOKENS_SPACE)
 
 
 # ─── Mock model helpers ──────────────────────────────────────────────────────
@@ -552,10 +552,12 @@ def _make_arxiv_model(
     backslash_hot_pos: int = 4,
     title_tok: int = 65,   # 'A'
     close_brace_tok: int = _CITE_CLOSE_TOKEN,   # '}'
+    opener_first_tok: int = _CITE_OPENER_TOKENS[0],   # which backslash token spikes ('\' 59 vs ' \' 3467)
 ):
     r"""Mock model for ArxivPromptAnnotator.
 
-    - backslash_hot_pos: position with high P('\\') (first \cite{ opener token)
+    - backslash_hot_pos: position with high P(opener_first_tok)
+    - opener_first_tok: which \cite{ opener first token to spike (59 '\' or 3467 ' \')
     - title_tok: token emitted during title generation
     - close_brace_tok: emitted one step after title_tok to stop generation
     """
@@ -573,9 +575,9 @@ def _make_arxiv_model(
     def _fwd(tokens, doc_spans, mask_type=None, **kwargs):
         T = tokens.shape[1]
         logits = torch.zeros(1, T, VOCAB_SIZE)
-        # High P('\\') at backslash_hot_pos
+        # High P(opener) at backslash_hot_pos
         if backslash_hot_pos < T:
-            logits[0, backslash_hot_pos, _CITE_OPENER_TOKENS[0]] = 10.0
+            logits[0, backslash_hot_pos, opener_first_tok] = 10.0
         # Title generation: emit title_tok once, then close_brace_tok
         if not _title_generated[0]:
             logits[0, -1, title_tok] = 8.0
@@ -624,6 +626,17 @@ def test_arxiv_annotate_injects_cite_opener():
     # The opener tokens (\cite{) should appear at link_opener_pos
     i = result.link_opener_pos
     assert list(result.context_tokens[i:i + len(_CITE_OPENER_TOKENS)]) == list(_CITE_OPENER_TOKENS)
+
+
+def test_arxiv_annotate_injects_space_cite_opener():
+    r"""When the space-backslash form (' \' 3467) scores highest, the injected
+    opener must be ' \cite{' (3467,66,578,90), not the bare '\cite{' form."""
+    model = _make_arxiv_model(backslash_hot_pos=2, opener_first_tok=_CITE_OPENER_TOKENS_SPACE[0])
+    ann = ArxivPromptAnnotator(link_retrieval_mode="link_but_skip", max_title_tokens=5)
+    ctx = [10, 20, 30, 40, 50]
+    result = ann.annotate(model, ctx, "cpu")
+    i = result.link_opener_pos
+    assert list(result.context_tokens[i:i + len(_CITE_OPENER_TOKENS_SPACE)]) == list(_CITE_OPENER_TOKENS_SPACE)
 
 
 def test_arxiv_annotate_context_longer_than_original():

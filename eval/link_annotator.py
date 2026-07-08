@@ -900,8 +900,19 @@ class MarkdownPromptAnnotator(_AnnotatorBase):
 # ---------------------------------------------------------------------------
 
 # GPT-2 token IDs for the LaTeX \cite{ opener sequence and } closer.
-# \cite{ tokenizes as [59, 66, 578, 90] → ['\\', 'c', 'ite', '{']
-_CITE_OPENER_TOKENS: Tuple[int, ...] = (59, 66, 578, 90)
+# Two forms, keyed by the leading backslash token:
+#   '\cite{'  = (59, 66, 578, 90)   → ['\\', 'c', 'ite', '{']  (line-start form)
+#   ' \cite{' = (3467, 66, 578, 90) → [' \\', 'c', 'ite', '{']  (in-prose form, ~77%)
+# A scan of 7k+ real arxiv cites found token 3467 (' \\') opens ~77% and bare
+# '\\' (59) ~23%. annotate() scans BOTH first-tokens and injects the full
+# sequence matching whichever scored highest at the chosen position.
+_CITE_OPENER_TOKENS: Tuple[int, ...] = (59, 66, 578, 90)          # '\cite{'
+_CITE_OPENER_TOKENS_SPACE: Tuple[int, ...] = (3467, 66, 578, 90)  # ' \cite{'
+# first backslash token -> full inject sequence
+_CITE_OPENER_BY_FIRST_TOKEN: Dict[int, Tuple[int, ...]] = {
+    59: _CITE_OPENER_TOKENS,
+    3467: _CITE_OPENER_TOKENS_SPACE,
+}
 _CITE_CLOSE_TOKEN: int = 92   # '}'
 
 # TODO(arxiv-opener-coverage): _opener_probs currently scans P(token 59, '\\')
@@ -1028,16 +1039,23 @@ class ArxivPromptAnnotator(_AnnotatorBase):
                 link_fired=False,
             )
 
-        # ── Step 1: find best '\' position ──────────────────────────────
-        backslash_probs = self._opener_probs(model, context_tokens, device)  # [T, 1]
-        per_pos_max = backslash_probs.max(dim=-1).values                      # [T]
+        # ── Step 1: find best opener position AND which backslash form ─────
+        # _opener_probs returns [T, n_openers] over self._opener_first_tokens
+        # (bare '\' 59 and space '\' 3467). From one forward we pick both the
+        # position (argmax over per-position maxima) and which backslash token
+        # the model preferred there, so we inject '\cite{' vs ' \cite{' to match.
+        opener_probs = self._opener_probs(model, context_tokens, device)  # [T, n_openers]
+        per_pos_max = opener_probs.max(dim=-1).values                     # [T]
         link_opener_prob = float(per_pos_max.max().item())
         link_opener_pos = int(per_pos_max.argmax().item())
+        best_first = self._opener_first_tokens[
+            int(opener_probs[link_opener_pos].argmax().item())
+        ]
 
         # ── Step 2: build title-generation prefix ────────────────────────
-        # Inject the full \cite{ opener (4 tokens) at link_opener_pos.
-        # link_mid_pos points to the '{' token (last opener token).
-        cite_opener = list(_CITE_OPENER_TOKENS)
+        # Inject the full \cite{ opener sequence matching the chosen backslash
+        # form at link_opener_pos. link_mid_pos points to the '{' (last token).
+        cite_opener = list(_CITE_OPENER_BY_FIRST_TOKEN[best_first])
         title_prefix = list(context_tokens[:link_opener_pos]) + cite_opener
         link_mid_pos = link_opener_pos + len(cite_opener) - 1   # position of '{'
 
@@ -1074,21 +1092,26 @@ class ArxivPromptAnnotator(_AnnotatorBase):
     # Private helpers
     # ------------------------------------------------------------------
 
+    # First tokens of the two \cite{ opener forms, in a fixed order that
+    # _opener_probs and annotate() share so the argmax index maps back correctly.
+    _opener_first_tokens: Tuple[int, ...] = (59, 3467)   # '\', ' \'
+
     def _opener_probs(
         self,
         model,
         context_tokens: List[int],
         device: str,
     ) -> torch.Tensor:
-        """Forward pass; return P('\\') (first token of \\cite{) per position. Shape [T, 1].
+        """Forward pass; return P(opener first token) per position. Shape [T, n_openers].
 
-        Single opener token, but the trailing dim matches the base [T, n_openers]
-        contract so scan_prob / annotate() reduce uniformly across annotators.
+        Scans both backslash forms — bare '\\' (59) and space '\\' (3467) — since
+        ~77% of real arxiv cites open with the space form. annotate() picks the
+        best (position, form) from this one forward; scan_prob reduces to a scalar.
         """
         tok_tensor = torch.tensor(context_tokens, dtype=torch.long, device=device)
         logits = self._run_fwd(model, tok_tensor, device)   # [T, V]
         probs = F.softmax(logits.float(), dim=-1)            # [T, V]
-        return probs[:, [_CITE_OPENER_TOKENS[0]]]            # [T, 1] — P('\')
+        return probs[:, list(self._opener_first_tokens)]     # [T, n_openers]
 
     # Title generation (free, stop at '}') is inherited: _generate_title_free.
     _generate_title = _AnnotatorBase._generate_title_free
