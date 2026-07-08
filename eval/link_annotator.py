@@ -916,14 +916,34 @@ _CITE_CLOSE_TOKEN: int = 92   # '}'
 # Correct opener sequences: '\\cite{' = (59,66,578,90); ' \\cite{' =
 # (3467,66,578,90). Since annotate() *injects* the opener, we must inject the
 # WHOLE (' \\'/'\\')+c+ite+{ sequence matching whichever backslash-first-token
-# scored highest — not just the c+ite bigram. A higher-precision position
-# signal is the 'ite' (578) / c+ite (66,578) bigram (~800x better SNR), but
-# scoring a two-token-ahead signal means a second forward pass per candidate
-# position — UNLESS we exploit the model's multi-token-prediction (MTP) head to
-# read P(c) and P(ite) from a single forward. Resolve the MTP angle before
-# implementing. (\citep/\citet are absent from this corpus — the unarXive
-# extractor normalises all citations to bare \cite{ — so no variant handling
-# needed unless pointed at raw LaTeX.)
+# scored highest — not just the c+ite bigram.
+#
+# PLANNED FIX (option B, multi-forward refinement): the high-precision signal is
+# the c+ite (66,578) bigram (~800x better SNR than bare '\\'), but reading a
+# 2-tokens-ahead signal needs additional forward passes. To bound cost: take the
+# top-K positions by the cheap one-forward P('\\'/' \\') signal, then teacher-force
+# the KNOWN fixed sequence '\\','c','ite' and read P at each step. This is LINEAR,
+# not combinatorial — the opener is a fixed token sequence, so each refinement
+# step has exactly one continuation to score (no branching/fan-out). Cost is a
+# constant ~1 + (refinement_depth * K) forwards, batchable if forward_inference
+# supports B>1. Acceptable multi-forward ugliness for a research repo; a from-
+# scratch trainer would instead use a custom tokenizer where each link opener is
+# a single token and this problem vanishes.
+#
+# Why NOT the MTP shortcut: this model's MTP reuses the single lm_head as a
+# training-only auxiliary loss and is skipped at eval (see training_module.py) —
+# there is no persistent +2/+3 head to query at inference, so P('ite') at
+# position t cannot be read from one forward. NOTE for future work: a model
+# trained with *traditional multi-head MTP* (separate persistent heads per
+# offset) COULD read P(c),P(ite) from a single forward and get the high-precision
+# signal for free — worth exploiting if such a checkpoint exists.
+# (mtp_decay_steps: 0 in the configs is correct, not a bug — main.py maps it to
+# mtp_decay_micro_steps=0, and training_module.py only decays when that is > 0,
+# so 0 means constant MTP weights [0.5, 0.25] throughout training.)
+#
+# (\citep/\citet are absent from this corpus — the unarXive extractor normalises
+# all citations to bare \cite{ — so no variant handling needed unless pointed at
+# raw LaTeX.)
 
 
 class ArxivPromptAnnotator(_AnnotatorBase):
