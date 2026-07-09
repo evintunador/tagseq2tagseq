@@ -35,15 +35,15 @@ def _eval_loss(model: nn.Module, loader) -> float:
     if was_training:
         model.train()
 
-    local_loss = total / max(count, 1)
-
     if dist.is_available() and dist.is_initialized():
+        # Reduce summed loss and count, then divide once: (Σ total) / (Σ count).
+        # Reducing per-rank means would give mean/val_steps (deflation bug).
         device = next(model.parameters()).device if list(model.parameters()) else torch.device("cuda")
-        t = torch.tensor([local_loss, float(count)], dtype=torch.float64, device=device)
+        t = torch.tensor([total, float(count)], dtype=torch.float64, device=device)
         dist.all_reduce(t, op=dist.ReduceOp.SUM)
         return t[0].item() / max(t[1].item(), 1.0)
 
-    return local_loss
+    return total / max(count, 1)
 
 
 def run_training(
