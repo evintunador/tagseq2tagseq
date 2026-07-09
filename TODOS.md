@@ -149,18 +149,31 @@ bottleneck.
 
 ## Eval
 
-### `annotated` (link-injection) eval is far too slow (TODO)
-The `annotated` condition (inject `[text](Title)` links into benchmark prompts,
-then let cross-doc attention pull the linked corpus doc) takes ~1s+/item just to
-annotate — one benchmark at n≈10k ran ~57 min and didn't finish; a killed job at
-n=2000 still took ~30 min. Bottleneck is the per-prompt corpus title lookup in
-`eval/link_annotator.py` (`HashNormTitleIndex` / `MarkdownPromptAnnotator`) over
-the full merged corpus (9.6M nodes): each prompt does string-normalization +
-fuzzy matching (exact→norm→word_overlap→edit_distance) against all raw
-identifiers. Options: precompute/persist the title index once (not per doc),
-vectorize/batch the annotation phase, cap corpus size, or memoize matches.
-Until fixed, run `annotated` at small `--max-docs` (≤2000) and expect it to be
-the long pole of any eval sweep.
+### `annotated` (link-injection) eval speed — PARTIALLY DONE, remaining levers
+The `annotated` condition (inject `[text](Title)` / `\cite{Title}` links into
+benchmark prompts, then let cross-doc attention pull the linked corpus doc) was
+~1s+/item. Two fixes landed (2026-07, commits da0f530..bbd1eac):
+- **C (done):** dropped `edit_distance` from `annotator_strategies` in all configs.
+  It did an O(9.6M) rapidfuzz scan per prompt (~338ms → ~5ms/lookup, 71×). Only
+  typo-recall lost (91%→4% on synthetic typos; a trained model rarely emits those).
+  Still available in code + `link_fuzzy_strategies` (generation-time, per-link).
+- **B (done):** removed a redundant forward pass in `MarkdownPromptAnnotator.annotate`.
+
+**REMAINING (the dominant cost is now autoregressive title generation, ~60
+sequential forwards/item on arxiv, no KV cache — NOT the lookup anymore):**
+- **A — batch the Step-1 opener scan forwards** across benchmark items. Modest
+  win (~5–10%); the scan is a small slice of total forwards.
+- **D — bound/​batch title generation** (the real remaining cost): lower
+  `max_title_tokens` (50/60 is generous; real titles are short) and/or batch the
+  autoregressive title gen. `forward_inference` is hardwired to B=1 (assert in
+  attention.py); the batching pattern to mirror is `eval/scoring.py`
+  `score_completions_batched` (packs K seqs into one `[1, total_T]` doc_causal
+  forward). Biggest remaining speedup but most invasive.
+
+**NOT YET VERIFIED end-to-end:** the C+B wins were measured component-level
+(lookup latency, forward counts) but a full `annotated` benchmark at realistic
+`n` was never re-run to confirm wall-clock actually dropped as projected. Do this
+before assuming the "annotated eval is slow" problem is closed.
 
 ### Integrate easy LLM benchmarks
 Wire in easy LLM benchmarks — likely specific sub-tasks from larger suites (e.g.
@@ -177,13 +190,21 @@ claim of the system but is untested. Candidates:
 Before implementing: check dataset availability on cluster and leakage vs. training
 data (Wikipedia models).
 
-### Better cross-doc benchmark for Stack models (future / low priority)
+### Synthetic intra-repo cross-doc benchmark for Stack models (designed 2026-07)
 RepoBench cross-doc shows only ~0.4% NLL improvement at early training — good
-signal but small headline number. Candidates:
-- CodeSearchNet with cross-file call graphs.
-- Synthetic benchmark from The Stack: take a file that imports another, score the
-  imported function's body under both conditions. No labelling needed, directly
-  tests our training setup.
+signal but small headline number. **The feasible path for code is a synthetic
+intra-repo benchmark, NOT a link annotator** (link *injection* is the wrong
+abstraction for code: an `import` can't be spliced mid-snippet the way
+`[text](Title)` can, and it must be positional + semantically used). Design:
+take file B that imports file A, score B's tokens (specifically the spans that
+*use* A's symbols) under two conditions — (1) B alone (doc_causal), (2) A
+provided as a cross-doc aux (the real import edge). NLL delta measures whether
+the model exploits the dependency. No annotator, no injection, no labelling —
+the edge already exists in the repo graph; you present or withhold the real
+neighbor. Reuses `score_completion_with_context_docs` (already used by the
+annotated path) but skips all `annotate()` machinery. Depends on a single-repo
+corpus so identifiers match (see `data/make_repo_corpus.py`). Alt candidate:
+CodeSearchNet with cross-file call graphs.
 
 ### Better cross-doc benchmark for multi-language Stack models (future)
 Once TheStack is expanded to all languages, extend the synthetic intra-repo benchmark
@@ -200,3 +221,38 @@ Score benchmark items with bare prompt vs. link-annotated prompt and report delt
 - `prefix_commit` strategy in `HashNormTitleIndex` — find corpus titles sharing the
   longest common word-level prefix with target_str. Covers early-halt and overshoot.
   Both described in `eval/title_index.py` module docstring.
+
+### Validate arxiv c+ite opener refinement on a real checkpoint (2026-07)
+`ArxivPromptAnnotator._refine_opener_position` (commit bbd1eac) re-ranks the
+top-K opener positions by `P(\)·P(c|\)·P(ite|\c)` to avoid placing citations at
+noise backslashes (`\alpha`, `\ref`, ...). It's implemented + unit-tested, but
+its placement *quality* is UNVALIDATED: measured on the 6L/512D smoke-test arxiv
+checkpoint it changes the chosen position in 63% of prompts, but that checkpoint
+is too undertrained to have real `\cite`-in-context behavior (P(c|\)≈0 at every
+position), so it's re-ranking noise. Re-measure `P(c|backslash)@chosen-pos` (raw
+argmax vs refined) once a properly-trained arxiv checkpoint exists; if it doesn't
+improve, reconsider or set `opener_refine_top_k<=1` (raw-argmax, one fewer fwd).
+
+### Annotator factory + generalization (raised 2026-07, not done)
+The `annotated` eval pipeline covers **markdown + arxiv only**. Dispatch is a
+hardcoded isinstance ladder in `eval_checkpoints.py` (~L614: `_is_annotatable =
+_is_markdown or _is_arxiv`); Python/Null models silently skip the condition.
+There is no `make_annotator(detector)` factory mirroring `make_link_detector`,
+and `annotate()` is duplicated per subclass. Cleanup: add a `make_annotator`
+factory + a no-op `NullPromptAnnotator`, replacing the isinstance ladder. NOTE: a
+Python *annotator* is likely the wrong goal (see the synthetic intra-repo code
+benchmark under the cross-doc-benchmark item) — this is purely about cleaning up
+dispatch for the two text annotators that exist.
+
+### Opener token coverage — remaining sub-items (2026-07)
+Shipped: markdown scans `{58, 685}`, arxiv scans `{59, 3467}` (both backslash
+forms). See the TODO comment by `_CITE_OPENER_TOKENS` in `eval/link_annotator.py`.
+Still open:
+- **Traditional multi-head MTP shortcut:** this model's MTP is a training-only
+  shared-`lm_head` aux loss (skipped at eval), so the high-precision c+ite signal
+  needs an extra forward. A model trained with *separate persistent MTP heads*
+  per offset could read P(c),P(ite) from ONE forward — exploit if such a
+  checkpoint is ever trained.
+- **Markdown merged-punctuation openers** (` ([` 29565, ` "[` 12878, ...) are
+  deliberately excluded (<2% coverage; injecting them splices malformed markdown).
+  Would need generalized splice logic to include as scan-but-not-inject targets.
