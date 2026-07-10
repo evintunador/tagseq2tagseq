@@ -355,3 +355,74 @@ class TestBucketStateCheckpointPersistence:
             assert set(packs_first5).isdisjoint(set(packs_next5)), (
                 f"resume replayed already-consumed packs:\n  first5={packs_first5}\n  next5={packs_next5}"
             )
+
+
+class _EpochSpyLayout:
+    """Layout stand-in that records every epoch it is advanced to."""
+    def __init__(self):
+        self.epochs_seen = []
+    def set_epoch(self, epoch_idx): self.epochs_seen.append(epoch_idx)
+    def prefix_length(self, info): return 0
+    def suffix_length(self, info): return 0
+    def prefix_tokens(self, info): return []
+    def suffix_tokens(self, info): return []
+
+
+class TestPerPackLayout:
+    """Per-pack layout resolution for mixed-source epochs (layout_name field)."""
+
+    def test_layout_name_round_trips_through_parquet(self):
+        rec = PackRecord(
+            pack_id=0, doc_ids=[0, 1], effective_lens=[8, 8],
+            truncated_flags=[False, False], trim_sides=["tail", "tail"],
+            link_end_positions=[], link_target_doc_ids=[],
+            layout_name="stochastic_latex_comment_prefix",
+        )
+        from data.epoch_precompute import _table_to_records
+        back = _table_to_records(_records_to_table([rec]))[0]
+        assert back.layout_name == "stochastic_latex_comment_prefix"
+
+    def test_missing_layout_name_column_defaults_empty(self):
+        # A parquet written before the column existed lacks 'layout_name'.
+        rec = PackRecord(
+            pack_id=0, doc_ids=[0], effective_lens=[8], truncated_flags=[False],
+            trim_sides=["tail"], link_end_positions=[], link_target_doc_ids=[],
+        )
+        table = _records_to_table([rec]).drop(["layout_name"])
+        from data.epoch_precompute import _table_to_records
+        assert _table_to_records(table)[0].layout_name == ""
+
+    def test_get_layout_empty_name_returns_default(self):
+        default = _EpochSpyLayout()
+        ds = BucketedPackDataset(
+            epoch_dirs=[], graph=_MockGraph(), backend=_MockBackend(),
+            layout=default, rank=0, world_size=1,
+        )
+        assert ds._get_layout("") is default
+
+    def test_get_layout_builds_and_caches_named_policy(self):
+        default = _EpochSpyLayout()
+        ds = BucketedPackDataset(
+            epoch_dirs=[], graph=_MockGraph(), backend=_MockBackend(),
+            layout=default, rank=0, world_size=1,
+            encode_fn=lambda s: [ord(c) for c in s],
+        )
+        first = ds._get_layout("identifier_prefix_eos")
+        second = ds._get_layout("identifier_prefix_eos")
+        assert first is second                       # cached, built once
+        assert ds._get_layout("") is default         # empty still falls back
+
+    def test_set_epoch_fans_out_to_all_cached_layouts(self):
+        default = _EpochSpyLayout()
+        ds = BucketedPackDataset(
+            epoch_dirs=[], graph=_MockGraph(), backend=_MockBackend(),
+            layout=default, rank=0, world_size=1,
+        )
+        extra = _EpochSpyLayout()
+        ds._layout_cache["extra"] = extra
+        ds._set_epoch_all(3)
+        # Both the default (advanced at construction to 0, then 3) and the extra
+        # cached layout must see epoch 3 — a named layout's stochastic coin must
+        # not freeze while the default advances.
+        assert default.epochs_seen[-1] == 3
+        assert extra.epochs_seen[-1] == 3

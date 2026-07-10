@@ -15,6 +15,11 @@ Key design decisions
   and avoids stale ``get_state()`` from a subprocess.
 * Epoch tail uses drop_last semantics: if fewer than world_size packs remain
   in all non-empty buckets, the epoch ends.
+* Per-pack layout: a pack may name the DocLayoutPolicy it was budgeted under
+  (``PackRecord.layout_name``); ``_materialize`` resolves each name through a
+  cache so one dataset can serve a mixed corpus whose sources use different
+  layouts (e.g. arxiv's latex-comment card vs wiki's identifier card). An empty
+  name falls back to the ``layout`` passed at construction (single-source epochs).
 """
 
 import collections
@@ -30,7 +35,7 @@ from torch.utils.data import IterableDataset
 from data.collate import build_packed_batch
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.epoch_precompute import PackRecord, _record_to_placements, _table_to_records
-from data.layout import DocLayoutPolicy
+from data.layout import DocLayoutPolicy, make_layout_policy
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +86,7 @@ class BucketedPackDataset(IterableDataset):
         rank: int,
         world_size: int,
         start_state: Optional[BucketState] = None,
+        encode_fn=None,
     ) -> None:
         super().__init__()
         self.epoch_dirs = epoch_dirs
@@ -89,6 +95,16 @@ class BucketedPackDataset(IterableDataset):
         self.layout = layout
         self.rank = rank
         self.world_size = world_size
+
+        # Per-pack layout support (mixed-source corpora): packs may carry a
+        # layout_name naming the DocLayoutPolicy they were budgeted under.
+        # _materialize resolves each name to a policy through this cache so one
+        # dataset can serve packs decorated with different layouts (e.g. arxiv's
+        # latex_comment card vs wiki's identifier card).  encode_fn is needed to
+        # build prefix layouts on demand; if not passed, derive it from the
+        # default layout (all prefix policies stash their tokeniser as ._encode).
+        self._encode_fn = encode_fn or getattr(layout, "_encode", None)
+        self._layout_cache: Dict[str, DocLayoutPolicy] = {"": layout}
 
         # State tracks position across calls to __iter__
         if start_state is not None:
@@ -100,9 +116,34 @@ class BucketedPackDataset(IterableDataset):
             self._global_accum_step = 0
             self._bucket_consumed = {}
 
-        # Signal initial epoch to stochastic layout policies.
-        if hasattr(self.layout, 'set_epoch'):
-            self.layout.set_epoch(self._epoch_idx)
+        # Signal initial epoch to every cached stochastic layout policy.
+        self._set_epoch_all(self._epoch_idx)
+
+    def _set_epoch_all(self, epoch_idx: int) -> None:
+        """Fan the epoch counter out to every cached layout policy.
+
+        The stochastic prefix layouts flip a per-(doc, epoch) coin, so each
+        cached policy — not just the default — must see the current epoch or
+        its coin would freeze at epoch 0 while others advance.
+        """
+        for pol in self._layout_cache.values():
+            if hasattr(pol, "set_epoch"):
+                pol.set_epoch(epoch_idx)
+
+    def _get_layout(self, layout_name: str) -> DocLayoutPolicy:
+        """Resolve a pack's layout_name to a policy, building+caching on first use.
+
+        Empty name → the default layout (single-source epochs). A newly built
+        policy is immediately advanced to the current epoch so its stochastic
+        coin is in sync with the rest.
+        """
+        pol = self._layout_cache.get(layout_name)
+        if pol is None:
+            pol = make_layout_policy(layout_name, encode_fn=self._encode_fn)
+            if hasattr(pol, "set_epoch"):
+                pol.set_epoch(self._epoch_idx)
+            self._layout_cache[layout_name] = pol
+        return pol
 
     # ------------------------------------------------------------------
 
@@ -172,8 +213,7 @@ class BucketedPackDataset(IterableDataset):
 
             # Epoch exhausted — advance to next
             self._epoch_idx += 1
-            if hasattr(self.layout, 'set_epoch'):
-                self.layout.set_epoch(self._epoch_idx)
+            self._set_epoch_all(self._epoch_idx)
             self._global_accum_step = 0
             self._bucket_consumed = {}
 
@@ -193,18 +233,20 @@ class BucketedPackDataset(IterableDataset):
     def _materialize(self, pack: PackRecord) -> Dict[str, Any]:
         """Reconstruct a full batch dict from a PackRecord."""
         placements = _record_to_placements(pack)
-        batch = build_packed_batch(self.graph, self.backend, self.layout, placements)
+        layout = self._get_layout(getattr(pack, "layout_name", ""))
+        batch = build_packed_batch(self.graph, self.backend, layout, placements)
         T = batch["tokens"].shape[-1]
         budget = getattr(self, '_token_budget', None)
         if budget is not None and T != budget:
             import logging as _logging
             _logging.getLogger(__name__).error(
-                "Materialized pack has T=%d, expected token_budget=%d. "
+                "Materialized pack has T=%d, expected token_budget=%d (layout=%r). "
                 "Re-run precompute_epochs.py to regenerate packs at the correct length.",
-                T, budget,
+                T, budget, getattr(pack, "layout_name", ""),
             )
             raise AssertionError(
-                f"Materialized pack has T={T}, expected token_budget={budget}. "
+                f"Materialized pack has T={T}, expected token_budget={budget} "
+                f"(layout={getattr(pack, 'layout_name', '')!r}). "
                 "Re-run precompute_epochs.py to regenerate packs at the correct length."
             )
         batch["link_to_target"] = dict(

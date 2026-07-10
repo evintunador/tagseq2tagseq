@@ -81,6 +81,11 @@ class PackRecord:
     component_ids:       List[int] = field(default_factory=list)  # connected-component id per doc
     kv_block_count:      int = -1           # filled by GPU pass
     bucket_id:           int = -1           # filled by bucketing
+    layout_name:         str = ""           # DocLayoutPolicy name this pack was
+                                            # budgeted under; "" = use the loader's
+                                            # default layout (single-source epochs).
+                                            # Set by merge_packs.py for mixed corpora
+                                            # where each source has its own layout.
 
 
 def _record_to_placements(record: PackRecord) -> List[DocPlacement]:
@@ -530,6 +535,7 @@ def _records_to_table(records: List[PackRecord]) -> pa.Table:
             pa.list_(pa.list_(pa.int32())),
         ),
         "component_ids":       pa.array([r.component_ids       for r in records], pa.list_(pa.int32())),
+        "layout_name":         pa.array([r.layout_name         for r in records], pa.string()),
     })
 
 
@@ -540,6 +546,10 @@ def _table_to_records(table: pa.Table) -> List[PackRecord]:
     # column; leave it empty so _record_to_placements falls back to per-doc
     # components (doc_concatenated degenerates to doc_causal).
     has_components = "component_ids" in cols
+    # Back-compat: parquet written before layout_name existed lacks the column;
+    # default to "" so BucketedPackDataset uses its single default layout (the
+    # correct behaviour for every single-source epoch).
+    has_layout = "layout_name" in cols
     return [
         PackRecord(
             pack_id=int(cols["pack_id"][i]),
@@ -554,6 +564,7 @@ def _table_to_records(table: pa.Table) -> List[PackRecord]:
                                  for row in cols["link_target_doc_ids"][i]],
             component_ids=([int(x) for x in cols["component_ids"][i]]
                            if has_components else []),
+            layout_name=(str(cols["layout_name"][i]) if has_layout else ""),
         )
         for i in range(n)
     ]
@@ -664,6 +675,12 @@ class EpochPrecomputer:
         for w in workers:
             w.join()
         logger.info("Workers done. Generated %d packs.", len(records))
+
+        # Stamp the layout each pack was budgeted under so any consumer (incl.
+        # a mixed-corpus BucketedPackDataset) can re-apply the correct decoration
+        # without a mismatch. Single-source runs get a uniform value; harmless.
+        for r in records:
+            r.layout_name = self.layout_policy_name
 
         # 3. GPU pass: fill kv_block_count (skip if analytical method used in workers)
         if self.use_analytical:
