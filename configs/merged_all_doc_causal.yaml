@@ -1,0 +1,108 @@
+# Merged all-links corpus — doc_causal BASELINE (FLOP/data-matched control for
+# merged_all_cross_doc.yaml). Same corpus, same precomputed packs, same per-source
+# val; the ONLY change is mask_type: doc_causal, which ignores cross-doc links
+# entirely (each doc attends causally within itself). Per-pack layout_name still
+# applies. See memory [[merged-corpus-build]].
+data:
+  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all
+  strategy: 'bfs'
+  layout_policy: 'stochastic_identifier_prefix'   # default/fallback; per-pack layout_name overrides
+  inference_layout_policy: 'identifier_prefix_eos'
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all/splits/train
+  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all/epoch_0
+  val_dirs:
+    wiki_community:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
+    wiki_random:       /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
+    stack_community:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
+    stack_random:      /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+    arxiv_community:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
+    arxiv_random:      /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
+    fineweb_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/fineweb_39b/splits/val_random
+  val_epoch_dirs:
+    wiki_community:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_val/val_community/epoch_0]
+    wiki_random:     [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_val/val_random/epoch_0]
+    stack_community: [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/stack_val/val_community/epoch_0]
+    stack_random:    [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/stack_val/val_random/epoch_0]
+    arxiv_community: [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_val/val_community/epoch_0]
+    arxiv_random:    [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_val/val_random/epoch_0]
+    fineweb_random:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/fineweb_val/val_random/epoch_0]
+
+model:
+  compile: true
+  compile_mode: 'default'
+  attention_backend: 'triton'
+  inference_attention_backend: 'flex'
+  mask_type: 'doc_causal'
+  # No link_detector / max_grants: doc_causal never resolves links.
+  activation_checkpointing: false
+  model_dim: 1024
+  num_layers: 24
+  num_heads: 8    # 8H × 128Dh = 1024
+  max_seq_len: 32768
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  untie_at_frac: 0.667
+  ignore_index: -100
+  dtype: 'bfloat16'
+  logit_softcap: 30.0
+  mtp_extra_weights: [0.5, 0.25]
+  mtp_decay_steps: 0
+  ve_layers: [1, 2, 21, 22, 23]
+  shared_ve_bank: false
+
+optimizer:
+  type: 'muon'
+  muon_wd: 1.2
+  adamw_wd: 0.005
+  momentum: 0.95
+  muon_beta2: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.001
+  adamw_lr: 0.00001
+  muon_momentum_warmup_steps: 300
+  adamw_embed_beta1: 0.5
+
+train_loop:
+  epochs: 1
+  max_optimizer_steps: null  # BucketedPackDataset terminates naturally at epoch end
+  warmup_steps: 300
+  cooldown_frac: 0.4
+  min_lr_ratio: 0.1
+  val_steps: 20
+  val_interval: 100
+  atomic_feature_kwargs:
+    norm_clip_value: 1.0
+    accum_steps: 1   # set for the real run to hit 0.5M tok/step given world_size
+
+seed: 42
+
+eval:
+  run_on_completion: true
+  benchmarks:
+    # No bare held_out/community_pack_perplexity — merged_all has no unified val
+    # split; per-source perplexity comes from the val_dirs/test_dirs split-eval
+    # loop (held_out_perplexity__wiki_random, __arxiv_random, …). See the
+    # cross_doc config for the full rationale.
+    - {name: wiki_qa,                   conditions: [doceval]}
+    - {name: hotpotqa,                  conditions: [doceval]}
+    - {name: repobench,                 conditions: [doceval]}
+    - {name: hellaswag,                 conditions: [doceval]}
+    - {name: boolq,                     conditions: [doceval]}
+    - {name: openbookqa,                conditions: [doceval]}
+  max_docs: 500
+  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
+  annotator_mode: corpus_only
+  annotator_strategies: [exact, norm, word_overlap_ordered]
+
+# --- Smoke-test overrides (pass on CLI, don't edit here) ---
+# NOTE: do NOT lower max_seq_len — packs are token_budget=32768 and
+# BucketedPackDataset asserts materialized T==32768 (RoPE also asserts at 32k).
+# Shrink the MODEL and step counts only; keep the 32k sequence length.
+# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
+# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
+# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
+# --eval.max_docs 20
