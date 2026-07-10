@@ -203,6 +203,35 @@ _MULTI_DOC_MASK_TYPES = frozenset({
     "doc_concatenated",
 })
 
+# Benchmark -> link detector it REQUIRES (Tier-1 per-benchmark inference for a
+# mixed-corpus model). A cross-doc benchmark asserts its detector type at
+# runtime (e.g. run_repobench_cross_doc requires PythonImportDetector), so on a
+# merged model — which has no single training detector — each such benchmark
+# must be evaluated with an inference model built for ITS detector. Benchmarks
+# absent from this map imply no detector (None -> eos inference layout): the
+# perplexity / single-doc suites that never resolve links. The inference layout
+# for each detector is derived via data.layout.inference_layout_for_detector.
+_BENCHMARK_LINK_DETECTOR = {
+    "repobench_cross_doc": "python",
+    "hotpotqa_cross_doc":  "markdown",
+    # Annotated NLP benchmarks inject markdown links via MarkdownPromptAnnotator.
+    "wiki_qa":             "markdown",
+    "hotpotqa":            "markdown",
+    # arxiv has no dedicated cross-doc benchmark yet; its perplexity evals run
+    # detector-free. Add arxiv-cite benchmarks here when they land.
+}
+
+
+def detector_for_benchmark(spec: dict) -> Optional[str]:
+    """Return the link-detector name a benchmark needs, or None.
+
+    ``annotated`` in a benchmark's conditions forces the markdown annotator path
+    regardless of the base benchmark, so those always need the markdown detector.
+    """
+    if "annotated" in (spec.get("conditions") or []):
+        return "markdown"
+    return _BENCHMARK_LINK_DETECTOR.get(spec.get("name"))
+
 _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
     "baseline": {
         "mask_type":               "doc_causal",

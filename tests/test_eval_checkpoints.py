@@ -435,3 +435,22 @@ def test_repobench_cross_doc_skipped_for_doc_causal_model():
         results = run_benchmarks_on_model(model, "/fake/dataset", eval_cfg=cfg, device="cpu")
     mock_fn.assert_not_called()
     assert "repobench_cross_doc/experimental" not in results
+
+
+# ─── detector_for_benchmark (Tier-1 per-benchmark inference detector) ─────────
+
+def test_detector_for_benchmark_cross_doc_benchmarks():
+    assert ec.detector_for_benchmark({"name": "repobench_cross_doc"}) == "python"
+    assert ec.detector_for_benchmark({"name": "hotpotqa_cross_doc"}) == "markdown"
+
+
+def test_detector_for_benchmark_none_for_detector_free():
+    # Perplexity / single-doc suites resolve no detector (None → eos layout).
+    assert ec.detector_for_benchmark({"name": "held_out_perplexity"}) is None
+    assert ec.detector_for_benchmark({"name": "hellaswag"}) is None
+
+
+def test_detector_for_benchmark_annotated_forces_markdown():
+    # 'annotated' routes through MarkdownPromptAnnotator regardless of base name.
+    spec = {"name": "boolq", "conditions": ["doceval", "annotated"]}
+    assert ec.detector_for_benchmark(spec) == "markdown"

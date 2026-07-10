@@ -8,6 +8,7 @@ from data.layout import (
     NullLayoutPolicy,
     StochasticLatexCommentPrefixLayoutPolicy,
     make_layout_policy,
+    inference_layout_for_detector,
     DocLayoutInfo,
     _latex_comment_card,
 )
@@ -372,3 +373,23 @@ def test_factory_latex_policies_require_encode_fn():
         make_layout_policy("latex_comment_prefix")
     with pytest.raises(ValueError, match="encode_fn"):
         make_layout_policy("stochastic_latex_comment_prefix")
+
+
+# ---------------------------------------------------------------------------
+# inference_layout_for_detector
+# ---------------------------------------------------------------------------
+
+def test_inference_layout_for_detector_known():
+    assert inference_layout_for_detector("python") == "identifier_prefix_eos"
+    assert inference_layout_for_detector("markdown") == "identifier_prefix_eos"
+    assert inference_layout_for_detector("arxiv") == "latex_comment_prefix"
+    assert inference_layout_for_detector("null") == "eos"
+
+
+def test_inference_layout_for_detector_none_is_eos():
+    assert inference_layout_for_detector(None) == "eos"
+
+
+def test_inference_layout_for_detector_unknown_raises():
+    with pytest.raises(ValueError, match="No inference layout mapping"):
+        inference_layout_for_detector("bogus")

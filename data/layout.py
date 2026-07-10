@@ -373,3 +373,40 @@ def make_layout_policy(
         "'identifier_prefix_eos', 'stochastic_identifier_prefix', "
         "'latex_comment_prefix', 'stochastic_latex_comment_prefix'."
     )
+
+
+# ---------------------------------------------------------------------------
+# Detector -> inference layout mapping
+# ---------------------------------------------------------------------------
+#
+# For a mixed-corpus model there is no single inference layout: a \cite prompt
+# must use arxiv's latex-comment card, a markdown prompt the identifier card.
+# The DETERMINISTIC inference-time layout is a clean function of the link
+# detector, so eval can pick the correct layout per benchmark from the detector
+# the benchmark implies (Tier-1 per-benchmark inference).  These pin the
+# DETERMINISTIC variants (the stochastic coin is a training-only device); they
+# mirror the inference_layout_policy fields in the per-source configs.
+_DETECTOR_INFERENCE_LAYOUT = {
+    "python":   "identifier_prefix_eos",
+    "markdown": "identifier_prefix_eos",
+    "arxiv":    "latex_comment_prefix",
+    "null":     "eos",
+}
+
+
+def inference_layout_for_detector(detector_name: Optional[str]) -> str:
+    """Return the deterministic inference layout name for a link detector.
+
+    ``None`` (no detector, e.g. doc_causal / edgeless) maps to ``"eos"``.
+    Raises on an unknown detector so a new detector can't silently fall back to
+    a wrong layout.
+    """
+    if detector_name is None:
+        return "eos"
+    try:
+        return _DETECTOR_INFERENCE_LAYOUT[detector_name]
+    except KeyError as exc:
+        raise ValueError(
+            f"No inference layout mapping for link detector {detector_name!r}. "
+            f"Known: {sorted(_DETECTOR_INFERENCE_LAYOUT)}."
+        ) from exc

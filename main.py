@@ -42,7 +42,7 @@ from model.graph_traversal.arxiv_cite_detector import ArxivCiteDetector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
 from data.bucketed_pack_dataset import BucketedPackDataset, BucketState
-from data.layout import make_layout_policy
+from data.layout import make_layout_policy, inference_layout_for_detector
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
     BFSStrategy,
@@ -1088,15 +1088,45 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # Both use a fresh inference model with attention_backend='flex' + torch.compile
     # so they run fast regardless of the training attention backend.
     # -------------------------------------------------------------------------
-    if dist.is_main_process:
-        training_module_unwrapped = model.module if dist.is_distributed else model
-        _flex_inference_model = _build_inference_model(
+    # Tier-1 per-benchmark inference: a merged corpus has no single link
+    # detector, and each cross-doc benchmark asserts its own detector type. Build
+    # (and cache) one inference model per detector name; its inference layout is
+    # derived from the detector via inference_layout_for_detector. detector_name
+    # None reuses the config's default detector + inference layout (the single-
+    # source case, fully back-compatible).
+    training_module_unwrapped = model.module if dist.is_distributed else model
+    _inference_model_cache: Dict[Any, Any] = {}
+
+    def _get_inference_model(detector_name):
+        """Return a cached flex inference model wired for ``detector_name``.
+
+        None → the config's default detector + inference layout. A named detector
+        gets a freshly-built detector and the deterministic layout that matches it.
+        """
+        if detector_name in _inference_model_cache:
+            return _inference_model_cache[detector_name]
+        if detector_name is None:
+            _det = detector
+            _inf_layout = inference_layout_policy
+        else:
+            _det = make_link_detector(detector_name, enc.decode)
+            _inf_layout = make_layout_policy(
+                inference_layout_for_detector(detector_name), encode_fn=enc.encode_ordinary
+            )
+        _m = _build_inference_model(
             training_module_unwrapped=training_module_unwrapped,
-            cfg=cfg, enc=enc, detector=detector,
+            cfg=cfg, enc=enc, detector=_det,
             training_layout_policy=layout_policy,
-            inference_layout_policy=inference_layout_policy,
+            inference_layout_policy=_inf_layout,
             device=str(dist.device),
         )
+        _inference_model_cache[detector_name] = _m
+        return _m
+
+    if dist.is_main_process:
+        # Default inference model (config detector) — the fallback used by
+        # perplexity/split evals and by benchmarks with no implied detector.
+        _flex_inference_model = _get_inference_model(None)
 
         _run_generation_demo(
             training_module=training_module_unwrapped,
@@ -1119,7 +1149,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         if eval_cfg.get("run_on_completion", False):
             dataset_dir_str = cfg.get("data", {}).get("dataset_dir", "")
             if _flex_inference_model is not None and dataset_dir_str:
-                from eval_checkpoints import run_benchmarks_on_model
+                from eval_checkpoints import run_benchmarks_on_model, detector_for_benchmark
                 logger.info("Running post-training benchmark evaluation...")
                 _flex_inference_model.eval()
 
@@ -1179,13 +1209,35 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                     _bench = "community_pack_perplexity" if "community" in _name else "held_out_perplexity"
                     _run_split_eval(_name, _path, _bench)
 
-                # Additional benchmarks from eval.benchmarks in YAML.
-                eval_results = run_benchmarks_on_model(
-                    model=_flex_inference_model,
-                    dataset_dir=dataset_dir_str,
-                    eval_cfg=eval_cfg,
-                    device=str(dist.device),
-                )
+                # Additional benchmarks from eval.benchmarks in YAML. Group by the
+                # detector each benchmark implies (Tier-1), and run each group on
+                # an inference model wired for that detector + its layout. Groups
+                # with no implied detector (None) use the config default model.
+                _bench_groups: Dict[Any, list] = {}
+                for _spec in eval_cfg.get("benchmarks", []):
+                    _det_name = detector_for_benchmark(_spec)
+                    _bench_groups.setdefault(_det_name, []).append(_spec)
+
+                eval_results: Dict[str, Any] = {}
+                for _det_name, _specs in _bench_groups.items():
+                    _grp_model = _get_inference_model(_det_name)
+                    if _grp_model is None:
+                        logger.warning(
+                            "Skipping %d benchmark(s) for detector=%r: inference "
+                            "model unavailable.", len(_specs), _det_name,
+                        )
+                        continue
+                    _grp_model.eval()
+                    _grp_cfg = {**eval_cfg, "benchmarks": _specs}
+                    logger.info("Post-training eval: %d benchmark(s) with detector=%r",
+                                len(_specs), _det_name)
+                    _grp_results = run_benchmarks_on_model(
+                        model=_grp_model,
+                        dataset_dir=dataset_dir_str,
+                        eval_cfg=_grp_cfg,
+                        device=str(dist.device),
+                    )
+                    eval_results.update(_grp_results)
                 eval_results.update(_split_results)
 
                 eval_path = os.path.join(rep.output_dir, "eval_results.json")
