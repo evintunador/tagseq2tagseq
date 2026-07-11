@@ -15,7 +15,7 @@ from data.collate import DocSpan
 from data.layout import EOSLayoutPolicy, NullLayoutPolicy
 from eval.scoring import (
     score_completion, score_completions_batched, score_completion_with_context_docs,
-    score_doc, score_doc_with_context,
+    score_doc, score_docs_batched, score_doc_with_context,
 )
 
 
@@ -522,3 +522,118 @@ def test_cdoc_uses_last_link_position_when_multiple():
     # Only the last position should be the key.
     assert link_pos_late in ltt
     assert link_pos_early not in ltt
+
+
+# ─── score_docs_batched tests ────────────────────────────────────────────────
+
+def _pos_dependent_forward(tokens, doc_spans, **kwargs):
+    """logits[0, t, v] = t + v — makes NLL depend on absolute position so the
+    parity check catches any offset/slicing bug, not just log(V) coincidences."""
+    T = tokens.shape[1]
+    t_idx = torch.arange(T, dtype=torch.float32).unsqueeze(1)          # [T, 1]
+    v_idx = torch.arange(VOCAB_SIZE, dtype=torch.float32).unsqueeze(0)  # [1, V]
+    return (t_idx + v_idx).unsqueeze(0)                                # [1, T, V]
+
+
+def _make_batched_model(forward_fn, max_seq_len=None):
+    model = MagicMock()
+    model.forward_inference.side_effect = forward_fn
+    model.active_layout_policy = NullLayoutPolicy()
+    # backbone.max_seq_len drives the pack budget; None disables truncation/cap.
+    model.backbone.max_seq_len = max_seq_len
+    return model
+
+
+DOCS = [
+    ([10, 20, 30, 40, 50], "Doc A", "a"),
+    ([60, 70], "Doc B", "b"),
+    ([80, 90, 100], "Doc C", "c"),
+]
+
+
+def test_score_docs_batched_returns_one_result_per_doc():
+    model = _make_batched_model(lambda t, s, **k: torch.zeros(1, t.shape[1], VOCAB_SIZE))
+    results = score_docs_batched(model, DOCS, NullLayoutPolicy(), device="cpu")
+    assert len(results) == len(DOCS)
+    assert all(set(r) == {"mean_nll", "num_tokens"} for r in results)
+
+
+def test_score_docs_batched_empty_input():
+    model = _make_batched_model(lambda t, s, **k: torch.zeros(1, t.shape[1], VOCAB_SIZE))
+    assert score_docs_batched(model, [], NullLayoutPolicy(), device="cpu") == []
+    assert model.forward_inference.call_count == 0
+
+
+def test_score_docs_batched_empty_body_yields_zero():
+    model = _make_batched_model(lambda t, s, **k: torch.zeros(1, t.shape[1], VOCAB_SIZE))
+    docs = [([], "empty", "e"), ([10, 20, 30], "ok", "o")]
+    results = score_docs_batched(model, docs, NullLayoutPolicy(), device="cpu")
+    assert results[0] == {"mean_nll": 0.0, "num_tokens": 0}
+    assert results[1]["num_tokens"] > 0
+
+
+@pytest.mark.parametrize("policy", [NullLayoutPolicy(), EOSLayoutPolicy(eos_token_id=1)])
+def test_score_docs_batched_matches_score_doc(policy):
+    """Each batched per-doc result must equal an individual score_doc call.
+
+    Runs under both NullLayoutPolicy and EOSLayoutPolicy (the latter has
+    prefix_len==0, exercising the skip-first-body-token path)."""
+    batched_model = _make_batched_model(_pos_dependent_forward)
+    batched = score_docs_batched(batched_model, DOCS, policy, device="cpu")
+
+    for (body, raw_id, normed_id), b in zip(DOCS, batched):
+        indiv_model = _make_batched_model(_pos_dependent_forward)
+        indiv = score_doc(
+            indiv_model, body, policy,
+            raw_identifier=raw_id, normed_identifier=normed_id, device="cpu",
+        )
+        assert b["num_tokens"] == indiv["num_tokens"]
+        assert abs(b["mean_nll"] - indiv["mean_nll"]) < 1e-4
+
+
+def test_score_docs_batched_packs_into_fewer_forwards():
+    """With a budget large enough to hold all docs, one forward covers them all."""
+    model = _make_batched_model(_pos_dependent_forward, max_seq_len=1024)
+    score_docs_batched(model, DOCS, NullLayoutPolicy(), device="cpu")
+    assert model.forward_inference.call_count == 1
+
+
+def test_score_docs_batched_respects_max_seq_len_budget():
+    """A tight budget forces multiple packs; results still match score_doc."""
+    # Each NullLayoutPolicy doc seq len == its body len (5, 2, 3). Budget 5 forces
+    # doc A alone, then B+? — verify multiple forwards AND correctness.
+    model = _make_batched_model(_pos_dependent_forward, max_seq_len=5)
+    batched = score_docs_batched(model, DOCS, NullLayoutPolicy(), device="cpu")
+    assert model.forward_inference.call_count >= 2
+    for (body, raw_id, normed_id), b in zip(DOCS, batched):
+        indiv_model = _make_batched_model(_pos_dependent_forward, max_seq_len=5)
+        indiv = score_doc(
+            indiv_model, body, NullLayoutPolicy(),
+            raw_identifier=raw_id, normed_identifier=normed_id, device="cpu",
+        )
+        assert abs(b["mean_nll"] - indiv["mean_nll"]) < 1e-4
+
+
+def test_score_docs_batched_body_truncated_to_budget():
+    """A doc longer than the budget is head-truncated exactly like score_doc."""
+    long_body = list(range(10, 10 + 20))          # 20 tokens
+    docs = [(long_body, "Long", "l")]
+    model = _make_batched_model(_pos_dependent_forward, max_seq_len=8)
+    b = score_docs_batched(model, docs, NullLayoutPolicy(), device="cpu")[0]
+    indiv_model = _make_batched_model(_pos_dependent_forward, max_seq_len=8)
+    indiv = score_doc(indiv_model, long_body, NullLayoutPolicy(),
+                      raw_identifier="Long", normed_identifier="l", device="cpu")
+    assert b["num_tokens"] == indiv["num_tokens"]
+    assert abs(b["mean_nll"] - indiv["mean_nll"]) < 1e-4
+
+
+def test_score_docs_batched_uses_doc_causal_mask():
+    captured = {}
+
+    def _capture(tokens, doc_spans, **kwargs):
+        captured.update(kwargs)
+        return torch.zeros(1, tokens.shape[1], VOCAB_SIZE)
+
+    model = _make_batched_model(_capture, max_seq_len=1024)
+    score_docs_batched(model, DOCS, NullLayoutPolicy(), device="cpu")
+    assert captured.get("mask_type") == "doc_causal"

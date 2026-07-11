@@ -52,7 +52,7 @@ from data.layout import DocLayoutPolicy
 from data.pack_sampler import PackBatchSampler
 from data.packed_dataset import PackedSequenceDataset
 from data.traversal import BFSStrategy
-from eval.scoring import score_doc, score_doc_with_context
+from eval.scoring import score_docs_batched, score_doc_with_context
 
 logger = logging.getLogger(__name__)
 
@@ -138,32 +138,31 @@ def run_held_out_perplexity(
         nll_list = []
         skipped = 0
 
-        for i, doc_id in enumerate(doc_ids):
-            if i > 0 and i % 50 == 0:
-                logger.info(
-                    "  %d / %d docs scored (%.1f%%)  running mean_nll=%.4f",
-                    i, len(doc_ids), 100.0 * i / len(doc_ids),
-                    float(np.mean(nll_list)) if nll_list else float("nan"),
-                )
-
+        # Gather scoreable docs, then batch-score them: score_docs_batched packs
+        # multiple docs into one forward_inference (doc_causal isolation → per-doc
+        # results identical to score_doc), eliminating the per-doc batch-1 passes
+        # that dominate this benchmark. mask_type_override is intentionally NOT
+        # forwarded — each doc is scored in isolation (the override has no effect
+        # on an isolated doc, per this function's contract), and doc_causal is
+        # required so packed docs never grant cross-doc attention to each other.
+        docs_to_score = []   # (body_tokens, raw_id, normed_id)
+        for doc_id in doc_ids:
             tokens_arr = backend.get_tokens_by_id(doc_id)
             if tokens_arr is None or len(tokens_arr) < 2:
                 skipped += 1
                 continue
-
             normed_id = graph.get_normed_identifier(doc_id)
             raw_id = graph.get_raw_identifier(normed_id) or normed_id
+            docs_to_score.append((tokens_arr.tolist(), raw_id, normed_id))
 
-            result = score_doc(
-                model=model,
-                tokens=tokens_arr.tolist(),
-                layout_policy=layout_policy,
-                raw_identifier=raw_id,
-                normed_identifier=normed_id,
-                device=device,
-                mask_type=mask_type_override,
-            )
+        results = score_docs_batched(
+            model=model,
+            docs=docs_to_score,
+            layout_policy=layout_policy,
+            device=device,
+        )
 
+        for result in results:
             if result["num_tokens"] > 0:
                 nll_list.append(result["mean_nll"])
             else:

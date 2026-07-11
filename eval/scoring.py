@@ -1,7 +1,7 @@
 """
 eval/scoring.py — primitive scoring utilities for TS2TS models.
 
-Provides five entry points:
+Provides six entry points:
 
   score_doc(model, tokens, layout_policy, raw_identifier, normed_identifier, device)
       -> {"mean_nll": float, "num_tokens": int}
@@ -10,6 +10,14 @@ Provides five entry points:
       contribute to the NLL; prefix/suffix are included in the sequence so
       the model sees the same context it saw during training, but they are
       excluded from the loss computation. Used for held-out perplexity.
+
+  score_docs_batched(model, docs, layout_policy, device, mask_type)
+      -> List[{"mean_nll": float, "num_tokens": int}]
+
+      Batched score_doc: packs multiple docs (each as a doc_causal-isolated
+      DocSpan) into one forward per max_seq_len-sized pack. Per-doc results are
+      identical to score_doc — a throughput win that removes the batch-1 forwards
+      dominating held-out perplexity.
 
   score_completion(model, context_tokens, completion_tokens,
                    layout_policy, prompt_preprocessor)
@@ -163,6 +171,179 @@ def score_doc(
     mean_nll = nll_per_tok.mean().item()
 
     return {"mean_nll": mean_nll, "num_tokens": len(logit_indices)}
+
+
+def score_docs_batched(
+    model,
+    docs: List[Any],
+    layout_policy: Optional[DocLayoutPolicy] = None,
+    device: str = "cuda",
+    mask_type: Optional[str] = "doc_causal",
+) -> List[Dict[str, float]]:
+    """Score many documents with as few forward passes as possible.
+
+    Batched equivalent of calling ``score_doc`` once per document: each doc's
+    decorated ``[prefix | body | suffix]`` sequence is packed as one DocSpan, and
+    multiple docs are concatenated into a single flat sequence (up to the model's
+    ``max_seq_len``) scored in one ``forward_inference`` call. ``doc_causal``
+    masking isolates each span, so every per-doc result is numerically identical
+    to ``score_doc`` — this is purely a throughput optimisation that eliminates
+    the per-doc batch-1 forward passes that dominate held-out perplexity.
+
+    Args:
+        model: TS2TSModel in eval mode.
+        docs: List of documents, each a tuple/sequence
+            ``(body_tokens, raw_identifier, normed_identifier)``. ``body_tokens``
+            is the raw body (no prefix/suffix decoration), as passed to
+            ``score_doc``.
+        layout_policy: Layout policy for prefix/suffix decoration. Defaults to
+            ``model.active_layout_policy``.
+        device: Target device for token tensors.
+        mask_type: Mask type passed to ``forward_inference``. Defaults to
+            ``'doc_causal'`` (per-doc isolation — the only correct choice for
+            scoring docs independently). Overridable for parity with
+            ``score_doc``.
+
+    Returns:
+        A list of ``{"mean_nll": float, "num_tokens": int}`` dicts, one per input
+        doc in the same order. Docs whose body cannot be scored (empty, or no
+        target token after prefix handling) yield ``{"mean_nll": 0.0,
+        "num_tokens": 0}`` — exactly as ``score_doc`` would.
+    """
+    n = len(docs)
+    if n == 0:
+        return []
+
+    if layout_policy is None:
+        layout_policy = model.active_layout_policy
+
+    max_seq_len = getattr(getattr(model, "backbone", None), "max_seq_len", None)
+
+    # ── Decorate each doc and precompute its body-scoring indices ─────────────
+    # For each doc we build its full [prefix | body | suffix] sequence and record
+    # the local logit/target index lists (relative to the doc's own start),
+    # replicating score_doc's math exactly. Docs that produce no scoreable target
+    # are marked and short-circuited to the zero result.
+    prepared = []   # per-doc dict: seq, local_logit_idx, local_target_idx (or None)
+    empty_result = {"mean_nll": 0.0, "num_tokens": 0}
+
+    for doc in docs:
+        body_tokens, raw_id, normed_id = doc[0], doc[1], doc[2]
+
+        if not body_tokens:
+            prepared.append(None)
+            continue
+
+        info = DocLayoutInfo(
+            raw_identifier=raw_id,
+            normed_identifier=normed_id,
+            body_tokens=body_tokens,
+        )
+        prefix = layout_policy.prefix_tokens(info)
+        suffix = layout_policy.suffix_tokens(info)
+        prefix_len = len(prefix)
+        suffix_len = len(suffix)
+
+        body = body_tokens
+        # Truncate body to fit within max_seq_len (head-first), matching score_doc.
+        if isinstance(max_seq_len, int):
+            max_body = max_seq_len - prefix_len - suffix_len
+            if max_body <= 0:
+                prepared.append(None)
+                continue
+            body = body[:max_body]
+
+        if len(body) < 1:
+            prepared.append(None)
+            continue
+
+        seq = list(prefix) + list(body) + list(suffix)
+
+        # Body tokens occupy [prefix_len, prefix_len + len(body)) in seq.
+        body_start = prefix_len
+        body_end = prefix_len + len(body)
+        logit_idx = list(range(body_start - 1, body_end - 1))
+        target_idx = list(range(body_start, body_end))
+        # If prefix_len == 0 the first body token has no preceding logit; skip it.
+        if prefix_len == 0:
+            logit_idx = logit_idx[1:]
+            target_idx = target_idx[1:]
+
+        if not logit_idx:
+            prepared.append(None)
+            continue
+
+        prepared.append({
+            "seq": seq,
+            "logit_idx": logit_idx,
+            "target_idx": target_idx,
+            "normed_id": normed_id,
+            "raw_id": raw_id,
+        })
+
+    # ── Bin-pack prepared docs into flat packs up to max_seq_len ──────────────
+    # A single doc always fits (its body was truncated to the budget above), so
+    # packs never exceed the limit. When no max_seq_len is known, pack greedily
+    # without a length cap (one forward if it fits).
+    budget = max_seq_len if isinstance(max_seq_len, int) else None
+    packs: List[List[int]] = []   # each is a list of prepared-doc indices
+    cur: List[int] = []
+    cur_len = 0
+    for i, p in enumerate(prepared):
+        if p is None:
+            continue
+        seq_len = len(p["seq"])
+        if budget is not None and cur and cur_len + seq_len > budget:
+            packs.append(cur)
+            cur = []
+            cur_len = 0
+        cur.append(i)
+        cur_len += seq_len
+    if cur:
+        packs.append(cur)
+
+    # ── One forward per pack; slice out each doc's NLL ────────────────────────
+    results: List[Dict[str, float]] = [empty_result.copy() for _ in range(n)]
+
+    for pack in packs:
+        all_tokens: List[int] = []
+        spans: List[DocSpan] = []
+        offsets: List[int] = []
+        for doc_pos, i in enumerate(pack):
+            p = prepared[i]
+            offset = len(all_tokens)
+            offsets.append(offset)
+            spans.append(DocSpan(
+                doc_id=doc_pos,
+                normed_identifier=p["normed_id"],
+                raw_identifier=p["raw_id"],
+                start=offset,
+                end=offset + len(p["seq"]),
+                truncated=False,
+                outgoing_identifiers=[],
+            ))
+            all_tokens.extend(p["seq"])
+
+        tokens_tensor = torch.tensor(
+            all_tokens, dtype=torch.long, device=device
+        ).unsqueeze(0)
+        logits = model.forward_inference(tokens_tensor, spans, mask_type=mask_type)
+        log_probs = F.log_softmax(logits[0].float(), dim=-1)   # [total_T, V]
+
+        for doc_pos, i in enumerate(pack):
+            p = prepared[i]
+            offset = offsets[doc_pos]
+            logit_indices = [offset + j for j in p["logit_idx"]]
+            target_indices = [offset + j for j in p["target_idx"]]
+            lp_slice = log_probs[logit_indices, :]                              # [N, V]
+            tgt = tokens_tensor[0, target_indices]                             # [N]
+            nll_per_tok = -lp_slice[torch.arange(len(tgt), device=device), tgt]  # [N]
+            results[i] = {
+                "mean_nll": nll_per_tok.mean().item(),
+                "num_tokens": len(logit_indices),
+            }
+
+    return results
 
 
 def score_completion(
