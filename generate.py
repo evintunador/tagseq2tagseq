@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import re
@@ -43,6 +44,9 @@ from model.graph_traversal.block_mask_creator import (
 from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
 from model.graph_traversal.link_detector import make_link_detector
 from model.modules.training_module import TS2TSTrainingModule
+
+
+logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,8 +215,41 @@ def load_inference_model(
         bigram_vocab_size=int(model_cfg.get("bigram_vocab_size", 50304 * 5)),
     )
 
-    # Load weights (ckpt/state_dict already loaded above)
-    training_module.load_state_dict(state_dict)
+    # Un-tie the lm_head before loading if the checkpoint was trained with
+    # deferred weight untying (model.untie_at_frac). Such a checkpoint stores a
+    # `loss_fn.weight` that genuinely differs from `embedding.weight`, but
+    # from_config(weight_tying=True) rebuilds them as a SINGLE shared storage
+    # (loss_fn.weight IS embedding.weight). Loading a state_dict with two
+    # distinct values into one aliased tensor is silently order-dependent —
+    # whichever key copies last wins — collapsing the input embedding table into
+    # the output projection (or vice-versa) and producing garbage logits
+    # (argmax accuracy ≈ chance). Detect the on-disk divergence and give the
+    # lm_head its own parameter storage so both matrices load correctly.
+    lm_head_sd = state_dict.get("loss_fn.weight")
+    emb_sd = state_dict.get("embedding.weight")
+    weights_tied = (
+        getattr(training_module.loss_fn, "weight", None) is training_module.embedding.weight
+    )
+    if (
+        weights_tied
+        and lm_head_sd is not None
+        and emb_sd is not None
+        and lm_head_sd.shape == emb_sd.shape
+        and not torch.equal(lm_head_sd, emb_sd)
+    ):
+        logger.info(
+            "Checkpoint has an untied lm_head (embedding.weight != loss_fn.weight "
+            "on disk); breaking the tied-weight aliasing before load so both "
+            "matrices are restored independently."
+        )
+        training_module.loss_fn.weight = torch.nn.Parameter(
+            torch.empty_like(training_module.embedding.weight)
+        )
+
+    # Load weights (ckpt/state_dict already loaded above). strict=True guards
+    # against silently-unloaded params (any missing/unexpected key would leave a
+    # tensor at its random init and corrupt inference).
+    training_module.load_state_dict(state_dict, strict=True)
 
     # Convert to inference model. to_inference_model handles the backbone
     # class-swap (triton → flex) and builds _creators internally.
