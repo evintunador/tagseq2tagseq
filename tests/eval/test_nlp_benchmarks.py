@@ -221,24 +221,25 @@ def test_arc_easy_and_challenge_both_work(monkeypatch):
 
 # ─── LAMBADA ──────────────────────────────────────────────────────────────────
 
-def test_lambada_calls_score_completion_once_per_item(monkeypatch):
+def test_lambada_scores_every_item(monkeypatch):
     items = [_fitb_item("The cat sat on the", "mat"), _fitb_item("She opened the", "door")]
     _patch_fitb_dataset(monkeypatch,
         "tunalab.data_sources.evaluations.fill_in_the_blank.lambada.LambadaDataset", items)
-    call_count = {"n": 0}
-    def _fake(m, ctx, completion, **kw):
-        call_count["n"] += 1
-        return 1.5
-    monkeypatch.setattr(_bench, "score_completion", _fake)
+    seen = {"pairs": 0}
+    def _fake(m, pairs, **kw):
+        seen["pairs"] += len(pairs)
+        return [1.5] * len(pairs)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched", _fake)
     run_lambada(model=_make_mock_model(), max_examples=2, device="cpu")
-    assert call_count["n"] == 2
+    assert seen["pairs"] == 2
 
 
 def test_lambada_returns_perplexity_key(monkeypatch):
     items = [_fitb_item("The sky is", "blue")]
     _patch_fitb_dataset(monkeypatch,
         "tunalab.data_sources.evaluations.fill_in_the_blank.lambada.LambadaDataset", items)
-    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched",
+                        lambda m, pairs, **kw: [1.0] * len(pairs))
     result = run_lambada(model=_make_mock_model(), max_examples=1, device="cpu")
     assert "perplexity" in result
     assert result["total_examples"] == 1
@@ -252,7 +253,8 @@ def test_lambada_prepends_space_to_answer(monkeypatch):
     model = _make_mock_model()
     orig = model.tokenizer.encode.side_effect
     model.tokenizer.encode.side_effect = lambda s, **kw: (encoded_calls.append(s), orig(s))[1]
-    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched",
+                        lambda m, pairs, **kw: [1.0] * len(pairs))
     run_lambada(model=model, max_examples=1, device="cpu")
     assert any(c.startswith(" ") for c in encoded_calls)
 
@@ -427,25 +429,26 @@ _CODEXGLUE_DS = (
 )
 
 
-def test_codexglue_calls_score_completion_once_per_item(monkeypatch):
+def test_codexglue_scores_every_item(monkeypatch):
     items = [
         _fitb_item("import os\nfrom pathlib import Path", "result = os.path.join(base, name)"),
         _fitb_item("def greet(name):", "    return f'Hello, {name}'"),
     ]
     _patch_fitb_dataset(monkeypatch, _CODEXGLUE_DS, items)
-    call_count = {"n": 0}
-    def _fake(m, ctx, completion, **kw):
-        call_count["n"] += 1
-        return 1.0
-    monkeypatch.setattr(_bench, "score_completion", _fake)
+    seen = {"pairs": 0}
+    def _fake(m, pairs, **kw):
+        seen["pairs"] += len(pairs)
+        return [1.0] * len(pairs)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched", _fake)
     run_codexglue_line_completion(model=_make_mock_model(), max_examples=2, device="cpu")
-    assert call_count["n"] == 2
+    assert seen["pairs"] == 2
 
 
 def test_codexglue_returns_perplexity_key(monkeypatch):
     items = [_fitb_item("x = 1\ny = 2", "z = x + y")]
     _patch_fitb_dataset(monkeypatch, _CODEXGLUE_DS, items)
-    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 2.0)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched",
+                        lambda m, pairs, **kw: [2.0] * len(pairs))
     result = run_codexglue_line_completion(model=_make_mock_model(), max_examples=1, device="cpu")
     assert "perplexity" in result
     assert result["total_examples"] == 1
@@ -458,7 +461,8 @@ def test_codexglue_prepends_newline_to_answer(monkeypatch):
     model = _make_mock_model()
     orig = model.tokenizer.encode.side_effect
     model.tokenizer.encode.side_effect = lambda s, **kw: (encoded_calls.append(s), orig(s))[1]
-    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.0)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched",
+                        lambda m, pairs, **kw: [1.0] * len(pairs))
     run_codexglue_line_completion(model=model, max_examples=1, device="cpu")
     assert any(c.startswith("\n") for c in encoded_calls)
 
@@ -554,22 +558,23 @@ def test_mathqa_loads_from_local_file(tmp_path):
 def test_math_returns_perplexity(monkeypatch):
     items = [_fitb_item("Find $x$ if $x^2=4$.", "\n$x=2$.")]
     _patch_fitb_dataset(monkeypatch, _MATH_DS, items)
-    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 2.0)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched",
+                        lambda m, pairs, **kw: [2.0] * len(pairs))
     result = run_math(model=_make_mock_model(), subject="algebra", max_examples=1, device="cpu")
     assert "perplexity" in result
     assert result["total_examples"] == 1
 
 
-def test_math_calls_score_completion_once_per_item(monkeypatch):
+def test_math_scores_every_item(monkeypatch):
     items = [_fitb_item("P1", "\nS1"), _fitb_item("P2", "\nS2")]
     _patch_fitb_dataset(monkeypatch, _MATH_DS, items)
-    call_count = {"n": 0}
-    def _fake(m, ctx, completion, **kw):
-        call_count["n"] += 1
-        return 1.5
-    monkeypatch.setattr(_bench, "score_completion", _fake)
+    seen = {"pairs": 0}
+    def _fake(m, pairs, **kw):
+        seen["pairs"] += len(pairs)
+        return [1.5] * len(pairs)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched", _fake)
     run_math(model=_make_mock_model(), max_examples=2, device="cpu")
-    assert call_count["n"] == 2
+    assert seen["pairs"] == 2
 
 
 # ─── CodeXGLUE code-to-text ───────────────────────────────────────────────────
@@ -577,23 +582,24 @@ def test_math_calls_score_completion_once_per_item(monkeypatch):
 def test_codexglue_code_to_text_returns_perplexity(monkeypatch):
     items = [_fitb_item("def add(a, b):\n    return a + b", "\nAdd two numbers.")]
     _patch_fitb_dataset(monkeypatch, _CODE2TXT_DS, items)
-    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.5)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched",
+                        lambda m, pairs, **kw: [1.5] * len(pairs))
     result = run_codexglue_code_to_text(model=_make_mock_model(), max_examples=1, device="cpu")
     assert "perplexity" in result
     assert result["total_examples"] == 1
 
 
-def test_codexglue_code_to_text_calls_once_per_item(monkeypatch):
+def test_codexglue_code_to_text_scores_every_item(monkeypatch):
     items = [_fitb_item("def f(): pass", "\nDoes nothing."),
              _fitb_item("def g(x): return x", "\nIdentity.")]
     _patch_fitb_dataset(monkeypatch, _CODE2TXT_DS, items)
-    call_count = {"n": 0}
-    def _fake(m, ctx, completion, **kw):
-        call_count["n"] += 1
-        return 1.0
-    monkeypatch.setattr(_bench, "score_completion", _fake)
+    seen = {"pairs": 0}
+    def _fake(m, pairs, **kw):
+        seen["pairs"] += len(pairs)
+        return [1.0] * len(pairs)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched", _fake)
     run_codexglue_code_to_text(model=_make_mock_model(), max_examples=2, device="cpu")
-    assert call_count["n"] == 2
+    assert seen["pairs"] == 2
 
 
 # ─── RepoBench ────────────────────────────────────────────────────────────────
@@ -606,25 +612,26 @@ def test_repobench_invalid_split_raises():
 def test_repobench_returns_perplexity(monkeypatch):
     items = [_fitb_item("import os\n\ndef main():\n    x = os.path.join", "\n    return x")]
     _patch_fitb_dataset(monkeypatch, _REPOBENCH_DS, items)
-    monkeypatch.setattr(_bench, "score_completion", lambda *a, **kw: 1.2)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched",
+                        lambda m, pairs, **kw: [1.2] * len(pairs))
     result = run_repobench(model=_make_mock_model(), split="cross_file_first",
                            max_examples=1, device="cpu")
     assert "perplexity" in result
     assert result["total_examples"] == 1
 
 
-def test_repobench_calls_once_per_item(monkeypatch):
+def test_repobench_scores_every_item(monkeypatch):
     items = [_fitb_item("ctx1\n\nf1", "\nline1"),
              _fitb_item("f2", "\nline2")]
     _patch_fitb_dataset(monkeypatch, _REPOBENCH_DS, items)
-    call_count = {"n": 0}
-    def _fake(m, ctx, comp, **kw):
-        call_count["n"] += 1
-        return 1.0
-    monkeypatch.setattr(_bench, "score_completion", _fake)
+    seen = {"pairs": 0}
+    def _fake(m, pairs, **kw):
+        seen["pairs"] += len(pairs)
+        return [1.0] * len(pairs)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched", _fake)
     run_repobench(model=_make_mock_model(), split="cross_file_random",
                   max_examples=2, device="cpu")
-    assert call_count["n"] == 2
+    assert seen["pairs"] == 2
 
 
 # ─── RepoBench cross-doc-link variant ─────────────────────────────────────────
@@ -682,21 +689,21 @@ def test_repobench_cross_doc_link_found_increments_n_link_found(monkeypatch):
     model = _make_cross_doc_model()
     examples = _raw_repobench_examples()[:2]  # 2 valid examples
 
-    flat_calls = {"n": 0}
-    def _fake_flat(*a, **kw):
-        flat_calls["n"] += 1
-        return 2.0
+    flat_calls = {"pairs": 0}
+    def _fake_flat_batched(m, pairs, **kw):
+        flat_calls["pairs"] += len(pairs)
+        return [2.0] * len(pairs)
 
     with patch("datasets.load_dataset", return_value=_FakeHFDataset(examples)), \
          patch.object(_bench, "score_completion_with_context_docs", return_value=1.5), \
-         patch.object(_bench, "score_completion", side_effect=_fake_flat):
+         patch.object(_bench, "score_completions_independent_batched", side_effect=_fake_flat_batched):
         result = run_repobench_cross_doc(model=model, max_examples=2, device="cpu")
 
     assert result["n_link_found"] == 2
     assert result["n_link_not_found"] == 0
     assert result["total_examples"] == 2
-    # Paired flat NLL must be computed once per grant-found example
-    assert flat_calls["n"] == 2
+    # Flat NLL is computed (batched) once per example — grant-found or fallback.
+    assert flat_calls["pairs"] == 2
     assert "perplexity_flat_linked_only" in result
     assert "average_nll_flat_linked_only" in result
 
@@ -705,20 +712,20 @@ def test_repobench_cross_doc_no_link_falls_back_to_flat(monkeypatch):
     model = _make_cross_doc_model()
     examples = _raw_repobench_examples()[:1]
 
-    flat_called = {"n": 0}
+    flat_called = {"pairs": 0}
 
-    def _fake_flat(m, ctx, comp, **kw):
-        flat_called["n"] += 1
-        return 2.0
+    def _fake_flat_batched(m, pairs, **kw):
+        flat_called["pairs"] += len(pairs)
+        return [2.0] * len(pairs)
 
     with patch("datasets.load_dataset", return_value=_FakeHFDataset(examples)), \
          patch.object(_bench, "score_completion_with_context_docs", return_value=None), \
-         patch.object(_bench, "score_completion", side_effect=_fake_flat):
+         patch.object(_bench, "score_completions_independent_batched", side_effect=_fake_flat_batched):
         result = run_repobench_cross_doc(model=model, max_examples=1, device="cpu")
 
     assert result["n_link_not_found"] == 1
     assert result["n_link_found"] == 0
-    assert flat_called["n"] == 1
+    assert flat_called["pairs"] == 1
 
 
 def test_repobench_cross_doc_reports_both_metric_keys(monkeypatch):
@@ -941,18 +948,18 @@ def test_hotpotqa_cross_doc_link_found_increments_n_link_found(monkeypatch):
                         lambda ex, title: [0])
     monkeypatch.setattr(_bench, "score_completion_with_context_docs",
                         lambda *a, **kw: 1.5)
-    flat_calls = {"n": 0}
-    def _fake_flat(*a, **kw):
-        flat_calls["n"] += 1
-        return 2.0
-    monkeypatch.setattr(_bench, "score_completion", _fake_flat)
+    flat_calls = {"pairs": 0}
+    def _fake_flat_batched(m, pairs, **kw):
+        flat_calls["pairs"] += len(pairs)
+        return [2.0] * len(pairs)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched", _fake_flat_batched)
     result = run_hotpotqa_cross_doc(model=_make_hotpotqa_model(), max_examples=1,
                                     device="cpu")
     assert result["n_link_found"] == 1
     assert result["n_link_not_found"] == 0
     assert result["total_examples"] == 1
-    # Paired flat NLL must be computed for the grant-found example
-    assert flat_calls["n"] == 1
+    # Flat NLL is computed (batched) for the grant-found example
+    assert flat_calls["pairs"] == 1
     assert "perplexity_flat_linked_only" in result
     assert "average_nll_flat_linked_only" in result
 
@@ -968,16 +975,16 @@ def test_hotpotqa_cross_doc_no_grant_falls_back(monkeypatch):
                         lambda ex, title: [0])
     monkeypatch.setattr(_bench, "score_completion_with_context_docs",
                         lambda *a, **kw: None)
-    flat_called = {"n": 0}
-    def _fake_flat(m, ctx, comp, **kw):
-        flat_called["n"] += 1
-        return 2.0
-    monkeypatch.setattr(_bench, "score_completion", _fake_flat)
+    flat_called = {"pairs": 0}
+    def _fake_flat_batched(m, pairs, **kw):
+        flat_called["pairs"] += len(pairs)
+        return [2.0] * len(pairs)
+    monkeypatch.setattr(_bench, "score_completions_independent_batched", _fake_flat_batched)
     result = run_hotpotqa_cross_doc(model=_make_hotpotqa_model(), max_examples=1,
                                     device="cpu")
     assert result["n_link_not_found"] == 1
     assert result["n_link_found"] == 0
-    assert flat_called["n"] == 1
+    assert flat_called["pairs"] == 1
 
 
 def test_hotpotqa_cross_doc_reports_all_metric_keys(monkeypatch):

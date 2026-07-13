@@ -111,8 +111,18 @@ except ImportError as _e:
         "(catalogs/nlp, editable install)."
     ) from _e
 
-from eval.scoring import score_completions_batched, score_completion, score_completion_with_context_docs
+from eval.scoring import (
+    score_completions_batched, score_completions_independent_batched,
+    score_completion, score_completion_with_context_docs,
+)
 from eval.link_annotator import MarkdownPromptAnnotator, AnnotatedPrompt
+
+# Fill-in-the-blank items are scored via score_completions_independent_batched,
+# which packs this many independent (prompt, answer) pairs into one forward pass
+# (doc_causal isolation → identical to per-item score_completion). The harness
+# feeds handle_batch lists of this size; the primitive sub-packs them to fit the
+# model's context window, so this is just the outer grouping granularity.
+_FILL_IN_BLANK_BATCH_SIZE = 64
 
 
 def _make_encoder(tokenizer):
@@ -291,14 +301,14 @@ def run_lambada(
     class _Adapter:
         @register_handler("fill_in_the_blank")
         def handle_batch(self_, batch: List[FillInTheBlankItem]):
-            outputs = []
-            for item in batch:
-                nll = score_completion(model, enc(item.prompt), enc(" " + item.answer), device=device)
-                outputs.append(("", nll))
-            return outputs
+            pairs = [(enc(item.prompt), enc(" " + item.answer)) for item in batch]
+            nlls = score_completions_independent_batched(model, pairs, device=device)
+            return [("", nll) for nll in nlls]
 
     dataset = LambadaDataset(cache_dir=cache_dir, limit=max_examples)
-    return FillInTheBlankEvaluation(_Adapter()).run(dataset, batch_size=1, limit=max_examples)
+    return FillInTheBlankEvaluation(_Adapter()).run(
+        dataset, batch_size=_FILL_IN_BLANK_BATCH_SIZE, limit=max_examples
+    )
 
 
 # ─── WinoGrande ───────────────────────────────────────────────────────────────
@@ -630,13 +640,9 @@ def run_codexglue_line_completion(
     class _Adapter:
         @register_handler("fill_in_the_blank")
         def handle_batch(self_, batch: List[FillInTheBlankItem]):
-            outputs = []
-            for item in batch:
-                nll = score_completion(
-                    model, enc(item.prompt), enc("\n" + item.answer), device=device
-                )
-                outputs.append(("", nll))
-            return outputs
+            pairs = [(enc(item.prompt), enc("\n" + item.answer)) for item in batch]
+            nlls = score_completions_independent_batched(model, pairs, device=device)
+            return [("", nll) for nll in nlls]
 
     dataset = CodeXGLUELineCompletionDataset(
         language=CodeXGLUELanguage.PYTHON,
@@ -644,7 +650,9 @@ def run_codexglue_line_completion(
         cache_dir=cache_dir,
         limit=max_examples,
     )
-    return FillInTheBlankEvaluation(_Adapter()).run(dataset, batch_size=1, limit=max_examples)
+    return FillInTheBlankEvaluation(_Adapter()).run(
+        dataset, batch_size=_FILL_IN_BLANK_BATCH_SIZE, limit=max_examples
+    )
 
 
 # ─── MMLU (STEM subsets, 4-way MC) ────────────────────────────────────────────
@@ -791,11 +799,9 @@ def run_math(
     class _Adapter:
         @register_handler("fill_in_the_blank")
         def handle_batch(self_, batch: List[FillInTheBlankItem]):
-            outputs = []
-            for item in batch:
-                nll = score_completion(model, enc(item.prompt), enc(item.answer), device=device)
-                outputs.append(("", nll))
-            return outputs
+            pairs = [(enc(item.prompt), enc(item.answer)) for item in batch]
+            nlls = score_completions_independent_batched(model, pairs, device=device)
+            return [("", nll) for nll in nlls]
 
     dataset = MATHDataset(
         subject=MATHSubject(subject),
@@ -803,7 +809,9 @@ def run_math(
         cache_dir=cache_dir,
         limit=max_examples,
     )
-    return FillInTheBlankEvaluation(_Adapter()).run(dataset, batch_size=1, limit=max_examples)
+    return FillInTheBlankEvaluation(_Adapter()).run(
+        dataset, batch_size=_FILL_IN_BLANK_BATCH_SIZE, limit=max_examples
+    )
 
 
 # ─── CodeXGLUE code-to-text (code → docstring) ────────────────────────────────
@@ -836,11 +844,9 @@ def run_codexglue_code_to_text(
     class _Adapter:
         @register_handler("fill_in_the_blank")
         def handle_batch(self_, batch: List[FillInTheBlankItem]):
-            outputs = []
-            for item in batch:
-                nll = score_completion(model, enc(item.prompt), enc(item.answer), device=device)
-                outputs.append(("", nll))
-            return outputs
+            pairs = [(enc(item.prompt), enc(item.answer)) for item in batch]
+            nlls = score_completions_independent_batched(model, pairs, device=device)
+            return [("", nll) for nll in nlls]
 
     dataset = CodeXGLUECodeToTextDataset(
         language=CodeToTextLanguage.PYTHON,
@@ -848,7 +854,9 @@ def run_codexglue_code_to_text(
         cache_dir=cache_dir,
         limit=max_examples,
     )
-    return FillInTheBlankEvaluation(_Adapter()).run(dataset, batch_size=1, limit=max_examples)
+    return FillInTheBlankEvaluation(_Adapter()).run(
+        dataset, batch_size=_FILL_IN_BLANK_BATCH_SIZE, limit=max_examples
+    )
 
 
 # ─── RepoBench-C (cross-file next-line, repo context) ─────────────────────────
@@ -888,18 +896,18 @@ def run_repobench(
     class _Adapter:
         @register_handler("fill_in_the_blank")
         def handle_batch(self_, batch: List[FillInTheBlankItem]):
-            outputs = []
-            for item in batch:
-                nll = score_completion(model, enc(item.prompt), enc(item.answer), device=device)
-                outputs.append(("", nll))
-            return outputs
+            pairs = [(enc(item.prompt), enc(item.answer)) for item in batch]
+            nlls = score_completions_independent_batched(model, pairs, device=device)
+            return [("", nll) for nll in nlls]
 
     dataset = RepoBenchDataset(
         split=RepoBenchSplit(split),
         cache_dir=cache_dir,
         limit=max_examples,
     )
-    return FillInTheBlankEvaluation(_Adapter()).run(dataset, batch_size=1, limit=max_examples)
+    return FillInTheBlankEvaluation(_Adapter()).run(
+        dataset, batch_size=_FILL_IN_BLANK_BATCH_SIZE, limit=max_examples
+    )
 
 
 # ─── RepoBench-C cross-doc-link variant ──────────────────────────────────────
@@ -977,11 +985,13 @@ def run_repobench_cross_doc(
     link_detector = model.link_detector
     repo_name = None  # populated per-example below
 
-    cross_doc_nlls: List[float] = []
-    paired_flat_nlls: List[float] = []
-    all_nlls: List[float] = []
-    n_link_found = 0
-    n_link_not_found = 0
+    # Per-example, in loop order: the cross-doc NLL (None if the link didn't
+    # fire) and the flat (context, completion) pair. The flat forwards are all
+    # doc_causal and identical whether paired-baseline or fallback, so they are
+    # scored together in one batched pass after the loop; the output lists are
+    # then rebuilt to exactly match the original per-example ordering.
+    per_ex_cross_nll: List[Optional[float]] = []
+    flat_pairs: List[Any] = []
 
     limit = max_examples if max_examples is not None else len(raw)
     for ex in raw.select(range(min(limit, len(raw)))):
@@ -1024,14 +1034,25 @@ def run_repobench_cross_doc(
             device=device,
         )
 
-        if nll is not None:
-            cross_doc_nlls.append(nll)
-            all_nlls.append(nll)
-            n_link_found += 1
-            flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
+        per_ex_cross_nll.append(nll)
+        flat_pairs.append((context_tokens, completion_tokens))
+
+    # Batched flat scoring: one forward per pack instead of one per example.
+    flat_nlls = score_completions_independent_batched(model, flat_pairs, device=device)
+
+    # Rebuild the metric lists in the original per-example order.
+    cross_doc_nlls: List[float] = []
+    paired_flat_nlls: List[float] = []
+    all_nlls: List[float] = []
+    n_link_found = 0
+    n_link_not_found = 0
+    for cross_nll, flat_nll in zip(per_ex_cross_nll, flat_nlls):
+        if cross_nll is not None:
+            cross_doc_nlls.append(cross_nll)
+            all_nlls.append(cross_nll)
             paired_flat_nlls.append(flat_nll)
+            n_link_found += 1
         else:
-            flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
             all_nlls.append(flat_nll)
             n_link_not_found += 1
 
@@ -1465,11 +1486,13 @@ def run_hotpotqa_cross_doc(
     corpus = _load_hotpotqa_corpus(cache_dir=cache_dir)
     examples = _hotpotqa_bridge_examples(max_examples, cache_dir)
 
-    cross_doc_nlls: List[float] = []
-    paired_flat_nlls: List[float] = []   # doc_causal on same examples as cross_doc_nlls
-    all_nlls: List[float] = []
-    n_link_found = 0
-    n_link_not_found = 0
+    # Per-example (in loop order, only examples that pass the corpus/link
+    # pre-filters): cross-doc NLL (None if the grant didn't fire) and the flat
+    # (context, completion) pair. Flat forwards are all doc_causal and identical
+    # whether paired-baseline or fallback, so they're scored in one batched pass
+    # after the loop; the metric lists are rebuilt to match the original order.
+    per_ex_cross_nll: List[Optional[float]] = []
+    flat_pairs: List[Any] = []
     n_skipped_no_corpus = 0
     n_skipped_no_link = 0
 
@@ -1521,17 +1544,28 @@ def run_hotpotqa_cross_doc(
             device=device,
         )
 
-        if nll is not None:
-            cross_doc_nlls.append(nll)
-            all_nlls.append(nll)
-            n_link_found += 1
-            # Paired flat baseline: same example, same tokenization, doc_causal only.
-            # Computed here so both scores share identical context_tokens /
-            # completion_tokens — no re-running of link detection or filtering.
-            flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
+        # Defer the flat (doc_causal) forward — paired baseline when the grant
+        # fired, fallback otherwise — to the batched pass below. Both use the
+        # identical context_tokens / completion_tokens recorded here.
+        per_ex_cross_nll.append(nll)
+        flat_pairs.append((context_tokens, completion_tokens))
+
+    # Batched flat scoring: one forward per pack instead of one per example.
+    flat_nlls = score_completions_independent_batched(model, flat_pairs, device=device)
+
+    # Rebuild the metric lists in the original per-example order.
+    cross_doc_nlls: List[float] = []
+    paired_flat_nlls: List[float] = []   # doc_causal on same examples as cross_doc_nlls
+    all_nlls: List[float] = []
+    n_link_found = 0
+    n_link_not_found = 0
+    for cross_nll, flat_nll in zip(per_ex_cross_nll, flat_nlls):
+        if cross_nll is not None:
+            cross_doc_nlls.append(cross_nll)
+            all_nlls.append(cross_nll)
             paired_flat_nlls.append(flat_nll)
+            n_link_found += 1
         else:
-            flat_nll = score_completion(model, context_tokens, completion_tokens, device=device)
             all_nlls.append(flat_nll)
             n_link_not_found += 1
 

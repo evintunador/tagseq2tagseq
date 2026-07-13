@@ -14,7 +14,8 @@ import torch.nn as nn
 from data.collate import DocSpan
 from data.layout import EOSLayoutPolicy, NullLayoutPolicy
 from eval.scoring import (
-    score_completion, score_completions_batched, score_completion_with_context_docs,
+    score_completion, score_completions_batched,
+    score_completions_independent_batched, score_completion_with_context_docs,
     score_doc, score_docs_batched, score_doc_with_context,
 )
 
@@ -636,4 +637,81 @@ def test_score_docs_batched_uses_doc_causal_mask():
 
     model = _make_batched_model(_capture, max_seq_len=1024)
     score_docs_batched(model, DOCS, NullLayoutPolicy(), device="cpu")
+    assert captured.get("mask_type") == "doc_causal"
+
+
+# ─── score_completions_independent_batched tests ─────────────────────────────
+
+PAIRS = [([10, 20, 30], [40, 50]), ([60, 70], [80]), ([90], [100, 110, 120])]
+
+
+def _make_indep_model(forward_fn, max_seq_len=None):
+    model = MagicMock()
+    model.forward_inference.side_effect = forward_fn
+    model.backbone.max_seq_len = max_seq_len
+    dummy_param = nn.Parameter(torch.zeros(1))
+    model.backbone.parameters.return_value = iter([dummy_param])
+    return model
+
+
+def test_indep_batched_returns_list_of_floats():
+    model = _make_indep_model(lambda t, s, **k: torch.zeros(1, t.shape[1], VOCAB_SIZE))
+    result = score_completions_independent_batched(model, PAIRS, device="cpu")
+    assert isinstance(result, list) and len(result) == len(PAIRS)
+    assert all(isinstance(v, float) for v in result)
+
+
+def test_indep_batched_empty_input():
+    model = _make_indep_model(lambda t, s, **k: torch.zeros(1, t.shape[1], VOCAB_SIZE))
+    assert score_completions_independent_batched(model, [], device="cpu") == []
+    assert model.forward_inference.call_count == 0
+
+
+def test_indep_batched_empty_completion_scores_zero():
+    model = _make_indep_model(lambda t, s, **k: torch.zeros(1, t.shape[1], VOCAB_SIZE))
+    result = score_completions_independent_batched(
+        model, [([1, 2, 3], []), ([4, 5], [6])], device="cpu"
+    )
+    assert result[0] == 0.0
+    assert abs(result[1] - math.log(VOCAB_SIZE)) < 1e-4
+
+
+@pytest.mark.parametrize("max_seq_len", [None, 1024, 4])
+def test_indep_batched_matches_score_completion(max_seq_len):
+    """Each batched pair result must equal an individual score_completion call.
+
+    max_seq_len=4 forces multiple packs (and context head-truncation on the
+    longer pairs), exercising the pack-splitting + truncation paths against the
+    same truncation applied to individual calls."""
+    batched_model = _make_indep_model(_pos_dependent_forward, max_seq_len=max_seq_len)
+    batched = score_completions_independent_batched(batched_model, PAIRS, device="cpu")
+
+    for (ctx, comp), b in zip(PAIRS, batched):
+        # Apply the same head-truncation score_completions_independent_batched
+        # would, so the individual reference matches when a pair overflows.
+        c = list(ctx)
+        if isinstance(max_seq_len, int):
+            overflow = len(c) + len(comp) - max_seq_len
+            if overflow > 0:
+                c = c[overflow:] if overflow < len(c) else []
+        indiv_model = _make_indep_model(_pos_dependent_forward, max_seq_len=max_seq_len)
+        indiv = score_completion(indiv_model, c, comp, device="cpu")
+        assert abs(b - indiv) < 1e-4, f"batched={b:.6f} vs individual={indiv:.6f}"
+
+
+def test_indep_batched_packs_into_one_forward_when_budget_allows():
+    model = _make_indep_model(_pos_dependent_forward, max_seq_len=1024)
+    score_completions_independent_batched(model, PAIRS, device="cpu")
+    assert model.forward_inference.call_count == 1
+
+
+def test_indep_batched_uses_doc_causal_mask():
+    captured = {}
+
+    def _capture(tokens, doc_spans, **kwargs):
+        captured.update(kwargs)
+        return torch.zeros(1, tokens.shape[1], VOCAB_SIZE)
+
+    model = _make_indep_model(_capture, max_seq_len=1024)
+    score_completions_independent_batched(model, PAIRS, device="cpu")
     assert captured.get("mask_type") == "doc_causal"

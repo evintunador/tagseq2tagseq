@@ -497,6 +497,123 @@ def score_completions_batched(
     return nlls
 
 
+def score_completions_independent_batched(
+    model,
+    pairs: List[Any],
+    device: Optional[str] = None,
+) -> List[float]:
+    """Score K independent (context, completion) pairs in as few forwards as possible.
+
+    Batched equivalent of calling ``score_completion`` once per pair. Unlike
+    ``score_completions_batched`` (which scores K completions against ONE shared
+    context), each pair here has its OWN context — so this is the right primitive
+    for fill-in-the-blank benchmarks (lambada, code completion, …) where every
+    item is a distinct (prompt, answer). Each pair's ``context + completion``
+    sequence is packed as one ``doc_causal``-isolated DocSpan; multiple pairs are
+    concatenated into one forward per ``max_seq_len``-sized pack. Results are
+    numerically identical to ``score_completion`` per pair.
+
+    Args:
+        model: TS2TSModel in eval mode.
+        pairs: List of ``(context_tokens, completion_tokens)`` tuples.
+        device: Device string. If None, inferred from model.backbone.parameters().
+
+    Returns:
+        List of K floats — mean NLL over each pair's completion tokens, in input
+        order. An empty completion yields 0.0 (matching ``score_completion``).
+    """
+    n = len(pairs)
+    if n == 0:
+        return []
+
+    if device is None:
+        device = next(model.backbone.parameters()).device
+
+    max_seq_len = getattr(getattr(model, "backbone", None), "max_seq_len", None)
+
+    # ── Prepare each pair: [context | completion] with score indices ──────────
+    # score_completion reads the logit at (ctx_len - 1) to predict the first
+    # completion token, so an empty context yields no valid logit for that token.
+    # We preserve score_completion's exact behaviour: an empty completion scores
+    # 0.0; a non-empty completion with empty context still scores from logit -1
+    # of the packed doc's start (handled below via the doc offset).
+    prepared = []   # per-pair dict, or None for the 0.0 short-circuit
+    for ctx, comp in pairs:
+        if not comp:
+            prepared.append(None)
+            continue
+        ctx = list(ctx)
+        comp = list(comp)
+        # Head-truncate context if the pair would exceed the model's context
+        # window, keeping the full completion (the scored region). In-range pairs
+        # (the overwhelming majority) are untouched → identical to score_completion.
+        if isinstance(max_seq_len, int):
+            overflow = len(ctx) + len(comp) - max_seq_len
+            if overflow > 0:
+                ctx = ctx[overflow:] if overflow < len(ctx) else []
+        prepared.append({"seq": ctx + comp, "ctx_len": len(ctx), "comp_len": len(comp)})
+
+    # ── Bin-pack into flat packs up to max_seq_len ────────────────────────────
+    budget = max_seq_len if isinstance(max_seq_len, int) else None
+    packs: List[List[int]] = []
+    cur: List[int] = []
+    cur_len = 0
+    for i, p in enumerate(prepared):
+        if p is None:
+            continue
+        seq_len = len(p["seq"])
+        if budget is not None and cur and cur_len + seq_len > budget:
+            packs.append(cur)
+            cur = []
+            cur_len = 0
+        cur.append(i)
+        cur_len += seq_len
+    if cur:
+        packs.append(cur)
+
+    # ── One forward per pack; slice out each pair's completion NLL ────────────
+    results: List[float] = [0.0] * n
+
+    for pack in packs:
+        all_tokens: List[int] = []
+        spans: List[DocSpan] = []
+        offsets: List[int] = []
+        for doc_pos, i in enumerate(pack):
+            p = prepared[i]
+            offset = len(all_tokens)
+            offsets.append(offset)
+            spans.append(DocSpan(
+                doc_id=doc_pos,
+                normed_identifier="",
+                raw_identifier="",
+                start=offset,
+                end=offset + len(p["seq"]),
+                truncated=False,
+                outgoing_identifiers=[],
+            ))
+            all_tokens.extend(p["seq"])
+
+        tokens_tensor = torch.tensor(
+            all_tokens, dtype=torch.long, device=device
+        ).unsqueeze(0)
+        logits = model.forward_inference(tokens_tensor, spans, mask_type='doc_causal')
+        log_probs = F.log_softmax(logits[0].float(), dim=-1)   # [total_T, V]
+
+        for doc_pos, i in enumerate(pack):
+            p = prepared[i]
+            offset = offsets[doc_pos]
+            ctx_len = p["ctx_len"]
+            comp_len = p["comp_len"]
+            # Logit at (offset + ctx_len - 1) predicts the first completion token.
+            logit_start = offset + ctx_len - 1
+            tgt_start = offset + ctx_len
+            lp = log_probs[logit_start:logit_start + comp_len, :]              # [C, V]
+            tgt = tokens_tensor[0, tgt_start:tgt_start + comp_len]             # [C]
+            results[i] = -lp[torch.arange(comp_len, device=device), tgt].mean().item()
+
+    return results
+
+
 def score_completion_with_context_docs(
     model,
     aux_token_lists: List[List[int]],
