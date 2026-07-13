@@ -113,6 +113,21 @@ optimizer-state checkpoint/resume) and PyTorch's official Muon at
 gets portable state_dict handling for free. Cross-ref the resume gotcha in
 [[cli-and-launch]] memory.
 
+**Also cold-started: AdamW state on post-untie-split resume.** As of 2026-07-13
+(untie-aware resume fix), resuming from a checkpoint saved *after* the deferred
+lm_head untie (`model.untie_at_frac`) cold-starts **all** AdamW state, not just
+Muon momentum. Reason: `split_fn` appended the new lm_head to a param group in a
+layout-dependent way (verified: some ckpts stored it as a trailing single-param
+group, others folded it into the embed group), so the current purely
+index-based AdamW-state restore can't reliably map saved indices onto the
+now-untied param ordering — an index-based restore could land the wrong param's
+`exp_avg`/`exp_avg_sq` on the lm_head. Cold-starting is the safe stopgap (recovers
+~100 steps). Fold into this task: make optimizer-state resume **name/shape-aware**
+(match saved→current params by parameter name + tensor shape rather than
+positional index) so AdamW state — including the split lm_head — restores exactly
+across the untie boundary and across param-group reordering. Pre-split and
+non-untie resumes already restore AdamW normally and are unaffected.
+
 ### Automate the compile-cache warmup (TODO)
 Multi-rank/multi-node runs require a pre-warmed shared compile cache to avoid the
 concurrent-compilation segfault (see `launch_slurm.py`: `TS2TS_SHARED_COMPILE_CACHE`
