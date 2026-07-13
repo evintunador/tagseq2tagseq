@@ -748,6 +748,41 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         bigram_vocab_size=bigram_vocab_size,
     ).to(dist.device)
 
+    # Resume-aware weight untying: if we are resuming from a checkpoint that was
+    # saved AFTER the deferred lm_head split (model.untie_at_frac), its state_dict
+    # holds a `loss_fn.weight` that genuinely differs from `embedding.weight`. The
+    # model was just built with weight_tying=True, so those two keys alias ONE
+    # storage; loading the distinct on-disk tensors into it is order-dependent
+    # (last key wins) and silently collapses the input embedding into the output
+    # projection. Break the tie NOW — before optimizer param-groups are built —
+    # so (a) load_state_dict below restores both matrices independently, (b) the
+    # untied lm_head flows into the embed AdamW group via the 'loss_fn' name
+    # match, and (c) DDP registers its own gradient hook for it (no manual
+    # all-reduce needed). resumed_split records that the split already happened so
+    # the LRCooldownScheduler does not re-fire split_fn and clobber the loaded
+    # lm_head. See generate.load_inference_model for the inference-path twin.
+    resumed_split = False
+    if resume_ckpt is not None:
+        _msd = resume_ckpt.get('model', {})
+        _lm = _msd.get('loss_fn.weight')
+        _em = _msd.get('embedding.weight')
+        _tied_now = getattr(model.loss_fn, 'weight', None) is model.embedding.weight
+        if (
+            _tied_now
+            and _lm is not None and _em is not None
+            and _lm.shape == _em.shape
+            and not torch.equal(_lm, _em)
+        ):
+            model.loss_fn.weight = torch.nn.Parameter(
+                torch.empty_like(model.embedding.weight)
+            )
+            resumed_split = True
+            logger.info(
+                "Resume: checkpoint has an untied lm_head (loss_fn.weight != "
+                "embedding.weight on disk); broke the tied-weight aliasing before "
+                "load and marked the deferred split as already-done."
+            )
+
     # Build optimizer param groups BEFORE compile/DDP so that named_parameters()
     # gives clean names and weight-tied tensors are only counted once.
     logger.info("Initializing Optimizer...")
@@ -856,6 +891,26 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 adamw_indices.update(g['params'])
 
         portable_state = {k: v for k, v in saved_state.items() if k in adamw_indices}
+
+        # Cold-start AdamW state when resuming from a post-split checkpoint.
+        # The deferred untie (split_fn) appended the new lm_head to a param group
+        # in a layout-dependent way — sometimes into the embed group, sometimes as
+        # a trailing group — so the saved AdamW state indices do NOT reliably map
+        # onto the current (now-untied) param ordering. An index-based restore
+        # could land the wrong param's exp_avg/exp_avg_sq on the lm_head. Since
+        # Muon momentum is already cold-restarted on every resume (and AdamW
+        # recovers within ~100 steps), cold-starting AdamW here is the safe,
+        # consistent choice rather than risk a misaligned restore. Precise
+        # name/shape-aware optimizer-state resume is tracked as future work
+        # (see the "Smoother Muon optimizer resume" TODO).
+        if resumed_split:
+            portable_state = {}
+            logger.warning(
+                "Resume: checkpoint is post-untie-split; cold-starting AdamW "
+                "state (saved optimizer-state indices are not reliably mappable "
+                "across the lm_head split). Recovers within ~100 steps."
+            )
+
         if portable_state:
             cur_sd = optimizer.state_dict()
             cur_sd['state'].update(portable_state)
@@ -949,7 +1004,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         pre_step_fn = None
         split_step = 0
         split_fn = None
-        if untie_at_frac is not None:
+        # Only arm the deferred split when it has NOT already happened. On a
+        # resume from a post-split checkpoint (resumed_split), the lm_head is
+        # already an independent Parameter — loaded above, folded into the embed
+        # AdamW group by name, and DDP-hooked (tie broken before DDP wrapping).
+        # Re-firing split_fn would clone embedding.weight over the trained
+        # lm_head; a manual pre_step_fn all-reduce would double-reduce a gradient
+        # DDP already handles. Leaving split_step=0 makes the scheduler treat the
+        # split as done (_split_done=True at construction).
+        if untie_at_frac is not None and not resumed_split:
             split_step = round(total_steps_original * untie_at_frac)
             _tm = model.module if hasattr(model, 'module') else model
             _embed_adamw_beta = (
