@@ -80,53 +80,11 @@ and multi-day runs. The 2026-07-01..07 arxiv/thestack/wiki ablation runs were al
 undertrained/poorly-tuned as a result (see RESULTS.md — barely-above-chance).
 Retune before spending GPU-time on the next matrix.
 
-### Periodic "latest" checkpointing (only best-val is saved → node death loses ~all progress)
-The `multi_val_bucketed` loop saves a checkpoint ONLY when val improves
-(best_model.pt). When Oracle reclaimed the down-nodes 2026-07-07, every run could
-only resume from its last val-improvement, not where it actually was — e.g. arxiv
-cross_doc_link had trained to ~step 50,491 but its newest checkpoint was step
-5,800 (~44.7k steps lost); doc_concatenated lost ~21.6k. Add periodic
-latest-checkpoint saving (every N optimizer steps, overwriting a single
-`latest.pt`, independent of val) so preemption loses at most N steps. Resume
-should prefer latest.pt over best_model.pt when newer.
-
 ### Train the ablation matrix
 Actually train reasonable-sized models for each ablation:
 (random, random-walk, dfs, bfs) × (doc-causal, cross-doc-link). NOTE: `random`
 strategy was previously introduced without approval and its runs deleted — confirm
 the intended strategy set before committing GPU-time (BFS is the established one).
-
-### Smoother Muon optimizer resume from checkpoints
-Today `--resume-from` (main.py:836) restores **only AdamW** optimizer state; the
-distributed Muon momentum buffers are deliberately dropped and reinitialized cold
-(`main.py:864` "Muon momentum initialised cold"). Reason: `MuonWithAuxAdam` shards
-the momentum buffers across ranks in a world_size-dependent layout, so the saved
-state isn't portable across a different world_size (or even reliably to the same
-one, given param-group ordering). Cold-restarting momentum on every resume costs
-re-warmup steps and perturbs the optimization trajectory — bad for
-resume-heavy/down-node workflows.
-Goal: gather/reshard the Muon momentum on save/load so resume restores it exactly
-(or maps it across world_size changes). Reference implementation:
-`~/hopprai/python/ml/models/mic/helpers/checkpoint_utils.py` (how mic handles
-optimizer-state checkpoint/resume) and PyTorch's official Muon at
-`torch/optim/_muon.py` (torch 2.9) — check whether migrating to the upstream Muon
-gets portable state_dict handling for free. Cross-ref the resume gotcha in
-[[cli-and-launch]] memory.
-
-**Also cold-started: AdamW state on post-untie-split resume.** As of 2026-07-13
-(untie-aware resume fix), resuming from a checkpoint saved *after* the deferred
-lm_head untie (`model.untie_at_frac`) cold-starts **all** AdamW state, not just
-Muon momentum. Reason: `split_fn` appended the new lm_head to a param group in a
-layout-dependent way (verified: some ckpts stored it as a trailing single-param
-group, others folded it into the embed group), so the current purely
-index-based AdamW-state restore can't reliably map saved indices onto the
-now-untied param ordering — an index-based restore could land the wrong param's
-`exp_avg`/`exp_avg_sq` on the lm_head. Cold-starting is the safe stopgap (recovers
-~100 steps). Fold into this task: make optimizer-state resume **name/shape-aware**
-(match saved→current params by parameter name + tensor shape rather than
-positional index) so AdamW state — including the split lm_head — restores exactly
-across the untie boundary and across param-group reordering. Pre-split and
-non-untie resumes already restore AdamW normally and are unaffected.
 
 ### Automate the compile-cache warmup (TODO)
 Multi-rank/multi-node runs require a pre-warmed shared compile cache to avoid the

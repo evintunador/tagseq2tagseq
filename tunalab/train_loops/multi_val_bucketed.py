@@ -68,24 +68,65 @@ def _eval_loss(model: nn.Module, loader) -> float:
     return total / max(count, 1)
 
 
-def _save_best(raw_model, optimizer, val_loss, step, output_dir, bucket_state_fn, config):
-    """Save best checkpoint on rank 0 then cpu_barrier so no rank races ahead.
+def _full_optimizer_state(optimizer):
+    """Collective (ALL ranks must call): world-size-portable, name-keyed
+    optimizer state via ``optimizer.state_dict_full()``, or ``None`` for a
+    plain optimizer that lacks it.
 
-    ``bucket_state`` is stored as a lazy callable so checkpointer resolves it at
-    save time (reflecting the true checkpoint position, not launch time).
+    The distributed Muon optimizer shards its momentum across ranks, so a
+    rank-0-only ``state_dict()`` captures just a fraction keyed by positional
+    index — neither complete nor portable.  ``state_dict_full`` runs an
+    all_gather to union every rank's shard into one name-keyed dict, so it MUST
+    be invoked by every rank together (outside the ``is_main_process`` guard) or
+    the non-rank-0 processes will deadlock on the missing collective.
     """
+    fn = getattr(optimizer, "state_dict_full", None)
+    if fn is None:
+        return None
+    return fn()
+
+
+def _save_ckpt_full(raw_model, optimizer, metadata, filepath, bucket_state_fn=None):
+    """Save a checkpoint whose optimizer state resumes EXACTLY at any world_size.
+
+    All ranks first compute the collective full optimizer state; rank 0 then
+    embeds it (already resolved) under ``metadata['optimizer_state']`` and writes
+    the file.  The model is passed to the checkpointer as a stateful object; the
+    optimizer is NOT passed as a stateful object because its positional
+    ``state_dict()`` is redundant with — and only a fraction of — the full state.
+    """
+    full_state = _full_optimizer_state(optimizer)  # collective — every rank
     if is_main_process():
-        metadata: Dict[str, Any] = {"val_loss": val_loss, "step": step, "config": config}
+        md: Dict[str, Any] = dict(metadata)
+        if full_state is not None:
+            md["optimizer_state"] = full_state
         if bucket_state_fn is not None:
-            metadata["bucket_state"] = lambda: bucket_state_fn().__dict__
-        checkpointer.save_checkpoint(
-            filepath=os.path.join(output_dir, "checkpoints", "best_model.pt"),
-            metadata=metadata,
-            model=raw_model,
-            optimizer=optimizer,
-        )
+            # Lazy: checkpointer resolves the dataset position at save time.
+            md["bucket_state"] = lambda: bucket_state_fn().__dict__
+        checkpointer.save_checkpoint(filepath=filepath, metadata=md, model=raw_model)
     # All ranks wait for rank 0 to finish writing before proceeding.
     cpu_barrier()
+
+
+def _save_best(raw_model, optimizer, val_loss, step, output_dir, bucket_state_fn, config):
+    """Save best checkpoint (full, portable optimizer state) on new best val loss."""
+    _save_ckpt_full(
+        raw_model, optimizer,
+        {"val_loss": val_loss, "step": step, "config": config},
+        os.path.join(output_dir, "checkpoints", "best_model.pt"),
+        bucket_state_fn=bucket_state_fn,
+    )
+
+
+def _save_latest(raw_model, optimizer, val_loss, step, output_dir, bucket_state_fn, config):
+    """Overwrite the single ``latest.pt`` regardless of val — so a kill loses at
+    most ``save_latest_interval`` steps, not everything since the last val gain."""
+    _save_ckpt_full(
+        raw_model, optimizer,
+        {"val_loss": val_loss, "step": step, "config": config},
+        os.path.join(output_dir, "checkpoints", "latest.pt"),
+        bucket_state_fn=bucket_state_fn,
+    )
 
 
 def run_training(
@@ -98,6 +139,7 @@ def run_training(
     save_best_model: bool = False,
     output_dir: Optional[str] = None,
     bucket_state_fn: Optional[Any] = None,
+    save_latest_interval: Optional[int] = None,
     **kwargs,
 ) -> Dict[str, Any]:
     """multi_val training loop that also persists BucketedPackDataset position.
@@ -105,6 +147,12 @@ def run_training(
     Behaves exactly like ``multi_val``; additionally, when ``bucket_state_fn`` is
     provided, the dataset schedule position is embedded in every best-model
     checkpoint for exact resume.
+
+    When ``save_latest_interval`` is set, also overwrites a single ``latest.pt``
+    every that-many optimizer steps (independent of val), so preemption/kill
+    loses at most ``save_latest_interval`` steps rather than everything since the
+    last val improvement.  Both best_model.pt and latest.pt carry the full,
+    world-size-portable optimizer state for exact Muon+AdamW resume.
     """
     model.train()
 
@@ -115,13 +163,18 @@ def run_training(
         raise ValueError(
             "val_loaders and output_dir must be provided when save_best_model=True."
         )
+    # 0 / None both mean "disabled" (main.py always passes an int, since this is
+    # a declared kwarg required for feature selection).
+    if save_latest_interval and output_dir is None:
+        raise ValueError("output_dir must be provided when save_latest_interval is set.")
 
     histories: Dict[str, List[float]] = {name: [] for name in val_loaders}
     best_val_loss = float("inf")
     config = kwargs.get("config", {})
+    last_val_mean = float("nan")  # most recent mean val loss, stamped into latest.pt
 
     def _run_val(step: int) -> None:
-        nonlocal best_val_loss
+        nonlocal best_val_loss, last_val_mean
         losses = {}
         for name, loader in val_loaders.items():
             losses[name] = _eval_loss(model, loader)
@@ -131,6 +184,7 @@ def run_training(
             return
 
         mean_loss = sum(losses.values()) / len(losses)
+        last_val_mean = mean_loss
         if save_best_model and mean_loss < best_val_loss:
             best_val_loss = mean_loss
             raw_model = model.module if hasattr(model, "module") else model
@@ -147,11 +201,26 @@ def run_training(
         if val_loaders and step_count > 0 and step_count % val_interval == 0:
             _run_val(step_count)
 
+        # Periodic latest.pt (collective — every rank calls _save_latest).
+        if (save_latest_interval and step_count > 0
+                and step_count % save_latest_interval == 0):
+            raw_model = model.module if hasattr(model, "module") else model
+            _save_latest(raw_model, optimizer, last_val_mean, step_count,
+                         output_dir, bucket_state_fn, config)
+
         step_count += 1
 
     # Final validation pass if not already run at the last step.
     if val_loaders and (step_count == 0 or step_count % val_interval != 0):
         _run_val(step_count)
+
+    # Final latest.pt so the very end of a run is always recoverable — skipped if
+    # the last step already landed on a save_latest_interval boundary (avoids an
+    # immediate redundant multi-GB write + collective gather).
+    if save_latest_interval and step_count % save_latest_interval != 0:
+        raw_model = model.module if hasattr(model, "module") else model
+        _save_latest(raw_model, optimizer, last_val_mean, step_count,
+                     output_dir, bucket_state_fn, config)
 
     result: Dict[str, Any] = {"model": model}
     for name, hist in histories.items():

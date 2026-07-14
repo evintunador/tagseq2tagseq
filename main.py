@@ -179,6 +179,26 @@ class LRCooldownScheduler:
     def load_state_dict(self, state_dict):
         self.optimizer.load_state_dict(state_dict)
 
+    def state_dict_full(self):
+        # Delegate the name-keyed, world-size-portable optimizer state to the
+        # wrapped optimizer so checkpoints saved while the scheduler is active
+        # (warmup/cooldown/untie — i.e. essentially always) still capture the
+        # full Muon+AdamW state. Without this delegation the training loop's
+        # getattr(optimizer, "state_dict_full", None) would miss it and silently
+        # fall back to a checkpoint with no optimizer state.
+        return self.optimizer.state_dict_full()
+
+    def load_state_dict_full(self, full_sd):
+        return self.optimizer.load_state_dict_full(full_sd)
+
+    @property
+    def _id_to_name(self):
+        return self.optimizer._id_to_name
+
+    @_id_to_name.setter
+    def _id_to_name(self, value):
+        self.optimizer._id_to_name = value
+
     @property
     def param_groups(self):
         return self.optimizer.param_groups
@@ -398,8 +418,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     if resume_from:
         if not os.path.exists(resume_from):
             raise FileNotFoundError(f"--resume-from checkpoint not found: {resume_from}")
+        # Resume from an explicit checkpoint FILE — the user chooses latest.pt
+        # (where the run was at the kill) vs best_model.pt (last val improvement).
         logger.info("Loading resume checkpoint: %s", resume_from)
-        resume_ckpt   = torch.load(resume_from, map_location='cpu', weights_only=False)
+        resume_ckpt = torch.load(resume_from, map_location='cpu', weights_only=False)
         resumed_steps = int(resume_ckpt.get('metadata', {}).get('step', 0))
         resumed_val   = resume_ckpt.get('metadata', {}).get('val_loss', float('nan'))
         logger.info("Checkpoint: step=%d  val_loss=%.4f", resumed_steps, resumed_val)
@@ -788,10 +810,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     logger.info("Initializing Optimizer...")
     muon_params, embed_adamw_params, other_adamw_params, ve_embed_params = [], [], [], []
     seen_ids: set = set()
+    # id(param) -> parameter name, for name-keyed (world-size-portable) optimizer
+    # state save/restore. Captured here (pre-compile/DDP) where named_parameters()
+    # gives clean names and each tied tensor appears once.
+    id_to_name: dict = {}
     for name, param in model.named_parameters():
         if id(param) in seen_ids:
             continue
         seen_ids.add(id(param))
+        id_to_name[id(param)] = name
         if 'value_embeds' in name or 'bigram_embed' in name:
             # Sparse lookup tables: lower β1 (0.75) for sparse gradients,
             # no weight decay (rows not seen this step must not shrink).
@@ -861,13 +888,20 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
         logger.info("Using SingleDeviceMuonWithAuxAdam (single process)")
 
+    # Give the optimizer the param-name map so state_dict_full/load_state_dict_full
+    # can (de)serialize state keyed by name — the basis for exact, world-size-
+    # portable Muon+AdamW resume (including the untied lm_head across the split).
+    optimizer._id_to_name = id_to_name
+
     # -------------------------------------------------------------------------
-    # 3b. Restore weights and AdamW state from checkpoint (if resuming).
+    # 3b. Restore weights and optimizer state from checkpoint (if resuming).
     #
-    # Muon momentum buffers are world_size-dependent: each rank only saves its
-    # own shard, so they cannot be remapped when world_size changes.  We restore
-    # the AdamW state (embedding + skip_weights) which IS portable, and let Muon
-    # restart with cold momentum (recovers within ~100 steps).
+    # The checkpoint carries a name-keyed, world-size-portable full optimizer
+    # state under metadata['optimizer_state'] (format 'muon_full_v1', written by
+    # the training loop via optimizer.state_dict_full). load_state_dict_full
+    # restores BOTH Muon momentum and AdamW state exactly — at any world_size and
+    # across the deferred lm_head untie — by matching saved→current params on NAME
+    # rather than positional index.
     # -------------------------------------------------------------------------
     if resume_ckpt is not None:
         # --- model weights ---
@@ -880,48 +914,29 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         model.load_state_dict(model_sd, strict=True)
         logger.info("Resume: model weights restored.")
 
-        # --- AdamW optimizer state ---
-        saved_opt = resume_ckpt.get('optimizer', {})
-        saved_state  = saved_opt.get('state', {})
-        saved_groups = saved_opt.get('param_groups', [])
-
-        adamw_indices = set()
-        for g in saved_groups:
-            if not g.get('use_muon', False):
-                adamw_indices.update(g['params'])
-
-        portable_state = {k: v for k, v in saved_state.items() if k in adamw_indices}
-
-        # Cold-start AdamW state when resuming from a post-split checkpoint.
-        # The deferred untie (split_fn) appended the new lm_head to a param group
-        # in a layout-dependent way — sometimes into the embed group, sometimes as
-        # a trailing group — so the saved AdamW state indices do NOT reliably map
-        # onto the current (now-untied) param ordering. An index-based restore
-        # could land the wrong param's exp_avg/exp_avg_sq on the lm_head. Since
-        # Muon momentum is already cold-restarted on every resume (and AdamW
-        # recovers within ~100 steps), cold-starting AdamW here is the safe,
-        # consistent choice rather than risk a misaligned restore. Precise
-        # name/shape-aware optimizer-state resume is tracked as future work
-        # (see the "Smoother Muon optimizer resume" TODO).
-        if resumed_split:
-            portable_state = {}
-            logger.warning(
-                "Resume: checkpoint is post-untie-split; cold-starting AdamW "
-                "state (saved optimizer-state indices are not reliably mappable "
-                "across the lm_head split). Recovers within ~100 steps."
+        # Full, name-keyed optimizer state — restores Muon momentum + AdamW
+        # exactly, at any world_size and across the deferred lm_head untie split
+        # (matched by parameter name, not positional index). All checkpoints
+        # written by the current training loops carry this under
+        # metadata['optimizer_state'] (format 'muon_full_v1').
+        full_opt_state = resume_ckpt.get('metadata', {}).get('optimizer_state')
+        if not (isinstance(full_opt_state, dict) and full_opt_state.get('format') == 'muon_full_v1'):
+            raise ValueError(
+                f"--resume-from {resume_from}: checkpoint has no name-keyed "
+                "optimizer state (metadata['optimizer_state'] with format "
+                "'muon_full_v1'). This checkpoint predates the portable-resume "
+                "format and is no longer supported — resume from a checkpoint "
+                "saved by the current training code."
             )
-
-        if portable_state:
-            cur_sd = optimizer.state_dict()
-            cur_sd['state'].update(portable_state)
-            optimizer.load_state_dict(cur_sd)
-            logger.info(
-                "Resume: AdamW state restored for %d param(s); "
-                "Muon momentum initialised cold (world_size changed: %d → %d).",
-                len(portable_state),
-                len(saved_groups[0].get('params', [])) + len(adamw_indices),  # old world total
-                dist.world_size,
-            )
+        restored, skipped = optimizer.load_state_dict_full(full_opt_state)
+        logger.info(
+            "Resume: full optimizer state restored by name for %d param(s) "
+            "(%d skipped: absent/shape-mismatch). Muon momentum + AdamW "
+            "restored exactly across world_size and the untie split.",
+            len(restored), len(skipped),
+        )
+        if skipped:
+            logger.info("Resume: optimizer state NOT restored for: %s", sorted(skipped)[:20])
 
         del resume_ckpt   # free ~1.8 GB
         resume_ckpt = None
@@ -1052,6 +1067,16 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                         for k, v in embed_state.items()
                     }
 
+                # Register the new lm_head in the optimizer's name map so a
+                # checkpoint saved AFTER this split captures its optimizer state
+                # (state_dict_full is name-keyed). Without this the freshly-untied
+                # lm_head would be silently omitted, defeating exact resume across
+                # a fresh run that crosses the untie point. 'loss_fn.weight'
+                # matches the resume-side model.named_parameters() name.
+                id_map = getattr(opt, '_id_to_name', None)
+                if id_map is not None:
+                    id_map[id(new_lm_head)] = 'loss_fn.weight'
+
                 logger.info(
                     "Weight untying: lm_head split from embedding at step %d "
                     "(Adam state transferred: %s).",
@@ -1109,6 +1134,19 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         'use_tqdm': dist.is_main_process,  # only rank 0 shows the progress bar
         'num_epochs': cfg['train_loop'].get('epochs', 1),
     })
+    # Periodic latest.pt: overwrite a single checkpoint every N optimizer steps
+    # (independent of val improvement) so a kill/preemption loses at most N steps
+    # instead of everything since the last val gain. Carries the full,
+    # world-size-portable optimizer state for exact Muon+AdamW resume.
+    #
+    # ALWAYS pass this kwarg (as an int): it is a declared kwarg of the multi_val
+    # feature, and smart_train only selects a feature when its ENTIRE kwarg set is
+    # present — omitting it would deselect multi_val_bucketed and silently drop
+    # the bucket-resume feature. 0 (falsy) disables periodic saving; the training
+    # loop treats it as off, preserving the old best-only behaviour by default.
+    atomic_feature_kwargs['save_latest_interval'] = int(
+        cfg['train_loop'].get('save_latest_interval') or 0
+    )
     # Profiling: inject profile_* knobs into the shared kwargs so profile_training
     # is selected and composed alongside the other atomic features (grad_accum,
     # val, checkpointing, etc.) by the LLM compiler.  profile_run=False is the
@@ -1336,10 +1374,16 @@ if __name__ == "__main__":
     parser.add_argument("--seed", dest="seed", type=int, default=None,
                         help="Random seed. If not set, uses the config file value.")
     parser.add_argument("--resume-from", dest="resume_from", type=str, default=None,
-                        help="Path to a best_model.pt checkpoint to resume training from. "
-                             "Restores model weights and AdamW state; Muon momentum is "
-                             "restarted cold (world_size-dependent, cannot be remapped). "
-                             "max_optimizer_steps is automatically reduced by the checkpoint step.")
+                        help="Path to a checkpoint FILE to resume from — e.g. "
+                             ".../checkpoints/latest.pt (where the run was at the kill) or "
+                             ".../checkpoints/best_model.pt (last val improvement); you pick "
+                             "which. Restores model weights AND the full optimizer state "
+                             "(Muon momentum + AdamW) exactly, keyed by parameter name so "
+                             "resume is correct at any world_size and across the lm_head "
+                             "untie split. Checkpoints must carry the name-keyed "
+                             "optimizer_state written by the current training code (older "
+                             "formats are not supported). max_optimizer_steps is "
+                             "automatically reduced by the checkpoint step.")
 
     config = compose_config(parser)
 

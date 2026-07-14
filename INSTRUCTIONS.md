@@ -437,17 +437,23 @@ python launch_slurm.py \
     --data.val_dirs.val_random /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random \
     --data.epoch_dirs /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_2
 
-# Resume from checkpoint (BucketState is embedded in the checkpoint metadata)
+# Resume from checkpoint (BucketState + full optimizer state are in the metadata)
 python launch_slurm.py \
     --nodes 2 --gpus-per-node 4 --time 24:00:00 \
     --config configs/thestack_cross_doc.yaml \
     --data.dataset_dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
     --data.epoch_dirs /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_1 \
-    --resume-from runs/<run_dir>/checkpoints/best_model.pt
+    --resume-from runs/<run_dir>/checkpoints/latest.pt
 ```
 
+Point `--resume-from` at a checkpoint FILE: `latest.pt` (overwritten every
+`save_latest_interval` steps — where the run was at the kill) or `best_model.pt`
+(last val improvement); you choose.
+
 Notes:
-- `world_size` and `grad_accum` can change on resume — the `bucket_consumed` cursors remain valid regardless.
+- `world_size` and `grad_accum` can change on resume — the `bucket_consumed`
+  cursors AND the full Muon+AdamW optimizer state both remain valid regardless
+  (optimizer state is keyed by parameter name and resharded to the new world_size).
 - If all `epoch_dirs` are exhausted, training raises `RuntimeError` asking you to precompute more epochs.
 - The `max_grants_warmup` warning is expected if `max_grants_start < max_grants` in the config: bucketing was done at the final `max_grants`, so density balance is approximate during warmup.
 

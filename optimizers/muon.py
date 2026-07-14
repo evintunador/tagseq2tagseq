@@ -25,10 +25,188 @@ Deviation from modded-nanogpt reference:
   We use lr × wd throughout, matching our existing optimizer behavior.
 """
 
+import logging
+
 import torch
 import torch.distributed as dist
 
 from kernels.polar_express import polar_express
+
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# World-size-portable, name-keyed optimizer-state (de)serialization
+# ---------------------------------------------------------------------------
+#
+# The distributed Muon step shards its per-parameter state (momentum_buffer,
+# second_momentum_buffer, red_dim, and the bf16 mantissa) round-robin across
+# ranks: position ``i`` in a size-sorted Muon group is owned by rank
+# ``i % world_size``, and only the owning rank ever creates/updates that
+# param's state.  AdamW state (exp_avg/exp_avg_sq/step) is UNsharded — every
+# rank steps every AdamW param, so it is identical on all ranks.
+#
+# A plain ``optimizer.state_dict()`` saved on rank 0 therefore captures only
+# rank 0's ~1/world_size slice of the Muon momentum, keyed by POSITIONAL param
+# index.  That is neither complete (missing other ranks' shards) nor portable
+# (indices shift across world_size changes and across param-group reordering
+# such as the deferred lm_head untie).  Hence the old "cold-restart Muon on
+# every resume" workaround.
+#
+# ``state_dict_full`` fixes both problems: it is a COLLECTIVE that gathers every
+# rank's shard into one dict keyed by parameter *name* (not index).
+# ``load_state_dict_full`` is then a LOCAL per-rank restore that reinstates only
+# the params the current rank owns at the current world_size, matched by name +
+# shape.  Result: exact Muon + AdamW resume at any world_size and across the
+# untie split.  Requires ``optimizer._id_to_name`` (id(param) -> name), which
+# main.py populates from ``model.named_parameters()`` after building groups.
+
+_FULL_STATE_FORMAT = "muon_full_v1"
+
+
+def _serialize_optimizer_state_full(optimizer):
+    """Collective: gather sharded Muon state + replicated AdamW state into one
+    name-keyed dict.  MUST be called by every rank (it runs an all_gather when
+    distributed).  Returns a picklable dict tagged with ``_FULL_STATE_FORMAT``."""
+    id_to_name = getattr(optimizer, "_id_to_name", None)
+    if id_to_name is None:
+        raise RuntimeError(
+            "state_dict_full requires optimizer._id_to_name (a dict mapping "
+            "id(param) -> parameter name). Populate it after building param "
+            "groups, e.g. optimizer._id_to_name = {id(p): n for n, p in "
+            "model.named_parameters()}."
+        )
+
+    is_dist = dist.is_available() and dist.is_initialized()
+    rank = dist.get_rank() if is_dist else 0
+
+    local = {}
+    for group in optimizer.param_groups:
+        use_muon = group["use_muon"]
+        for p in group["params"]:
+            st = optimizer.state.get(p)
+            if not st:
+                continue
+            name = id_to_name.get(id(p))
+            if name is None:
+                # Unnamed param (should not happen for a model-derived optimizer);
+                # skip rather than emit an unrestorable positional key.
+                continue
+            # AdamW state is replicated on every rank — only rank 0 emits it so
+            # the merged dict holds a single copy.  Muon state is sharded, so
+            # every owning rank emits its slice.
+            if not use_muon and rank != 0:
+                continue
+            entry = {"use_muon": use_muon}
+            if use_muon:
+                entry["momentum_buffer"] = st["momentum_buffer"].detach().to("cpu")
+                entry["second_momentum_buffer"] = st["second_momentum_buffer"].detach().to("cpu")
+                entry["red_dim"] = int(st["red_dim"])
+                if "mantissa" in st:
+                    entry["mantissa"] = st["mantissa"].detach().to("cpu")
+            else:
+                entry["exp_avg"] = st["exp_avg"].detach().to("cpu")
+                entry["exp_avg_sq"] = st["exp_avg_sq"].detach().to("cpu")
+                entry["step"] = int(st["step"])
+            local[name] = entry
+
+    if is_dist:
+        # all_gather_object (not gather_object): the NCCL backend used in
+        # production does NOT support gather/gather_object, only all_gather. Every
+        # rank therefore reconstructs the full state; the tensors were already
+        # moved to CPU above, so the transient cost is CPU RAM (pickled shards),
+        # not GPU memory. Only rank 0's returned dict is written to disk, but all
+        # ranks must participate in the collective. If this CPU spike ever
+        # matters, the fix is a gloo subgroup + gather_object, not gather here.
+        gathered = [None] * dist.get_world_size()
+        dist.all_gather_object(gathered, local)
+        merged = {}
+        for part in gathered:
+            if part:
+                merged.update(part)
+    else:
+        merged = local
+
+    return {"format": _FULL_STATE_FORMAT, "state": merged}
+
+
+def _restore_one_param_state(optimizer, p, entry, use_muon):
+    """Load a single param's saved state (shape-validated) into optimizer.state.
+    Returns True on success, False if skipped due to a shape/type mismatch."""
+    if entry.get("use_muon") != use_muon:
+        return False
+    st = optimizer.state[p]
+    if use_muon:
+        mb = entry["momentum_buffer"]
+        if tuple(mb.shape) != tuple(p.shape):
+            return False
+        st["momentum_buffer"] = mb.to(device=p.device, dtype=torch.float32)
+        st["second_momentum_buffer"] = entry["second_momentum_buffer"].to(
+            device=p.device, dtype=torch.float32
+        )
+        st["red_dim"] = int(entry["red_dim"])
+        if p.dtype == torch.bfloat16:
+            m = entry.get("mantissa")
+            if m is not None and tuple(m.shape) == tuple(p.shape):
+                st["mantissa"] = m.to(device=p.device)
+            else:
+                # Missing/mismatched mantissa (e.g. dtype changed): start the
+                # low-bit tracker cold — a bounded, sub-ULP loss only.
+                st["mantissa"] = torch.zeros(p.shape, dtype=torch.uint16, device=p.device)
+    else:
+        ea, eas = entry["exp_avg"], entry["exp_avg_sq"]
+        if tuple(ea.shape) != tuple(p.shape) or tuple(eas.shape) != tuple(p.shape):
+            return False
+        st["exp_avg"] = ea.to(device=p.device, dtype=p.dtype)
+        st["exp_avg_sq"] = eas.to(device=p.device, dtype=p.dtype)
+        st["step"] = int(entry["step"])
+    return True
+
+
+def _load_optimizer_state_full(optimizer, full_sd):
+    """Local per-rank restore of state produced by ``_serialize_optimizer_state_full``.
+
+    Each rank restores only the params it currently owns (Muon: the round-robin
+    shard for this rank/world_size; AdamW: all).  Params whose name is absent or
+    whose saved shape mismatches are left cold (fresh on first step).  Returns
+    ``(restored_names, skipped_names)`` for logging."""
+    if not isinstance(full_sd, dict) or full_sd.get("format") != _FULL_STATE_FORMAT:
+        raise ValueError(
+            f"load_state_dict_full expected a '{_FULL_STATE_FORMAT}' dict, got "
+            f"{type(full_sd)} with format={full_sd.get('format') if isinstance(full_sd, dict) else None}"
+        )
+    id_to_name = getattr(optimizer, "_id_to_name", None)
+    if id_to_name is None:
+        raise RuntimeError("load_state_dict_full requires optimizer._id_to_name")
+
+    saved = full_sd["state"]
+    is_dist = dist.is_available() and dist.is_initialized()
+    rank = dist.get_rank() if is_dist else 0
+    world_size = dist.get_world_size() if is_dist else 1
+    sharded = bool(getattr(optimizer, "_muon_sharded", False))
+
+    restored, skipped = [], []
+    for group in optimizer.param_groups:
+        use_muon = group["use_muon"]
+        params = group["params"]
+        if use_muon and sharded and world_size > 1:
+            # Mirror step()'s ownership: position i -> rank i % world_size.
+            owned = [params[i] for i in range(len(params)) if i % world_size == rank]
+        else:
+            owned = list(params)
+        for p in owned:
+            name = id_to_name.get(id(p))
+            entry = saved.get(name) if name is not None else None
+            if entry is None:
+                if name is not None:
+                    skipped.append(name)
+                continue
+            if _restore_one_param_state(optimizer, p, entry, use_muon):
+                restored.append(name)
+            else:
+                skipped.append(name)
+    return restored, skipped
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +318,12 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                 group["weight_decay"] = group.get("weight_decay", 0)
                 assert set(group.keys()) == {"params", "lr", "betas", "eps", "weight_decay", "use_muon"}
         super().__init__(param_groups, dict())
+        # Muon state is sharded round-robin across ranks in this class (see
+        # state_dict_full) — controls per-rank ownership on portable restore.
+        self._muon_sharded = True
+        # id(param) -> parameter name, populated by the training entrypoint after
+        # building param groups; required by state_dict_full/load_state_dict_full.
+        self._id_to_name = {}
         # 0-D CPU scalar buffers — filled before each compiled call to avoid
         # recompilation when lr/momentum change during training.
         self._momentum_t  = torch.zeros((), device="cpu")
@@ -147,6 +331,18 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
         self._wd_t        = torch.zeros((), device="cpu")
         self._step_size_t = torch.zeros((), device="cpu")
         self._eff_wd_t    = torch.zeros((), device="cpu")
+
+    def state_dict_full(self):
+        """Collective: gather all ranks' sharded Muon state + replicated AdamW
+        state into one world-size-portable, name-keyed dict.  Every rank must
+        call this together.  See module docstring for rationale."""
+        return _serialize_optimizer_state_full(self)
+
+    def load_state_dict_full(self, full_sd):
+        """Local: restore state produced by ``state_dict_full`` for the params
+        this rank owns at the current world_size.  Returns (restored, skipped)
+        name lists."""
+        return _load_optimizer_state_full(self, full_sd)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -262,11 +458,25 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                 group["weight_decay"] = group.get("weight_decay", 0)
                 assert set(group.keys()) == {"params", "lr", "betas", "eps", "weight_decay", "use_muon"}
         super().__init__(param_groups, dict())
+        # Single-device: no sharding — every param's state lives on this process.
+        self._muon_sharded = False
+        self._id_to_name = {}
         self._momentum_t  = torch.zeros((), device="cpu")
         self._lr_t        = torch.zeros((), device="cpu")
         self._wd_t        = torch.zeros((), device="cpu")
         self._step_size_t = torch.zeros((), device="cpu")
         self._eff_wd_t    = torch.zeros((), device="cpu")
+
+    def state_dict_full(self):
+        """Name-keyed, world-size-portable optimizer state (single-process:
+        no gather needed, but produces the same format as the distributed
+        optimizer so checkpoints interoperate across launch topologies)."""
+        return _serialize_optimizer_state_full(self)
+
+    def load_state_dict_full(self, full_sd):
+        """Restore state produced by ``state_dict_full``.  Returns (restored,
+        skipped) name lists."""
+        return _load_optimizer_state_full(self, full_sd)
 
     @torch.no_grad()
     def step(self, closure=None):

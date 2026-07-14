@@ -14,13 +14,36 @@ Kwargs:
     output_dir (str):                     directory for checkpoint (required when
                                           save_best_model=True).
 """
+import os
 from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
 
-from tunalab.train_loops.checkpoint_best_model import _save_best
+# Full, world-size-portable optimizer-state save helpers (single source of
+# truth in the bucketed feature). Used with bucket_state_fn=None here.
+from tunalab.train_loops.multi_val_bucketed import (
+    _save_ckpt_full as _save_ckpt_full_ts2,
+)
+
+
+def _save_best(raw_model, optimizer, val_loss, step, output_dir, kwargs):
+    """Best checkpoint with full, portable optimizer state (no bucket state)."""
+    _save_ckpt_full_ts2(
+        raw_model, optimizer,
+        {"val_loss": val_loss, "step": step, "config": kwargs.get("config", {})},
+        os.path.join(output_dir, "checkpoints", "best_model.pt"),
+    )
+
+
+def _save_latest(raw_model, optimizer, val_loss, step, output_dir, kwargs):
+    """Periodic latest.pt with full, portable optimizer state (no bucket state)."""
+    _save_ckpt_full_ts2(
+        raw_model, optimizer,
+        {"val_loss": val_loss, "step": step, "config": kwargs.get("config", {})},
+        os.path.join(output_dir, "checkpoints", "latest.pt"),
+    )
 
 
 @torch.no_grad()
@@ -55,6 +78,7 @@ def run_training(
     val_interval: int = 10,
     save_best_model: bool = False,
     output_dir: Optional[str] = None,
+    save_latest_interval: Optional[int] = None,
     **kwargs,
 ) -> Dict[str, Any]:
     """Training loop with multiple named validation loaders.
@@ -65,6 +89,10 @@ def run_training(
     When ``save_best_model=True``, saves a checkpoint whenever the mean val
     loss across all loaders improves, using the same ``_save_best`` helper as
     ``checkpoint_best_model``.
+
+    When ``save_latest_interval`` is set, also overwrites a single ``latest.pt``
+    every that-many steps (independent of val) so a kill loses at most that many
+    steps.  Both checkpoints carry full, world-size-portable optimizer state.
     """
     model.train()
 
@@ -75,12 +103,17 @@ def run_training(
         raise ValueError(
             "val_loaders and output_dir must be provided when save_best_model=True."
         )
+    # 0 / None both mean "disabled" (main.py always passes an int, since this is
+    # a declared kwarg required for feature selection).
+    if save_latest_interval and output_dir is None:
+        raise ValueError("output_dir must be provided when save_latest_interval is set.")
 
     histories: Dict[str, List[float]] = {name: [] for name in val_loaders}
     best_val_loss = float("inf")
+    last_val_mean = float("nan")
 
     def _run_val(step: int) -> None:
-        nonlocal best_val_loss
+        nonlocal best_val_loss, last_val_mean
         losses = {}
         for name, loader in val_loaders.items():
             losses[name] = _eval_loss(model, loader)
@@ -90,6 +123,7 @@ def run_training(
             return
 
         mean_loss = sum(losses.values()) / len(losses)
+        last_val_mean = mean_loss
         if save_best_model and mean_loss < best_val_loss:
             best_val_loss = mean_loss
             raw_model = model.module if hasattr(model, "module") else model
@@ -105,11 +139,21 @@ def run_training(
         if val_loaders and step_count > 0 and step_count % val_interval == 0:
             _run_val(step_count)
 
+        if (save_latest_interval and step_count > 0
+                and step_count % save_latest_interval == 0):
+            raw_model = model.module if hasattr(model, "module") else model
+            _save_latest(raw_model, optimizer, last_val_mean, step_count, output_dir, kwargs)
+
         step_count += 1
 
     # Final validation pass if not already run at the last step.
     if val_loaders and (step_count == 0 or step_count % val_interval != 0):
         _run_val(step_count)
+
+    # Final latest.pt (skip if the last step already saved on a boundary).
+    if save_latest_interval and step_count % save_latest_interval != 0:
+        raw_model = model.module if hasattr(model, "module") else model
+        _save_latest(raw_model, optimizer, last_val_mean, step_count, output_dir, kwargs)
 
     result: Dict[str, Any] = {"model": model}
     for name, hist in histories.items():
