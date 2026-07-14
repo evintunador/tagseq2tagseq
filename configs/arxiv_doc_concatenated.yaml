@@ -61,7 +61,12 @@ train_loop:
   cooldown_frac: 0.4
   min_lr_ratio: 0.1
   val_steps: 20
-  val_interval: 100
+  val_interval: 250
+  # Overwrite a single latest.pt every N optimizer steps (independent of val)
+  # so a kill/preemption loses at most N steps. Set to val_interval here.
+  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
+  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
+  save_latest_interval: 250
   atomic_feature_kwargs:
     norm_clip_value: 1.0
     accum_steps: 1
