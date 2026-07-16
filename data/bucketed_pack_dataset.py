@@ -230,6 +230,19 @@ class BucketedPackDataset(IterableDataset):
             bucket_consumed=dict(self._bucket_consumed),
         )
 
+    def set_state(self, state: BucketState) -> None:
+        """Restore the schedule position captured by get_state().
+
+        Used to make a throw-away read (e.g. a pre-training compile warmup that
+        fetches a batch before the real loop) side-effect-free: snapshot with
+        get_state(), consume the batch, then set_state() back so the warmup pack
+        is re-yielded by the real training loop and the per-epoch dedup accounting
+        is unperturbed.
+        """
+        self._epoch_idx = state.epoch_idx
+        self._global_accum_step = state.global_accum_step
+        self._bucket_consumed = dict(state.bucket_consumed)
+
     def _materialize(self, pack: PackRecord) -> Dict[str, Any]:
         """Reconstruct a full batch dict from a PackRecord."""
         placements = _record_to_placements(pack)

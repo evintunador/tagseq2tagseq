@@ -144,6 +144,34 @@ class TestBucketedPackDataset:
                 f"Resume diverged:\n  original: {packs1_next5}\n  resumed:  {packs2_next5}"
             )
 
+    def test_set_state_roundtrip_is_side_effect_free(self):
+        """set_state(get_state()) makes a throw-away read invisible.
+
+        Mirrors the compile-warmup use case in main.py: snapshot the position,
+        consume a batch (as the warmup does), restore the snapshot, then verify
+        the real loop re-yields the same packs it would have without the read.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            epoch_dir = _make_epoch_dir(tmp, n_buckets=4, packs_per_bucket=10)
+            epoch_dirs = [epoch_dir]
+
+            # Baseline: uninterrupted run of 5 packs.
+            ds_ref = _make_dataset(epoch_dirs)
+            baseline = _collect_pack_ids(ds_ref, 5)
+
+            # Warmup-style: snapshot, consume 1 (the broadcast warmup batch),
+            # restore, then collect 5 — must match the baseline exactly.
+            ds = _make_dataset(epoch_dirs)
+            snap = ds.get_state()
+            _collect_pack_ids(ds, 1)      # throw-away warmup read
+            ds.set_state(snap)            # restore
+            after = _collect_pack_ids(ds, 5)
+
+            assert after == baseline, (
+                f"set_state round-trip perturbed the schedule:\n"
+                f"  baseline: {baseline}\n  after:    {after}"
+            )
+
     def test_world_size_change_on_resume(self):
         """bucket_consumed cursors stay valid when world_size doubles on resume.
 

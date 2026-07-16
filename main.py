@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import logging
+import traceback
 import os
 import datetime
 from pathlib import Path
@@ -42,6 +43,7 @@ from model.graph_traversal.arxiv_cite_detector import ArxivCiteDetector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
 from data.bucketed_pack_dataset import BucketedPackDataset, BucketState
+from tunalab.device import to_device
 from data.layout import make_layout_policy, inference_layout_for_detector
 from data.pack_sampler import PackBatchSampler
 from data.traversal import (
@@ -220,6 +222,103 @@ class LimitedDataLoader:
     @property
     def dataset(self):
         return self.loader.dataset
+
+
+def _compile_warmup(model, train_loader, dist, num_steps: int) -> None:
+    """Synchronized torch.compile warmup to prevent cross-rank NCCL desync.
+
+    THE PROBLEM: with torch.compile + DDP, the first real step triggers a lazy,
+    per-rank compilation of the backbone graph. If ranks compile *non-identical*
+    graphs — which happens when each rank fetches a *different* batch (packed
+    sequences vary in shape/sparsity, so the FlexAttention BlockMask / Triton
+    mask tensors differ) or when concurrent cold-compile under submitit/srun
+    resolves the compile-cache race differently per rank — dynamo can insert a
+    different number of collectives (or DDP assigns mismatched gradient buckets),
+    so step 1 desyncs and hangs on an NCCL all-reduce. (This is the same
+    first-step hang tracked in the submitit investigation; disabling
+    optimize_ddp removes the compiler-inserted collectives, and this warmup
+    removes the graph-divergence source itself.)
+
+    THE FIX (mirrors the mic reference orchestrator): before the real loop, rank
+    0 fetches ONE batch and broadcasts it to every rank, so all ranks trace the
+    IDENTICAL shape and compile the same graph. We run ``num_steps`` fwd+bwd
+    passes with a ``barrier()`` between each so compilation completes
+    synchronously across ranks, then zero the grads. We NEVER call
+    optimizer.step() — this must not advance training.
+
+    SIDE-EFFECT-FREE: the model forward mutates the MTP step counter and reading
+    a batch advances the (stateful, IterableDataset) schedule position; both are
+    snapshotted and restored so the warmup batch is re-yielded by the real loop
+    and the schedule/dedup accounting is unperturbed.
+
+    HISTORICAL NOTE: this warmup was written while chasing an intermittent
+    step-0 8-GPU hang. That hang was ultimately root-caused to a rank-0 CUDA OOM
+    from a foreign GPU-0 co-tenant (a self-inflicted service that autostarted on
+    SSH into a node, since fixed), NOT a genuine graph-divergence desync — 9
+    clean overnight 8-GPU runs after the co-tenant fix showed no warmup hangs.
+    The warmup is kept because identical-graph compilation is still the right
+    invariant and it makes any residual first-step failure loud at step 0.
+    """
+    if num_steps <= 0 or not dist.is_distributed:
+        return
+
+    device = dist.device
+    raw_model = model.module if hasattr(model, "module") else model
+
+    # Snapshot the dataset schedule position so the warmup read is invisible to
+    # the real loop (only meaningful for the stateful BucketedPackDataset path).
+    dataset = train_loader.dataset
+    ds_state = dataset.get_state() if hasattr(dataset, "get_state") else None
+
+    # Rank 0 fetches one real batch; broadcast it so every rank traces the same
+    # shape. broadcast_object_list moves the (CPU) batch dict across ranks.
+    batch = None
+    if dist.is_main_process:
+        batch = next(iter(train_loader))
+        batch = to_device(batch, "cpu")
+    obj = [batch]
+    torch.distributed.broadcast_object_list(obj, src=0)
+    batch = to_device(obj[0], device)
+
+    # Snapshot MTP counter (raw_model.forward increments it in training mode).
+    mtp_step = None
+    if hasattr(raw_model, "_mtp_step"):
+        mtp_step = raw_model._mtp_step.clone()
+
+    logger.info("[compile warmup] Running %d synchronized fwd+bwd pass(es) on a "
+                "broadcast batch to compile identical graphs across %d ranks...",
+                num_steps, dist.world_size)
+    was_training = model.training
+    model.train()
+    # If ANY rank raises here (compile error, OOM, kernel assert), the exception
+    # would otherwise unwind straight into reproducibility.__exit__'s barrier(),
+    # which hangs forever (peers never arrive) and SWALLOWS the traceback — the
+    # classic "DDP collective hang" that's really a masked single-rank error.
+    # Log the full traceback on the failing rank FIRST so it's always visible,
+    # then re-raise (the process will still abort; at least we see why).
+    try:
+        for i in range(num_steps):
+            loss = model(batch)
+            loss.backward()
+            torch.cuda.synchronize()
+            dist.barrier()
+            logger.info("[compile warmup] step %d/%d done (loss=%.4f)", i + 1, num_steps, loss.item())
+    except Exception:
+        logger.error("[compile warmup] rank %d raised during warmup — full traceback:\n%s",
+                     dist.rank, traceback.format_exc())
+        raise
+
+    # Discard warmup grads so the real first step starts clean; do NOT step().
+    model.zero_grad(set_to_none=True)
+    if not was_training:
+        model.eval()
+
+    # Restore mutated state so warmup leaves no trace.
+    if mtp_step is not None:
+        raw_model._mtp_step.copy_(mtp_step)
+    if ds_state is not None and hasattr(dataset, "set_state"):
+        dataset.set_state(ds_state)
+    logger.info("[compile warmup] Complete — graphs compiled, state restored.")
 
 
 def _run_generation_demo(training_module, tokenizer, link_detector, layout_policy, mask_type,
@@ -1003,10 +1102,23 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # interfering with the compiled graph.
     if cfg['model']['compile']:
         logger.info("Compiling model backbone with torch.compile...")
-        # optimize_ddp=True lets dynamo insert all-reduce graph breaks at the
-        # right points during backbone backward, enabling overlap between
-        # gradient compute and DDP bucket all-reduces.
-        torch._dynamo.config.optimize_ddp = True
+        # optimize_ddp lets dynamo insert all-reduce graph breaks during backbone
+        # backward, overlapping gradient compute with DDP bucket all-reduces
+        # (a real throughput win, so True is the default).
+        #
+        # The hazard it USED to create: the number of inserted collectives depends
+        # on the compiled graph shape, so if ranks compile non-identical graphs
+        # (concurrent cold-compile under submitit/srun with per-task cache timing),
+        # they emit a DIFFERENT number of all-reduces per step → NCCL
+        # collective-count desync → first-step hang (rank 0 one ALLREDUCE behind
+        # peers). This is now prevented at the source by the synchronized compile
+        # warmup below (`_compile_warmup`): it compiles the backbone on a
+        # rank-0-broadcast batch before the real loop, so every rank traces the
+        # IDENTICAL graph and the collective counts match. Keep both together — if
+        # you disable the warmup (train_loop.compile_warmup_steps: 0) on a
+        # multi-rank run, set model.optimize_ddp: false to stay safe.
+        torch._dynamo.config.optimize_ddp = bool(cfg['model'].get('optimize_ddp', True))
+        logger.info("torch._dynamo.config.optimize_ddp = %s", torch._dynamo.config.optimize_ddp)
         model.backbone = torch.compile(
             model.backbone,
             dynamic=True,
@@ -1202,6 +1314,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # checkpoint for exact resume capability.
     if epoch_dirs:
         atomic_feature_kwargs['bucket_state_fn'] = dataset.get_state
+
+    # Synchronized torch.compile warmup (multi-rank only): compile the backbone
+    # graph on a broadcast batch BEFORE the real loop so every rank traces the
+    # identical shape and step 1 can't desync on an NCCL collective. Runs on both
+    # fresh and resumed runs (every process cold-compiles regardless of resume).
+    # Configurable via train_loop.compile_warmup_steps (default 2); 0 disables.
+    if cfg['model']['compile']:
+        _warmup_steps = int(cfg.get('train_loop', {}).get('compile_warmup_steps', 2))
+        _compile_warmup(model, train_loader, dist, _warmup_steps)
 
     result = smart_train(
         model=model,
