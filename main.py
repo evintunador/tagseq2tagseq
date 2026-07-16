@@ -583,6 +583,36 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         batch_size=None,
         num_workers=0,
     )
+    # Auto-derive max_optimizer_steps from the pre-computed schedules when it is
+    # not set explicitly.  BucketedPackDataset walks every epoch_dir in a single
+    # pass (data-repeat = number of dirs), so the total step count is the sum of
+    # each dir's n_packs, spread across DDP ranks and grad-accum micro-steps.
+    # This is REQUIRED for LR cooldown and the deferred weight-untie split, both
+    # of which are silently disabled when max_optimizer_steps is None (see 3c).
+    # Leaving it None with epoch_dirs set was the latent footgun that trained the
+    # 2026-07-03 wiki runs at constant LR with no untie.
+    if epoch_dirs and cfg.get('train_loop', {}).get('max_optimizer_steps') is None:
+        _accum = int(cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1))
+        _total_packs = 0
+        _ok = True
+        for _ed in epoch_dirs:
+            _meta_p = os.path.join(_ed, "metadata.json")
+            try:
+                with open(_meta_p) as _f:
+                    _total_packs += int(json.load(_f)["n_packs"])
+            except (OSError, KeyError, ValueError) as _exc:
+                logger.warning("Could not read n_packs from %s (%s); "
+                               "cannot auto-derive max_optimizer_steps.", _meta_p, _exc)
+                _ok = False
+                break
+        if _ok and _total_packs > 0:
+            _derived = _total_packs // (max(1, dist.world_size) * max(1, _accum))
+            cfg.setdefault('train_loop', {})['max_optimizer_steps'] = _derived
+            logger.info(
+                "Auto-derived max_optimizer_steps=%d from %d epoch_dir(s) "
+                "(%d total packs / world_size=%d / accum=%d). Enables LR cooldown + untie.",
+                _derived, len(epoch_dirs), _total_packs, dist.world_size, _accum,
+            )
     max_optimizer_steps = cfg.get('train_loop', {}).get('max_optimizer_steps')
     if max_optimizer_steps is not None:
         accum_steps = cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1)
