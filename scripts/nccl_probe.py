@@ -1,0 +1,10 @@
+import os, torch, torch.distributed as dist
+rank=int(os.environ["SLURM_PROCID"]); lr=int(os.environ["SLURM_LOCALID"]); ws=int(os.environ["SLURM_NTASKS"])
+torch.cuda.set_device(lr)
+dist.init_process_group("nccl", rank=rank, world_size=ws, device_id=torch.device("cuda",lr))
+print(f"[rank{rank}] pg init done, running all_reduce...", flush=True)
+t=torch.ones(1024,1024,device=f"cuda:{lr}")
+dist.all_reduce(t)
+torch.cuda.synchronize()
+print(f"[rank{rank}] all_reduce OK sum={t.sum().item()}", flush=True)
+dist.destroy_process_group()
