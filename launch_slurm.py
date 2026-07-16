@@ -97,6 +97,27 @@ def _training_worker(main_argv: list, run_dir: str, script: str = 'main') -> Non
     # crash site; the classic dynamic launcher is stable.
     os.environ.setdefault("TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER", "0")
 
+    # NCCL FlightRecorder: on a collective-timeout the watchdog dumps the Python
+    # stack of the offending collective (otherwise "Stack trace of the failed
+    # collective not found").  Essential for diagnosing rank-conditional
+    # collective divergence (e.g. a numel-mismatched all-reduce).  Cheap ring
+    # buffer, safe to leave on.
+    os.environ.setdefault("TORCH_NCCL_TRACE_BUFFER_SIZE", "2000")
+    os.environ.setdefault("TORCH_NCCL_DUMP_ON_TIMEOUT", "1")
+
+    # ---- console logging capture ----
+    # main.py installs no console handler, so its logger.info lines (compile
+    # warmup, "Wrapping model in DDP", scheduler config, auto-derived steps) are
+    # INVISIBLE under submitit — you end up debugging blind.  torchrun paths get
+    # this via downnode_rank_wrapper.sh's basicConfig; replicate it here so the
+    # submitit .err files capture the same INFO stream.
+    import logging as _logging
+    _logging.basicConfig(
+        level=_logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
     # ---- reconstruct sys.argv so compose_config sees the right args ----
     sys.argv = ["main"] + main_argv
 
