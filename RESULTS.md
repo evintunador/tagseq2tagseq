@@ -5,6 +5,35 @@ Benchmark & held-out performance for the current model ablation: **4 datasets ×
 hasn't been run yet, `n/a` where the benchmark/condition doesn't apply to that
 model.
 
+## LR RETUNE MILESTONE (2026-07-16) — first above-chance wiki model
+
+The 2026-07-01..07 runs were undertrained + LR-mis-tuned (all at chance; see
+below). An 8-point muon_lr sweep on **wiki_merged / doc_causal** (VE banks OFF,
+4-epoch data-repeat = ~14.5k steps / ~3.8B tok, cooldown + untie now actually
+firing) found the inherited `muon_lr=0.001` was ~3× too low. **Final val_loss
+U-curve bottoms at muon_lr≈0.003** (basin 0.002–0.004 within 0.03, noise-tight);
+0.001 was 2nd-worst. adamw_lr scaled at muon_lr×0.01.
+
+Winner (muon_lr=0.003, fully trained to step 14438, `doceval`, max_docs=1000):
+
+| metric | value | chance | verdict |
+|--------|:-----:|:------:|---------|
+| held_out perplexity | **ppl 4.00 / nll 1.387** | — | vs old undertrained ppl ~124–137 |
+| hellaswag | **0.333** [.304,.361] | 0.25 | ✅ **above chance** (CI clears) |
+| arc_easy | **0.333** [.305,.363] | 0.25 | ✅ **above chance** (CI clears) |
+| piqa | 0.524 [.492,.554] | 0.50 | ≈ chance |
+| winogrande | 0.509 [.479,.539] | 0.50 | ≈ chance |
+| openbookqa | 0.216 [.182,.252] | 0.25 | ≈ chance |
+| boolq | 0.387 [.355,.417] | 0.50 | below (yes/no likelihood-scoring artifact) |
+
+First wiki model **statistically above chance** (hellaswag + arc_easy) — the old
+ablation was indistinguishable from chance on everything. Config: 1024d/24L/8H,
+`ve_layers: []`, `weight_tying:true` + `untie_at_frac:0.667`, cooldown_frac 0.4,
+min_lr_ratio 0.1. Run dir `runs/20260715_232111...` (job 45065). Pending: seed-43
+replica + doc_concatenated LR-transfer confirm; then a weight-decay sweep at 0.003.
+
+---
+
 > Last updated: 2026-07-13. All numbers below regenerated in a full 12-model
 > re-sweep on the verified-sound eval path (max_docs=2000, seed=0, `doceval`
 > condition for single-doc benchmarks, `experimental` for cross-doc/community).
