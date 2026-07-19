@@ -69,9 +69,19 @@ shipped without validation.
   - Precompute note: Go ids have no ':' → route to the Voronoi partitioner
     (correct; intra-repo edges = disconnected components Voronoi keeps together).
     No dispatcher fix needed for Go.
-- **Java (fan-out #2):** detector + harness spec DONE, detection P=1.0/R=1.0 on 80
-  real gson files (§12-adjacent). Extractor + source-root FQN keying + data run
-  still TODO.
+- **Java (fan-out #2): code COMPLETE; data pipeline running.**
+  - Detector + harness spec: detection P=1.0/R=1.0 on 80 real gson files.
+  - Extractor `data/java_graph_extractor/build_java_graph.py`: file-node model,
+    FQN = `<package>.<ClassFromFilename>` (read directly, no inference). Static
+    imports edge to enclosing type; on-demand skipped. + `download_java.py`,
+    `pretokenize_java.py`, `ContentJsonlSource` (generic content reader).
+  - Resolution fixture (`java/simple_pkg`) + `build_java_file_nodes`: P=1.0/R=1.0.
+  - Validated on gson: 112 nodes, 425 edges (out-degree 3.79, denser than Go),
+    0 dangling/self; sample-dump confirms FQN imports resolve to correct type
+    source, JDK imports unresolved.
+  - Data: downloading 2M `data/java` files → `/fss-data/.../raw/java/`. Then
+    build→pretokenize→split→audit. Config `configs/java_cross_doc.yaml`.
+  - Full harness suite now 12 tests (python/go/java, both axes).
 - **Rust, TS/JS:** grammars installed; not started (deferred — messier resolution).
 - **Python→tree-sitter migration (§10a):** not started.
 
