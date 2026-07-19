@@ -102,6 +102,51 @@ def _import_path(module: str, pkg_dir: str) -> str:
     return module if pkg_dir == "" else f"{module}/{pkg_dir}"
 
 
+def _is_vendored(path: str) -> bool:
+    """True for third-party code copied into a vendor/ tree (not the repo's own)."""
+    return path == "vendor" or path.startswith("vendor/") or "/vendor/" in path
+
+
+def infer_module_path(
+    pkg_dirs: Set[str],
+    all_imports: Set[str],
+    go_mod_module: Optional[str] = None,
+) -> Optional[str]:
+    """Infer the repo's Go module path.
+
+    The Stack (dedup) contains NO go.mod files (filtered to ext=="go"), so the
+    module path — needed to form globally-unique package import paths — must be
+    inferred. Strategy (robust to custom hosts like k8s.io, gopkg.in; needs no
+    go.mod): find the prefix P such that ``P/<pkgdir>`` appears as an import for
+    the most of the repo's OWN package directories. Because P is only established
+    from imports that actually reference this repo's directories, it is
+    self-validating: a repo whose imports never reference its own subpackages
+    yields None (no module, no intra-repo edges — correct for single-package repos).
+
+    If ``go_mod_module`` is provided (a future dataset that keeps go.mod), it wins.
+    """
+    if go_mod_module:
+        return go_mod_module
+    from collections import Counter
+    votes: Counter = Counter()
+    subdirs = [d for d in pkg_dirs if d]
+    for imp in all_imports:
+        for d in subdirs:
+            if imp == d or imp.endswith("/" + d):
+                prefix = imp[: len(imp) - len(d)].rstrip("/")
+                # a real module prefix is a host-qualified path: its first segment
+                # is a domain (contains a dot, no '..', not a relative marker).
+                # This rejects stdlib-like short imports and dodges './..' paths
+                # that survive from relative-import artifacts.
+                host = prefix.split("/", 1)[0]
+                if (prefix and "." in host and ".." not in prefix
+                        and not prefix.startswith(".")):
+                    votes[prefix] += 1
+    if not votes:
+        return None
+    return votes.most_common(1)[0][0]
+
+
 # ---------------------------------------------------------------------------
 # Core build (per-repo, package-level)
 # ---------------------------------------------------------------------------
@@ -124,47 +169,60 @@ def build_repo_packages(
     A node with no in-repo edges is still returned; the caller applies the
     min-package-links filter so stats can see the pre-filter distribution.
     """
-    # module path from go.mod (repo root or nested); fall back to a synthetic id.
-    module = None
+    # Optional go.mod (absent in The Stack dedup; kept for future datasets).
+    go_mod_module = None
     for path, content in repo_files:
         if path == "go.mod" or path.endswith("/go.mod"):
             m = _MODULE_RE.search(content)
             if m:
-                module = m.group(1)
+                go_mod_module = m.group(1)
                 break
-    if module is None:
-        # No go.mod in the slice: cannot form globally-unique import paths.
-        # Signal caller to skip this repo (return empty).
-        return {}, {}
 
-    # group non-test .go files by package dir
+    # group non-test, non-vendored .go files by package dir; detect imports.
     pkg_files: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
     for path, content in repo_files:
         if not path.endswith(".go") or path.endswith("_test.go"):
             continue
+        if _is_vendored(path):
+            continue  # vendored third-party copies are not this repo's packages
         pkg_files[_package_dir(path)].append((path, content))
 
     if len(pkg_files) < 1:
         return {}, {}
 
+    # first pass: concat each package + detect its imports (needed for inference)
+    pkg_concat: Dict[str, str] = {}
+    imports_by_dir: Dict[str, Set[str]] = {}
+    all_imports: Set[str] = set()
+    for pkg_dir, files in pkg_files.items():
+        files_sorted = sorted(files, key=lambda x: x[0])
+        concat = "\n\n".join(c for _p, c in files_sorted)
+        pkg_concat[pkg_dir] = concat
+        imps = set(parser.imports(concat))
+        imports_by_dir[pkg_dir] = imps
+        all_imports |= imps
+
+    # infer the module path from the repo's own imports vs. its directory layout.
+    module = infer_module_path(set(pkg_files.keys()), all_imports, go_mod_module)
+    if module is None:
+        # Can't form globally-unique import paths (e.g. a single-package repo with
+        # no self-references). Skip — it would contribute only edgeless nodes.
+        return {}, {}
+
     nodes: Dict[str, dict] = {}
     contents: Dict[str, str] = {}
     imports_by_pkg: Dict[str, Set[str]] = {}
-
     for pkg_dir, files in pkg_files.items():
         ip = _import_path(module, pkg_dir)
-        files_sorted = sorted(files, key=lambda x: x[0])
-        concat = "\n\n".join(c for _p, c in files_sorted)
+        concat = pkg_concat[pkg_dir]
         contents[ip] = concat
-        # detect this package's imports once, over the concatenated source
-        imps = set(parser.imports(concat))
-        imports_by_pkg[ip] = imps
+        imports_by_pkg[ip] = imports_by_dir[pkg_dir]
         nodes[ip] = {
             "normed_identifier": ip,
             "raw_identifier": ip,
-            "n_files": len(files_sorted),
+            "n_files": len(files),
             "char_count": len(concat),
-            "import_count": len(imps),
+            "import_count": len(imports_by_dir[pkg_dir]),
             "outgoing": [],
             "incoming": [],
             "links_in_repo": 0,
