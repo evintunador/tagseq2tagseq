@@ -88,9 +88,25 @@ shipped without validation.
   - Validated on gson: 112 nodes, 425 edges (out-degree 3.79, denser than Go),
     0 dangling/self; sample-dump confirms FQN imports resolve to correct type
     source, JDK imports unresolved.
-  - Data: downloading 2M `data/java` files → `/fss-data/.../raw/java/`. Then
-    build→pretokenize→split→audit. Config `configs/java_cross_doc.yaml`.
+  - **Data pipeline COMPLETE (training-ready):** 2M files → **316,992 file nodes,
+    782.6M tokens, 229,357 edges**, 0 dangling/self. Split train 291,320 / val+test
+    community+random. Train re-audited clean. Config `configs/java_cross_doc.yaml`;
+    dataset at `/fss-data/.../pretokenized_datasets/java`.
   - Full harness suite now 12 tests (python/go/java, both axes).
+
+  **QUALITY NUANCE (Java FQN namespace) — TRAINING GRAPH IS CLEAN; affects only
+  generation-time resolution:** Verified the stored `graph.jsonl` edges are
+  INTRA-REPO by construction (`build_repo_nodes` runs per-repo), so a mock
+  `java.util.List` node only receives in-edges from the one repo that defines it —
+  the TRAINING edge set has no cross-repo framework contamination. The cross-repo
+  resolution visible in `run_sample_dump` is a property of `PretokCorpus` (the
+  generation/eval resolver, which matches an emitted import against ALL nodes), NOT
+  the training mask. So the only real exposure: a Java model at GENERATION time
+  emitting `import java.util.List` could resolve to some repo's stub. Prevalence of
+  framework-namespaced nodes: only **0.8%** (`android.`/`java.`/`javax.`/`androidx.`/
+  `com.google.`). Optional hardening for the generation path: drop framework-prefixed
+  nodes from the corpus, or scope generation resolution to the active repo. Not a
+  blocker for training. (Flagged for the human visual gate regardless.)
 - **Rust, TS/JS:** grammars installed; not started (deferred — messier resolution).
 - **Python→tree-sitter migration (§10a):** not started.
 
