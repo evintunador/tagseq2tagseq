@@ -1,6 +1,6 @@
 # Multi-language code datasets — design doc (stage 1 of 4)
 
-Status: **stage 3 (Go pilot) code COMPLETE; running data pipeline**. Author: Claude. Date: 2026-07-19.
+Status: **Go dataset DONE (training-ready); Java data pipeline running**. Author: Claude. Date: 2026-07-19.
 
 Plan (agreed): **spec/design → harness → one pilot language → fan-out**, each stage
 possibly handed to a fresh session.
@@ -8,10 +8,19 @@ possibly handed to a fresh session.
 - Stage 1 (spec): this doc.
 - Stage 2 (harness): **COMPLETE — both axes built.** Detection (§10) + resolution
   (§11): fixtures runner, dataset auditor, sample-dump.
-- Stage 3 (Go pilot): **code COMPLETE — see §12.** Detector, extractor, pretokenize,
-  package-node model all built + validated on real Go. Data pipeline running.
-  Still pending: Python→tree-sitter migration (§10a) as a fan-out task.
-- Stage 4 (fan-out): in progress (§13).
+- Stage 3 (Go pilot): **COMPLETE.** Go dataset training-ready: 358,812 package
+  nodes, 1.22B tokens, split + audited clean (§12, §13).
+- Stage 4 (fan-out): **Java in progress** (§13) — code + gson-validation complete,
+  full 2M-file data pipeline running (build → pretokenize → split → audit).
+
+QUICK-START (where things are for a fresh session):
+- Datasets: `/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/{go,java}`
+  (each with `splits/{train,val_*,test_*}`). Configs: `configs/{go,java}_cross_doc.yaml`.
+- Harness: `data/graph_harness/` (run_detection / run_audit / run_sample_dump CLIs).
+- Tests: `python -m pytest tests/harness tests/test_go_import_detector.py
+  tests/test_java_import_detector.py tests/data/test_*_graph_builder.py`.
+- NOT done: Rust + TS/JS (deferred — messier resolution, need fixtures + human
+  review); Python→tree-sitter migration (§10a); training runs; multi-GPU precompute.
 
 ## 12. Go pilot — code complete + validated (2026-07-19)
 - `model/graph_traversal/go_import_detector.py` — `GoImportDetector`. Emits the
