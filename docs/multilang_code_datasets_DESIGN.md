@@ -44,10 +44,32 @@ possibly handed to a fresh session.
 - 120 tests pass (harness + go + python + corpus).
 
 ## 13. Fan-out (stage 4) — in progress
-Running autonomously (user authorized overnight, 2026-07-19). Per §5: each language
-in its own worktree + PR, gated by the frozen harness (detection P≥0.95/R≥0.90 +
-resolution fixture + human-style sample-dump). Order: Go data pipeline first (real
-Stack Go), then Java/Kotlin, Rust, TS/JS + Python→tree-sitter migration.
+Running autonomously (user authorized overnight, 2026-07-19). Per §5, gated by the
+frozen harness (detection P≥0.95/R≥0.90 + resolution fixture + human-style
+sample-dump). Scope decision: DEPTH over breadth — fully complete + validate Go
+(the pilot), then Java (cleanest remaining, richest imports 9.5/file), rather than
+shipping 4 unvalidated datasets. Rust + TS/JS have messier resolution needing
+careful fixtures + human review; specs/detectors will be stubbed but data NOT
+shipped without validation.
+
+**Progress log:**
+- **Go data pipeline (task 3):**
+  - Download: 2,000,000 Go files (9.2GB) →
+    `/fss-data/.../raw/go/sample_go.jsonl`. DONE.
+  - Graph build: running on full 2M (326,796 repos), single-thread tree-sitter
+    parse → `/fss-data/.../graphs/go/{graph,content}.jsonl`.
+  - Then: pretokenize_go → split_graph → audit → sample-dump → (precompute if
+    multi-GPU) → training-ready. Config: `configs/go_cross_doc.yaml`.
+- **Java (fan-out #2):** detector + harness spec DONE, detection P=1.0/R=1.0 on 80
+  real gson files (§12-adjacent). Extractor + source-root FQN keying + data run
+  still TODO.
+- **Rust, TS/JS:** grammars installed; not started (deferred — messier resolution).
+- **Python→tree-sitter migration (§10a):** not started.
+
+**The Stack has NO go.mod** (filtered to ext==go) → module path is INFERRED from
+each repo's own imports vs. its directory layout (`build_go_graph.infer_module_path`).
+Validated on 50k real records: real modules recovered (github.com/APTrust/exchange,
+code.cloudfoundry.org/cli, ...), 0 dangling/self edges.
 
 ## 10. What's built (stage 2, DETECTION axis) — 2026-07-18
 Package `data/graph_harness/` (tests in `tests/harness/`), tree-sitter + `tree_sitter_go`
