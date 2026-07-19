@@ -1,0 +1,7 @@
+[
+  {"from": "main.py", "to": "pkg/helper.py"},
+  {"from": "main.py", "to": "pkg/__init__.py"},
+  {"from": "main.py", "to": "pkg/sub/deep.py"},
+  {"from": "main.py", "to": "pkg/sub/__init__.py"},
+  {"from": "main.py", "to": "pkg/other.py"}
+]
