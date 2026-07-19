@@ -29,8 +29,64 @@ Winner (muon_lr=0.003, fully trained to step 14438, `doceval`, max_docs=1000):
 First wiki model **statistically above chance** (hellaswag + arc_easy) — the old
 ablation was indistinguishable from chance on everything. Config: 1024d/24L/8H,
 `ve_layers: []`, `weight_tying:true` + `untie_at_frac:0.667`, cooldown_frac 0.4,
-min_lr_ratio 0.1. Run dir `runs/20260715_232111...` (job 45065). Pending: seed-43
-replica + doc_concatenated LR-transfer confirm; then a weight-decay sweep at 0.003.
+min_lr_ratio 0.1. Run dir `runs/20260715_232111...` (job 45065).
+
+**Follow-on tuning (2026-07-18):** weight-decay sweep found `muon_wd=1.2` (inherited)
+was ~12× too high — clean U-curve minimum at **muon_wd=0.1** (val 2.424 vs 2.548 @1.2).
+LR optimum stayed 0.003 across WD. Final tuned config: **muon_lr=0.003, muon_wd=0.1,
+VE-off**. wd=0.1 winner re-eval: ppl **3.75**, arc_easy 0.368, hellaswag 0.322.
+
+## CROSS-DOC THESIS CONFIRMED (2026-07-18) — the core result
+
+`hotpotqa_cross_doc` on the tuned **cross_doc_link** wiki model (bfs, run 45314) scores
+the same 2-hop questions two ways:
+
+| condition | mean NLL | perplexity |
+|-----------|:--------:|:----------:|
+| **cross-doc** (linked doc via cross-doc attention) | **5.63** | **278** |
+| flat-linked (same content concatenated, no cross-doc structure) | 6.92 | 1012 |
+
+**Δnll = +1.29 (~19% lower NLL, 3.6× lower perplexity) favoring cross-doc attention**
+(n=738). This is the project's central mechanism, confirmed at a properly-tuned
+operating point (the old undertrained run showed only +13.4%). On single-doc
+benchmarks all masks are ~identical (doc_causal / cross_doc_link / doc_concat_link
+all ppl≈3.84, hellaswag≈0.33) — the cross-doc advantage appears **only** on the
+multi-hop cross-doc benchmark, exactly as the hypothesis predicts.
+
+## TRAVERSAL ABLATION (2026-07-19) — thesis robust; graph≫random for base LM
+
+Full {bfs, dfs, random_walk, random} × {doc_causal, cross_doc_link} matrix at the tuned
+config. Final val_loss (wd0.1 doc_causal / wd0.3 cross_doc_link, VE-off):
+
+| strategy | cross_doc_link | doc_causal |
+|----------|:--------------:|:----------:|
+| dfs | 2.421 | 2.426 |
+| bfs | 2.431 | 2.424 |
+| random_walk | 2.492 | 2.495 |
+| random | 3.001 | 3.176 |
+
+Cross-doc Δnll (`hotpotqa_cross_doc`, n=738): dfs +1.329, bfs +1.291, rw +1.270, random +1.241.
+
+- **Graph-structured packing matters hugely for the base LM**: bfs/dfs (~2.42) ≫ random (3.00),
+  a 0.58 val gap. dfs ≈ bfs > random_walk > random.
+- **Cross-doc benefit is robust across ALL traversals** (+1.24…+1.33) — the thesis is traversal-
+  independent. bfs/dfs/rw are indistinguishable on Δnll (0.06 spread at n=738 = noise level; no
+  winner claimed among them). `random` is a mild low-Δnll outlier.
+- **Decoupling**: traversal strongly affects base-LM quality but only weakly affects the
+  *incremental* cross-doc benefit — two separate axes. (Caveat: absolute NLL isn't cleanly
+  cross-model comparable; the within-model Δnll cross-doc−flat is the robust contrast.)
+
+## ARXIV SWEEP (2026-07-19) — 38B-token corpus, 15k-step budget (~3.9B tok), LR0.003
+
+Final val: doc_causal veoff **2.156**, VE-ON 2.204, wd0.6 2.173, cross_doc_link 2.471,
+doc_concatenated 2.140, doc_concat_link 2.133.
+- **VE-off still beats VE-on (2.156 vs 2.204)** even on 38B tokens — the predicted VE "flip"
+  did NOT fully materialize within this budget (VE closed the wiki gap but didn't overtake).
+- Low-WD preference transfers from wiki (wd0.6 worse). ArXiv trains to lower val (2.14) than
+  wiki (2.42) — 28× more data. concat variants edge out doc_causal on raw val (denser packing).
+
+Full run-by-run log + the yield-watcher/auto-kill system are documented in `TUNING_LESSONS.md`
+and `/fss-data/.../pipeline_logs/lrsweep_runmap.txt`.
 
 ---
 
