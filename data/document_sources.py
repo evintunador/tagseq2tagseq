@@ -155,23 +155,17 @@ class FineWebSource:
                     yield normed_id, content
 
 
-class GoPackageContentSource:
+class ContentJsonlSource:
     """
-    Yields (normed_id, content) for Go PACKAGES from a pre-built content JSONL.
-
-    Same thin-reader contract as ArxivUnarxiveSource / FineWebSource: the Go
-    builder (data/go_graph_extractor/build_go_graph.py) already grouped each
-    repo's .go files into package nodes (a node = a directory of files,
-    concatenated), assigned each its full import-path normed_id, and wrote
-    content.jsonl alongside graph.jsonl. This source yields each record whose
-    normed_id is in the graph (keeps the tokenized corpus aligned after splits).
-
-    A distinct class (rather than reusing ArxivUnarxiveSource) so the Go pipeline
-    is self-documenting and the package-node contract is discoverable here.
+    Generic thin reader over a builder's ``content.jsonl`` (the arxiv/fineweb
+    pattern), yielding (normed_id, content) for records whose normed_id is in the
+    graph. Used by the code-language builders (Go package nodes, Java file nodes)
+    whose extractor already assigned each node its normed_id and wrote content
+    alongside graph.jsonl. Keeps the tokenized corpus aligned after splits.
 
     Args:
         content_jsonl: Path to the builder's content JSONL.
-        graph_normed_ids: Set of normed_identifier (import path) strings.
+        graph_normed_ids: Set of normed_identifier strings (import path / FQN).
     """
 
     def __init__(self, content_jsonl: Path, graph_normed_ids: set[str]):
@@ -191,3 +185,8 @@ class GoPackageContentSource:
                     continue
                 if normed_id in self._graph_normed_ids:
                     yield normed_id, content
+
+
+# Backward-compatible alias: the Go pipeline originally named this source after
+# its package-node use; it is a generic content.jsonl reader (also used by Java).
+GoPackageContentSource = ContentJsonlSource
