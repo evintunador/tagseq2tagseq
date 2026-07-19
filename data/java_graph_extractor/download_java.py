@@ -90,7 +90,7 @@ def main(argv=None):
             f.write("\n".join(buf) + "\n")
 
     dt = time.time() - start
-    logger.info("Done: wrote %d records (%d .go files) in %.0fs",
+    logger.info("Done: wrote %d records (%d .java files) in %.0fs",
                 written, kept_java, dt)
     print(json.dumps({"written": written, "java_files": kept_java, "seconds": round(dt)}))
     return 0
