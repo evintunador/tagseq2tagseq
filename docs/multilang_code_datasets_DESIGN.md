@@ -53,13 +53,22 @@ careful fixtures + human review; specs/detectors will be stubbed but data NOT
 shipped without validation.
 
 **Progress log:**
-- **Go data pipeline (task 3):**
-  - Download: 2,000,000 Go files (9.2GB) →
-    `/fss-data/.../raw/go/sample_go.jsonl`. DONE.
-  - Graph build: running on full 2M (326,796 repos), single-thread tree-sitter
-    parse → `/fss-data/.../graphs/go/{graph,content}.jsonl`.
-  - Then: pretokenize_go → split_graph → audit → sample-dump → (precompute if
-    multi-GPU) → training-ready. Config: `configs/go_cross_doc.yaml`.
+- **Go data pipeline (task 3): COMPLETE — dataset training-ready (2026-07-19).**
+  - Download: 2,000,000 Go files (9.2GB) → `/fss-data/.../raw/go/sample_go.jsonl`.
+  - Graph build (full 2M, 326,796 repos): **358,812 package nodes, 388,608 edges**,
+    avg out-degree 1.08, **0 dangling / 0 self-links**. → `/fss-data/.../graphs/go/`.
+  - Pretokenize: **1.22B tokens**, 2 shards →
+    `/fss-data/.../pretokenized_datasets/go_run` (symlinked `…/go`).
+  - Audit: 0% dangling/self/isolated. Sample-dump (human review): intra/in-corpus
+    imports RESOLVE to correct package content; stdlib+external correctly
+    unresolved; even cross-repo resolution works (k8s.io/... via a vendoring repo).
+  - Split: train 322,900 / val_community 8,986 / val_random 8,970 / test_* 8,986/8,970.
+    Train split re-audited clean (0 dangling after edge filtering). Loads + tokens OK.
+  - **Ready to train**: `configs/go_cross_doc.yaml` (single-GPU uses live dataset;
+    precompute epoch_dirs for multi-GPU is optional, not yet run).
+  - Precompute note: Go ids have no ':' → route to the Voronoi partitioner
+    (correct; intra-repo edges = disconnected components Voronoi keeps together).
+    No dispatcher fix needed for Go.
 - **Java (fan-out #2):** detector + harness spec DONE, detection P=1.0/R=1.0 on 80
   real gson files (§12-adjacent). Extractor + source-root FQN keying + data run
   still TODO.
