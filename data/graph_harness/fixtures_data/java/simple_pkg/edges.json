@@ -1,0 +1,4 @@
+[
+  {"from": "com.ex.Main", "to": "com.ex.util.Helper"},
+  {"from": "com.ex.Main", "to": "com.ex.Consts"}
+]
