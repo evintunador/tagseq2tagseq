@@ -153,3 +153,41 @@ class FineWebSource:
                     continue
                 if normed_id in self._graph_normed_ids:
                     yield normed_id, content
+
+
+class GoPackageContentSource:
+    """
+    Yields (normed_id, content) for Go PACKAGES from a pre-built content JSONL.
+
+    Same thin-reader contract as ArxivUnarxiveSource / FineWebSource: the Go
+    builder (data/go_graph_extractor/build_go_graph.py) already grouped each
+    repo's .go files into package nodes (a node = a directory of files,
+    concatenated), assigned each its full import-path normed_id, and wrote
+    content.jsonl alongside graph.jsonl. This source yields each record whose
+    normed_id is in the graph (keeps the tokenized corpus aligned after splits).
+
+    A distinct class (rather than reusing ArxivUnarxiveSource) so the Go pipeline
+    is self-documenting and the package-node contract is discoverable here.
+
+    Args:
+        content_jsonl: Path to the builder's content JSONL.
+        graph_normed_ids: Set of normed_identifier (import path) strings.
+    """
+
+    def __init__(self, content_jsonl: Path, graph_normed_ids: set[str]):
+        self._content_jsonl = content_jsonl
+        self._graph_normed_ids = graph_normed_ids
+
+    def __len__(self) -> int:
+        return len(self._graph_normed_ids)
+
+    def __iter__(self) -> Iterator[tuple[str, str]]:
+        with open(self._content_jsonl, "r", encoding="utf-8") as f:
+            for line in f:
+                record = json.loads(line)
+                normed_id = record.get("normed_identifier", "")
+                content = record.get("content", "")
+                if not (normed_id and content):
+                    continue
+                if normed_id in self._graph_normed_ids:
+                    yield normed_id, content

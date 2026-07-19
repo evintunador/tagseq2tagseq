@@ -1,0 +1,5 @@
+[
+  {"from": "example.com/proj/cmd/app", "to": "example.com/proj/internal/store"},
+  {"from": "example.com/proj/cmd/app", "to": "example.com/proj/util"},
+  {"from": "example.com/proj/internal/store", "to": "example.com/proj/util"}
+]

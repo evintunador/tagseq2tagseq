@@ -72,7 +72,7 @@ class LinkDetector(Protocol):
 
 # Valid names accepted by ``make_link_detector`` (and the ``model.link_detector``
 # config key), kept here as the single source of truth for error messages.
-LINK_DETECTOR_NAMES = ("markdown", "python", "arxiv", "null")
+LINK_DETECTOR_NAMES = ("markdown", "python", "go", "arxiv", "null")
 
 
 def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "LinkDetector":
@@ -83,8 +83,9 @@ def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "Lin
     one entry here instead of editing every training/inference/profiling script.
 
     Args:
-        name: ``'markdown'`` (Wikipedia), ``'python'`` (TheStack), or
-              ``'arxiv'`` (unarXive ``\\cite{Title}`` citations).
+        name: ``'markdown'`` (Wikipedia), ``'python'`` (TheStack),
+              ``'go'`` (TheStack Go), or ``'arxiv'`` (unarXive
+              ``\\cite{Title}`` citations).
         decode_fn: Token-ids → str callable (typically ``tiktoken_enc.decode``).
 
     Raises:
@@ -98,6 +99,9 @@ def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "Lin
     if name == "python":
         from .python_import_detector import PythonImportDetector
         return PythonImportDetector(decode_fn=decode_fn)
+    if name == "go":
+        from .go_import_detector import GoImportDetector
+        return GoImportDetector(decode_fn=decode_fn)
     if name == "arxiv":
         from .arxiv_cite_detector import ArxivCiteDetector
         return ArxivCiteDetector(decode_fn=decode_fn)
@@ -107,6 +111,6 @@ def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "Lin
     raise ValueError(
         f"Unknown model.link_detector '{name}'. "
         f"Valid options: {', '.join(LINK_DETECTOR_NAMES)} "
-        "('markdown'=Wikipedia, 'python'=TheStack, 'arxiv'=unarXive, "
-        "'null'=edgeless/FineWeb)."
+        "('markdown'=Wikipedia, 'python'=TheStack, 'go'=TheStack Go, "
+        "'arxiv'=unarXive, 'null'=edgeless/FineWeb)."
     )

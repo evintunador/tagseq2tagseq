@@ -72,31 +72,58 @@ class ResolutionScore:
 
 @dataclass
 class _FixtureNode:
-    relpath: str
+    # `key`: the node's identity in edges.json + scoring space (relpath for
+    # file-node languages like Python; import path for package-node languages like
+    # Go). `raw_identifier`: fed to the detector's index_doc_span to build the
+    # resolution index (for Python "fixture:relpath"; for Go the import path). The
+    # two differ because index_doc_span may strip a prefix (Python) or not (Go).
+    key: str
     raw_identifier: str
     normed_identifier: str
     content: str
+    relpath: str = ""  # a representative source path (first file, for a package)
 
 
-def _load_fixture(fixture_dir: Path, extensions: Set[str]) -> Tuple[List[_FixtureNode], Set[Tuple[str, str]]]:
+@dataclass
+class _FixtureFile:
+    relpath: str
+    content: str
+
+
+def default_file_node_builder(files: List[_FixtureFile], extensions: Set[str]) -> List[_FixtureNode]:
+    """File-per-node model (Python and any language where import ≈ one file).
+
+    key = relpath; raw_identifier = "fixture:relpath" (so a detector's
+    index_doc_span that strips a "<repo>:" prefix yields the bare relpath key).
+    """
+    nodes: List[_FixtureNode] = []
+    for f in files:
+        raw = f"fixture:{f.relpath}"
+        nodes.append(_FixtureNode(
+            key=f.relpath, raw_identifier=raw, normed_identifier=raw,
+            content=f.content, relpath=f.relpath,
+        ))
+    return nodes
+
+
+def _load_fixture(
+    fixture_dir: Path,
+    extensions: Set[str],
+    node_builder,
+) -> Tuple[List[_FixtureNode], Set[Tuple[str, str]]]:
     files_dir = fixture_dir / "files"
     edges_path = fixture_dir / "edges.json"
     if not files_dir.is_dir():
         raise FileNotFoundError(f"fixture {fixture_dir} has no files/ dir")
 
-    nodes: List[_FixtureNode] = []
+    files: List[_FixtureFile] = []
     for p in sorted(files_dir.rglob("*")):
         if not p.is_file():
             continue
         rel = p.relative_to(files_dir).as_posix()
-        ext = rel.rsplit(".", 1)[-1] if "." in rel else ""
-        # include language source files as nodes; project files (go.mod, etc.) are
-        # readable by the extractor but are not themselves link targets unless the
-        # extractor decides so — we still register them as nodes so a resolver may
-        # legitimately reference them.
-        content = p.read_text(encoding="utf-8", errors="replace")
-        raw = f"fixture:{rel}"
-        nodes.append(_FixtureNode(rel, raw, raw, content))
+        files.append(_FixtureFile(rel, p.read_text(encoding="utf-8", errors="replace")))
+
+    nodes = node_builder(files, extensions)
 
     gold: Set[Tuple[str, str]] = set()
     if edges_path.exists():
@@ -111,6 +138,7 @@ def score_resolution(
     extensions: Set[str],
     edge_producer: Callable[[List[_FixtureNode]], List[Tuple[str, str]]],
     link_detector=None,
+    node_builder=default_file_node_builder,
 ) -> ResolutionScore:
     """Score resolved edges from a fixture against its hand-labeled edges.json.
 
@@ -118,16 +146,21 @@ def score_resolution(
         fixture_dir: directory with files/ and edges.json.
         extensions: source extensions for this language.
         edge_producer: callable taking the fixture nodes and returning the list of
-            (from_relpath, raw_target_str) pairs the implementation emits — i.e.
+            (from_node_key, raw_target_str) pairs the implementation emits — i.e.
             detected imports with their emitted target strings, BEFORE resolution.
             The runner resolves each raw_target_str itself via PretokCorpus logic,
             so this callable only owns detection, keeping resolution consistent
-            with training/generation.
+            with training/generation. ``from_node_key`` must be in the same space
+            as the ``key`` of the fixture nodes and edges.json (relpath for
+            file-node languages, import path for package-node languages).
         link_detector: the LinkDetector, used to build the detector-key index
             exactly as PretokCorpus does. Required (resolution is detector-keyed).
+        node_builder: maps the fixture's files to nodes. Default is one node per
+            file (Python); Go supplies a package-grouping builder so a node is a
+            directory of .go files (see design doc §Go pilot).
     """
     fixture_dir = Path(fixture_dir)
-    nodes, gold = _load_fixture(fixture_dir, extensions)
+    nodes, gold = _load_fixture(fixture_dir, extensions, node_builder)
 
     node_dicts: Dict[str, Dict] = {
         n.normed_identifier: {
@@ -138,21 +171,18 @@ def score_resolution(
     }
     raw_to_normed, key_to_normed = _build_indexes(node_dicts, link_detector)
 
-    # normed_identifier "fixture:relpath" -> relpath, for scoring in relpath space
-    def relpath_of(normed: Optional[str]) -> Optional[str]:
-        if normed is None:
-            return None
-        return normed.split(":", 1)[1] if ":" in normed else normed
+    # Map a resolved normed_identifier back to its node key (scoring space).
+    normed_to_key: Dict[str, str] = {n.normed_identifier: n.key for n in nodes}
 
     produced_edges: Set[Tuple[str, str]] = set()
-    for from_rel, raw_target in edge_producer(nodes):
+    for from_key, raw_target in edge_producer(nodes):
         normed = _resolve_target(
             raw_target, raw_to_normed, key_to_normed,
             has_detector=link_detector is not None,
         )
-        to_rel = relpath_of(normed)
-        if to_rel is not None:
-            produced_edges.add((from_rel, to_rel))
+        to_key = normed_to_key.get(normed) if normed is not None else None
+        if to_key is not None:
+            produced_edges.add((from_key, to_key))
 
     tp = produced_edges & gold
     fp = produced_edges - gold

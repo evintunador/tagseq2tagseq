@@ -389,6 +389,7 @@ def make_layout_policy(
 _DETECTOR_INFERENCE_LAYOUT = {
     "python":   "identifier_prefix_eos",
     "markdown": "identifier_prefix_eos",
+    "go":       "identifier_prefix_eos",
     "arxiv":    "latex_comment_prefix",
     "null":     "eos",
 }

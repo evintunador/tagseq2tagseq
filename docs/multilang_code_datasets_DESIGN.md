@@ -1,6 +1,6 @@
 # Multi-language code datasets — design doc (stage 1 of 4)
 
-Status: **stage 2 (harness, both axes) COMPLETE**. Author: Claude. Date: 2026-07-18.
+Status: **stage 3 (Go pilot) code COMPLETE; running data pipeline**. Author: Claude. Date: 2026-07-19.
 
 Plan (agreed): **spec/design → harness → one pilot language → fan-out**, each stage
 possibly handed to a fresh session.
@@ -8,9 +8,46 @@ possibly handed to a fresh session.
 - Stage 1 (spec): this doc.
 - Stage 2 (harness): **COMPLETE — both axes built.** Detection (§10) + resolution
   (§11): fixtures runner, dataset auditor, sample-dump.
-- Stage 3 (Go pilot): not started. Also pending: Python→tree-sitter migration
-  (§10a) as a stage-3-adjacent fan-out task.
-- Stage 4 (fan-out): not started.
+- Stage 3 (Go pilot): **code COMPLETE — see §12.** Detector, extractor, pretokenize,
+  package-node model all built + validated on real Go. Data pipeline running.
+  Still pending: Python→tree-sitter migration (§10a) as a fan-out task.
+- Stage 4 (fan-out): in progress (§13).
+
+## 12. Go pilot — code complete + validated (2026-07-19)
+- `model/graph_traversal/go_import_detector.py` — `GoImportDetector`. Emits the
+  raw import path as `target_str`, NO candidate expansion; `index_doc_span` returns
+  the full import path. Strips comments (hand-scanner, string-literal-aware) so
+  imports inside doc comments aren't matched. Registered in `make_link_detector`
+  (`go`) + `LINK_DETECTOR_NAMES` + `_DETECTOR_INFERENCE_LAYOUT` (identifier_prefix_eos).
+- `data/go_graph_extractor/build_go_graph.py` — tree-sitter package-graph builder.
+  A node = a package (dir of non-test .go files, concatenated), keyed by full
+  import path `<module>/<pkgdir>` (module from go.mod). Emits `graph.jsonl` +
+  `content.jsonl`. Edges = exact-match imports between same-repo packages; dropped-
+  package edges pruned (no dangling). Skips repos without go.mod (can't form unique
+  paths).
+- `data/document_sources.py::GoPackageContentSource` + `data/pretokenize_go.py` —
+  thin content.jsonl reader + pretokenize wrapper (arxiv/fineweb pattern).
+- `data/graph_harness/go_nodes.py::build_go_package_nodes` — the SAME package-node
+  model, shared with the fixtures runner.
+- **Node-unit decision RESOLVED empirically**: packages, not files (Go imports
+  reference directories; same-dir files share a package w/o importing). See §Go pilot.
+
+**Validated (2026-07-19):**
+- Detection vs tree-sitter oracle on 70 real Go files (httprouter/logrus/mux):
+  **P=1.0 / R=1.0**, 320 imports. (Harness caught + we fixed a real FP: `import (…)`
+  inside a `/* */` doc comment.)
+- Resolution on the `go/simple_module` fixture: **P=1.0 / R=1.0** in package-key space
+  (store's 2 files correctly = 1 node; stdlib `fmt` correctly doesn't resolve).
+- Full build→pretokenize→audit→sample-dump on real logrus: 6 package nodes, 5 edges,
+  **0% dangling/self/isolated**; sample-dump shows intra-repo imports RESOLVE to the
+  right package content, stdlib+external imports correctly unresolved.
+- 120 tests pass (harness + go + python + corpus).
+
+## 13. Fan-out (stage 4) — in progress
+Running autonomously (user authorized overnight, 2026-07-19). Per §5: each language
+in its own worktree + PR, gated by the frozen harness (detection P≥0.95/R≥0.90 +
+resolution fixture + human-style sample-dump). Order: Go data pipeline first (real
+Stack Go), then Java/Kotlin, Rust, TS/JS + Python→tree-sitter migration.
 
 ## 10. What's built (stage 2, DETECTION axis) — 2026-07-18
 Package `data/graph_harness/` (tests in `tests/harness/`), tree-sitter + `tree_sitter_go`
@@ -310,13 +347,24 @@ Ranked by how cleanly intra-repo file→file resolution maps onto the model.
   package dir. **Multi-repo** = the full string is already the unique key, no strip.
 - **Enables multi-repo corpora** (cross-repo edges), since paths never collide.
   This removes Python's single-repo eval bottleneck and yields a much denser graph.
-- **PILOT DECISION — package vs. file nodes.** A Go import points to a *package*
-  (a directory of many `.go` files), but the current model has *file*-nodes
-  (Python: import ≈ one file). Options: (a) fan one import out to an edge per file
-  in the target package, or (b) make **packages the node unit for Go** (concatenate
-  a package's files into one node). This does not exist in the Python model and must
-  be decided in the pilot. Leaning (b) — cleaner mapping, matches Go's own unit of
-  import — but it changes what a "document" is for code.
+- **PILOT DECISION RESOLVED (2026-07-19): packages are the node unit for Go.**
+  Settled empirically, not by preference. Inspecting real repos (httprouter,
+  logrus): (1) files in the SAME directory share one `package` and do NOT import
+  each other — Go has no file→file intra-package import; (2) every intra-repo
+  import references a *directory* under the module path
+  (`github.com/sirupsen/logrus/hooks/writer`), never a file. So a file-node model
+  has no natural Go edge at all. A Go NODE = one package (all non-test `.go` files
+  in a directory, concatenated); `raw_identifier = "<module>/<pkgdir>"` (the full
+  import path). This is the one structural difference from Python's file-nodes, and
+  it makes the detector trivially clean (next bullet).
+- **Detector design (consequence):** because Go imports are unambiguous full paths,
+  the detector emits the **raw import path as `target_str`** with NO candidate
+  expansion (contrast Python's `foo/bar.py` + `foo/bar/__init__.py`).
+  `index_doc_span(node)` returns the node's full import path. Match = exact string
+  equality → also makes the multi-repo relaxation trivial later (no prefix strip
+  needed; the full path is already globally unique).
+- **Single vs. multi-repo:** start single-repo per the §4 decision (identifier is
+  the full import path either way; single-repo just means one module per corpus).
 - Best possible showcase and lowest-risk template for the fan-out.
 
 ### Then, in order
