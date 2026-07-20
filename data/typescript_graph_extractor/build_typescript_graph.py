@@ -95,7 +95,12 @@ class _TSParser:
             if spec and (spec.startswith("./") or spec.startswith("../")):
                 specs.append(spec)
 
-        def walk(node):
+        # Iterative (explicit-stack) walk — a recursive walk overflows Python's
+        # ~1000-frame stack on pathologically deep real TS files (deeply nested
+        # ternaries/objects), which crashes the whole build.
+        stack = [tree.root_node]
+        while stack:
+            node = stack.pop()
             t = node.type
             if t == "import_statement":
                 add(self._spec_text(node.child_by_field_name("source"), src))
@@ -108,10 +113,8 @@ class _TSParser:
                     fn_txt = src[fn.start_byte:fn.end_byte].decode("utf-8", "replace")
                     if (fn.type == "identifier" and fn_txt == "require") or fn.type == "import":
                         add(self._spec_text(self._first_string_arg(args), src))
-            for c in node.children:
-                walk(c)
+            stack.extend(node.children)
 
-        walk(tree.root_node)
         return specs
 
 
