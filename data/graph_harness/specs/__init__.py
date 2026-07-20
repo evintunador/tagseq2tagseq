@@ -7,11 +7,13 @@ from ..spec import LanguageSpec
 from .python_spec import PYTHON_SPEC
 from .go_spec import GO_SPEC
 from .java_spec import JAVA_SPEC
+from .typescript_spec import TYPESCRIPT_SPEC
 
 SPECS = {
     PYTHON_SPEC.name: PYTHON_SPEC,
     GO_SPEC.name: GO_SPEC,
     JAVA_SPEC.name: JAVA_SPEC,
+    TYPESCRIPT_SPEC.name: TYPESCRIPT_SPEC,
 }
 
 

@@ -58,8 +58,8 @@ def main() -> None:
                         help="Base seed; epoch i uses seed+i.")
     parser.add_argument("--link-detector",  type=str, default="python",
                         choices=list(LINK_DETECTOR_NAMES),
-                        help="Link detector type (python=TheStack, markdown=Wikipedia, "
-                             "go=Go imports, java=Java FQN, arxiv=ArXiv, "
+                        help="Link detector type (python/go/java/typescript/kotlin/rust"
+                             "=TheStack code, markdown=Wikipedia, arxiv=ArXiv, "
                              "null=edgeless/FineWeb).")
     parser.add_argument("--layout-policy",  type=str, default="null",
                         help="Layout policy name (null, bos_eos, etc.).")
