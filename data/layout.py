@@ -393,6 +393,7 @@ _DETECTOR_INFERENCE_LAYOUT = {
     "java":     "identifier_prefix_eos",
     "typescript": "identifier_prefix_eos",
     "kotlin":   "identifier_prefix_eos",
+    "rust":     "identifier_prefix_eos",
     "arxiv":    "latex_comment_prefix",
     "null":     "eos",
 }

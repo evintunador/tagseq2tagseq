@@ -1,0 +1,8 @@
+[
+  {"from": "crate", "to": "crate::a"},
+  {"from": "crate", "to": "crate::a::c"},
+  {"from": "crate", "to": "crate::b"},
+  {"from": "crate::a", "to": "crate::a::c"},
+  {"from": "crate::a", "to": "crate::b"},
+  {"from": "crate::a::c", "to": "crate::b"}
+]
