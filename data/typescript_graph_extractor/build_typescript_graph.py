@@ -40,6 +40,8 @@ import json
 import logging
 from collections import defaultdict
 from pathlib import Path
+
+from data.jsonl_shards import iter_jsonl_records
 from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
@@ -199,21 +201,16 @@ def build(jsonl_path: Path, out_dir: Path, min_links: int = 1) -> dict:
     parser = _TSParser()
     repos: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
     n_records = 0
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line in f:
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            repo = rec.get("max_stars_repo_name")
-            path = rec.get("max_stars_repo_path")
-            content = rec.get("content")
-            if not (repo and path and content):
-                continue
-            if not (path.endswith(".ts") or path.endswith(".tsx")):
-                continue
-            repos[repo].append((path, content))
-            n_records += 1
+    for rec in iter_jsonl_records(jsonl_path):
+        repo = rec.get("max_stars_repo_name")
+        path = rec.get("max_stars_repo_path")
+        content = rec.get("content")
+        if not (repo and path and content):
+            continue
+        if not (path.endswith(".ts") or path.endswith(".tsx")):
+            continue
+        repos[repo].append((path, content))
+        n_records += 1
     logger.info("Read %d TypeScript records across %d repos", n_records, len(repos))
 
     # Keys are repo-relative (not globally unique across repos), so unlike Go/Java
