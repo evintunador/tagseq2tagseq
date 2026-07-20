@@ -31,6 +31,8 @@ from pathlib import Path
 
 import torch
 
+from model.graph_traversal.link_detector import LINK_DETECTOR_NAMES
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -55,9 +57,10 @@ def main() -> None:
     parser.add_argument("--seed",           type=int, default=42,
                         help="Base seed; epoch i uses seed+i.")
     parser.add_argument("--link-detector",  type=str, default="python",
-                        choices=["python", "markdown", "arxiv", "null"],
+                        choices=list(LINK_DETECTOR_NAMES),
                         help="Link detector type (python=TheStack, markdown=Wikipedia, "
-                             "arxiv=ArXiv, null=edgeless/FineWeb).")
+                             "go=Go imports, java=Java FQN, arxiv=ArXiv, "
+                             "null=edgeless/FineWeb).")
     parser.add_argument("--layout-policy",  type=str, default="null",
                         help="Layout policy name (null, bos_eos, etc.).")
     parser.add_argument("--max-grants",     type=int, default=64,
