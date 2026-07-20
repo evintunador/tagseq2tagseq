@@ -464,9 +464,11 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Random seed for batch selection")
     parser.add_argument("--token-budget", type=int, default=16_384, help="Max tokens per batch")
     parser.add_argument("--doc-budget", type=int, default=4096, help="Max tokens per document")
+    from model.graph_traversal.link_detector import LINK_DETECTOR_NAMES
     parser.add_argument("--link-detector", type=str, default="markdown",
-                        choices=["markdown", "python"],
-                        help="Link detector for cross_doc_link: 'markdown' (Wikipedia) or 'python' (TheStack)")
+                        choices=[n for n in LINK_DETECTOR_NAMES if n != "null"],
+                        help="Link detector for cross_doc_link (markdown=Wikipedia, "
+                             "python/go/java=code, arxiv=unarXive)")
     parser.add_argument("--layout-policy", type=str, default="stochastic_identifier_prefix",
                         choices=["null", "eos", "identifier_prefix",
                                  "identifier_prefix_eos", "stochastic_identifier_prefix"],
@@ -550,12 +552,11 @@ if __name__ == "__main__":
         if tiktoken is None:
             raise ImportError(f"tiktoken is required for {args.mask_type} visualization. Install with: pip install tiktoken")
         enc = tiktoken.get_encoding('gpt2')
-        if args.link_detector == 'python':
-            from model.graph_traversal.python_import_detector import PythonImportDetector
-            detector = PythonImportDetector(decode_fn=enc.decode)
-        else:
-            from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
-            detector = MarkdownLinkDetector(decode_fn=enc.decode)
+        # Route through the single dispatch point so every registered detector
+        # (markdown, python, go, java, arxiv, ...) works here without editing this
+        # branch — keeps the viz CLI in sync with make_link_detector.
+        from model.graph_traversal.link_detector import make_link_detector
+        detector = make_link_detector(args.link_detector, enc.decode)
         # doc_concat_link: whole-doc grants (full concatenation, no link gate).
         cross_doc_creator = CrossDocLinkMaskCreator(
             link_detector=detector,
