@@ -4,6 +4,34 @@ Remaining work, organized by area. All completed items stripped.
 
 ---
 
+## Java dataset — cross-repo framework-class mock resolution
+
+In the Java code dataset, framework/stdlib imports (`android.content.Context`,
+`java.util.List`, etc.) can RESOLVE at generation/eval time to *another repo's*
+mock/stub reimplementation of that class, because Java FQNs are a global namespace
+and several repos in the corpus define their own `android.*` / `java.*` stubs.
+Only ~0.8% of nodes are framework-namespaced, and the TRAINING graph is unaffected
+(its edges are intra-repo by construction — see `build_java_graph.build_repo_nodes`);
+this only touches the `PretokCorpus` generation/eval resolver, which matches an
+emitted import against ALL nodes. Look into whether to (a) drop framework-prefixed
+nodes from the corpus, (b) scope generation-time resolution to the active repo, or
+(c) leave it. Surfaced 2026-07-19 via `run_sample_dump` on the Go/Java datasets;
+see `docs/multilang_code_datasets_DESIGN.md` §13 (Java quality nuance).
+
+**Verified 2026-07-20 (two adversarial reviewers of `01_sample_dump.txt`):** in the
+sample-dump, ~71% of resolved links are framework/stdlib FQNs matching a foreign
+repo's mock/stub (0% resolved to the WRONG class — it's exact-FQN, so no
+mis-resolution, just semantically-empty "stub magnet" edges); only ~29% are genuine
+intra-project deps. BUT this is a `PretokCorpus`-resolver artifact — spot-checked
+the STORED training graph and `java.util.List`/`Map`/`android.content.Context` each
+have their few in-edges all from the SINGLE repo that vendored the stub (intra-repo
+by construction), so TRAINING edges are NOT contaminated. Fix is only needed for the
+generation/eval path. Also: wildcard imports (`import a.b.*;`) are intentionally
+dropped by the detector (a package has no single file node) — confirm that's the
+desired behavior or add package-info handling.
+
+---
+
 ## Data
 
 ### Wikipedia redirect map
