@@ -152,8 +152,41 @@ shipped without validation.
     cross-repo-resolve a framework FQN); (b) multi-node-per-file means the pack
     sampler sees several nodes with identical content for a multi-symbol file —
     expected, but worth a glance in the visual gate at real batch scale.
-- **Rust, TS/JS:** grammars installed; not started (deferred — messier resolution).
-- **Python→tree-sitter migration (§10a):** not started.
+- **TypeScript + Rust (fan-out #4/#5): code COMPLETE + gated + committed on main
+  (2026-07-20).** Both mirror the Go/Java template; each gated by the frozen
+  harness before any build.
+  - **TypeScript** — file-node, single-repo, relative-import resolution
+    (`./foo`→`foo.ts`/`foo/index.ts` candidates, `.js`→`.ts` remap, `.d.ts`
+    excluded); Python-style `detect_links_for_doc` resolves `./`+`../` against the
+    importing file's dir; `repo:path` node ids (routes through the `:`-based
+    partitioner per §7, like Python). Detection **P=1.0/R=1.0** on 2000 real files
+    (orchestrator re-verified P=1.0/R=1.0 on a fresh 400-file sample); resolution
+    fixture P=1.0/R=1.0. Uses `language_tsx()` grammar (strict superset).
+  - **Rust** — file/module-node, single-repo; two-pass builder walks the `mod`-tree
+    from crate roots (`lib.rs`/`main.rs`/`bin/*`) to assign module paths, then
+    resolves `crate::`/`self::`/`super::` `use` edges; glob→target module, nested
+    `use` expanded leaf-by-leaf, re-exports included, inline vs file-backed `mod`
+    distinguished. Detection **P=0.995-0.999/R=1.0** on real files (orchestrator
+    re-verified P=0.995/R=1.0 fresh); resolution fixture P=1.0/R=1.0 (rigorous:
+    mod.rs-vs-.rs, self/super, glob, re-export, std excluded, doc-comment `use` not
+    matched, self-link dropped).
+  - **Node model + integration:** all 3 Tier-A languages cherry-picked onto main
+    (commits 93bb591 TS, 700f7dc kotlin, fe20804 rust); shared registries
+    (`link_detector`/`layout`/`specs`) unioned; 186 harness+detector tests green.
+- **FULL data pipeline (2026-07-20):** full subsets downloaded (no limit, for max
+  connectivity) via parquet-sharded SLURM array jobs
+  (`data/stack_sharded_download.py` + `scripts/download_stack_lang.sbatch`;
+  survived an HF 429 via whole-file caching + retry/backoff + %-throttling):
+  Rust 1,386,585 files / Kotlin 2,176,191 / TypeScript 10,637,070. Graph builds +
+  pretokenize/split/audit run as staggered SLURM CPU jobs
+  (`scripts/build_graph_lang.sbatch`, `scripts/finish_dataset_lang.sbatch`; builders
+  read a dir of shards via `data/jsonl_shards.py`).
+  - **Rust graph built (35 min):** 580,314 nodes, 1,152,231 edges, **avg
+    out-degree 1.99** (denser than Go 1.08), 0 dangling/self. **57.6% of repos had
+    a crate root** (84,429/146,497) — far above the 19.5% streaming-head estimate
+    (real repo co-location, per §8 caveat), so the Rust yield concern is largely
+    resolved. Kotlin + TS builds in progress.
+- **Python→tree-sitter migration (§10a):** deferred to end of fan-out (per human).
 
 **The Stack has NO go.mod** (filtered to ext==go) → module path is INFERRED from
 each repo's own imports vs. its directory layout (`build_go_graph.infer_module_path`).
