@@ -1,6 +1,6 @@
 # GO SWEEP — cross_doc_link — the cross-doc thesis condition: detected imports grant cross-doc attention.
 # Recipe: wiki-tuned (muon_lr=0.003, muon_wd=0.1, adamw_lr=3e-5, VE-off).
-# Chinchilla: go corpus is below the ~3.9B target, so 5 epoch_dirs (seed+i reshuffle)
+# Chinchilla: go corpus is below the ~3.9B target, so 6 epoch_dirs (seed+i reshuffle)
 # give >=120k packs to cover max_optimizer_steps=15000 @ world=8 (~3.9B tok).
 data:
   dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go
@@ -10,7 +10,7 @@ data:
   order_mode: 'prefer_targets_first'
   doc_budget: null
   train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/train
-  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_3,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_4]
+  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_3,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_4,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_bfs/epoch_5]
   val_dirs:
     val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/val_community
     val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/val_random
