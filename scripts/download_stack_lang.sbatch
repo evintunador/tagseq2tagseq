@@ -5,10 +5,14 @@
 # language's parquet files (see data/stack_sharded_download.py). Set the array
 # size to the parquet-file count (get it with `--list-only`).
 #
-# Submit (example — Rust has 21 parquet files):
-#   LANG=rust NPARQ=21 sbatch --array=0-20 scripts/download_stack_lang.sbatch
-#   LANG=kotlin NPARQ=15 sbatch --array=0-14 scripts/download_stack_lang.sbatch
-#   LANG=typescript NPARQ=71 sbatch --array=0-70 scripts/download_stack_lang.sbatch
+# Submit — THROTTLE concurrency with %N (HF returns 429 if too many parquet
+# fetches hit at once; keep simultaneous tasks <= ~12):
+#   LANG=rust NPARQ=21 sbatch --array=0-20%12 scripts/download_stack_lang.sbatch
+#   LANG=kotlin NPARQ=15 sbatch --array=0-14%12 scripts/download_stack_lang.sbatch
+#   LANG=typescript NPARQ=71 sbatch --array=0-70%12 scripts/download_stack_lang.sbatch
+#
+# Only ONE language's array should run at a time (don't stack languages onto the
+# same endpoint concurrently). Wait for one to drain before submitting the next.
 #
 # Output: one JSONL per parquet shard under
 #   /fss-data/evin_t/tagseq2tagseq_artifacts/raw/<lang>/shards/
@@ -29,6 +33,11 @@ REPO=/fss/evin_t/tagseq2tagseq
 OUTDIR=/fss-data/evin_t/tagseq2tagseq_artifacts/raw/${LANG}/shards
 cd "$REPO"
 
+# Keep the HF parquet cache on /fss-data (never /fss home) — parquet files are
+# large (~2GB each for TS) and hf_hub_download caches the whole file.
+export HF_HOME=/fss-data/evin_t/tagseq2tagseq_artifacts/.hf_cache
+mkdir -p "$HF_HOME"
+
 # Activate the project venv (editable install lives here).
 source "$REPO/.venv/bin/activate"
 
@@ -37,5 +46,6 @@ python -m data.stack_sharded_download \
     --lang "$LANG" \
     --out-dir "$OUTDIR" \
     --num-workers "$NPARQ" \
-    --worker-id "${SLURM_ARRAY_TASK_ID}"
+    --worker-id "${SLURM_ARRAY_TASK_ID}" \
+    --stagger 4
 echo "[$(date)] worker ${SLURM_ARRAY_TASK_ID} done"

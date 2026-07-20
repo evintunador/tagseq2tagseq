@@ -62,38 +62,70 @@ def _list_parquet(lang: str, token: str) -> List[str]:
     return pfs
 
 
-def _download_shard(parquet_path: str, out_jsonl: str, keep_path, token: str) -> dict:
-    """Stream one parquet file → JSONL, applying the extension filter."""
+def _download_via_cache(parquet_path: str, token: str) -> str:
+    """Download the parquet to the local HF cache and return the local path.
+
+    Downloading the whole file once (with hf_hub_download's built-in retry) then
+    reading it locally is far more rate-limit-friendly than fsspec range-reads,
+    which issue many concurrent HTTP requests per file (the 429 source).
+    """
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download("bigcode/the-stack-dedup", parquet_path,
+                           repo_type="dataset", token=token)
+
+
+def _download_shard(parquet_path: str, out_jsonl: str, keep_path, token: str,
+                    max_retries: int = 8, base_backoff: float = 5.0,
+                    jitter: float = 0.0) -> dict:
+    """Stream one parquet file → JSONL, applying the extension filter.
+
+    Retries with exponential backoff on transient HTTP errors (429/5xx). The
+    parquet is fetched to the local HF cache first (single request with the hub's
+    own retry) rather than range-read over HTTP, which avoids the 429 storm.
+    """
     import pyarrow.parquet as pq
-    import fsspec
-    from huggingface_hub import hf_hub_url
 
     done_marker = out_jsonl + ".done"
     if os.path.exists(done_marker):
         logger.info("skip (done): %s", out_jsonl)
         return {"skipped": True, "parquet": parquet_path}
 
-    url = hf_hub_url("bigcode/the-stack-dedup", parquet_path, repo_type="dataset")
     kept = read = 0
     t0 = time.time()
     tmp = out_jsonl + ".tmp"
-    with fsspec.open(url, headers={"Authorization": f"Bearer {token}"}) as fh:
-        pf = pq.ParquetFile(fh)
-        cols = [c for c in _KEEP if c in pf.schema_arrow.names]
-        with open(tmp, "w", encoding="utf-8", buffering=8 * 1024 * 1024) as out:
-            for batch in pf.iter_batches(batch_size=4096, columns=cols):
-                d = batch.to_pydict()
-                n = len(next(iter(d.values())))
-                for i in range(n):
-                    read += 1
-                    path = d.get("max_stars_repo_path", [None] * n)[i] or ""
-                    content = d.get("content", [None] * n)[i]
-                    repo = d.get("max_stars_repo_name", [None] * n)[i]
-                    if not content or not repo or not keep_path(path):
-                        continue
-                    rec = {k: d.get(k, [None] * n)[i] for k in _KEEP}
-                    out.write(json.dumps(rec) + "\n")
-                    kept += 1
+    attempt = 0
+    while True:
+        try:
+            local = _download_via_cache(parquet_path, token)
+            pf = pq.ParquetFile(local)
+            cols = [c for c in _KEEP if c in pf.schema_arrow.names]
+            kept = read = 0
+            with open(tmp, "w", encoding="utf-8", buffering=8 * 1024 * 1024) as out:
+                for batch in pf.iter_batches(batch_size=4096, columns=cols):
+                    d = batch.to_pydict()
+                    n = len(next(iter(d.values())))
+                    for i in range(n):
+                        read += 1
+                        path = d.get("max_stars_repo_path", [None] * n)[i] or ""
+                        content = d.get("content", [None] * n)[i]
+                        repo = d.get("max_stars_repo_name", [None] * n)[i]
+                        if not content or not repo or not keep_path(path):
+                            continue
+                        rec = {k: d.get(k, [None] * n)[i] for k in _KEEP}
+                        out.write(json.dumps(rec) + "\n")
+                        kept += 1
+            break
+        except Exception as e:  # noqa: BLE001 — retry any transient fetch/parse error
+            attempt += 1
+            if attempt > max_retries:
+                logger.error("shard %s FAILED after %d retries: %s",
+                             parquet_path, max_retries, e)
+                raise
+            wait = base_backoff * (2 ** (attempt - 1)) + jitter
+            logger.warning("shard %s attempt %d hit %s: %s — backoff %.0fs",
+                           parquet_path, attempt, type(e).__name__, e, wait)
+            time.sleep(wait)
+
     os.replace(tmp, out_jsonl)
     open(done_marker, "w").write(f"{kept}\n")
     dt = time.time() - t0
@@ -110,6 +142,9 @@ def main(argv=None):
                     help="total workers splitting the parquet list")
     ap.add_argument("--worker-id", type=int, default=0,
                     help="this worker's index in [0, num-workers)")
+    ap.add_argument("--stagger", type=float, default=0.0,
+                    help="per-worker startup delay (seconds) = worker_id * stagger, "
+                         "to avoid a synchronized HF-endpoint stampede (429)")
     ap.add_argument("--list-only", action="store_true",
                     help="print the parquet file count + names and exit")
     args = ap.parse_args(argv)
@@ -133,12 +168,21 @@ def main(argv=None):
     logger.info("worker %d/%d handling %d/%d parquet files for %s",
                 args.worker_id, args.num_workers, len(mine), len(pfs), args.lang)
 
+    # Stagger workers' first request to avoid a synchronized HF-endpoint stampede
+    # (429). Deterministic per worker, so resumes don't all wake at once.
+    startup_delay = (args.worker_id % max(args.num_workers, 1)) * args.stagger
+    if startup_delay:
+        logger.info("worker %d staggered start: sleeping %.0fs",
+                    args.worker_id, startup_delay)
+        time.sleep(startup_delay)
+
     results = []
     for p in mine:
         # data/rust/train-00007-of-00021.parquet -> rust_00007.jsonl
         stem = p.rsplit("/", 1)[-1].replace(".parquet", "")
         out_jsonl = os.path.join(args.out_dir, f"{stem}.jsonl")
-        results.append(_download_shard(p, out_jsonl, keep_path, token))
+        results.append(_download_shard(p, out_jsonl, keep_path, token,
+                                       jitter=(args.worker_id % 8)))
 
     total_kept = sum(r.get("kept", 0) for r in results)
     logger.info("worker %d done: %d shards, %d records kept",
