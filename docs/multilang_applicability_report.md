@@ -1,0 +1,107 @@
+# Step-0 applicability report — which Stack languages get a link graph
+
+Author: Claude (orchestrator). Date: 2026-07-20.
+
+**Method.** Enumerated all `data/<lang>` subsets in `bigcode/the-stack-dedup`
+(**358** language dirs). Stream-probed ~1,500 real files/candidate for import
+density and the *local-ish* (plausibly intra-repo-resolvable) fraction. Confirmed a
+tree-sitter grammar wheel exists on PyPI for every recommended language. Then
+applied the hard gate from the design (§2, §4):
+
+> **Applicable ⟺ a *local* import string maps deterministically to another source
+> unit in the SAME repo, without reading a manifest** (the Stack strips
+> `go.mod`/`pom.xml`/`Cargo.toml`/`package.json`/`composer.json`).
+
+Density alone is not the test — a language can have many imports that are all
+external (won't resolve) or namespace-granular (map to no single node).
+
+Baselines already shipped: **Go** 7.6 imp/file (package-node), **Java** 9.5
+(file-node/FQN), **Python** ~4.0 (file-node, single-repo).
+
+## Probe data (imports/file · % files w/ imports · % local-ish · chars/file)
+
+| Lang | imp/file | %w/imp | %local | chars | Grammar |
+|---|---|---|---|---|---|
+| kotlin | 6.97 | 82% | 70% | 2856 | ✓ 1.1.0 |
+| scala | 6.04 | 87% | 78% | 4514 | ✓ 0.26.0 |
+| haskell | 6.62 | 88% | 46% | 5292 | ✓ 0.23.1 |
+| zig | 7.33 | 88% | 33% | 11006 | ✓ (needs wheel) |
+| rust | 5.76 | 88% | 39% | 8959 | ✓ 0.24.2 (installed) |
+| typescript | 4.09 | 82% | 48% | 4570 | ✓ 0.23.2 (installed) |
+| dart | 3.97 | 82% | 82% | 4381 | ✓ 0.1.0 |
+| groovy | 4.62 | 79% | 87% | 3876 | ✓ |
+| perl | 3.47 | 75% | 44% | 5081 | ✓ |
+| javascript | 2.66 | 59% | 50% | 11652 | ✓ 0.25.0 (installed) |
+| julia | 2.27 | 57% | 32% | 4408 | ✓ 0.23.1 |
+| php | 1.88 | 44% | 100%\* | 5593 | ✓ 0.24.1 |
+| elixir | 1.71 | 79% | 100%\* | 2808 | ✓ |
+| nimrod | 1.72 | 74% | 35% | 7963 | ✓ |
+| swift | 1.57 | 92% | 43%\* | 4173 | ✓ |
+| solidity | 1.42 | 42% | 60% | 7750 | ✓ 1.2.13 |
+| crystal | 1.28 | 60% | 62% | 3334 | ✓ |
+| lua | 1.21 | 36% | 100%\* | 6975 | ✓ |
+| ocaml | 1.19 | 48% | 100%\* | 6566 | ✓ |
+| ruby | 0.90 | 41% | 13% | 3835 | ✓ 0.23.1 |
+| c-sharp | 3.88 | 80% | 46%\* | 5445 | ✓ 0.23.5 |
+| clojure | 0.71 | 70% | 100%\* | 4088 | ✓ |
+| erlang | 0.05 | 4% | — | 6905 | ✓ |
+
+\* heuristic "% local" is unreliable for these (namespace-granular or my probe
+regex marked everything local); the decision below uses the *resolution model*, not
+this number.
+
+## Ranked decision
+
+### Tier A — BUILD FIRST (clean node model, high yield, close to Go/Java)
+| Lang | Node model | Multi-repo? | Resolution difficulty | Why |
+|---|---|---|---|---|
+| **TypeScript** | file | no (relative) | **medium** — relative path + ext/`index` inference; deterministic, fixture-able to 1.0 | canonical, high volume, cleanest relative-import graph |
+| **Kotlin** | file, RICH-keyed by declared top-level FQNs | yes (FQN) | **medium** — need symbol→file index (filename ≠ classname, multi-class files), mirrors Java otherwise | richest imports (6.97), Java-adjacent template reuse |
+| **Rust** | module (file or `mod`-decl) | no (crate-relative) | **hard** — resolve `mod`-tree; `use crate::/super::/self::`; re-exports/glob are the risk to R≥0.90 | in design §4; rich (5.76); highest-risk-of-flag |
+
+### Tier B — BUILD AFTER A (applicable, more nuance)
+| Lang | Node model | Multi-repo? | Resolution difficulty | Note |
+|---|---|---|---|---|
+| **JavaScript** | file | no | medium | like TS but CommonJS `require` + dynamic; lower %w/imp |
+| **Scala** | file, RICH FQN | yes | medium-hard | symbol index + wildcard `import pkg._` + package objects |
+| **Haskell** | file, module→path | yes | medium | `Data.Map`→`Data/Map.hs` convention, clean; many external |
+| **Zig** | file | no (relative) | **easy** | `@import("x.zig")` explicit path; dense (7.33); lower total volume |
+| **Dart** | file | no (relative) | easy-medium | relative `.dart` clean; `package:` needs root inference |
+| **Solidity** | file | no (relative) | easy | `import "./X.sol"` explicit; sparse-ish (1.42) |
+
+### Tier C — BORDERLINE, flag for human call before spending build time
+- **PHP** — FQN `use`, but resolution needs PSR-4 root inference (namespace-prefix
+  vs dir, à la Go module inference); sparse (1.88). Doable, medium-hard.
+- **Julia** — `include("x.jl")` is a clean literal file edge, but `using/import` is
+  module-based and filename-independent; mixed model.
+- **Groovy** — mirrors Java FQN but heavily build-script/DSL; overlaps Java.
+- **Elixir / OCaml** — module imports, but filename ≠ module (symbol index needed);
+  moderate density.
+- **Clojure** — `ns`→path is clean convention but probe shows very low density (0.71).
+- **Perl** — `use Mod::Name`→`Mod/Name.pm` convention, but mostly CPAN-external.
+- **Crystal / Nim / Lua / Ruby** — relative/require forms exist but local yield is
+  low (Ruby 13% local, Lua/Crystal sparse). Weak graphs.
+
+### REJECT — document the reason (no deterministic import→source-unit map)
+- **C#** — `using` is **namespace-granular** (a namespace spans many files; imports a
+  whole namespace, not a type/file). No single target node. *Like Java on-demand `*`.*
+- **Swift** — **whole-module compilation**: files in a module see each other with NO
+  import statement; `import X` names an external framework. No intra-repo file edge
+  (same shape as Go's intra-package problem, but Swift has no package-path either).
+- **Erlang** — `-import` essentially unused (3.9% of files); modules called as
+  `mod:func`, not imported. No import graph.
+- **Vala** — `using` is namespace-granular like C#.
+- **C / C++ / CUDA / Objective-C** — `#include` needs header-search-path resolution
+  (design §0 already rejects; not manifest-free deterministic).
+- **All non-code** (html, css, json, yaml, sql, shell, markdown, tex, …) — no
+  code-import graph.
+
+## Recommendation
+Build **Tier A (TS, Kotlin, Rust)** first as the proven-template expansion, then
+**Tier B** (JS, Scala, Haskell, Zig, Dart, Solidity) staggered. Treat **Tier C** as
+opt-in per human call. **Reject** the rejects with the reasons above. Every language,
+Tier A–B included, must still clear the frozen gate (detection P≥0.95/R≥0.90 +
+resolution fixture) before ANY data is built; any that can't is flagged and set
+aside — Rust is the most likely to hit that wall (re-exports/glob `use`).
+
+**Awaiting human confirmation of the build set before dispatching implementers.**
