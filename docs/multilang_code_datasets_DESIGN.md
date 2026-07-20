@@ -107,6 +107,51 @@ shipped without validation.
   `com.google.`). Optional hardening for the generation path: drop framework-prefixed
   nodes from the corpus, or scope generation resolution to the active repo. Not a
   blocker for training. (Flagged for the human visual gate regardless.)
+- **Kotlin (fan-out #3): code COMPLETE + gated; data DRY-RUN validated (2026-07-20).**
+  - Detector `model/graph_traversal/kotlin_import_detector.py` (dotted-FQN
+    target_str; strips `as` alias; DROPS wildcard `import a.b.*`; blanks
+    comments/strings incl. nested block comments + `"""` raw strings). Spec
+    `specs/kotlin_spec.py` (RICH path; wildcard licenses nothing; backtick
+    keyword-escapes `` `fun` `` stripped on both sides). Registered in
+    `make_link_detector`/`LINK_DETECTOR_NAMES`/`_DETECTOR_INFERENCE_LAYOUT`.
+  - **NODE MODEL — one node per TOP-LEVEL DECLARED FQN, not per file.** Kotlin's
+    filename does NOT fix the symbol name and one `.kt` file declares MANY
+    top-level symbols (class/object/interface/fun/val/var/typealias), each with
+    FQN `<package>.<Name>`; `import` names a DECLARATION, not a file. The frozen
+    resolver (`document_corpus._build_indexes` / `cross_doc_mask._match_links_to_docs`)
+    keys each document by exactly ONE string via `index_doc_span`, so a file
+    exposing N FQNs must become N nodes (all sharing the file content) for every
+    importable FQN to resolve by exact match. Builder
+    `data/kotlin_graph_extractor/build_kotlin_graph.py` (tree-sitter; per-repo;
+    parses package + all top-level decl names → symbol→file index → edges) +
+    `download_kotlin.py` (keep `.kt`, exclude `.kts`) + node builder
+    `data/graph_harness/kotlin_nodes.py` + `data/pretokenize_kotlin.py`.
+  - **DETECTION GATE PASSED**: on 1941 real Stack `.kt` files (500-file gate run
+    P=0.999/R=1.000) — full-sample **P=0.999 / R=1.000** (tp=13023, fp=19, fn=0).
+    The ~19 residual FPs are all files tree-sitter fails to parse
+    (`<%= %>` template stubs, kotlin-compiler `// FILE:`-multiplexed test
+    artifacts) where the detector is arguably MORE correct — not real errors.
+  - **RESOLUTION FIXTURE**: `fixtures_data/kotlin/simple_pkg` → **P=1.0 / R=1.0**.
+    Exercises: a class + a top-level function declared in ONE file, imported
+    separately (the multi-symbol case); an object import; an alias import
+    (alias stripped, FQN with no declarer → no spurious edge); a wildcard (no
+    edge); a `kotlin.*` stdlib import (unresolved). Tests
+    `tests/harness/test_kotlin_resolution.py` + `tests/test_kotlin_import_detector.py`;
+    full harness suite green (`tests/harness` 14, go/java/kotlin detectors,
+    `tests/data/test_layout.py`).
+  - **DRY RUN** (5000-file sample, NOT the 2M build): built graph = 37 FQN nodes,
+    26 edges, 0% dangling/self/isolated (run_audit); pretokenize OK (182,926
+    tokens); run_sample_dump shows intra-repo FQN imports RESOLVE to the declaring
+    file (incl. 4 sibling top-level funcs from one file resolving as distinct
+    nodes — validates the per-FQN model), stdlib/external imports unresolved.
+    Small graph is the known streaming-head sampling artifact (not repo-ordered);
+    real co-location only appears at full scale. Config `configs/kotlin_cross_doc.yaml`.
+  - **STOPPED before the full 2M build** (orchestrator staggers heavy builds).
+  - Human-review flags: (a) same framework-FQN generation-resolution nuance as
+    Java (stored per-repo edges are clean; only generation-time PretokCorpus can
+    cross-repo-resolve a framework FQN); (b) multi-node-per-file means the pack
+    sampler sees several nodes with identical content for a multi-symbol file —
+    expected, but worth a glance in the visual gate at real batch scale.
 - **Rust, TS/JS:** grammars installed; not started (deferred — messier resolution).
 - **Python→tree-sitter migration (§10a):** not started.
 

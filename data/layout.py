@@ -392,6 +392,7 @@ _DETECTOR_INFERENCE_LAYOUT = {
     "go":       "identifier_prefix_eos",
     "java":     "identifier_prefix_eos",
     "typescript": "identifier_prefix_eos",
+    "kotlin":   "identifier_prefix_eos",
     "arxiv":    "latex_comment_prefix",
     "null":     "eos",
 }
