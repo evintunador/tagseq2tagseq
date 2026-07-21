@@ -1,0 +1,35 @@
+#!/bin/bash
+# Precompute all MISSING code-lang epoch schedules on a dedicated compute node.
+# Resume-safe: precompute_epochs.py skips epoch dirs that already have packs.parquet.
+# Chinchilla epoch targets (packs/epoch → epochs for 15k steps @ world=8, need 120k packs):
+#   go   ~23k → 6ep   java ~18k → 7ep   rust ~37k → 4ep   kotlin ~84k → 2ep   typescript ~181k → 1ep(done)
+# go_bfs/java_bfs were DELETED (buggy '#' layout) and regenerate here with '//' (slash_comment).
+# All code langs use stochastic_slash_comment_prefix. Detector = lang name.
+set -euo pipefail
+REPO=/fss/evin_t/tagseq2tagseq
+ART=/fss-data/evin_t/tagseq2tagseq_artifacts
+cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
+
+gen () { # lang detector n_epochs strat
+  local lang=$1 det=$2 n=$3 strat=$4
+  echo "=== [$(date)] $lang/$strat → $n epoch(s) ==="
+  python precompute_epochs.py \
+    --dataset-dir "$ART/pretokenized_datasets/$lang/splits/train" \
+    --output-dir  "$ART/schedules/${lang}_${strat}" \
+    --n-epochs "$n" --strategy "$strat" --local-seq-len 32768 --n-buckets 32 --n-workers 32 \
+    --link-detector "$det" --layout-policy stochastic_slash_comment_prefix \
+    --max-grants 256 --order-mode prefer_targets_first --device cpu
+}
+
+# go: 6 epochs all strategies (bfs regen from scratch; others extend 1→6)
+for s in bfs dfs random_walk random; do gen go go 6 "$s"; done
+# java: 7 epochs all strategies
+for s in bfs dfs random_walk random; do gen java java 7 "$s"; done
+# rust: 4 epochs all strategies
+for s in bfs dfs random_walk random; do gen rust rust 4 "$s"; done
+# kotlin: 2 epochs all strategies
+for s in bfs dfs random_walk random; do gen kotlin kotlin 2 "$s"; done
+# typescript: 1 epoch (already done for all strategies) — noop / verify
+for s in bfs dfs random_walk random; do gen typescript typescript 1 "$s"; done
+
+echo "=== [$(date)] ALL MISSING CODE EPOCHS DONE ==="

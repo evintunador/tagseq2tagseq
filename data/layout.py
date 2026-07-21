@@ -451,6 +451,7 @@ _DETECTOR_INFERENCE_LAYOUT = {
     "kotlin":   "slash_comment_prefix_eos",
     "rust":     "slash_comment_prefix_eos",
     "zig":      "slash_comment_prefix_eos",
+    "dart":     "slash_comment_prefix_eos",
     "arxiv":    "latex_comment_prefix",
     "null":     "eos",
 }

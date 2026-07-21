@@ -1,0 +1,7 @@
+[
+  {"from": "src/main.dart", "to": "src/util/helper.dart"},
+  {"from": "src/main.dart", "to": "src/models/user.dart"},
+  {"from": "src/main.dart", "to": "src/consts.dart"},
+  {"from": "src/models/user.dart", "to": "src/consts.dart"},
+  {"from": "src/util/helper.dart", "to": "src/consts.dart"}
+]
