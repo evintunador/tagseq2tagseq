@@ -1,0 +1,10 @@
+{
+  "records_read": 2000000,
+  "repos_total": 326796,
+  "repos_kept": 81445,
+  "packages_before_filter": 551763,
+  "graph_nodes_final": 358812,
+  "graph_edges_internal_final": 388608,
+  "avg_out_degree": 1.0830407009799004,
+  "min_package_links": 1
+}

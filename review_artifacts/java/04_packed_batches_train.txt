@@ -1,0 +1,452 @@
+====================================================================================================
+Loading GraphIndex from /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/java/splits/val_community ...
+  nodes=4,910  tokenizer=gpt2  eos=50256  dtype=uint16
+  LIVE sample  |  strategy=bfs  layout=stochastic_slash_comment_prefix  order_mode=prefer_targets_first  token_budget=16384  doc_budget=None  epoch=0
+====================================================================================================
+
+####################################################################################################
+PACK 0   |   16,384 tokens   |   3 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:6057]  (6057 tok)  doc_id=721  component=0  TRUNCATED
+   normed_id : org.opentravel.schemacompiler.model.TLModel
+   title     : 'org.opentravel.schemacompiler.model.TLModel'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[1003, 8745, 13, 404, 298, 25843, 13, 1416, 4411, 330, 3361, 5329, 13, 19849, 13, 14990, 17633, 628]
+   │   // org.opentravel.schemacompiler.model.TLModel
+   │   
+   ├ BODY    (6038 tok)
+   │   head: '/**\\n * Copyright (C) 2014 OpenTravel Alliance (info@opentravel.org)\\n *\\n * Licensed under the Apache License, Version 2.0 (the "License");\\n * you may not use this file except in compliance with the License.\\n * You may obtain a copy of the License at\\n *\\n *         http://www.apache.org/licenses … (+7 chars)'
+   │   tail: ' this );\\n    }\\n\\n    /**\\n     * Publishes the given event to all registered listeners that are capable of processing it.\\n     * \\n     * @param event the event to publish\\n     * @param <E> the type of the event to publish\\n     */\\n    @SuppressWarnings("unchecked")\\n    protected <E extends Mo … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[6057:13416]  (7359 tok)  doc_id=731  component=0
+   normed_id : org.opentravel.schemacompiler.codegen.html.Configuration
+   title     : 'org.opentravel.schemacompiler.codegen.html.Configuration'
+   categories: ''
+   ┌ PREFIX  (none) (stochastic coin-flip: no card this epoch)
+   ├ BODY    (7358 tok)
+   │   head: '/**\\n * Copyright (C) 2014 OpenTravel Alliance (info@opentravel.org)\\n *\\n * Licensed under the Apache License, Version 2.0 (the "License");\\n * you may not use this file except in compliance with the License.\\n * You may obtain a copy of the License at\\n *\\n *         http://www.apache.org/licenses … (+7 chars)'
+   │   tail: "return String\\n     */\\n    public String getHelpfile() {\\n        return helpfile;\\n    }\\n\\n    /**\\n     * Assigns the value of the 'helpfile' field.\\n     *\\n     * @param helpfile the field value to assign\\n     */\\n    public void setHelpfile(String helpfile) {\\n        this.helpfile = helpfil … (+16 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[13416:16384]  (2968 tok)  doc_id=750  component=0
+   normed_id : org.opentravel.schemacompiler.codegen.html.writers.info.FacetInfoWriter
+   title     : 'org.opentravel.schemacompiler.codegen.html.writers.info.FacetInfoWriter'
+   categories: ''
+   ┌ PREFIX  (27 tok)  ids=[1003, 8745, 13, 404, 298, 25843, 13, 1416, 4411, 330, 3361, 5329, 13, 8189, 5235, 13, 6494, 13, 34422, 13, 10951, 13, 37, 23253, 12360, 34379, 628]
+   │   // org.opentravel.schemacompiler.codegen.html.writers.info.FacetInfoWriter
+   │   
+   ├ BODY    (2940 tok)
+   │   head: '/**\\n * Copyright (C) 2014 OpenTravel Alliance (info@opentravel.org)\\n *\\n * Licensed under the Apache License, Version 2.0 (the "License");\\n * you may not use this file except in compliance with the License.\\n * You may obtain a copy of the License at\\n *\\n *         http://www.apache.org/licenses … (+7 chars)'
+   │   tail: 'r.codegen.html.writers.info.AbstractInfoWriter#getInfoTableHeader()\\n     */\\n    @Override\\n    protected String[] getInfoTableHeader() {\\n        Configuration config = writer.newConfiguration();\\n\\n        return new String[] {config.getText( "doclet.Name" ), config.getText( "doclet.Type" )};\\n   … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (java detector; targets matched against in-pack docs)
+   @tok    223  from doc[0]  → 'org.opentravel.schemacompiler.event.ModelEvent'  not in pack (no grant)
+   @tok    243  from doc[0]  → 'org.opentravel.schemacompiler.event.ModelEventBuilder'  not in pack (no grant)
+   @tok    263  from doc[0]  → 'org.opentravel.schemacompiler.event.ModelEventListener'  not in pack (no grant)
+   @tok    283  from doc[0]  → 'org.opentravel.schemacompiler.event.ModelEventType'  not in pack (no grant)
+   @tok    303  from doc[0]  → 'org.opentravel.schemacompiler.event.OwnershipEvent'  not in pack (no grant)
+   @tok    323  from doc[0]  → 'org.opentravel.schemacompiler.event.ValueChangeEvent'  not in pack (no grant)
+   @tok    347  from doc[0]  → 'org.opentravel.schemacompiler.ic.LibraryMemberChangeIntegrityChecker'  not in pack (no grant)
+   @tok    370  from doc[0]  → 'org.opentravel.schemacompiler.ic.NameChangeIntegrityChecker'  not in pack (no grant)
+   @tok    391  from doc[0]  → 'org.opentravel.schemacompiler.loader.BuiltInLibraryFactory'  not in pack (no grant)
+   @tok    411  from doc[0]  → 'org.opentravel.schemacompiler.transform.AnonymousEntityFilter'  not in pack (no grant)
+   @tok    434  from doc[0]  → 'org.opentravel.schemacompiler.transform.util.ModelReferenceResolver'  not in pack (no grant)
+   @tok    454  from doc[0]  → 'org.opentravel.schemacompiler.util.URLUtils'  not in pack (no grant)
+   @tok    474  from doc[0]  → 'org.opentravel.schemacompiler.validate.Validatable'  not in pack (no grant)
+   @tok    483  from doc[0]  → 'java.net.URL'  not in pack (no grant)
+   @tok    492  from doc[0]  → 'java.util.ArrayList'  not in pack (no grant)
+   @tok    500  from doc[0]  → 'java.util.Collection'  not in pack (no grant)
+   @tok    509  from doc[0]  → 'java.util.Collections'  not in pack (no grant)
+   @tok    518  from doc[0]  → 'java.util.HashMap'  not in pack (no grant)
+   @tok    527  from doc[0]  → 'java.util.HashSet'  not in pack (no grant)
+   @tok    535  from doc[0]  → 'java.util.List'  not in pack (no grant)
+   @tok    543  from doc[0]  → 'java.util.Map'  not in pack (no grant)
+   @tok    551  from doc[0]  → 'java.util.Set'  not in pack (no grant)
+   @tok   6270  from doc[1]  → 'org.opentravel.schemacompiler.codegen.example.ExampleGeneratorOptions'  not in pack (no grant)
+   @tok   6295  from doc[1]  → 'org.opentravel.schemacompiler.codegen.html.builders.DocumentationBuild … (+2 chars)'  not in pack (no grant)
+   @tok   6321  from doc[1]  → 'org.opentravel.schemacompiler.codegen.html.builders.DocumentationBuild … (+9 chars)'  not in pack (no grant)
+   @tok   6340  from doc[1]  → 'org.opentravel.schemacompiler.model.AbstractLibrary'  not in pack (no grant)
+   @tok   6360  from doc[1]  → 'org.opentravel.schemacompiler.model.BuiltInLibrary'  not in pack (no grant)
+   @tok   6379  from doc[1]  → 'org.opentravel.schemacompiler.model.LibraryMember'  not in pack (no grant)
+   @tok   6399  from doc[1]  → 'org.opentravel.schemacompiler.model.TLLibrary'  not in pack (no grant)
+   @tok   6418  from doc[1]  → 'org.opentravel.schemacompiler.model.TLModel'  IN-PACK → grants attention to doc[0]
+   @tok   6427  from doc[1]  → 'java.util.List'  not in pack (no grant)
+   @tok   6436  from doc[1]  → 'java.util.Locale'  not in pack (no grant)
+   @tok  13657  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.Configuration'  IN-PACK → grants attention to doc[1]
+   @tok  13678  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.Content'  not in pack (no grant)
+   @tok  13701  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.LinkInfoImpl'  not in pack (no grant)
+   @tok  13728  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.builders.FacetDocumentation … (+7 chars)'  not in pack (no grant)
+   @tok  13756  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.builders.FacetOwnerDocument … (+12 chars)'  not in pack (no grant)
+   @tok  13782  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.markup.HtmlStyle'  not in pack (no grant)
+   @tok  13808  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.markup.HtmlTag'  not in pack (no grant)
+   @tok  13834  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.markup.HtmlTree'  not in pack (no grant)
+   @tok  13860  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.markup.RawHtml'  not in pack (no grant)
+   @tok  13887  from doc[2]  → 'org.opentravel.schemacompiler.codegen.html.writers.SubWriterHolderWrit … (+2 chars)'  not in pack (no grant)
+   @tok  13908  from doc[2]  → 'org.opentravel.schemacompiler.model.TLFacetType'  not in pack (no grant)
+   @tok  13918  from doc[2]  → 'java.util.ArrayList'  not in pack (no grant)
+   @tok  13926  from doc[2]  → 'java.util.List'  not in pack (no grant)
+
+####################################################################################################
+PACK 1   |   16,384 tokens   |   2 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:15310]  (15310 tok)  doc_id=4196  component=0  TRUNCATED
+   normed_id : org.zstack.test.Api
+   title     : 'org.zstack.test.Api'
+   categories: ''
+   ┌ PREFIX  (11 tok)  ids=[1003, 8745, 13, 89, 25558, 13, 9288, 13, 32, 14415, 628]
+   │   // org.zstack.test.Api
+   │   
+   ├ BODY    (15298 tok)
+   │   head: 'package org.zstack.test;\\n\\nimport org.springframework.beans.factory.annotation.Autowire;\\nimport org.springframework.beans.factory.annotation.Autowired;\\nimport org.springframework.beans.factory.annotation.Configurable;\\nimport org.zstack.appliancevm.APIListApplianceVmReply;\\nimport org.zstack.appl … (+6 chars)'
+   │   tail: ' sender = new ApiSender();\\n        sender.setTimeout(timeout);\\n        APIListGlobalConfigReply reply = sender.call(msg, APIListGlobalConfigReply.class);\\n        return reply.getInventories();*/\\n        return null;\\n    }\\n\\n    public GlobalConfigInventory updateGlobalConfig(GlobalConfigInvent … (+7 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[15310:16384]  (1074 tok)  doc_id=4219  component=0
+   normed_id : org.zstack.test.compute.vm.TestVmStateTracer7
+   title     : 'org.zstack.test.compute.vm.TestVmStateTracer7'
+   categories: ''
+   ┌ PREFIX  (none) (stochastic coin-flip: no card this epoch)
+   ├ BODY    (1073 tok)
+   │   head: 'package org.zstack.test.compute.vm;\\n\\nimport junit.framework.Assert;\\nimport org.junit.Before;\\nimport org.junit.Test;\\nimport org.zstack.compute.host.HostGlobalConfig;\\nimport org.zstack.core.cloudbus.CloudBus;\\nimport org.zstack.core.cloudbus.EventFacade;\\nimport org.zstack.core.componentloader.C … (+8 chars)'
+   │   tail: 'onState(hostUuid, true);\\n        HostVO host = dbf.findByUuid(hostUuid, HostVO.class);\\n        host.setStatus(HostStatus.Disconnected);\\n        dbf.update(host);\\n        TimeUnit.SECONDS.sleep(3);\\n        vm1 = q.find();\\n\\n        Assert.assertEquals(VmInstanceState.Stopped, vm1.getState());\\n … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (java detector; targets matched against in-pack docs)
+   @tok     39  from doc[0]  → 'org.springframework.beans.factory.annotation.Autowire'  not in pack (no grant)
+   @tok     58  from doc[0]  → 'org.springframework.beans.factory.annotation.Autowired'  not in pack (no grant)
+   @tok     76  from doc[0]  → 'org.springframework.beans.factory.annotation.Configurable'  not in pack (no grant)
+   @tok     98  from doc[0]  → 'org.zstack.appliancevm.APIListApplianceVmReply'  not in pack (no grant)
+   @tok    118  from doc[0]  → 'org.zstack.appliancevm.ApplianceVmInventory'  not in pack (no grant)
+   @tok    132  from doc[0]  → 'org.zstack.core.MessageCommandRecorder'  not in pack (no grant)
+   @tok    143  from doc[0]  → 'org.zstack.core.Platform'  not in pack (no grant)
+   @tok    158  from doc[0]  → 'org.zstack.core.cloudbus.CloudBus'  not in pack (no grant)
+   @tok    175  from doc[0]  → 'org.zstack.core.cloudbus.CloudBusEventListener'  not in pack (no grant)
+   @tok    190  from doc[0]  → 'org.zstack.core.componentloader.ComponentLoader'  not in pack (no grant)
+   @tok    208  from doc[0]  → 'org.zstack.core.config.APIListGlobalConfigReply'  not in pack (no grant)
+   @tok    224  from doc[0]  → 'org.zstack.core.config.GlobalConfigInventory'  not in pack (no grant)
+   @tok    239  from doc[0]  → 'org.zstack.core.db.DatabaseFacade'  not in pack (no grant)
+   @tok    253  from doc[0]  → 'org.zstack.core.db.SimpleQuery'  not in pack (no grant)
+   @tok    269  from doc[0]  → 'org.zstack.core.db.SimpleQuery.Op'  not in pack (no grant)
+   @tok    288  from doc[0]  → 'org.zstack.core.debug.APIDebugSignalEvent'  not in pack (no grant)
+   @tok    307  from doc[0]  → 'org.zstack.core.debug.APIDebugSignalMsg'  not in pack (no grant)
+   @tok    322  from doc[0]  → 'org.zstack.core.debug.DebugSignal'  not in pack (no grant)
+   @tok    339  from doc[0]  → 'org.zstack.network.securitygroup.SecurityGroupInventory'  not in pack (no grant)
+   @tok    360  from doc[0]  → 'org.zstack.network.securitygroup.VmNicSecurityGroupRefInventory'  not in pack (no grant)
+   @tok    382  from doc[0]  → 'org.zstack.header.allocator.APIGetCpuMemoryCapacityReply'  not in pack (no grant)
+   @tok    403  from doc[0]  → 'org.zstack.header.apimediator.APIIsReadyToGoMsg'  not in pack (no grant)
+   @tok    424  from doc[0]  → 'org.zstack.header.apimediator.ApiMediatorConstant'  not in pack (no grant)
+   @tok    454  from doc[0]  → 'org.zstack.header.cluster.ClusterInventory'  not in pack (no grant)
+   @tok    485  from doc[0]  → 'org.zstack.header.configuration.DiskOfferingInventory'  not in pack (no grant)
+   @tok    503  from doc[0]  → 'org.zstack.header.configuration.InstanceOfferingInventory'  not in pack (no grant)
+   @tok    518  from doc[0]  → 'org.zstack.header.console.ConsoleInventory'  not in pack (no grant)
+   @tok    534  from doc[0]  → 'org.zstack.header.exception.CloudRuntimeException'  not in pack (no grant)
+   @tok    561  from doc[0]  → 'org.zstack.header.host.HostInventory'  not in pack (no grant)
+   @tok    590  from doc[0]  → 'org.zstack.header.identity.AccountInventory'  not in pack (no grant)
+   @tok    608  from doc[0]  → 'org.zstack.header.identity.AccountResourceRefInventory'  not in pack (no grant)
+   @tok    624  from doc[0]  → 'org.zstack.header.identity.PolicyInventory'  not in pack (no grant)
+   @tok    639  from doc[0]  → 'org.zstack.header.identity.PolicyStatement'  not in pack (no grant)
+   @tok    656  from doc[0]  → 'org.zstack.header.identity.QuotaInventory'  not in pack (no grant)
+   @tok    672  from doc[0]  → 'org.zstack.header.identity.SessionInventory'  not in pack (no grant)
+   @tok    689  from doc[0]  → 'org.zstack.header.identity.UserGroupInventory'  not in pack (no grant)
+   @tok    705  from doc[0]  → 'org.zstack.header.identity.UserInventory'  not in pack (no grant)
+   @tok    732  from doc[0]  → 'org.zstack.header.image.ImageInventory'  not in pack (no grant)
+   @tok    762  from doc[0]  → 'org.zstack.header.managementnode.ManagementNodeInventory'  not in pack (no grant)
+   @tok    777  from doc[0]  → 'org.zstack.header.message.APIMessage'  not in pack (no grant)
+   @tok    793  from doc[0]  → 'org.zstack.header.message.APIReply'  not in pack (no grant)
+   @tok    810  from doc[0]  → 'org.zstack.header.message.APISyncCallMessage'  not in pack (no grant)
+   @tok    823  from doc[0]  → 'org.zstack.header.message.Event'  not in pack (no grant)
+   @tok    858  from doc[0]  → 'org.zstack.header.network.l2.L2NetworkInventory'  not in pack (no grant)
+   @tok    880  from doc[0]  → 'org.zstack.header.network.l2.L2VlanNetworkInventory'  not in pack (no grant)
+   @tok    915  from doc[0]  → 'org.zstack.header.network.l3.FreeIpInventory'  not in pack (no grant)
+   @tok    935  from doc[0]  → 'org.zstack.header.network.l3.IpRangeInventory'  not in pack (no grant)
+   @tok    955  from doc[0]  → 'org.zstack.header.network.l3.L3NetworkInventory'  not in pack (no grant)
+   @tok    988  from doc[0]  → 'org.zstack.header.network.service.NetworkServiceProviderInventory'  not in pack (no grant)
+   @tok   1034  from doc[0]  → 'org.zstack.header.simulator.ChangeVmStateOnSimulatorHostMsg'  not in pack (no grant)
+   @tok   1051  from doc[0]  → 'org.zstack.header.simulator.SimulatorConstant'  not in pack (no grant)
+   @tok   1076  from doc[0]  → 'org.zstack.header.simulator.storage.backup.SimulatorBackupStorageConst … (+3 chars)'  not in pack (no grant)
+   @tok   1100  from doc[0]  → 'org.zstack.header.simulator.storage.backup.SimulatorBackupStorageDetai … (+2 chars)'  not in pack (no grant)
+   @tok   1125  from doc[0]  → 'org.zstack.header.simulator.storage.primary.APIAddSimulatorPrimaryStor … (+6 chars)'  not in pack (no grant)
+   @tok   1148  from doc[0]  → 'org.zstack.header.simulator.storage.primary.SimulatorPrimaryStorageCon … (+5 chars)'  not in pack (no grant)
+   @tok   1170  from doc[0]  → 'org.zstack.header.simulator.storage.primary.SimulatorPrimaryStorageDet … (+4 chars)'  not in pack (no grant)
+   @tok   1205  from doc[0]  → 'org.zstack.header.storage.backup.BackupStorageInventory'  not in pack (no grant)
+   @tok   1237  from doc[0]  → 'org.zstack.header.storage.primary.PrimaryStorageInventory'  not in pack (no grant)
+   @tok   1272  from doc[0]  → 'org.zstack.header.storage.snapshot.VolumeSnapshotInventory'  not in pack (no grant)
+   @tok   1293  from doc[0]  → 'org.zstack.header.storage.snapshot.VolumeSnapshotTreeInventory'  not in pack (no grant)
+   @tok   1308  from doc[0]  → 'org.zstack.header.tag.TagInventory'  not in pack (no grant)
+   @tok   1322  from doc[0]  → 'org.zstack.header.tag.TagType'  not in pack (no grant)
+   @tok   1351  from doc[0]  → 'org.zstack.header.vm.VmInstanceInventory'  not in pack (no grant)
+   @tok   1368  from doc[0]  → 'org.zstack.header.vm.VmNicInventory'  not in pack (no grant)
+   @tok   1403  from doc[0]  → 'org.zstack.header.volume.APIGetVolumeFormatReply.VolumeFormatReplyStru … (+2 chars)'  not in pack (no grant)
+   @tok   1418  from doc[0]  → 'org.zstack.header.volume.VolumeInventory'  not in pack (no grant)
+   @tok   1445  from doc[0]  → 'org.zstack.header.zone.ZoneInventory'  not in pack (no grant)
+   @tok   1463  from doc[0]  → 'org.zstack.kvm.APIAddKVMHostMsg'  not in pack (no grant)
+   @tok   1480  from doc[0]  → 'org.zstack.kvm.APIUpdateKVMHostMsg'  not in pack (no grant)
+   @tok   1496  from doc[0]  → 'org.zstack.kvm.KVMHostInventory'  not in pack (no grant)
+   @tok   1529  from doc[0]  → 'org.zstack.network.service.eip.APIUpdateEipEvent'  not in pack (no grant)
+   @tok   1549  from doc[0]  → 'org.zstack.network.service.eip.APIUpdateEipMsg'  not in pack (no grant)
+   @tok   1568  from doc[0]  → 'org.zstack.network.service.eip.EipInventory'  not in pack (no grant)
+   @tok   1587  from doc[0]  → 'org.zstack.network.service.eip.EipStateEvent'  not in pack (no grant)
+   @tok   1620  from doc[0]  → 'org.zstack.network.service.lb.LoadBalancerInventory'  not in pack (no grant)
+   @tok   1640  from doc[0]  → 'org.zstack.network.service.lb.LoadBalancerListenerInventory'  not in pack (no grant)
+   @tok   1678  from doc[0]  → 'org.zstack.network.service.portforwarding.PortForwardingRuleInventory'  not in pack (no grant)
+   @tok   1698  from doc[0]  → 'org.zstack.network.service.vip.APIUpdateVipEvent'  not in pack (no grant)
+   @tok   1718  from doc[0]  → 'org.zstack.network.service.vip.APIUpdateVipMsg'  not in pack (no grant)
+   @tok   1737  from doc[0]  → 'org.zstack.network.service.vip.VipInventory'  not in pack (no grant)
+   @tok   1756  from doc[0]  → 'org.zstack.network.service.vip.VipStateEvent'  not in pack (no grant)
+   @tok   1782  from doc[0]  → 'org.zstack.network.service.virtualrouter.APICreateVirtualRouterOfferin … (+4 chars)'  not in pack (no grant)
+   @tok   1806  from doc[0]  → 'org.zstack.network.service.virtualrouter.APIUpdateVirtualRouterOfferin … (+4 chars)'  not in pack (no grant)
+   @tok   1829  from doc[0]  → 'org.zstack.network.service.virtualrouter.VirtualRouterOfferingInventor … (+1 chars)'  not in pack (no grant)
+   @tok   1846  from doc[0]  → 'org.zstack.portal.managementnode.ManagementNodeManager'  not in pack (no grant)
+   @tok   1886  from doc[0]  → 'org.zstack.storage.backup.sftp.APIReconnectSftpBackupStorageEvent'  not in pack (no grant)
+   @tok   1915  from doc[0]  → 'org.zstack.storage.backup.sftp.APIReconnectSftpBackupStorageMsg'  not in pack (no grant)
+   @tok   1941  from doc[0]  → 'org.zstack.storage.backup.sftp.APIUpdateSftpBackupStorageMsg'  not in pack (no grant)
+   @tok   1966  from doc[0]  → 'org.zstack.storage.backup.sftp.SftpBackupStorageInventory'  not in pack (no grant)
+   @tok   2005  from doc[0]  → 'org.zstack.storage.ceph.backup.CephBackupStorageInventory'  not in pack (no grant)
+   @tok   2041  from doc[0]  → 'org.zstack.storage.ceph.primary.CephPrimaryStorageInventory'  not in pack (no grant)
+   @tok   2075  from doc[0]  → 'org.zstack.storage.primary.local.LocalStorageResourceRefInventory'  not in pack (no grant)
+   @tok   2088  from doc[0]  → 'org.zstack.utils.TimeUtils'  not in pack (no grant)
+   @tok   2100  from doc[0]  → 'org.zstack.utils.Utils'  not in pack (no grant)
+   @tok   2114  from doc[0]  → 'org.zstack.utils.data.SizeUnit'  not in pack (no grant)
+   @tok   2131  from doc[0]  → 'org.zstack.utils.gson.JSONObjectUtil'  not in pack (no grant)
+   @tok   2147  from doc[0]  → 'org.zstack.utils.logging.CLogger'  not in pack (no grant)
+   @tok   2167  from doc[0]  → 'java.util.concurrent.Callable'  not in pack (no grant)
+   @tok   2179  from doc[0]  → 'java.util.concurrent.TimeUnit'  not in pack (no grant)
+   @tok   2190  from doc[0]  → 'java.util.stream.Collectors'  not in pack (no grant)
+   @tok   2204  from doc[0]  → 'java.util.Arrays.asList'  not in pack (no grant)
+   @tok   2204  from doc[0]  → 'java.util.Arrays'  not in pack (no grant)
+   @tok   2220  from doc[0]  → 'org.zstack.utils.CollectionDSL.list'  not in pack (no grant)
+   @tok   2220  from doc[0]  → 'org.zstack.utils.CollectionDSL'  not in pack (no grant)
+   @tok  15334  from doc[1]  → 'junit.framework.Assert'  not in pack (no grant)
+   @tok  15343  from doc[1]  → 'org.junit.Before'  not in pack (no grant)
+   @tok  15352  from doc[1]  → 'org.junit.Test'  not in pack (no grant)
+   @tok  15368  from doc[1]  → 'org.zstack.compute.host.HostGlobalConfig'  not in pack (no grant)
+   @tok  15383  from doc[1]  → 'org.zstack.core.cloudbus.CloudBus'  not in pack (no grant)
+   @tok  15399  from doc[1]  → 'org.zstack.core.cloudbus.EventFacade'  not in pack (no grant)
+   @tok  15414  from doc[1]  → 'org.zstack.core.componentloader.ComponentLoader'  not in pack (no grant)
+   @tok  15430  from doc[1]  → 'org.zstack.core.config.GlobalConfigFacade'  not in pack (no grant)
+   @tok  15445  from doc[1]  → 'org.zstack.core.db.DatabaseFacade'  not in pack (no grant)
+   @tok  15459  from doc[1]  → 'org.zstack.core.db.SimpleQuery'  not in pack (no grant)
+   @tok  15475  from doc[1]  → 'org.zstack.core.db.SimpleQuery.Op'  not in pack (no grant)
+   @tok  15489  from doc[1]  → 'org.zstack.header.host.HostStatus'  not in pack (no grant)
+   @tok  15503  from doc[1]  → 'org.zstack.header.host.HostVO'  not in pack (no grant)
+   @tok  15519  from doc[1]  → 'org.zstack.header.vm.VmInstanceState'  not in pack (no grant)
+   @tok  15535  from doc[1]  → 'org.zstack.header.vm.VmInstanceVO'  not in pack (no grant)
+   @tok  15552  from doc[1]  → 'org.zstack.header.vm.VmInstanceVO_'  not in pack (no grant)
+   @tok  15566  from doc[1]  → 'org.zstack.simulator.SimulatorController'  not in pack (no grant)
+   @tok  15578  from doc[1]  → 'org.zstack.test.Api'  IN-PACK → grants attention to doc[0]
+   @tok  15593  from doc[1]  → 'org.zstack.test.ApiSenderException'  not in pack (no grant)
+   @tok  15606  from doc[1]  → 'org.zstack.test.DBUtil'  not in pack (no grant)
+   @tok  15622  from doc[1]  → 'org.zstack.test.deployer.Deployer'  not in pack (no grant)
+   @tok  15635  from doc[1]  → 'java.util.concurrent.TimeUnit'  not in pack (no grant)
+
+####################################################################################################
+PACK 2   |   16,384 tokens   |   2 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:15484]  (15484 tok)  doc_id=105  component=0  TRUNCATED
+   normed_id : com.gempukku.swccgo.filters.Filters
+   title     : 'com.gempukku.swccgo.filters.Filters'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[1003, 401, 13, 24090, 79, 2724, 23063, 13, 2032, 535, 2188, 13, 10379, 1010, 13, 11928, 1010, 628]
+   │   // com.gempukku.swccgo.filters.Filters
+   │   
+   ├ BODY    (15465 tok)
+   │   head: 'package com.gempukku.swccgo.filters;\\n\\nimport com.gempukku.swccgo.common.*;\\nimport com.gempukku.swccgo.game.*;\\nimport com.gempukku.swccgo.game.state.*;\\nimport com.gempukku.swccgo.game.state.actions.PlayCardState;\\nimport com.gempukku.swccgo.logic.GameUtils;\\nimport com.gempukku.swccgo.logic.acti … (+7 chars)'
+   │   tail: 'ery\\n     * @param filters the filters\\n     * @return Filter\\n     */\\n    public static Filter sameTitleAs(PhysicalCard source, final Map<InactiveReason, Boolean> spotOverrides, final Filter filters) {\\n        final Integer permSourceCardId = source != null ? source.getPermanentCardId() : null;\\n … (+6 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[15484:16384]  (900 tok)  doc_id=290  component=0
+   normed_id : com.gempukku.swccgo.cards.set14.dark.Card14_089
+   title     : 'com.gempukku.swccgo.cards.set14.dark.Card14_089'
+   categories: ''
+   ┌ PREFIX  (none) (stochastic coin-flip: no card this epoch)
+   ├ BODY    (899 tok)
+   │   head: 'package com.gempukku.swccgo.cards.set14.dark;\\n\\nimport com.gempukku.swccgo.cards.AbstractDroid;\\nimport com.gempukku.swccgo.cards.conditions.AtCondition;\\nimport com.gempukku.swccgo.cards.conditions.WithCondition;\\nimport com.gempukku.swccgo.common.*;\\nimport com.gempukku.swccgo.filters.Filters;\\ni … (+7 chars)'
+   │   tail: 'ers.opponents(self), Filters.Jedi), 4, Filters.sameSite(self)));\\n        modifiers.add(new DrawsBattleDestinyIfUnableToOtherwiseModifier(self, new AndCondition(new WithCondition(self, Filters.battle_droid),\\n                new AtCondition(self, Filters.site)), 1));\\n        return modifiers;\\n     … (+6 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (java detector; targets matched against in-pack docs)
+   @tok    107  from doc[0]  → 'com.gempukku.swccgo.game.state.actions.PlayCardState'  not in pack (no grant)
+   @tok    127  from doc[0]  → 'com.gempukku.swccgo.logic.GameUtils'  not in pack (no grant)
+   @tok    149  from doc[0]  → 'com.gempukku.swccgo.logic.actions.PlayCardAction'  not in pack (no grant)
+   @tok    175  from doc[0]  → 'com.gempukku.swccgo.logic.effects.RespondableWeaponFiringEffect'  not in pack (no grant)
+   @tok    200  from doc[0]  → 'com.gempukku.swccgo.logic.modifiers.ModifiersQuerying'  not in pack (no grant)
+   @tok    225  from doc[0]  → 'com.gempukku.swccgo.logic.modifiers.ModifyGameTextType'  not in pack (no grant)
+   @tok    246  from doc[0]  → 'com.gempukku.swccgo.logic.timing.Action'  not in pack (no grant)
+   @tok    267  from doc[0]  → 'com.gempukku.swccgo.logic.timing.Effect'  not in pack (no grant)
+   @tok    289  from doc[0]  → 'com.gempukku.swccgo.logic.timing.EffectResult'  not in pack (no grant)
+   @tok    314  from doc[0]  → 'com.gempukku.swccgo.logic.timing.TargetingActionUtils'  not in pack (no grant)
+   @tok  15523  from doc[1]  → 'com.gempukku.swccgo.cards.AbstractDroid'  not in pack (no grant)
+   @tok  15544  from doc[1]  → 'com.gempukku.swccgo.cards.conditions.AtCondition'  not in pack (no grant)
+   @tok  15565  from doc[1]  → 'com.gempukku.swccgo.cards.conditions.WithCondition'  not in pack (no grant)
+   @tok  15600  from doc[1]  → 'com.gempukku.swccgo.filters.Filters'  IN-PACK → grants attention to doc[0]
+   @tok  15618  from doc[1]  → 'com.gempukku.swccgo.game.PhysicalCard'  not in pack (no grant)
+   @tok  15638  from doc[1]  → 'com.gempukku.swccgo.game.SwccgGame'  not in pack (no grant)
+   @tok  15660  from doc[1]  → 'com.gempukku.swccgo.logic.conditions.AndCondition'  not in pack (no grant)
+   @tok  15686  from doc[1]  → 'com.gempukku.swccgo.logic.modifiers.DeployCostToLocationModifier'  not in pack (no grant)
+   @tok  15718  from doc[1]  → 'com.gempukku.swccgo.logic.modifiers.DrawsBattleDestinyIfUnableToOtherw … (+11 chars)'  not in pack (no grant)
+   @tok  15740  from doc[1]  → 'com.gempukku.swccgo.logic.modifiers.Modifier'  not in pack (no grant)
+   @tok  15763  from doc[1]  → 'com.gempukku.swccgo.logic.modifiers.PowerModifier'  not in pack (no grant)
+   @tok  15774  from doc[1]  → 'java.util.LinkedList'  not in pack (no grant)
+   @tok  15782  from doc[1]  → 'java.util.List'  not in pack (no grant)
+
+####################################################################################################
+PACK 3   |   16,384 tokens   |   1 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:16384]  (16384 tok)  doc_id=3024  component=0  TRUNCATED
+   normed_id : net.minecraft.entity.Entity
+   title     : 'net.minecraft.entity.Entity'
+   categories: ''
+   ┌ PREFIX  (none) (stochastic coin-flip: no card this epoch)
+   ├ BODY    (16383 tok)
+   │   head: 'package net.minecraft.entity;\\n\\nimport net.canarymod.ToolBox;\\nimport net.canarymod.api.CanaryDamageSource;\\nimport net.canarymod.api.entity.CanaryEntity;\\nimport net.canarymod.api.entity.EntityType;\\nimport net.canarymod.api.entity.living.LivingBase;\\nimport net.canarymod.api.entity.vehicle.Vehicl … (+8 chars)'
+   │   tail: 'tate iblockstate = this.o.p(blockpos);\\n        Block block = iblockstate.c();\\n\\n        if (block.r() == material) {\\n            float f0 = BlockLiquid.b(iblockstate.c().c(iblockstate)) - 0.11111111F;\\n            float f1 = (float) (blockpos.o() + 1) - f0;\\n            boolean flag0 = d0 < (doub … (+6 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (java detector; targets matched against in-pack docs)
+   @tok     19  from doc[0]  → 'net.canarymod.ToolBox'  not in pack (no grant)
+   @tok     34  from doc[0]  → 'net.canarymod.api.CanaryDamageSource'  not in pack (no grant)
+   @tok     50  from doc[0]  → 'net.canarymod.api.entity.CanaryEntity'  not in pack (no grant)
+   @tok     65  from doc[0]  → 'net.canarymod.api.entity.EntityType'  not in pack (no grant)
+   @tok     82  from doc[0]  → 'net.canarymod.api.entity.living.LivingBase'  not in pack (no grant)
+   @tok    100  from doc[0]  → 'net.canarymod.api.entity.vehicle.Vehicle'  not in pack (no grant)
+   @tok    116  from doc[0]  → 'net.canarymod.api.world.CanaryWorld'  not in pack (no grant)
+   @tok    132  from doc[0]  → 'net.canarymod.api.world.position.Location'  not in pack (no grant)
+   @tok    150  from doc[0]  → 'net.canarymod.api.world.position.Vector3D'  not in pack (no grant)
+   @tok    162  from doc[0]  → 'net.canarymod.config.Configuration'  not in pack (no grant)
+   @tok    178  from doc[0]  → 'net.canarymod.hook.CancelableHook'  not in pack (no grant)
+   @tok    194  from doc[0]  → 'net.canarymod.hook.entity.DamageHook'  not in pack (no grant)
+   @tok    212  from doc[0]  → 'net.canarymod.hook.entity.DimensionSwitchHook'  not in pack (no grant)
+   @tok    229  from doc[0]  → 'net.canarymod.hook.entity.EntityMountHook'  not in pack (no grant)
+   @tok    246  from doc[0]  → 'net.canarymod.hook.entity.EntityMoveHook'  not in pack (no grant)
+   @tok    264  from doc[0]  → 'net.canarymod.hook.entity.VehicleMoveHook'  not in pack (no grant)
+   @tok    274  from doc[0]  → 'net.minecraft.block.Block'  not in pack (no grant)
+   @tok    286  from doc[0]  → 'net.minecraft.block.BlockFence'  not in pack (no grant)
+   @tok    299  from doc[0]  → 'net.minecraft.block.BlockFenceGate'  not in pack (no grant)
+   @tok    310  from doc[0]  → 'net.minecraft.block.BlockLiquid'  not in pack (no grant)
+   @tok    321  from doc[0]  → 'net.minecraft.block.BlockWall'  not in pack (no grant)
+   @tok    333  from doc[0]  → 'net.minecraft.block.material.Material'  not in pack (no grant)
+   @tok    347  from doc[0]  → 'net.minecraft.block.state.IBlockState'  not in pack (no grant)
+   @tok    359  from doc[0]  → 'net.minecraft.command.CommandResultStats'  not in pack (no grant)
+   @tok    373  from doc[0]  → 'net.minecraft.command.ICommandSender'  not in pack (no grant)
+   @tok    385  from doc[0]  → 'net.minecraft.crash.CrashReport'  not in pack (no grant)
+   @tok    398  from doc[0]  → 'net.minecraft.crash.CrashReportCategory'  not in pack (no grant)
+   @tok    413  from doc[0]  → 'net.minecraft.enchantment.EnchantmentHelper'  not in pack (no grant)
+   @tok    429  from doc[0]  → 'net.minecraft.enchantment.EnchantmentProtection'  not in pack (no grant)
+   @tok    445  from doc[0]  → 'net.minecraft.entity.effect.EntityLightningBolt'  not in pack (no grant)
+   @tok    458  from doc[0]  → 'net.minecraft.entity.item.EntityItem'  not in pack (no grant)
+   @tok    473  from doc[0]  → 'net.minecraft.entity.passive.EntityHorse'  not in pack (no grant)
+   @tok    488  from doc[0]  → 'net.minecraft.entity.passive.EntityPig'  not in pack (no grant)
+   @tok    501  from doc[0]  → 'net.minecraft.entity.player.EntityPlayer'  not in pack (no grant)
+   @tok    515  from doc[0]  → 'net.minecraft.entity.player.EntityPlayerMP'  not in pack (no grant)
+   @tok    527  from doc[0]  → 'net.minecraft.event.HoverEvent'  not in pack (no grant)
+   @tok    537  from doc[0]  → 'net.minecraft.init.Blocks'  not in pack (no grant)
+   @tok    547  from doc[0]  → 'net.minecraft.item.Item'  not in pack (no grant)
+   @tok    558  from doc[0]  → 'net.minecraft.item.ItemStack'  not in pack (no grant)
+   @tok    571  from doc[0]  → 'net.minecraft.nbt.NBTBase'  not in pack (no grant)
+   @tok    586  from doc[0]  → 'net.minecraft.nbt.NBTTagCompound'  not in pack (no grant)
+   @tok    600  from doc[0]  → 'net.minecraft.nbt.NBTTagDouble'  not in pack (no grant)
+   @tok    614  from doc[0]  → 'net.minecraft.nbt.NBTTagFloat'  not in pack (no grant)
+   @tok    628  from doc[0]  → 'net.minecraft.nbt.NBTTagList'  not in pack (no grant)
+   @tok    639  from doc[0]  → 'net.minecraft.server.MinecraftServer'  not in pack (no grant)
+   @tok    653  from doc[0]  → 'net.minecraft.util.AxisAlignedBB'  not in pack (no grant)
+   @tok    664  from doc[0]  → 'net.minecraft.util.BlockPos'  not in pack (no grant)
+   @tok    676  from doc[0]  → 'net.minecraft.util.ChatComponentText'  not in pack (no grant)
+   @tok    687  from doc[0]  → 'net.minecraft.util.DamageSource'  not in pack (no grant)
+   @tok    700  from doc[0]  → 'net.minecraft.util.EnumFacing'  not in pack (no grant)
+   @tok    714  from doc[0]  → 'net.minecraft.util.EnumParticleTypes'  not in pack (no grant)
+   @tok    726  from doc[0]  → 'net.minecraft.util.IChatComponent'  not in pack (no grant)
+   @tok    737  from doc[0]  → 'net.minecraft.util.MathHelper'  not in pack (no grant)
+   @tok    749  from doc[0]  → 'net.minecraft.util.ReportedException'  not in pack (no grant)
+   @tok    761  from doc[0]  → 'net.minecraft.util.StatCollector'  not in pack (no grant)
+   @tok    773  from doc[0]  → 'net.minecraft.util.Vec3'  not in pack (no grant)
+   @tok    784  from doc[0]  → 'net.minecraft.world.Explosion'  not in pack (no grant)
+   @tok    794  from doc[0]  → 'net.minecraft.world.World'  not in pack (no grant)
+   @tok    805  from doc[0]  → 'net.minecraft.world.WorldServer'  not in pack (no grant)
+   @tok    814  from doc[0]  → 'java.util.Iterator'  not in pack (no grant)
+   @tok    822  from doc[0]  → 'java.util.List'  not in pack (no grant)
+   @tok    830  from doc[0]  → 'java.util.Random'  not in pack (no grant)
+   @tok    839  from doc[0]  → 'java.util.UUID'  not in pack (no grant)
+   @tok    851  from doc[0]  → 'java.util.concurrent.Callable'  not in pack (no grant)
+
+####################################################################################################
+PACK 4   |   16,384 tokens   |   2 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:14426]  (14426 tok)  doc_id=4291  component=1  TRUNCATED
+   normed_id : net.minecraft.world.inventory.AbstractContainerMenu
+   title     : 'net.minecraft.world.inventory.AbstractContainerMenu'
+   categories: ''
+   ┌ PREFIX  (none) (stochastic coin-flip: no card this epoch)
+   ├ BODY    (14425 tok)
+   │   head: 'package net.minecraft.world.inventory;\\n\\nimport com.google.common.base.Suppliers;\\nimport com.google.common.collect.HashBasedTable;\\nimport com.google.common.collect.Lists;\\nimport com.google.common.collect.Sets;\\nimport com.google.common.collect.Table;\\nimport it.unimi.dsi.fastutil.ints.IntArrayLi … (+8 chars)'
+   │   tail: 'nerSlot());\\n         if (integer != null) {\\n            this.lastSlots.set(j, p_150415_.lastSlots.get(integer));\\n            this.remoteSlots.set(j, p_150415_.remoteSlots.get(integer));\\n         }\\n      }\\n\\n   }\\n\\n   public OptionalInt findSlot(Container p_182418_, int p_182419_) {\\n      for … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[14426:16384]  (1958 tok)  doc_id=4325  component=1
+   normed_id : net.minecraft.world.entity.vehicle.MinecartHopper
+   title     : 'net.minecraft.world.entity.vehicle.MinecartHopper'
+   categories: ''
+   ┌ PREFIX  (none) (stochastic coin-flip: no card this epoch)
+   ├ BODY    (1957 tok)
+   │   head: 'package net.minecraft.world.entity.vehicle;\\n\\nimport java.util.List;\\nimport net.minecraft.core.BlockPos;\\nimport net.minecraft.nbt.CompoundTag;\\nimport net.minecraft.world.damagesource.DamageSource;\\nimport net.minecraft.world.entity.EntitySelector;\\nimport net.minecraft.world.entity.EntityType;\\n … (+8 chars)'
+   │   tail: '    * Returns whether the hopper cart can currently transfer an item.\\n    */\\n   public boolean isOnCooldown() {\\n      return this.cooldownTime > 0;\\n   }\\n\\n   public AbstractContainerMenu createMenu(int pId, Inventory pPlayerInventory) {\\n      return new HopperMenu(pId, pPlayerInventory, this); … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (java detector; targets matched against in-pack docs)
+   @tok     24  from doc[0]  → 'com.google.common.base.Suppliers'  not in pack (no grant)
+   @tok     38  from doc[0]  → 'com.google.common.collect.HashBasedTable'  not in pack (no grant)
+   @tok     51  from doc[0]  → 'com.google.common.collect.Lists'  not in pack (no grant)
+   @tok     64  from doc[0]  → 'com.google.common.collect.Sets'  not in pack (no grant)
+   @tok     76  from doc[0]  → 'com.google.common.collect.Table'  not in pack (no grant)
+   @tok     95  from doc[0]  → 'it.unimi.dsi.fastutil.ints.IntArrayList'  not in pack (no grant)
+   @tok    113  from doc[0]  → 'it.unimi.dsi.fastutil.ints.IntList'  not in pack (no grant)
+   @tok    121  from doc[0]  → 'java.util.List'  not in pack (no grant)
+   @tok    129  from doc[0]  → 'java.util.Optional'  not in pack (no grant)
+   @tok    138  from doc[0]  → 'java.util.OptionalInt'  not in pack (no grant)
+   @tok    146  from doc[0]  → 'java.util.Set'  not in pack (no grant)
+   @tok    157  from doc[0]  → 'java.util.function.Supplier'  not in pack (no grant)
+   @tok    169  from doc[0]  → 'javax.annotation.Nullable'  not in pack (no grant)
+   @tok    178  from doc[0]  → 'net.minecraft.CrashReport'  not in pack (no grant)
+   @tok    188  from doc[0]  → 'net.minecraft.CrashReportCategory'  not in pack (no grant)
+   @tok    198  from doc[0]  → 'net.minecraft.ReportedException'  not in pack (no grant)
+   @tok    210  from doc[0]  → 'net.minecraft.core.NonNullList'  not in pack (no grant)
+   @tok    221  from doc[0]  → 'net.minecraft.core.Registry'  not in pack (no grant)
+   @tok    234  from doc[0]  → 'net.minecraft.server.level.ServerPlayer'  not in pack (no grant)
+   @tok    245  from doc[0]  → 'net.minecraft.util.Mth'  not in pack (no grant)
+   @tok    255  from doc[0]  → 'net.minecraft.world.Container'  not in pack (no grant)
+   @tok    268  from doc[0]  → 'net.minecraft.world.entity.SlotAccess'  not in pack (no grant)
+   @tok    283  from doc[0]  → 'net.minecraft.world.entity.player.Inventory'  not in pack (no grant)
+   @tok    297  from doc[0]  → 'net.minecraft.world.entity.player.Player'  not in pack (no grant)
+   @tok    310  from doc[0]  → 'net.minecraft.world.item.ItemStack'  not in pack (no grant)
+   @tok    324  from doc[0]  → 'net.minecraft.world.level.block.Block'  not in pack (no grant)
+   @tok    341  from doc[0]  → 'net.minecraft.world.level.block.entity.BlockEntity'  not in pack (no grant)
+   @tok  14447  from doc[1]  → 'java.util.List'  not in pack (no grant)
+   @tok  14458  from doc[1]  → 'net.minecraft.core.BlockPos'  not in pack (no grant)
+   @tok  14471  from doc[1]  → 'net.minecraft.nbt.CompoundTag'  not in pack (no grant)
+   @tok  14486  from doc[1]  → 'net.minecraft.world.damagesource.DamageSource'  not in pack (no grant)
+   @tok  14500  from doc[1]  → 'net.minecraft.world.entity.EntitySelector'  not in pack (no grant)
+   @tok  14513  from doc[1]  → 'net.minecraft.world.entity.EntityType'  not in pack (no grant)
+   @tok  14528  from doc[1]  → 'net.minecraft.world.entity.item.ItemEntity'  not in pack (no grant)
+   @tok  14543  from doc[1]  → 'net.minecraft.world.entity.player.Inventory'  not in pack (no grant)
+   @tok  14557  from doc[1]  → 'net.minecraft.world.inventory.AbstractContainerMenu'  IN-PACK → grants attention to doc[0]
+   @tok  14571  from doc[1]  → 'net.minecraft.world.inventory.HopperMenu'  not in pack (no grant)
+   @tok  14584  from doc[1]  → 'net.minecraft.world.level.GameRules'  not in pack (no grant)
+   @tok  14596  from doc[1]  → 'net.minecraft.world.level.Level'  not in pack (no grant)
+   @tok  14610  from doc[1]  → 'net.minecraft.world.level.block.Blocks'  not in pack (no grant)
+   @tok  14627  from doc[1]  → 'net.minecraft.world.level.block.entity.Hopper'  not in pack (no grant)
+   @tok  14646  from doc[1]  → 'net.minecraft.world.level.block.entity.HopperBlockEntity'  not in pack (no grant)
+   @tok  14663  from doc[1]  → 'net.minecraft.world.level.block.state.BlockState'  not in pack (no grant)
+
+====================================================================================================
+done.
