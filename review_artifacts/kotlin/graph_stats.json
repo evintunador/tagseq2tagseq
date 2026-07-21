@@ -1,0 +1,12 @@
+{
+  "records_read": 2127846,
+  "repos_total": 109992,
+  "repos_kept": 60724,
+  "nodes_before_filter": 3692413,
+  "graph_nodes_final": 2003631,
+  "graph_edges_internal_final": 4879033,
+  "avg_out_degree": 2.4350955839673074,
+  "min_links": 1,
+  "testdata_files_skipped": 48345,
+  "parser_timeouts_skipped": 1
+}

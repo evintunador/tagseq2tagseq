@@ -1,0 +1,451 @@
+==============================================================================
+SOURCE [1/40]  piotrwalkusz1/SmartLaw:frontend/src/component/template/NullableTemplate
+  import Template from "../../model/Template";\nimport { isStaticTemplate, prepareStaticTemplate } from "../../model/StaticTemplate";\nimport TemplateEditor from "./TemplateEditor";\nimport { createTemplateByMetaData, MetaData } from "../../utils/Reflection";\nimport ExpandableArea from "../../common/ExpandableArea";\nimport { Button, Form } from "react-bootstrap";\n\ninterface NullableTemplateProps…
+  link@10 -> 'frontend/src/model/Template'  [RESOLVES]
+      target: import { decodeEnum } from "../utils/Decoders";\nimport {\n  buildComplexDataMeta,\n  enumMeta,\n  getCreateTemplateByMetaData,\n  MetaData,\n  MetaDataFields,\n  TemplateMetaData,\n} from "../utils/Reflection";\nimport { decodeStaticTemplate, prepareEmptyStaticTemplate, prepareStaticTemplate } from "./StaticTemplate";\nimport { TemplateType } from "./TemplateType";\nimport { decodeGroovyTemplate,…
+  link@10 -> 'frontend/src/model/Template/index'  [unresolved]
+  link@30 -> 'frontend/src/model/StaticTemplate'  [RESOLVES]
+      target: import Template from "./Template";\nimport { decodeEnum } from "../utils/Decoders";\nimport { TemplateType } from "./TemplateType";\n\nexport default interface StaticTemplate<T> extends Template<T> {\n  value: T;\n}\n\nexport const decodeStaticTemplate = <T>(json: any, decodeTemplateResult: (json: any) => T): StaticTemplate<T> => {\n  return {\n    templateType: decodeEnum(json.templateType, Templ…
+  link@30 -> 'frontend/src/model/StaticTemplate/index'  [unresolved]
+  link@40 -> 'frontend/src/component/template/TemplateEditor'  [RESOLVES]
+      target: import React from "react";\nimport Template from "../../model/Template";\nimport { getDerivativeMetaDataAndTemplateTypes } from "../../utils/ModelUtils";\nimport { ComplexMetaData, MetaData } from "../../utils/Reflection";\nimport ExpandableArea from "../../common/ExpandableArea";\nimport TemplateTypeSelector from "./TemplateTypeSelector";\n\ninterface TemplateEditorProps<T> {\n  template: Templat…
+  link@40 -> 'frontend/src/component/template/TemplateEditor/index'  [unresolved]
+  link@61 -> 'frontend/src/utils/Reflection'  [RESOLVES]
+      target: import { decodeEnum, decodeList, decodeMap, decodeNullable, decodeNumber, decodeString } from "./Decoders";\nimport { List, Map } from "immutable";\nimport Template, { decodeTemplate } from "../model/Template";\nimport { TemplateType } from "../model/TemplateType";\nimport { ReactElement } from "react";\nimport ListTemplateEditor from "../component/template/ListTemplateEditor";\nimport StringTempl…
+  link@61 -> 'frontend/src/utils/Reflection/index'  [unresolved]
+  link@77 -> 'frontend/src/common/ExpandableArea'  [RESOLVES]
+      target: import { Accordion, Card } from "react-bootstrap";\nimport { ReactElement } from "react";\n\ninterface ExpandableAreaProps {\n  header?: string | ReactElement;\n  children: JSX.Element;\n  errorBorder?: boolean;\n}\n\nconst ExpandableArea = ({ header, children, errorBorder }: ExpandableAreaProps) => {\n  const renderBody = () => {\n    if (header) {\n      return (\n        <Accordion>\n          …
+  link@77 -> 'frontend/src/common/ExpandableArea/index'  [unresolved]
+==============================================================================
+SOURCE [2/40]  GinoCardillo-OST/Visual-OO-Debugger:src/data-extractor/abstractDataExtractor
+  import { DebugProtocol } from '@vscode/debugprotocol';\nimport { PanelViewVariable, PrimitiveValue, VariableReference, VariableRelation } from '../model/panelViewInput';\n\nexport abstract class AbstractDataExtractor {\n  abstract nullText: string;\n\n  abstract isPrimitiveVariable(variable: DebugProtocol.Variable): boolean;\n  abstract isPrimitiveArrayVariable(variable: DebugProtocol.Variable): b…
+  link@44 -> 'src/model/panelViewInput'  [RESOLVES]
+      target: export interface PanelViewInput {\n  callstack: PanelViewStackFrame[];\n}\n\n// The key is the value of an object or the hash of the variable for primitives\nexport type PanelViewInputVariableMap = Map<string, PanelViewVariable>;\n\nexport interface PanelViewStackFrame {\n  name: string;\n  variables: PanelViewInputVariableMap;\n}\n\nexport interface PanelViewVariable {\n  id: string;\n  type?: st…
+  link@44 -> 'src/model/panelViewInput/index'  [unresolved]
+==============================================================================
+SOURCE [3/40]  OpenTechStrategies/example-client:src/components/Profile
+  import UserAvatar from "./UserAvatar";\nimport { Button } from "antd";\nimport ConnectionsList from "./ConnectionsList";\nimport React, { useEffect, useState } from "react";\nimport { useAppSelector } from "../redux/hooks";\nimport * as types from "../utilities/types";\nimport { saveProfile } from "../services/content";\nimport { core } from "@dsnp/sdk";\nimport GraphChangeButton from "./GraphChan…
+  link@11 -> 'src/components/UserAvatar'  [RESOLVES]
+      target: import React, { FunctionComponent, memo, useEffect, useState } from "react";\nimport { Avatar, Typography } from "antd";\nimport { UserModel } from "../typings/dto";\nimport { appOptions } from "../config/appOptions";\nimport { PageProps } from "../typings/PageProps";\n\nexport interface UserAvatarProps extends PageProps {\n    user: UserModel;\n    showDisplayName?: boolean;\n}\n\nconst UserAvata…
+  link@11 -> 'src/components/UserAvatar/index'  [unresolved]
+  link@33 -> 'src/components/ConnectionsList'  [RESOLVES]
+      target: import React, { useState } from "react";\nimport { Button } from "antd";\nimport ConnectionsListProfiles from "./ConnectionsListProfiles";\nimport { useAppSelector } from "../redux/hooks";\n\nenum ListStatus {\n  CLOSED,\n  FOLLOWERS,\n  FOLLOWING,\n}\n\nconst ConnectionsList = (): JSX.Element => {\n  const { id: userId, displayId } = useAppSelector((state) => state.user);\n\n  const followedByDis…
+  link@33 -> 'src/components/ConnectionsList/index'  [unresolved]
+  link@65 -> 'src/redux/hooks'  [unresolved]
+  link@65 -> 'src/redux/hooks/index'  [unresolved]
+  link@78 -> 'src/utilities/types'  [unresolved]
+  link@78 -> 'src/utilities/types/index'  [unresolved]
+  link@91 -> 'src/services/content'  [RESOLVES]
+      target: import { FeedItem, Reply } from "../utilities/types";\nimport { core } from "@dsnp/sdk";\nimport { RegistryUpdateLogData } from "@dsnp/sdk/core/contracts/registry";\nimport { addFeedItem, clearFeedItems } from "../redux/slices/feedSlice";\nimport { upsertProfile } from "../redux/slices/profileSlice";\nimport { AnyAction, ThunkDispatch } from "@reduxjs/toolkit";\nimport {\n  ActivityContentNote,\n …
+  link@91 -> 'src/services/content/index'  [unresolved]
+  link@116 -> 'src/components/GraphChangeButton'  [RESOLVES]
+      target: import React from "react";\nimport { Button, Spin } from "antd";\nimport { useAppDispatch } from "../redux/hooks";\nimport {\n  RelationshipState,\n  RelationshipStatus,\n  updateRelationshipStatus,\n} from "../redux/slices/graphSlice";\nimport { followUser, unfollowUser } from "../services/content";\nimport { Profile } from "../utilities/types";\n\ninterface FollowButtonProps {\n  userId: string;…
+  link@116 -> 'src/components/GraphChangeButton/index'  [unresolved]
+==============================================================================
+SOURCE [4/40]  nordnet/ui:src/Atoms/OldIcon/components/FinanceGrowth
+  import React from 'react';\nimport { IconBase } from '../IconBase';\nimport { ChildProps } from '../IconBase.types';\n\nexport const FinanceGrowth = ({ ...props }: ChildProps) => {\n  return (\n    <IconBase {...props} viewBox="0 0 24 24">\n      <path\n        d="M15.64 5.47L19 2.11l3.36 3.36-1.06 1.06-1.55-1.55V22h-1.5V4.98L16.7 6.53l-1.06-1.06zM14.75 8v14h-1.5V8h1.5zm-5 4v10h-1.5V12h1.5zm-5 4v6…
+  link@18 -> 'src/Atoms/OldIcon/IconBase'  [unresolved]
+  link@18 -> 'src/Atoms/OldIcon/IconBase/index'  [unresolved]
+  link@33 -> 'src/Atoms/OldIcon/IconBase.types'  [RESOLVES]
+      target: import { Theme } from '../../theme/theme.types';\n\nexport type ColorFn = (t: Theme) => Values<Theme['color']>;\n\ntype Values<ObjectType> = ObjectType extends Record<any, infer K> ? K : never; // can move it to util types\n\nexport type StyledIconBaseProps = {\n  colorFn?: ColorFn | string;\n  /** unit-based */\n  size?: number;\n  inline?: boolean;\n};\n\nexport type StyledChildProps = {\n  stro…
+  link@33 -> 'src/Atoms/OldIcon/IconBase.types/index'  [unresolved]
+==============================================================================
+SOURCE [5/40]  AnyhowStep/sql-compiler:src/emitter/stored-procedure-statement/loop-statement
+  import {LoopStatement} from "../../parser-node";\nimport {StringBuilder} from "../string-builder";\nimport {emitStoredProcedureStatementList} from "./stored-procedure-statement-list";\n\nexport function emitLoopStatement (statement : LoopStatement) {\n    return new StringBuilder()\n        .append("LOOP")\n        .scope(builder => {\n            const statements = emitStoredProcedureStatementLis…
+  link@13 -> 'src/parser-node'  [unresolved]
+  link@13 -> 'src/parser-node/index'  [RESOLVES]
+      target: export * from "./data-type";\nexport * from "./expression";\nexport * from "./identifier";\nexport * from "./misc";\nexport * from "./statement";\nexport * from "./stored-procedure-statement";\nexport * from "./find-all-syntactic-errors";\nexport * from "./is-syntax-kind.generated";\nexport * from "./node-array";\nexport * from "./node";\nexport * from "./reverse-syntax-kind";\nexport * from "./so…
+  link@26 -> 'src/emitter/string-builder'  [RESOLVES]
+      target: \nexport class StringBuilder {\n    private lineIndex : number = 0;\n    private curLineLength : number = 0;\n    private maxLineLength : number = 0;\n    private arr : string[] = [];\n    private indentStr : string = "";\n    private shouldIndent : boolean = false;\n\n    public getLineIndex () : number {\n        return this.lineIndex;\n    }\n\n    public getCurLineLength () : number {\n       …
+  link@26 -> 'src/emitter/string-builder/index'  [unresolved]
+  link@53 -> 'src/emitter/stored-procedure-statement/stored-procedure-statement-list'  [RESOLVES]
+      target: import {isSyntaxKind, StoredProcedureStatementList, SyntaxKind} from "../../parser-node";\nimport {StringBuilder} from "../string-builder";\nimport {emitStoredProcedureStatement} from "./stored-procedure-statement";\n\nexport function emitStoredProcedureStatementList (statements : StoredProcedureStatementList) : StringBuilder {\n    const result = new StringBuilder();\n\n    result.loop(\n        …
+  link@53 -> 'src/emitter/stored-procedure-statement/stored-procedure-statement-list/index'  [unresolved]
+==============================================================================
+SOURCE [6/40]  microsoftgraph/msgraph-sdk-typescript:src/models/conversationMember
+  import {Entity} from './index';\nimport {Parsable, ParseNode, SerializationWriter} from '@microsoft/kiota-abstractions';\n\n/** Provides operations to manage the collection of chat entities. */\nexport class ConversationMember extends Entity implements Parsable {\n    /** The display name of the user. */\n    private _displayName?: string | undefined;\n    /** The roles for that user. */\n    priv…
+  link@9 -> 'src/models/index'  [RESOLVES]
+      target: export * from './recipient'\nexport * from './location'\nexport * from './dictionary'\nexport * from './attendeeBase'\nexport * from './conditionalAccessSessionControl'\nexport * from './scheduleEntity'\nexport * from './shiftItem'\nexport * from './identity'\nexport * from './identitySet'\nexport * from './callOptions'\nexport * from './entity'\nexport * from './printUsage'\nexport * from './requ…
+==============================================================================
+SOURCE [7/40]  lutaalbert/elearning-platform-be:src/activity/activity.loader
+  import { Injectable, Scope } from '@nestjs/common';\nimport DataLoader from 'dataloader';\nimport { ActivityType } from 'src/generated/prisma-nestjs-graphql/prisma/activity-type.enum';\nimport { PrismaService } from 'src/global/prisma/prisma.service';\nimport { ActivityReturnType } from './activity.types';\n\n@Injectable({ scope: Scope.REQUEST })\nexport class ActivityLoader {\n	constructor(privat…
+  link@94 -> 'src/activity/activity.types'  [RESOLVES]
+      target: import { ForumReturnType } from 'src/forum/forum.types';\nimport { AssignmentObject } from './dto/assignment.object';\nimport { BaseActivityInterface } from './dto/base-activity.interface';\nimport { QuizQuestionObject } from './dto/quiz-question.object';\nimport { QuizObject } from './dto/quiz.object';\nimport { ResourceObject } from './dto/resource.object';\n\nexport type BaseActivityReturnType<…
+  link@94 -> 'src/activity/activity.types/index'  [unresolved]
+==============================================================================
+SOURCE [8/40]  zencomputersystems/eLeaveCore:src/api/userprofile/controller/entitlement-detail/entitlement-detail.controller
+  import { Controller, UseGuards, Get, Param, Req, Res, Post, Body, Delete } from '@nestjs/common';\nimport { ResourceGuard } from 'src/guard/resource.guard';\nimport { Roles } from 'src/decorator/resource.decorator';\nimport { ApiOperation, ApiBearerAuth, ApiImplicitParam } from '@nestjs/swagger';\nimport { AssignLeavePolicyDTO } from '../../dto/leave-entitlement/assign-leave-policy.dto';\nimport {…
+  link@130 -> 'src/api/userprofile/dto/leave-entitlement/assign-leave-policy.dto'  [RESOLVES]
+      target: import { IsNotEmpty, IsString, IsArray } from 'class-validator';\nimport { ApiModelProperty } from '@nestjs/swagger';\n\n/**\n * Data for assign leave policy\n *\n * @export\n * @class AssignLeavePolicyDTO\n */\nexport class AssignLeavePolicyDTO {\n\n    /**\n     * Data assign leave policy - user id\n     *\n     * @type {string}\n     * @memberof AssignLeavePolicyDTO\n     */\n    @ApiModelPrope…
+  link@130 -> 'src/api/userprofile/dto/leave-entitlement/assign-leave-policy.dto/index'  [unresolved]
+  link@156 -> 'src/api/userprofile/service/user-leave-entitlement.service'  [RESOLVES]
+      target: import { Injectable } from '@nestjs/common';\nimport { UserLeaveEntitlementDbService } from '../db/user-leave-entitlement.db.service';\nimport { UserLeaveEntitlementSummaryDbService } from '../db/user-leave-summary.db.service';\nimport { AssignLeavePolicyDTO } from '../dto/leave-entitlement/assign-leave-policy.dto';\nimport { UserprofileDbService } from '../db/userprofile.db.service';\nimport { ma…
+  link@156 -> 'src/api/userprofile/service/user-leave-entitlement.service/index'  [unresolved]
+  link@196 -> 'src/common/helper/common-function.services'  [unresolved]
+  link@196 -> 'src/common/helper/common-function.services/index'  [unresolved]
+  link@229 -> 'src/api/userprofile/dto/leave-entitlement/create-replacement-leave.dto'  [RESOLVES]
+      target: import { AssignLeavePolicyDTO } from './assign-leave-policy.dto';\nimport { ApiModelProperty } from '@nestjs/swagger';\nimport { IsNumber, IsNotEmpty } from 'class-validator';\n\n/**\n * Data to create replacement leave\n *\n * @export\n * @class CreateReplacementLeaveDTO\n * @extends {AssignLeavePolicyDTO}\n */\nexport class CreateReplacementLeaveDTO extends AssignLeavePolicyDTO {\n  /**\n   * No…
+  link@229 -> 'src/api/userprofile/dto/leave-entitlement/create-replacement-leave.dto/index'  [unresolved]
+  link@264 -> 'src/api/userprofile/dto/leave-entitlement/create-entitlement-claim.dto'  [RESOLVES]
+      target: import { ApiModelProperty } from '@nestjs/swagger';\nimport { Type } from 'class-transformer';\nimport { IsArray, IsNotEmpty, IsString, IsOptional } from 'class-validator';\nexport class EntitlementClaimDetailsDTO {\n  @ApiModelProperty({ description: 'User id', example: '507a60c0-18a5-11eb-ba6c-3972e8c82172' })\n  @IsString()\n  @IsNotEmpty()\n  userId: string; // "bb8b692b-aca9-3a47-180c-68a139d…
+  link@264 -> 'src/api/userprofile/dto/leave-entitlement/create-entitlement-claim.dto/index'  [unresolved]
+==============================================================================
+SOURCE [9/40]  PhilipsOnFhir/fhir-2-angular:angular2/projects/fhir2angular-r4_1/src/lib/vConfidentialityClassificationEnum
+  import { DomainResource } from './DomainResource';\n\nexport enum vConfidentialityClassificationEnum{\n    L = 'L',\n    M = 'M',\n    N = 'N',\n    R = 'R',\n    U = 'U',\n    V = 'V',\n}\n
+  link@11 -> 'angular2/projects/fhir2angular-r4_1/src/lib/DomainResource'  [unresolved]
+  link@11 -> 'angular2/projects/fhir2angular-r4_1/src/lib/DomainResource/index'  [unresolved]
+==============================================================================
+SOURCE [10/40]  jsonxr/react-native-material-icons:icons/SvgChildFriendlyOutlined
+  // /src/places/child_friendly/materialiconsoutlined/24px.svg\nimport { createSvgIcon } from './createSvgIcon';\n\nexport const SvgChildFriendlyOutlined = createSvgIcon(\n  `<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 0 24 24" width="24">\n    <path d="M0 0h24v24H0V0z" fill="none"/>\n    <path d="M13 2v8h8c0-4.42-3.58-8-8-8zm2 6V4.34c1.7.6 3.05 1.95 3.66 3.66H15zm-8.56 3l-.95-2…
+  link@36 -> 'icons/createSvgIcon'  [RESOLVES]
+      target: import React from 'react';\nimport { Appearance, ColorValue } from 'react-native';\nimport { SvgXml, XmlProps } from 'react-native-svg';\n\nexport interface MIconProps extends Omit<XmlProps, 'fill' | 'width' | 'height' | 'xml'> {\n  color?: ColorValue;\n  size?: number;\n}\n\nexport const createSvgIcon =\n  (xml: string) =>\n  ({ color, fillOpacity = 1.0, size = 24, ...props }: MIconProps) => {\n …
+  link@36 -> 'icons/createSvgIcon/index'  [unresolved]
+==============================================================================
+SOURCE [11/40]  BasisTI/abaco_tst_deploy:frontend/src/app/user/user-list/user-list.component
+  import { Component, ViewChild, OnInit } from '@angular/core';\nimport { Router } from '@angular/router';\nimport { ConfirmationService } from 'primeng';\nimport { DatatableComponent, PageNotificationService, DatatableClickEvent } from '@nuvem/primeng-components';\nimport { Organizacao, OrganizacaoService } from 'src/app/organizacao';\nimport { TipoEquipe, TipoEquipeService } from 'src/app/tipo-equ…
+  link@136 -> 'frontend/src/app/user/user.service'  [unresolved]
+  link@136 -> 'frontend/src/app/user/user.service/index'  [unresolved]
+  link@148 -> 'frontend/src/app/user/user.model'  [RESOLVES]
+      target: import { BaseEntity } from '../shared';\nimport { TipoEquipe } from '../tipo-equipe';\nimport { Organizacao } from '../organizacao';\nimport { THIS_EXPR } from '@angular/compiler/src/output/output_ast';\nimport { UserService } from './user.service';\nimport { Perfil } from '../perfil/perfil.model';\nimport { PerfilOrganizacao } from '../perfil/perfil-organizacao.model';\n\n\nexport class User impl…
+  link@148 -> 'frontend/src/app/user/user.model/index'  [unresolved]
+==============================================================================
+SOURCE [12/40]  potenstop/type-iorm:src/splicer/IUpdatableRecord
+  /**\n *\n * 功能描述:\n *\n * @className IUpdatableRecord\n * @projectName type-iorm\n * @author yanshaowen\n * @date 2019/5/7 15:36\n */\nimport {ITableRecord} from "./ITableRecord";\n\nexport interface IUpdatableRecord<R extends IUpdatableRecord<R>> extends ITableRecord<R> {\n\n}\n
+  link@73 -> 'src/splicer/ITableRecord'  [RESOLVES]
+      target: /**\n *\n * 功能描述:\n *\n * @className ITableRecord\n * @projectName type-iorm\n * @author yanshaowen\n * @date 2019/5/7 10:54\n */\nimport {IRecord} from "./IRecord";\nimport {ITable} from "./ITable";\n\nexport interface ITableRecord<R extends ITableRecord<R>>  extends IRecord {\n    getTable(): ITable<R>;\n}\n
+  link@73 -> 'src/splicer/ITableRecord/index'  [unresolved]
+==============================================================================
+SOURCE [13/40]  shalev007/hubspot-api-nodejs:src/discovery/cms/blogs/tags/TagsDiscovery
+  import { createConfiguration } from '../../../../../codegen/cms/blogs/tags/configuration'\nimport { BlogTagsApi, RequestContext, ResponseContext } from '../../../../../codegen/cms/blogs/tags/index'\nimport { Observable } from '../../../../../codegen/cms/blogs/tags/rxjsStub'\nimport { ApiClientConfigurator } from '../../../../configuration/ApiClientConfigurator'\nimport { IConfiguration } from '../…
+  link@24 -> 'codegen/cms/blogs/tags/configuration'  [unresolved]
+  link@24 -> 'codegen/cms/blogs/tags/configuration/index'  [unresolved]
+  link@56 -> 'codegen/cms/blogs/tags/index'  [unresolved]
+  link@83 -> 'codegen/cms/blogs/tags/rxjsStub'  [unresolved]
+  link@83 -> 'codegen/cms/blogs/tags/rxjsStub/index'  [unresolved]
+  link@109 -> 'src/configuration/ApiClientConfigurator'  [RESOLVES]
+      target: import * as _ from 'lodash'\nimport { IRequestContext } from '../services/IRequestContext'\nimport { IConfiguration } from './IConfiguration'\nimport { VERSION } from './version'\n\nexport class ApiClientConfigurator {\n  public static getParams<\n    RequestContextType extends IRequestContext,\n    ResponseContextType,\n    ObservableRequestContextType,\n    ObservableResponseContextType\n  >(\n …
+  link@109 -> 'src/configuration/ApiClientConfigurator/index'  [unresolved]
+  link@129 -> 'src/configuration/IConfiguration'  [RESOLVES]
+      target: export interface IConfiguration {\n  apiKey?: string\n  accessToken?: string\n  developerApiKey?: string\n}\n
+  link@129 -> 'src/configuration/IConfiguration/index'  [unresolved]
+==============================================================================
+SOURCE [14/40]  newkisoft/newki-inventory-main:inventory/Views/Pallet/pallet/src/app/edit/edit.component
+  import { Component, OnInit } from "@angular/core";\nimport { HttpClient } from "@angular/common/http";\nimport { ActivatedRoute, Router } from "@angular/router";\nimport { Pallet } from "../pallet";\nimport { Location } from '@angular/common';\nimport { FormBuilder, FormGroup, Validators,FormControl } from "@angular/forms";\nimport { Setting } from "../Setting";\n\n@Component({\n  selector: "app-e…
+  link@56 -> 'inventory/Views/Pallet/pallet/src/app/pallet'  [RESOLVES]
+      target: export class Pallet {\n  public PalletId: number;\n  public PalletNumber: number;\n  public Barcode: string;  \n  public Lot: string;  \n  public Weight: number;\n  public RemainWeight: number;\n  public Sold: boolean;\n  public Price:number;\n  public Note:string;\n  public YarnType:string;\n  public Denier:number;\n  public Filament:number;\n  public Lustre:string;\n  public Intermingle:string;\…
+  link@56 -> 'inventory/Views/Pallet/pallet/src/app/pallet/index'  [unresolved]
+  link@99 -> 'inventory/Views/Pallet/pallet/src/app/Setting'  [unresolved]
+  link@99 -> 'inventory/Views/Pallet/pallet/src/app/Setting/index'  [unresolved]
+==============================================================================
+SOURCE [15/40]  IMRZ/tw-db:src/generated/warhammer2/collections/AudioVoActorGroups
+  \nimport { CollectionCache, CollectionKey } from "../../../common";\nimport { AudioVoActors } from "./AudioVoActors";\n\nexport namespace AudioVoActorGroups {\n  export const KEY = new CollectionKey("audio_vo_actor_groups");\n\n  export class Entry {\n    private readonly collectionCache: CollectionCache;\n\n    readonly name: string;\n    readonly _voActor1: string;\n    readonly _voActor2: strin…
+  link@16 -> 'src/common'  [RESOLVES]
+      target: export function getRange(total) {\n    if (total >= 0 && total <= 0.69) {\n        return 0;\n    }\n    if (total >= 0.70 && total <= 1.19) {\n        return 1;\n    }\n    if (total >= 1.20 && total <= 1.70) {\n        return 2;\n    }\n    if (total >= 1.71 && total <= 3) {\n        return 3;\n    }\n}\n
+  link@16 -> 'src/common/index'  [RESOLVES]
+      target: export * from './BitmovinError';\nexport * from './Configuration';\nexport * from './ConsoleLogger';\nexport * from './Logger';\nexport * from './NullLogger';\n
+  link@32 -> 'src/generated/warhammer2/collections/AudioVoActors'  [unresolved]
+  link@32 -> 'src/generated/warhammer2/collections/AudioVoActors/index'  [unresolved]
+==============================================================================
+SOURCE [16/40]  rcommerce/Cromwell_PL:system/admin-panel/src/pages/themeEdit/themeEditActions/ThemeEditActions
+  import { getRandStr, getStoreItem, TPageConfig, TPalette } from '@cromwell/core';\nimport { getRestApiClient } from '@cromwell/core-frontend';\nimport {\n    AddCircle as AddCircleIcon,\n    Close as CloseIcon,\n    DeleteForever as DeleteForeverIcon,\n    InfoOutlined as InfoOutlinedIcon,\n    MoreVertOutlined as MoreVertOutlinedIcon,\n    Pages as PagesIcon,\n    Redo as RedoIcon,\n    Settings …
+  link@276 -> 'system/admin-panel/src/components/colorPicker/ColorPicker'  [unresolved]
+  link@276 -> 'system/admin-panel/src/components/colorPicker/ColorPicker/index'  [unresolved]
+  link@296 -> 'system/admin-panel/src/components/loadBox/LoadingStatus'  [unresolved]
+  link@296 -> 'system/admin-panel/src/components/loadBox/LoadingStatus/index'  [unresolved]
+  link@317 -> 'system/admin-panel/src/components/modal/Confirmation'  [unresolved]
+  link@317 -> 'system/admin-panel/src/components/modal/Confirmation/index'  [unresolved]
+  link@335 -> 'system/admin-panel/src/components/modal/Modal'  [unresolved]
+  link@335 -> 'system/admin-panel/src/components/modal/Modal/index'  [unresolved]
+  link@355 -> 'system/admin-panel/src/components/modeSwitch/ModeSwitch'  [unresolved]
+  link@355 -> 'system/admin-panel/src/components/modeSwitch/ModeSwitch/index'  [unresolved]
+  link@374 -> 'system/admin-panel/src/components/toast/toast'  [RESOLVES]
+      target: import { setStoreItem, TCromwellNotify } from '@cromwell/core';\nimport { Alert } from '@mui/material';\nimport React from 'react';\nimport { toast as toastify, ToastOptions } from 'react-toastify';\n\nimport styles from './toast.module.scss';\n\nclass Toast implements TCromwellNotify {\n    success(text: string, options?: ToastOptions) {\n        return toastify.info(<div className={styles.contai…
+  link@374 -> 'system/admin-panel/src/components/toast/toast/index'  [unresolved]
+  link@393 -> 'system/admin-panel/src/styles/common.module.scss'  [unresolved]
+  link@393 -> 'system/admin-panel/src/styles/common.module.scss/index'  [unresolved]
+  link@411 -> 'system/admin-panel/src/pages/themeEdit/pageListItem/PageListItem'  [unresolved]
+  link@411 -> 'system/admin-panel/src/pages/themeEdit/pageListItem/PageListItem/index'  [unresolved]
+  link@426 -> 'system/admin-panel/src/pages/themeEdit/pageSettings/PageSettings'  [RESOLVES]
+      target: import { TPageConfig } from '@cromwell/core';\nimport { Autocomplete, TextField, Tooltip } from '@mui/material';\nimport React from 'react';\n\nimport styles from './PageSettings.module.scss';\n\nexport const PageSettings = (props: {\n    pageConfig: TPageConfig;\n    handlePageInfoChange: (page: TPageConfig) => void;\n}) => {\n    const { pageConfig } = props;\n\n    const handlePageSettingsChang…
+  link@426 -> 'system/admin-panel/src/pages/themeEdit/pageSettings/PageSettings/index'  [unresolved]
+  link@446 -> 'system/admin-panel/src/pages/themeEdit/ThemeEdit'  [unresolved]
+  link@446 -> 'system/admin-panel/src/pages/themeEdit/ThemeEdit/index'  [unresolved]
+  link@462 -> 'system/admin-panel/src/pages/themeEdit/themeEditActions/ThemeEditActions.module.scss'  [unresolved]
+  link@462 -> 'system/admin-panel/src/pages/themeEdit/themeEditActions/ThemeEditActions.module.scss/index'  [unresolved]
+==============================================================================
+SOURCE [17/40]  anhnguyen44/Developpement-des-modules-AngularJS-NestJS:backend/src/formation-contact/formation-contact.controller
+  import {\n    Body,\n    Controller,\n    Delete,\n    ForbiddenException,\n    Get, InternalServerErrorException,\n    Param,\n    Patch,\n    Post,\n    Put,\n    Req, Res,\n    UnauthorizedException,\n    UseInterceptors,\n    ParseIntPipe\n} from '@nestjs/common';\nimport { ApiOperation, ApiUseTags, ApiResponse } from '@nestjs/swagger';\nimport { apiPath } from '../api';\nimport { Authorized }…
+  link@145 -> 'backend/src/api'  [unresolved]
+  link@145 -> 'backend/src/api/index'  [unresolved]
+  link@166 -> 'backend/src/common/decorators/authorized.decorator'  [RESOLVES]
+      target: import { ReflectMetadata } from '@nestjs/common';\nimport { profils } from '@aleaac/shared/src/models/profil.model';\n\n\nexport function Authorized(...roles: profils[]);\nexport function Authorized(roles: profils[]);\nexport function Authorized(...roleOrRoles: Array<profils | profils[]>) {\n    const roles = Array.isArray(roleOrRoles[0]) ? (roleOrRoles[0] as profils[]) : (roleOrRoles as profils[]…
+  link@166 -> 'backend/src/common/decorators/authorized.decorator/index'  [unresolved]
+  link@186 -> 'backend/src/common/decorators/rights.decorator'  [RESOLVES]
+      target: import { ReflectMetadata } from '@nestjs/common';\n\n\nexport function Rights(...droits: string[]);\nexport function Rights(droits: string[]);\nexport function Rights(...droitOrDroits: Array<string | string[]>) {\n    const droits = Array.isArray(droitOrDroits[0]) ? (droitOrDroits[0] as string[]) : (droitOrDroits as string[]);\n    return ReflectMetadata('droits', droits);\n}\n
+  link@186 -> 'backend/src/common/decorators/rights.decorator/index'  [unresolved]
+  link@209 -> 'backend/src/common/interceptors/logging.interceptor'  [RESOLVES]
+      target: import {ExecutionContext, Injectable, NestInterceptor} from '@nestjs/common';\nimport {tap} from 'rxjs/operators';\nimport {ElasticSearchService} from '../../elastic-search/elastic-search.service';\nimport {Observable} from 'rxjs';\n\n@Injectable()\nexport class LoggingInterceptor implements NestInterceptor {\n    constructor(\n        private elasticSearchService: ElasticSearchService\n    ) {\n …
+  link@209 -> 'backend/src/common/interceptors/logging.interceptor/index'  [unresolved]
+  link@230 -> 'backend/src/common/interceptors/transform.interceptor'  [RESOLVES]
+      target: import {ExecutionContext, Injectable, NestInterceptor} from '@nestjs/common';\nimport {Observable} from 'rxjs';\nimport {map} from 'rxjs/operators';\n\n@Injectable()\nexport class TransformInterceptor implements NestInterceptor {\n  intercept(\n      // dataOrRequest,\n      context: ExecutionContext,\n      stream$: Observable<any>): Observable<any> {\n    return stream$.pipe(\n        map(data =…
+  link@230 -> 'backend/src/common/interceptors/transform.interceptor/index'  [unresolved]
+  link@245 -> 'backend/src/generation/generation.service'  [RESOLVES]
+      target: import { Injectable } from '@nestjs/common';\nimport * as childProcess from 'child_process'\n\nimport * as expressions from 'angular-expressions';\nimport * as JSZip from 'jszip';\nimport * as Docxtemplater from 'docxtemplater';\nimport * as ImageModule from 'docxtemplater-image-module';\n\nimport * as fs from 'fs';\nimport * as path from 'path';\n\nimport { Fichier } from '../fichier/fichier.enti…
+  link@245 -> 'backend/src/generation/generation.service/index'  [unresolved]
+  link@262 -> 'backend/src/formation-contact/formation-contact.entity'  [RESOLVES]
+      target: import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, PrimaryColumn } from 'typeorm';\nimport { ApiModelProperty } from '@nestjs/swagger';\nimport { FormationContact, Formation, IFormationContact } from '@aleaac/shared';\nimport { CFormation } from '../formation/formation.entity';\nimport { Contact } from '../contact/contact.entity';\nimport { Compte } from '../compte/…
+  link@262 -> 'backend/src/formation-contact/formation-contact.entity/index'  [unresolved]
+  link@278 -> 'backend/src/formation-contact/formation-contact.service'  [RESOLVES]
+      target: import { Injectable, NotFoundException } from '@nestjs/common';\nimport { Log } from '../logger/logger';\nimport { FindManyOptions, Repository, DeepPartial, UpdateResult, FindOperator, In, Brackets } from 'typeorm';\nimport { InjectRepository } from '@nestjs/typeorm';\nimport { QueryService } from '../query/query.service';\nimport { CFormationContact } from './formation-contact.entity';\nimport { …
+  link@278 -> 'backend/src/formation-contact/formation-contact.service/index'  [unresolved]
+  link@318 -> 'backend/src/historique/historique.service'  [RESOLVES]
+      target: import {Injectable} from '@nestjs/common';\nimport {Historique} from './historique.entity';\nimport {Repository} from 'typeorm';\nimport {InjectRepository} from '@nestjs/typeorm';\nimport {QueryService} from '../query/query.service';\n\n@Injectable()\nexport class HistoriqueService {\n    constructor(\n        @InjectRepository(Historique)\n        private readonly historiqueRepository: Repository…
+  link@318 -> 'backend/src/historique/historique.service/index'  [unresolved]
+==============================================================================
+SOURCE [18/40]  hashtag-design-system/design_system:packages/components/src/components/Input/__tests__/IncrDcr.test
+  import { fireEvent, render, screen, waitFor } from "@testing-library/react";\nimport userEvent, { specialChars } from "@testing-library/user-event";\nimport React from "react";\nimport Input from "../index";\n\ndescribe("<Input.IncrDcr />", () => {\n  test("default behaviour", () => {\n    render(<Input.IncrDcr />);\n    const input = screen.getByTestId("input-incr-dcr");\n    const decreaseBtn = …
+  link@55 -> 'packages/components/src/components/Input/index'  [RESOLVES]
+      target: import Input from "./Input";\n\nexport { default as Input } from "./Input";\nexport type { FProps as InputDigitFProps } from "./Digit";\nexport type { FProps as InputDigitSequenceFProps, Props as InputDigitSequenceProps } from "./DigitSequence";\nexport type { FProps as InputIncrDcrFProps, IncrDcrState } from "./IncrDcr";\nexport type { FProps as InputFProps, InputBaseState, InputState, Props as I…
+==============================================================================
+SOURCE [19/40]  pablor21/nestjs-starter-01:src/lib/datasources/repositories/generic.repository
+  import { IQuery, Filter } from "../queryable";\nimport { ClassType } from "../../types";\nimport { EntityNotFoundException } from "./exceptions";\nimport { IRepository, IRepositoryContext, IRepositoryStatement } from "./repository.interface";\n\nexport abstract class GenericRepository<T, PK = any> implements IRepository<T, PK>{\n\n    constructor(public readonly entityClass: ClassType<T>) {\n\n   …
+  link@13 -> 'src/lib/datasources/queryable'  [unresolved]
+  link@13 -> 'src/lib/datasources/queryable/index'  [unresolved]
+  link@25 -> 'src/lib/types'  [RESOLVES]
+      target: export type PK = string | number;\nexport type LatLng = { lat: number, lon: number };\nexport interface ClassType<T = any> {\n    new(...args: any[]): T;\n}\n\nexport type Diff<T extends string | symbol | number, U extends string | symbol | number> =\n    ({ [P in T]: P } & { [P in U]: never } & { [x: string]: never })[T];\n\nexport type Omit<T, K extends keyof T> = { [P in Diff<keyof T, K>]: T[P]…
+  link@25 -> 'src/lib/types/index'  [RESOLVES]
+      target: export * from './array'\nexport * from './boolean'\nexport * from './const'\nexport * from './dict'\nexport * from './enum'\nexport * from './integer'\nexport * from './null'\nexport * from './nullable'\nexport * from './number'\nexport * from './object'\nexport * from './optional'\nexport * from './ref'\nexport * from './string'\nexport * from './tuple'\nexport * from './union'\nexport * from './…
+  link@39 -> 'src/lib/datasources/repositories/exceptions'  [unresolved]
+  link@39 -> 'src/lib/datasources/repositories/exceptions/index'  [RESOLVES]
+      target: export * from './entitynotfound.exception';
+  link@65 -> 'src/lib/datasources/repositories/repository.interface'  [RESOLVES]
+      target: import { Filter } from "../queryable/filter";\nimport { IQuery } from "../queryable/query.interface";\nimport { IRepositoryTransaction } from "./transaction.interface";\n\n\n/**\n * Represents a repository execution context\n */\nexport interface IRepositoryContext {\n    /**\n     * The repository transaction\n     */\n    transaction?: IRepositoryTransaction,\n    /**\n     * Options to pass\n  …
+  link@65 -> 'src/lib/datasources/repositories/repository.interface/index'  [unresolved]
+==============================================================================
+SOURCE [20/40]  vishalp36/lxglobal:src/components/deliver-anything/banner
+  import React from "react";\n//buttons\nimport Button from "../button";\nimport Breadcrumbs from "../categories/breadcrumbs-3";\nimport Banner from "./images/banner.png";\nimport MobileBack from "../product-details/images/left-arrow.svg";\nimport styles from './styles.scss';\n\n\nexport default function DeliverAnythingBanner() {\n  return (\n    <>\n        <div className={`${styles['banner-section…
+  link@18 -> 'src/components/button'  [RESOLVES]
+      target: import React, { FC, MouseEvent } from "react";\nimport styled, { css } from "styled-components";\n\nimport { Constants } from "../constants";\nimport { SmartLink } from "./smart-link";\n\ntype PillButtonProps = {\n  color?: string;\n  onClick?: (e: MouseEvent<HTMLButtonElement, globalThis.MouseEvent>) => void;\n  type?: "submit" | undefined;\n};\n\ntype ButtonProps = {\n  backgroundColor?: string;…
+  link@18 -> 'src/components/button/index'  [RESOLVES]
+      target: export { default, ButtonType } from './Button';\n
+  link@35 -> 'src/components/categories/breadcrumbs-3'  [unresolved]
+  link@35 -> 'src/components/categories/breadcrumbs-3/index'  [unresolved]
+  link@48 -> 'src/components/deliver-anything/images/banner.png'  [unresolved]
+  link@48 -> 'src/components/deliver-anything/images/banner.png/index'  [unresolved]
+  link@68 -> 'src/components/product-details/images/left-arrow.svg'  [unresolved]
+  link@68 -> 'src/components/product-details/images/left-arrow.svg/index'  [unresolved]
+  link@79 -> 'src/components/deliver-anything/styles.scss'  [unresolved]
+  link@79 -> 'src/components/deliver-anything/styles.scss/index'  [unresolved]
+==============================================================================
+SOURCE [21/40]  a-lundsgaard/Electron-madplan-app:app/src/components/componentPages/createPlan/shoppingList/src/contexts/todos.context
+  import React, { createContext, useEffect, useReducer } from 'react';\nimport todosReducer from '../reducers/todos.reducer';\n\nimport { ADD_INGREDIENT_ARRAY, UPDATE_AMOUNT_OF_INGREDIENTS, DELETE_INGREDIENTS } from '../constants/actions';\nimport useLocalStorageReducer from '../hooks/useLocalStorageReducer';\n\nconst defaultItems = [\n  { id: '1', task: 'rugbrød', completed: false, initiator: 'USER…
+  link@38 -> 'app/src/components/componentPages/createPlan/shoppingList/src/reducers/todos.reducer'  [RESOLVES]
+      target: //import uuid from 'uuid/v4';\n//import { uuidv4 } from 'uuid';\nimport uuidv4 from "uuid/dist/v4";\n\nimport {\n  NewIngredient,\n  StateIngredient,\n  IngredientHash\n} from "./types"\n\nimport {\n  ADD_TODO,\n  REMOVE_TODO,\n  TOGGLE_TODO,\n  EDIT_TODO,\n  ADD_INGREDIENT_ARRAY,\n  COMPLETE_TODO,\n  UNCOMPLETE_TODO,\n  ADD_SALES_TO_TODO,\n  UPDATE_AMOUNT_OF_INGREDIENTS,\n  DELETE_INGREDIENTS\n} …
+  link@38 -> 'app/src/components/componentPages/createPlan/shoppingList/src/reducers/todos.reducer/index'  [unresolved]
+  link@80 -> 'app/src/components/componentPages/createPlan/shoppingList/src/constants/actions'  [RESOLVES]
+      target: export const ADD_TODO = 'ADD_TODO';\nexport const REMOVE_TODO = 'REMOVE_TODO';\nexport const TOGGLE_TODO = 'TOGGLE_TODO';\nexport const COMPLETE_TODO = 'COMPLETE_TODO';\nexport const UNCOMPLETE_TODO = 'UNCOMPLETE_TODO';\nexport const EDIT_TODO = 'EDIT_TODO';\nexport const ADD_INGREDIENT_ARRAY = 'ADD_INGREDIENT_ARRAY';\nexport const ADD_SALES_TO_TODO = 'ADD_SALES_TO_TODO';\nexport const UPDATE_AMOU…
+  link@80 -> 'app/src/components/componentPages/createPlan/shoppingList/src/constants/actions/index'  [unresolved]
+  link@99 -> 'app/src/components/componentPages/createPlan/shoppingList/src/hooks/useLocalStorageReducer'  [RESOLVES]
+      target: import { useReducer, useEffect } from 'react';\n\nfunction useLocalStorageReducer(key, reducer, defaultValue) {\n  \n  const [state, dispatch] = useReducer(reducer, defaultValue, () => {\n    let value;\n    try {\n      value = JSON.parse(\n        window.localStorage.getItem(key) || String(defaultValue)\n      );\n    } catch (e) {\n      value = defaultValue;\n    }\n    return value;\n  });\n\…
+  link@99 -> 'app/src/components/componentPages/createPlan/shoppingList/src/hooks/useLocalStorageReducer/index'  [unresolved]
+==============================================================================
+SOURCE [22/40]  nileshp87/fluentui:packages/react-icons/src/components/BorderDashIcon
+  import * as React from 'react';\nimport createSvgIcon from '../utils/createSvgIcon';\n\nconst BorderDashIcon = createSvgIcon({\n  svg: ({ classes }) => (\n    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048" className={classes.svg}>\n      <path d="M256 128H0V0h256v128zm384 0H384V0h256v128zm384 0H768V0h256v128zm384 0h-256V0h256v128zm384 0h-256V0h256v128zM0 256h128v256H0V256zm0 384h1…
+  link@24 -> 'packages/react-icons/src/utils/createSvgIcon'  [RESOLVES]
+      target: import * as React from 'react';\nimport { css, getNativeProps, htmlElementProperties } from '@uifabric/utilities';\nimport * as classes from './SvgIcon.scss';\nimport { ISvgIconProps } from './SvgIcon.types';\nimport { SvgIconCreateFnParams } from './types';\n\nconst createSvgIcon = <TProps = {}>({ svg, displayName }: SvgIconCreateFnParams<TProps>) => {\n  const Component: React.FC<React.HTMLAttri…
+  link@24 -> 'packages/react-icons/src/utils/createSvgIcon/index'  [unresolved]
+==============================================================================
+SOURCE [23/40]  AnyhowStep/sql-compiler:src/parser-node/statement/alter-user-statement/index
+  export * from "./alter-current-user-statement";\nexport * from "./alter-grant-user";\nexport * from "./alter-user-statement";\n
+  link@13 -> 'src/parser-node/statement/alter-user-statement/alter-current-user-statement'  [RESOLVES]
+      target: import {StringLiteral} from "../../expression";\nimport {Node} from "../../node";\nimport {SyntaxKind} from "../../syntax-kind.generated";\n\n/**\n * https://dev.mysql.com/doc/refman/5.7/en/alter-user.html\n *\n * https://github.com/mysql/mysql-server/blob/5c8c085ba96d30d697d0baa54d67b102c232116b/sql/sql_yacc.yy#L7694\n */\nexport interface AlterCurrentUserStatement extends Node {\n    syntaxKind …
+  link@13 -> 'src/parser-node/statement/alter-user-statement/alter-current-user-statement/index'  [unresolved]
+  link@26 -> 'src/parser-node/statement/alter-user-statement/alter-grant-user'  [RESOLVES]
+      target: import {StringLiteral} from "../../expression";\nimport {AccountIdentifier, Identifier} from "../../identifier";\nimport {Node, ValueNode} from "../../node";\nimport {NodeArray2} from "../../node-array";\nimport {SyntaxKind} from "../../syntax-kind.generated";\n\n/**\n * https://github.com/mysql/mysql-server/blob/5c8c085ba96d30d697d0baa54d67b102c232116b/sql/sql_yacc.yy#L14484\n */\nexport interfac…
+  link@26 -> 'src/parser-node/statement/alter-user-statement/alter-grant-user/index'  [unresolved]
+  link@38 -> 'src/parser-node/statement/alter-user-statement/alter-user-statement'  [RESOLVES]
+      target: import {Node, ValueNode} from "../../node";\nimport {SyntaxKind} from "../../syntax-kind.generated";\nimport {PartialAccountLockAndPasswordExpiryOptions, PartialRateLimitOptions, RequiredEncryptedConnectionOptions} from "../create-user-statement";\nimport {AlterGrantUserList} from "./alter-grant-user";\n\n/**\n * https://dev.mysql.com/doc/refman/5.7/en/alter-user.html\n *\n * https://github.com/my…
+  link@38 -> 'src/parser-node/statement/alter-user-statement/alter-user-statement/index'  [unresolved]
+==============================================================================
+SOURCE [24/40]  blixth/Utilitype:src/arrays/is-present
+  import { isMissing } from '../any/is-missing';\n\n/*\n * Checks if there is an array present\n *\n * @Example\n *\n *   isPresent([1, 2, 3])\n *   //=> true\n *\n *   isPresent([])\n *   //=> false\n *\n *   isPresent(null)\n *   //=> false\n *\n *   isPresent(undefined)\n *   //=> false\n */\nexport function isPresent<T>(\n  array: T[] | null | undefined,\n): array is [T, ...T[]] {\n  return !isM…
+  link@14 -> 'src/any/is-missing'  [unresolved]
+  link@14 -> 'src/any/is-missing/index'  [unresolved]
+==============================================================================
+SOURCE [25/40]  lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/index
+  export * from './merge-all-single-observable.shortcut';\nexport * from './merge-all-single-observable';\nexport * from './merge-all-single-observable-pipe.shortcut';\nexport * from './merge-all-single-observable-pipe';\n\n
+  link@19 -> 'src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/merge-all-single-observable.shortcut'  [RESOLVES]
+      target: export { mergeAllSingleObservable as mergeAllSingle$$, mergeAllSingleObservable as mergeAllS$$ } from './merge-all-single-observable';\n\n\n
+  link@19 -> 'src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/merge-all-single-observable.shortcut/index'  [unresolved]
+  link@36 -> 'src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/merge-all-single-observable'  [RESOLVES]
+      target: import { IObserver } from '../../../../../../../../observer/type/observer.type';\nimport { IHigherOrderObservable } from '../../../../../../../type/derived/higher-order-observable.type';\nimport { IObservable, IUnsubscribe } from '../../../../../../../type/observable.type';\n\nexport function mergeAllSingleObservable<GValue>(\n  subscribe: IHigherOrderObservable<GValue>,\n): IObservable<GValue> {\…
+  link@36 -> 'src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/merge-all-single-observable/index'  [unresolved]
+  link@58 -> 'src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/merge-all-single-observable-pipe.shortcut'  [RESOLVES]
+      target: export {\n  mergeAllSingleObservablePipe as mergeAllSingle$$$, mergeAllSingleObservablePipe as mergeAllS$$$,\n} from './merge-all-single-observable-pipe';\n\n\n
+  link@58 -> 'src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/merge-all-single-observable-pipe.shortcut/index'  [unresolved]
+  link@77 -> 'src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/merge-all-single-observable-pipe'  [RESOLVES]
+      target: import { IObservable } from '../../../../../../../type/observable.type';\nimport { IObservablePipe } from '../../../../../../type/observable-pipe.type';\nimport { mergeAllSingleObservable } from './merge-all-single-observable';\n\nexport function mergeAllSingleObservablePipe<GValue>(): IObservablePipe<IObservable<GValue>, GValue> {\n  return mergeAllSingleObservable;\n}\n\n// export function merge…
+  link@77 -> 'src/observable/pipes/built-in/without-notifications/merge/merge-all/derived/merge-all-single/merge-all-single-observable-pipe/index'  [unresolved]
+==============================================================================
+SOURCE [26/40]  blixth/Utilitype:test/arrays/first.spec
+  import { first } from '../../src/arrays/first';\nimport { expect } from '../expect-helper';\n\ndescribe('first', () => {\n  context('when given a non empty array', () => {\n    it('returns the first element', () => {\n      expect(first([1, 2, 3])).to.eql(1);\n    });\n\n    it('uses typing which allows direct access to the returned item', () => {\n      expect(first([{ food: 'pizza' }]).food).to.…
+  link@15 -> 'src/arrays/first'  [RESOLVES]
+      target: /**\n * Retrieve the first element in the given array.\n *\n * @Param {Array} array = The array to check in.\n *\n * @Example\n *\n *   first([1, 2, 3])\n *   //=> 1\n *\n *   first([])\n *   //=> undefined\n */\nexport function first<T>(array: [T, ...T[]]): T;\nexport function first(array: []): undefined;\nexport function first<T>(array: [T, ...T[]] | []): T | undefined {\n  return array[0];\n}\n
+  link@15 -> 'src/arrays/first/index'  [unresolved]
+  link@29 -> 'test/expect-helper'  [RESOLVES]
+      target: import * as expect from 'expect.js';\n\nexport { expect };\n
+  link@29 -> 'test/expect-helper/index'  [unresolved]
+==============================================================================
+SOURCE [27/40]  zsh2401/tdscore:src/data-structure/map/HashMap
+  /*\n * HashMap.ts\n * Created on Mon Mar 15 2021 15:53:10\n *\n * Description: \n *   HashMap which turn to HashMap in JDK 1.7\n *\n * Copyright (c) 2021 tdscore\n * \n * Copyright (c) 2021 Seymour Zhang and all contributors of this project.\n * tdscore is licensed under Mulan PSL v2.\n * You can use this software according to the terms and conditions of the Mulan PSL v2.\n * You may obtain a copy…
+  link@249 -> 'src/DSArray'  [RESOLVES]
+      target: /*\n * DSArray.ts\n * Created on Wed Mar 10 2021 19:54:56\n *\n * Description: \n *   No description.\n *\n * Copyright (c) 2021 tdscore\n * \n * Copyright (c) 2021 Seymour Zhang and all contributors of this project.\n * tdscore is licensed under Mulan PSL v2.\n * You can use this software according to the terms and conditions of the Mulan PSL v2.\n * You may obtain a copy of Mulan PSL v2 at:\n * …
+  link@249 -> 'src/DSArray/index'  [unresolved]
+  link@269 -> 'src/data-structure/map/IMap'  [RESOLVES]
+      target: import ICollection from "../ICollection";\nimport IIterable from "../IIterable";\n\nexport interface IKeyValuePair<K, V> {\n    key: K;\n    value: V;\n}\nexport interface IReadonlyKeyValuePair<K, V> {\n    readonly key: K;\n    readonly value: V;\n}\nexport default interface IMap<K, V>\n    extends ICollection<IReadonlyKeyValuePair<K, V>> {\n\n    mapPut(key: K, value: V): V | null\n    mapGet(ke…
+  link@269 -> 'src/data-structure/map/IMap/index'  [unresolved]
+  link@285 -> 'src/util/hashing/hash'  [RESOLVES]
+      target: /*\n * hashcode.ts\n * Created on Wed Mar 10 2021 19:10:07\n *\n * Description: \n *   No description.\n *\n * Copyright (c) 2021 tdscore\n * \n * Copyright (c) 2021 Seymour Zhang and all contributors of this project.\n * tdscore is licensed under Mulan PSL v2.\n * You can use this software according to the terms and conditions of the Mulan PSL v2.\n * You may obtain a copy of Mulan PSL v2 at:\n *…
+  link@285 -> 'src/util/hashing/hash/index'  [unresolved]
+  link@297 -> 'src/data-structure/map/HashMapEntry'  [RESOLVES]
+      target: import DSObject from "../../DSObject";\nimport _hashCode from "../../util/hashing"\nexport default class HashMapEntry<K, V> extends DSObject {\n    \n    hash: number;\n    value: V;\n    key: K;\n    next: HashMapEntry<K, V> | null;\n\n    constructor(hash: number, key: K, value: V) {\n        super();\n        this.hash = hash;\n        this.key = key;\n        this.value = value;\n        this.…
+  link@297 -> 'src/data-structure/map/HashMapEntry/index'  [unresolved]
+  link@307 -> 'src/data-structure/map/MapBase'  [RESOLVES]
+      target: import DSArray from "../../DSArray";\nimport IIterator from "../IIterator";\nimport toDSArray from "../../ixa/toDSArrayForItertable";\nimport CollectionBase from "../CollectionBase";\nimport IMap, { IKeyValuePair, IReadonlyKeyValuePair } from "./IMap";\nimport equals from "../../equals";\nimport IIterable from "../IIterable";\nimport contains from "../../ixa/contains";\n\n/**\n * Map类型的基类\n */\nex…
+  link@307 -> 'src/data-structure/map/MapBase/index'  [unresolved]
+  link@317 -> 'src/equals'  [RESOLVES]
+      target: /*\n * dsEquals.ts\n * Created on Tue Mar 30 2021 08:37:52\n *\n * Description: \n *   No description.\n *\n * Copyright (c) 2021 tdscore\n * \n * Copyright (c) 2021 Seymour Zhang and all contributors of this project.\n * tdscore is licensed under Mulan PSL v2.\n * You can use this software according to the terms and conditions of the Mulan PSL v2.\n * You may obtain a copy of Mulan PSL v2 at:\n *…
+  link@317 -> 'src/equals/index'  [unresolved]
+==============================================================================
+SOURCE [28/40]  zencomputersystems/eLeaveCore:src/admin/company/company.controller
+  import { Controller, UseGuards, Get, Req, Res, Param, NotFoundException, Post, Body, Patch, Delete } from '@nestjs/common';\nimport { AuthGuard } from '@nestjs/passport';\nimport { ApiBearerAuth, ApiOperation, ApiImplicitParam } from '@nestjs/swagger';\nimport { CompanyService } from './company.service';\nimport { CommonFunctionService } from 'src/common/helper/common-function.services';\nimport {…
+  link@96 -> 'src/admin/company/company.service'  [RESOLVES]
+      target: import { Injectable, HttpService } from '@nestjs/common';\nimport { QueryParserService } from 'src/common/helper/query-parser.service';\nimport { Observable, forkJoin } from 'rxjs';\nimport { Resource } from 'src/common/model/resource.model';\nimport { v1 } from 'uuid';\nimport { CompanyModel } from './model/company.model';\nimport { BaseDBService } from 'src/common/base/base-db.service';\nimport …
+  link@96 -> 'src/admin/company/company.service/index'  [unresolved]
+  link@139 -> 'src/admin/company/dto/update-company.dto'  [RESOLVES]
+      target: import { ApiModelProperty } from '@nestjs/swagger';\nimport { IsNotEmpty } from 'class-validator';\n\n/**\n * Update company dto\n *\n * @export\n * @class UpdateCompanyDTO\n */\nexport class UpdateCompanyDTO {\n    /**\n     * company id\n     *\n     * @type {string}\n     * @memberof UpdateCompanyDTO\n     */\n    @ApiModelProperty({ description: 'Company id', example: '323bdfa7-eed2-8bf2-2274-…
+  link@139 -> 'src/admin/company/dto/update-company.dto/index'  [unresolved]
+  link@180 -> 'src/admin/general-leave-policy/general-leave-policy.service'  [RESOLVES]
+      target: import { GeneralLeavePolicyModel } from './model/general-leave-policy.model';\nimport { CreateGeneralLeavePolicyDTO } from './dto/create-general-leave-policy.dto';\nimport { Resource } from 'src/common/model/resource.model';\nimport { v1 } from 'uuid';\nimport { HttpService, Injectable } from '@nestjs/common';\nimport { QueryParserService } from 'src/common/helper/query-parser.service';\nimport { …
+  link@180 -> 'src/admin/general-leave-policy/general-leave-policy.service/index'  [unresolved]
+==============================================================================
+SOURCE [29/40]  Nick-Goorwah/origin:packages/ui/libs/ui/core/src/components/layout/UsernameAndOrg/index
+  export * from './UsernameAndOrg';\n
+  link@10 -> 'packages/ui/libs/ui/core/src/components/layout/UsernameAndOrg/UsernameAndOrg'  [RESOLVES]
+      target: import { Box, BoxProps } from '@mui/material';\nimport React, { FC, memo } from 'react';\nimport { TextWithPendingDot } from '../../text';\nimport { useStyles } from './UsernameAndOrg.styles';\n\nexport interface UsernameAndOrgProps {\n  username: string;\n  userPending?: boolean;\n  userTooltip?: string;\n  orgName?: string;\n  orgPending?: boolean;\n  orgTooltip?: string;\n  wrapperProps?: BoxPr…
+  link@10 -> 'packages/ui/libs/ui/core/src/components/layout/UsernameAndOrg/UsernameAndOrg/index'  [unresolved]
+==============================================================================
+SOURCE [30/40]  NWylynko/react-clean-badges:src/badges/IBMCloud
+  \nimport React from "react"\nimport { Badge } from "../badge"\nimport type { BadgeProps } from "../badge"\n\nconst IBMCloud = (props: BadgeProps) => <Badge name="IBM Cloud" {...props} backgroundColor="#1261FE" />\n\nexport default IBMCloud\n
+  link@18 -> 'src/badge'  [RESOLVES]
+      target: import React from "react"\nimport type { ClassAttributes, ImgHTMLAttributes } from "react"\n\nconst customProps = ['name', 'logoColor', 'label', 'backgroundColor']\n\ninterface BadgeSrc {\n  title: string\n  backgroundColor: string\n  logoColor?: string\n  name: string\n}\n\nconst badgeSrc = ({ title, backgroundColor, logoColor, name }: BadgeSrc) => {\n\n  const encodedTitle = title.replace(/-/g, …
+  link@18 -> 'src/badge/index'  [RESOLVES]
+      target: import React, { ReactNode } from 'react'\nimport { Badge as AntBadge, BadgeProps as AntBadgeProps } from 'antd'\n\ninterface BadgeProps extends AntBadgeProps {\n    children?: ReactNode\n}\n\nconst Badge = (props: BadgeProps) => {\n    return <AntBadge {...props}/>\n}\n\nexport default Badge\n
+==============================================================================
+SOURCE [31/40]  bjarkehs/phosphor-react:src/icons/ArrowElbowRightUp
+  import React, { forwardRef } from "react";\n\nimport {\n  IconWeight,\n  IconProps,\n  PaintFunction,\n  renderPathForWeight,\n} from "../lib";\nimport IconBase, { RenderFunction } from "../lib/IconBase";\n\nconst pathsByWeight = new Map<IconWeight, PaintFunction>();\npathsByWeight.set("bold", (color: string) => (\n  <>\n    <polyline\n      points="128 96 176 48 224 96"\n      fill="none"\n      …
+  link@45 -> 'src/lib'  [unresolved]
+  link@45 -> 'src/lib/index'  [RESOLVES]
+      target: // eslint-disable-next-line\nexport { default as flexi } from "./flexi";\n
+  link@62 -> 'src/lib/IconBase'  [unresolved]
+  link@62 -> 'src/lib/IconBase/index'  [unresolved]
+==============================================================================
+SOURCE [32/40]  lifaon74/observables:src/notifications/core/notification/constructor
+  import { INotification } from './interfaces';\nimport { ConstructClassWithPrivateMembers } from '../../../misc/helpers/ClassWithPrivateMembers';\nimport { INotificationInternal, INotificationPrivate, NOTIFICATION_PRIVATE } from './privates';\nimport { IsObject } from '../../../helpers';\n\n/** CONSTRUCTOR **/\n\nexport function ConstructNotification<TName extends string, TValue>(instance: INotific…
+  link@12 -> 'src/notifications/core/notification/interfaces'  [RESOLVES]
+      target: import { IEventLike } from '../../observables/events/events-listener/event-like/interfaces';\n\n/** TYPES **/\n\nexport type TNotificationName<N extends INotification<any, any>> = N extends INotification<infer TName, any> ? TName : never;\nexport type TNotificationValue<N extends INotification<any, any>> = N extends INotification<any, infer TValue> ? TValue : never;\n\n\n/** INTERFACES **/\n\nexpo…
+  link@12 -> 'src/notifications/core/notification/interfaces/index'  [unresolved]
+  link@36 -> 'src/misc/helpers/ClassWithPrivateMembers'  [unresolved]
+  link@36 -> 'src/misc/helpers/ClassWithPrivateMembers/index'  [unresolved]
+  link@63 -> 'src/notifications/core/notification/privates'  [RESOLVES]
+      target: import { INotification } from './interfaces';\n\n/** PRIVATES **/\n\nexport const NOTIFICATION_PRIVATE = Symbol('notification-private');\n\nexport interface INotificationPrivate<TName extends string, TValue> {\n  name: TName;\n  value: TValue;\n}\n\nexport interface INotificationPrivatesInternal<TName extends string, TValue> {\n  [NOTIFICATION_PRIVATE]: INotificationPrivate<TName, TValue>;\n}\n\ne…
+  link@63 -> 'src/notifications/core/notification/privates/index'  [unresolved]
+  link@77 -> 'src/helpers'  [RESOLVES]
+      target: import { setImmediate } from './classes/set-immediate';\n\nexport function noop() {\n}\n\nexport function EnumToString<T>(values: T[]): string {\n  let string: string = '';\n  for (let i = 0, l = values.length; i < l; i++) {\n    if (i > 0) {\n      string += (i === (l - 1)) ? ' or ' : ',';\n    }\n    string += `'${ values[i] }'`;\n  }\n  return string;\n}\n\nexport function StringMaxLength(input…
+  link@77 -> 'src/helpers/index'  [RESOLVES]
+      target: import * as concurrency from 'concurrency.libx.js';\nimport { Deferred } from 'concurrency.libx.js';\nimport mixin from 'lodash/mixin';\nimport forEach from 'lodash/forEach';\nimport transform from 'lodash/transform';\nimport reduce from 'lodash/reduce';\nimport map from 'lodash/map';\nimport mapKeys from 'lodash/mapKeys';\nimport mapValues from 'lodash/mapValues';\nimport each from 'lodash/each';…
+==============================================================================
+SOURCE [33/40]  TriForMine/Discordeno:gateway/shard/connect
+  import { Shard, ShardState } from "./types.ts";\n\nexport async function connect(shard: Shard): Promise<void> {\n  // Only set the shard to `Connecting` state,\n  // if the connection request does not come from an identify or resume action.\n  if (![ShardState.Identifying, ShardState.Resuming].includes(shard.state)) {\n    shard.state = ShardState.Connecting;\n  }\n  shard.events.connecting?.(shar…
+  link@14 -> 'gateway/shard/types'  [RESOLVES]
+      target: import { StatusUpdate } from "../../helpers/misc/editShardStatus.ts";\nimport { DiscordGatewayPayload } from "../../types/discord.ts";\nimport { GatewayOpcodes } from "../../types/shared.ts";\nimport { LeakyBucket } from "../../util/bucket.ts";\nimport { createShard } from "./createShard.ts";\n\n// TODO: think whether we also need an identifiedShard function\n\nexport const MAX_GATEWAY_REQUESTS_PE…
+  link@14 -> 'gateway/shard/types/index'  [unresolved]
+==============================================================================
+SOURCE [34/40]  The-Speck/box-ui-elements:src/icons/general/IconPencil
+  import * as React from 'react';\n\nimport AccessibleSVG from '../accessible-svg';\n\nimport { Icon } from '../iconTypes';\n\nconst IconPencil = ({ className = '', color = '#777777', height = 13, title, width = 13 }: Icon) => (\n    <AccessibleSVG\n        className={`icon-pencil ${className}`}\n        height={height}\n        title={title}\n        viewBox="0 0 13 13"\n        width={width}\n    …
+  link@23 -> 'src/icons/accessible-svg'  [unresolved]
+  link@23 -> 'src/icons/accessible-svg/index'  [RESOLVES]
+      target: export { default } from './AccessibleSVG';\n
+  link@35 -> 'src/icons/iconTypes'  [RESOLVES]
+      target: import { ReactElement } from 'react';\n\nexport interface TwoTonedIcon {\n    /** Class name for the icon */\n    className?: string;\n    /** A number specifying the height of the icon */\n    height?: number;\n    /** A string describing the icon if it's not purely decorative for accessibility */\n    title?: string | ReactElement<string>;\n    /** A number specifying the width of the icon */\n …
+  link@35 -> 'src/icons/iconTypes/index'  [unresolved]
+==============================================================================
+SOURCE [35/40]  Maxopoly/cards-database:data/XY/Kalos Starter Set/10
+  import { Card } from '../../../interfaces'\nimport Set from '../Kalos Starter Set'\n\nconst card: Card = {\n	name: {\n		en: "Delphox",\n		fr: "Goupelin",\n	},\n	illustrator: "5ban Graphics",\n	rarity: "None",\n	category: "Pokemon",\n\n	set: Set,\n	dexId: [\n		655,\n	],\n	hp: 140,\n	types: [\n		"Fire",\n	],\n	evolveFrom: {\n		en: "Braixen",\n		fr: "Roussil",\n	},\n	stage: "Stage2",\n\n\n	attacks: […
+  link@12 -> 'interfaces'  [unresolved]
+  link@12 -> 'interfaces/index'  [RESOLVES]
+      target: export * from './classes';\nexport * from './enums';\nexport * from './interfaces';\nexport * from './structs';\n\nexport const inheritanceMap = {\n  'UFGAISystem': ["Unknown<'UAISystem'>", "Unknown<'FTickableGameObject'>"],\n  'UFGAttack': ['UObject'],\n  'UFGAttackCustomRadial': ['UFGAttack'],\n  'UFGAttackMelee': ['UFGAttack'],\n  'UFGAttackMeleeJump': ['UFGAttackMelee'],\n  'UFGAttackRanged': …
+  link@23 -> 'data/XY/Kalos Starter Set'  [RESOLVES]
+      target: import { Set } from '../../interfaces'\nimport serie from '../XY'\n\nconst xy0: Set = {\n	id: "xy0",\n\n	name: {\n		en: "Kalos Starter Set",\n		fr: "Bienvenue à Kalos",\n		it: "Benvenuti a Kalos",\n		de: "Willkommen in Kalos"\n	},\n\n	serie: serie,\n	tcgOnline: "KSS",\n\n	cardCount: {\n		official: 45\n	},\n\n	releaseDate: "2013-11-08"\n}\n\nexport default xy0\n
+  link@23 -> 'data/XY/Kalos Starter Set/index'  [unresolved]
+==============================================================================
+SOURCE [36/40]  StigNorland/qddt-client:src/app/preview/surveyprogram/preview.survey.component
+  import { Component, Input } from '@angular/core';\nimport {SurveyProgram} from '../../classes';\n\n@Component({\n  selector: 'qddt-preview-survey',\n\n  template: `\n  <div class="row">\n    <div class="col s12">\n      <label class="active teal-text">Description</label>\n      <P [innerHtml]="survey?.description"></P>\n    </div>\n  </div>\n  <div class="row" *ngIf="survey?.authors && survey?.aut…
+  link@26 -> 'src/app/classes'  [unresolved]
+  link@26 -> 'src/app/classes/index'  [unresolved]
+==============================================================================
+SOURCE [37/40]  JLLeitschuh/vid:vid-webpack-master/src/app/shared/store/module
+  import {NgModule} from '@angular/core';\nimport {NgReduxModule, NgRedux, DevToolsExtension} from '@angular-redux/store';\nimport {RootEpics} from './epics';\n\nimport rootReducer, {AppState} from "./reducers";\nimport {AAIEpics} from "../services/aaiService/aai.epics";\nimport {createEpicMiddleware} from "redux-observable";\nimport {AaiService} from "../services/aaiService/aai.service";\nimport {a…
+  link@54 -> 'vid-webpack-master/src/app/shared/store/epics'  [RESOLVES]
+      target: import { Injectable } from '@angular/core';\nimport {AAIEpics} from "../services/aaiService/aai.epics";\n\n@Injectable()\nexport class RootEpics {\n  constructor(private aaiEpics: AAIEpics) {}\n\n  public createEpics()  {\n    return this.aaiEpics.createEpic();\n  }\n}\n
+  link@54 -> 'vid-webpack-master/src/app/shared/store/epics/index'  [unresolved]
+  link@72 -> 'vid-webpack-master/src/app/shared/store/reducers'  [RESOLVES]
+      target: import {MainReducer, ServiceState} from "../storeUtil/utils/main.reducer";\nimport {globalReducer, GlobalState} from "../storeUtil/utils/global/global.reducers";\nimport {combineReducers, Reducer} from "redux";\n\n\nexport interface AppState {\n  global: GlobalState;\n  service: ServiceState;\n}\n\nconst rootReducer: Reducer<AppState> = combineReducers<AppState>({\n  global: globalReducer,\n  serv…
+  link@72 -> 'vid-webpack-master/src/app/shared/store/reducers/index'  [unresolved]
+  link@95 -> 'vid-webpack-master/src/app/shared/services/aaiService/aai.epics'  [RESOLVES]
+      target: import {Injectable} from '@angular/core';\nimport {combineEpics, createEpicMiddleware, ofType} from 'redux-observable';\nimport 'rxjs/add/operator/catch';\nimport 'rxjs/add/operator/map';\nimport 'rxjs/add/operator/do';\nimport 'rxjs/add/operator/startWith';\nimport {\n  LOAD_PRODUCT_FAMILIES,\n  LOAD_LCP_TENANT,\n  LOAD_AIC_ZONES,\n  LOAD_CATEGORY_PARAMETERS,\n  LOAD_SERVICE_MDOEL_BY_UUID,\n  LOA…
+  link@95 -> 'vid-webpack-master/src/app/shared/services/aaiService/aai.epics/index'  [unresolved]
+  link@134 -> 'vid-webpack-master/src/app/shared/services/aaiService/aai.service'  [unresolved]
+  link@134 -> 'vid-webpack-master/src/app/shared/services/aaiService/aai.service/index'  [unresolved]
+==============================================================================
+SOURCE [38/40]  metal-messiah/mtn-data-suite:src/app/casing/google-info-card-item
+  import { Type } from '@angular/core';\nimport { InfoCardItem } from './info-card-item';\nimport { GooglePlace } from '../models/google-place';\n\nexport class GoogleInfoCardItem extends InfoCardItem {\n  constructor(public component: Type<any>,\n              public googlePlace: GooglePlace) {\n    super(component);\n  }\n}\n
+  link@27 -> 'src/app/casing/info-card-item'  [unresolved]
+  link@27 -> 'src/app/casing/info-card-item/index'  [unresolved]
+  link@42 -> 'src/app/models/google-place'  [RESOLVES]
+      target: import { Mappable } from '../interfaces/mappable';\nimport { LatLng } from './latLng';\nimport PlaceResult = google.maps.places.PlaceResult;\nimport { MarkerType } from '../core/functionalEnums/MarkerType';\nimport { Color } from '../core/functionalEnums/Color';\nimport MarkerLabel = google.maps.MarkerLabel;\nimport * as MarkerWithLabel from '@google/markerwithlabel';\n\nexport class GooglePlace i…
+  link@42 -> 'src/app/models/google-place/index'  [unresolved]
+==============================================================================
+SOURCE [39/40]  MenkaChaugule/hospital-management-emr:Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/pharmacy-transfer.component
+  import { Component, ChangeDetectorRef } from '@angular/core';\nimport { RouterOutlet, RouterModule, Router } from '@angular/router';\nimport { HttpClient } from '@angular/common/http';\nimport { WardSupplyBLService } from "./shared/wardsupply.bl.service";\nimport { MessageboxService } from "../shared/messagebox/messagebox.service";\nimport * as moment from 'moment/moment'\nimport { DLService } fro…
+  link@76 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/shared/wardsupply.bl.service'  [RESOLVES]
+      target: import { Injectable, Directive } from '@angular/core';\nimport * as _ from 'lodash';\nimport * as moment from 'moment/moment';\n\nimport { WardSupplyDLService } from './wardsupply.dl.service';\nimport { WardRequisitionModel } from './ward-requisition.model';\nimport { WardStockModel } from './ward-stock.model';\nimport { WARDReportsModel } from './ward-report.model';\nimport { response } from '../…
+  link@76 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/shared/wardsupply.bl.service/index'  [unresolved]
+  link@96 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/shared/messagebox/messagebox.service'  [RESOLVES]
+      target: /*File: messagebox.service.ts\ndescription: to show the messabox(popupmodal) after necessary actions/events\n             eg: success, error, alert, notification, warning, etc..\ncreated: 15June'17 Sudarshan\nRemarks: try to find a singleton implementation of it, i.e: declare it in AppMain.cshtml, and \n         show/hide it using only this service.\nChange History:\n------------------------------…
+  link@96 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/shared/messagebox/messagebox.service/index'  [unresolved]
+  link@126 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/shared/dl.service'  [RESOLVES]
+      target: import { Injectable, Directive } from '@angular/core';\nimport { HttpClient, HttpHeaders } from '@angular/common/http';\n@Injectable()\nexport class DLService {\n    public http: HttpClient;\n    public options = {\n        headers: new HttpHeaders({ 'Content-Type': 'application/x-www-form-urlencoded' })\n    };\n    constructor(_http: HttpClient) {\n        this.http = _http;\n    }\n    public g…
+  link@126 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/shared/dl.service/index'  [unresolved]
+  link@148 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/shared/ward-grid-cloumns'  [RESOLVES]
+      target: import * as moment from 'moment/moment';\nimport { CommonFunctions } from '../../shared/common.functions';\nimport GridColumnSettings from '../../shared/danphe-grid/grid-column-settings.constant';\nexport default class WARDGridColumns {\n\n  static WARDStockDetailsList = [\n    { headerName: "Generic Name", field: "GenericName", width: 150 },\n    { headerName: "Item Name", field: "ItemName", widt…
+  link@148 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/shared/ward-grid-cloumns/index'  [unresolved]
+  link@163 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/shared/ward.model'  [RESOLVES]
+      target: ﻿\nexport class WardModel {\n    public WardId: number = 0;\n    public WardCode: string = '';\n    public WardName: string = '';\n    public WardLocation: string = '';\n    public CreatedBy: number = 0;\n    public CreatedOn: string = '';\n    public ModifiedBy: number = 0;\n    public ModifiedOn: string = '';\n    public IsActive: boolean = false;\n}
+  link@163 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/shared/ward.model/index'  [unresolved]
+  link@181 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/shared/ward-stock.model'  [RESOLVES]
+      target: import { NgForm, FormGroup, FormControl, Validators, FormBuilder } from '@angular/forms'\n\nexport class WardStockModel {\n    public StockId: number = 0;\n    public WardId: number = 0;\n    public StoreId: number = 0;\n    public ItemId: number = 0;\n    public AvailableQuantity: number = 0;\n    public UnConfirmedQty: number = 0;\n    public MRP: number = 0;\n    public BatchNo: string = '';\n …
+  link@181 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/wardsupply/shared/ward-stock.model/index'  [unresolved]
+  link@198 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/security/shared/security.service'  [RESOLVES]
+      target: import { Injectable, Directive } from "@angular/core";\nimport { User } from "./user.model";\nimport { BillingCounter } from "../../billing/shared/billing-counter.model";\nimport { DanpheRoute } from "../../security/shared/danphe-route.model";\nimport { PharmacyCounter } from "../../pharmacy/shared/pharmacy-counter.model";\nimport { Permission } from "../../security/shared/permission.model";\nimpo…
+  link@198 -> 'Code/Websites/DanpheEMR/wwwroot/DanpheApp/src/app/security/shared/security.service/index'  [unresolved]
+==============================================================================
+SOURCE [40/40]  nordnet/ui:src/Molecules/Tooltip/Tooltip.stories
+  import React, { useState } from 'react';\nimport styled from 'styled-components';\nimport { Box, Drawer, Flexbox, OldIcon, Modal, Button as UIButton } from '../..';\nimport Tooltip from '.';\nimport { Display } from '../../common/Display';\n\nexport default {\n  title: 'Molecules / Tooltip',\n  parameters: {\n    component: Tooltip,\n  },\n};\n\nconst label = 'Information in a Tooltip should not b…
+  link@49 -> 'src'  [unresolved]
+  link@49 -> 'src/index'  [RESOLVES]
+      target: import { flexi } from "./lib";\n\nexport { until } from "./lib/walker";\nexport * from "./types";\n\nexport default flexi;\n
+  link@70 -> 'src/common/Display'  [unresolved]
+  link@70 -> 'src/common/Display/index'  [unresolved]
+==============================================================================
+Shown 40 source docs with links (scanned 52).

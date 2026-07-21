@@ -1,0 +1,816 @@
+====================================================================================================
+Loading GraphIndex from /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/kotlin/splits/val_community ...
+  nodes=50,141  tokenizer=gpt2  eos=50256  dtype=uint16
+  LIVE sample  |  strategy=bfs  layout=identifier_prefix_eos  order_mode=prefer_targets_first  token_budget=16384  doc_budget=None  epoch=0
+====================================================================================================
+
+####################################################################################################
+PACK 0   |   16,384 tokens   |   14 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:107]  (107 tok)  doc_id=37464  component=0  TRUNCATED
+   normed_id : cash.z.ecc.ui.design.component.ChipGrid
+   title     : 'cash.z.ecc.ui.design.component.ChipGrid'
+   categories: ''
+   ┌ PREFIX  (17 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 42895, 13, 49985, 41339, 628]
+   │   # cash.z.ecc.ui.design.component.ChipGrid
+   │   
+   ├ BODY    (89 tok)
+   │   head: 'package cash.z.ecc.ui.design.component\\n\\nimport androidx.compose.foundation.layout.Column\\nimport androidx.compose.foundation.layout.Row\\nimport androidx.compose.foundation.layout.Spacer\\nimport androidx.compose.foundation.layout.fillMaxWidth\\nimport androidx.compose.runtime.Composable\\nimport andr … (+7 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[107:437]  (330 tok)  doc_id=37465  component=0
+   normed_id : cash.z.ecc.ui.screen.backup.state.BackupState
+   title     : 'cash.z.ecc.ui.screen.backup.state.BackupState'
+   categories: ''
+   ┌ PREFIX  (21 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 9612, 13, 1891, 929, 13, 5219, 13, 7282, 929, 9012, 628]
+   │   # cash.z.ecc.ui.screen.backup.state.BackupState
+   │   
+   ├ BODY    (308 tok)
+   │   head: 'package cash.z.ecc.ui.screen.backup.state\\n\\nimport cash.z.ecc.ui.screen.backup.model.BackupStage\\nimport kotlinx.coroutines.flow.MutableStateFlow\\nimport kotlinx.coroutines.flow.StateFlow\\n\\n/**\\n * @param initialState Allows restoring the state from a different starting point. This is\\n * primaril … (+8 chars)'
+   │   tail: 'mutableState\\n\\n    fun hasNext() = current.value.hasNext()\\n\\n    fun goNext() {\\n        mutableState.value = current.value.getNext()\\n    }\\n\\n    fun goPrevious() {\\n        mutableState.value = current.value.getPrevious()\\n    }\\n\\n    fun goToSeed() {\\n        mutableState.value = BackupStage. … (+16 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[437:723]  (286 tok)  doc_id=37433  component=0
+   normed_id : cash.z.ecc.sdk.model.SeedPhrase
+   title     : 'cash.z.ecc.sdk.model.SeedPhrase'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 21282, 74, 13, 19849, 13, 50, 2308, 2725, 22789, 628]
+   │   # cash.z.ecc.sdk.model.SeedPhrase
+   │   
+   ├ BODY    (267 tok)
+   │   head: 'package cash.z.ecc.sdk.model\\n\\n// Consider using ImmutableList here\\ndata class SeedPhrase(val split: List<String>) {\\n    init {\\n        require(SEED_PHRASE_SIZE == split.size) {\\n            "Seed phrase must split into $SEED_PHRASE_SIZE words but was ${split.size}"\\n        }\\n    }\\n\\n    // F … (+10 chars)'
+   │   tail: '   override fun toString() = "SeedPhrase"\\n\\n    fun joinToString() = split.joinToString(DEFAULT_DELIMITER)\\n\\n    companion object {\\n        const val SEED_PHRASE_SIZE = 24\\n\\n        const val DEFAULT_DELIMITER = " "\\n\\n        fun new(phrase: String) = SeedPhrase(phrase.split(DEFAULT_DELIMITER)) … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[723:980]  (257 tok)  doc_id=37451  component=0
+   normed_id : cash.z.ecc.sdk.fixture.PersistableWalletFixture
+   title     : 'cash.z.ecc.sdk.fixture.PersistableWalletFixture'
+   categories: ''
+   ┌ PREFIX  (21 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 21282, 74, 13, 69, 9602, 13, 30946, 396, 540, 47152, 37, 9602, 628]
+   │   # cash.z.ecc.sdk.fixture.PersistableWalletFixture
+   │   
+   ├ BODY    (235 tok)
+   │   head: 'package cash.z.ecc.sdk.fixture\\n\\nimport cash.z.ecc.android.sdk.type.WalletBirthday\\nimport cash.z.ecc.android.sdk.type.ZcashNetwork\\nimport cash.z.ecc.sdk.model.PersistableWallet\\nimport cash.z.ecc.sdk.model.SeedPhrase\\n\\nobject PersistableWalletFixture {\\n\\n    val NETWORK = ZcashNetwork.Testnet\\n … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[4]  pos[980:5503]  (4523 tok)  doc_id=37377  component=0
+   normed_id : cash.z.ecc.ui.screen.backup.view.SeedPhrase
+   title     : 'cash.z.ecc.ui.screen.backup.view.SeedPhrase'
+   categories: ''
+   ┌ PREFIX  (22 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 9612, 13, 1891, 929, 13, 1177, 13, 50, 2308, 2725, 22789, 628]
+   │   # cash.z.ecc.ui.screen.backup.view.SeedPhrase
+   │   
+   ├ BODY    (4500 tok)
+   │   head: 'package cash.z.ecc.ui.screen.backup.view\\n\\nimport androidx.compose.foundation.layout.Box\\nimport androidx.compose.foundation.layout.Column\\nimport androidx.compose.foundation.layout.Row\\nimport androidx.compose.foundation.layout.Spacer\\nimport androidx.compose.foundation.layout.fillMaxHeight\\nimpor … (+7 chars)'
+   │   tail: '   .fillMaxWidth()\\n                .weight(MINIMAL_WEIGHT, true)\\n        )\\n        PrimaryButton(onClick = onComplete, text = stringResource(R.string.new_wallet_5_button_finished))\\n        TertiaryButton(onClick = onBackToSeedPhrase, text = stringResource(R.string.new_wallet_5_button_back))\\n    … (+7 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[5]  pos[5503:6035]  (532 tok)  doc_id=37354  component=0
+   normed_id : cash.z.ecc.ui.design.component.Body
+   title     : 'cash.z.ecc.ui.design.component.Body'
+   categories: ''
+   ┌ PREFIX  (16 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 42895, 13, 25842, 628]
+   │   # cash.z.ecc.ui.design.component.Body
+   │   
+   ├ BODY    (515 tok)
+   │   head: 'package cash.z.ecc.ui.design.component\\n\\nimport androidx.compose.material3.MaterialTheme\\nimport androidx.compose.material3.Text\\nimport androidx.compose.runtime.Composable\\nimport androidx.compose.ui.Modifier\\nimport cash.z.ecc.ui.theme.ZcashTheme\\n\\n@Composable\\nfun Header(\\n    text: String,\\n   … (+11 chars)'
+   │   tail: 'ground,\\n        modifier = modifier\\n    )\\n}\\n\\n@Composable\\nfun ListHeader(\\n    text: String,\\n    modifier: Modifier = Modifier\\n) {\\n    Text(\\n        text = text,\\n        style = ZcashTheme.typography.listItem,\\n        color = MaterialTheme.colorScheme.onBackground,\\n        modifier = mod … (+17 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[6]  pos[6035:6805]  (770 tok)  doc_id=37358  component=0
+   normed_id : cash.z.ecc.ui.design.component.Chip
+   title     : 'cash.z.ecc.ui.design.component.Chip'
+   categories: ''
+   ┌ PREFIX  (16 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 42895, 13, 49985, 628]
+   │   # cash.z.ecc.ui.design.component.Chip
+   │   
+   ├ BODY    (753 tok)
+   │   head: 'package cash.z.ecc.ui.design.component\\n\\nimport androidx.compose.foundation.layout.Row\\nimport androidx.compose.foundation.layout.Spacer\\nimport androidx.compose.foundation.layout.padding\\nimport androidx.compose.foundation.shape.RoundedCornerShape\\nimport androidx.compose.material3.MaterialTheme\\n … (+7 chars)'
+   │   tail: '(horizontal = 2.dp, vertical = 0.dp))\\n            Text(\\n                text = text,\\n                style = MaterialTheme.typography.bodyLarge,\\n                color = MaterialTheme.colorScheme.onSecondary,\\n                modifier = Modifier.testTag(CommonTag.CHIP)\\n            )\\n        }\\n … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[7]  pos[6805:7337]  (532 tok)  doc_id=37353  component=0
+   normed_id : cash.z.ecc.ui.design.component.Header
+   title     : 'cash.z.ecc.ui.design.component.Header'
+   categories: ''
+   ┌ PREFIX  (16 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 42895, 13, 39681, 628]
+   │   # cash.z.ecc.ui.design.component.Header
+   │   
+   ├ BODY    (515 tok)
+   │   head: 'package cash.z.ecc.ui.design.component\\n\\nimport androidx.compose.material3.MaterialTheme\\nimport androidx.compose.material3.Text\\nimport androidx.compose.runtime.Composable\\nimport androidx.compose.ui.Modifier\\nimport cash.z.ecc.ui.theme.ZcashTheme\\n\\n@Composable\\nfun Header(\\n    text: String,\\n   … (+11 chars)'
+   │   tail: 'ground,\\n        modifier = modifier\\n    )\\n}\\n\\n@Composable\\nfun ListHeader(\\n    text: String,\\n    modifier: Modifier = Modifier\\n) {\\n    Text(\\n        text = text,\\n        style = ZcashTheme.typography.listItem,\\n        color = MaterialTheme.colorScheme.onBackground,\\n        modifier = mod … (+17 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[8]  pos[7337:9132]  (1795 tok)  doc_id=37342  component=0
+   normed_id : cash.z.ecc.ui.design.component.NavigationButton
+   title     : 'cash.z.ecc.ui.design.component.NavigationButton'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 42895, 13, 30575, 7065, 21864, 628]
+   │   # cash.z.ecc.ui.design.component.NavigationButton
+   │   
+   ├ BODY    (1776 tok)
+   │   head: 'package cash.z.ecc.ui.design.component\\n\\nimport androidx.compose.foundation.layout.Column\\nimport androidx.compose.foundation.layout.fillMaxWidth\\nimport androidx.compose.foundation.layout.padding\\nimport androidx.compose.material3.Button\\nimport androidx.compose.material3.ButtonDefaults\\nimport an … (+7 chars)'
+   │   tail: 'ing(horizontal = 16.dp, vertical = 8.dp)\\n        ),\\n        colors = buttonColors(containerColor = ZcashTheme.colors.dangerous)\\n    ) {\\n        Text(\\n            style = MaterialTheme.typography.labelLarge,\\n            text = text,\\n            color = ZcashTheme.colors.onDangerous\\n        )\\ … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[9]  pos[9132:10926]  (1794 tok)  doc_id=37340  component=0
+   normed_id : cash.z.ecc.ui.design.component.PrimaryButton
+   title     : 'cash.z.ecc.ui.design.component.PrimaryButton'
+   categories: ''
+   ┌ PREFIX  (17 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 42895, 13, 35170, 21864, 628]
+   │   # cash.z.ecc.ui.design.component.PrimaryButton
+   │   
+   ├ BODY    (1776 tok)
+   │   head: 'package cash.z.ecc.ui.design.component\\n\\nimport androidx.compose.foundation.layout.Column\\nimport androidx.compose.foundation.layout.fillMaxWidth\\nimport androidx.compose.foundation.layout.padding\\nimport androidx.compose.material3.Button\\nimport androidx.compose.material3.ButtonDefaults\\nimport an … (+7 chars)'
+   │   tail: 'ing(horizontal = 16.dp, vertical = 8.dp)\\n        ),\\n        colors = buttonColors(containerColor = ZcashTheme.colors.dangerous)\\n    ) {\\n        Text(\\n            style = MaterialTheme.typography.labelLarge,\\n            text = text,\\n            color = ZcashTheme.colors.onDangerous\\n        )\\ … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[10]  pos[10926:12722]  (1796 tok)  doc_id=37343  component=0
+   normed_id : cash.z.ecc.ui.design.component.TertiaryButton
+   title     : 'cash.z.ecc.ui.design.component.TertiaryButton'
+   categories: ''
+   ┌ PREFIX  (19 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 42895, 13, 51, 861, 8042, 21864, 628]
+   │   # cash.z.ecc.ui.design.component.TertiaryButton
+   │   
+   ├ BODY    (1776 tok)
+   │   head: 'package cash.z.ecc.ui.design.component\\n\\nimport androidx.compose.foundation.layout.Column\\nimport androidx.compose.foundation.layout.fillMaxWidth\\nimport androidx.compose.foundation.layout.padding\\nimport androidx.compose.material3.Button\\nimport androidx.compose.material3.ButtonDefaults\\nimport an … (+7 chars)'
+   │   tail: 'ing(horizontal = 16.dp, vertical = 8.dp)\\n        ),\\n        colors = buttonColors(containerColor = ZcashTheme.colors.dangerous)\\n    ) {\\n        Text(\\n            style = MaterialTheme.typography.labelLarge,\\n            text = text,\\n            color = ZcashTheme.colors.onDangerous\\n        )\\ … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[11]  pos[12722:13353]  (631 tok)  doc_id=37280  component=0
+   normed_id : cash.z.ecc.ui.theme.ZcashTheme
+   title     : 'cash.z.ecc.ui.theme.ZcashTheme'
+   categories: ''
+   ┌ PREFIX  (16 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 43810, 13, 57, 30350, 47863, 628]
+   │   # cash.z.ecc.ui.theme.ZcashTheme
+   │   
+   ├ BODY    (614 tok)
+   │   head: 'package cash.z.ecc.ui.theme\\n\\nimport androidx.compose.foundation.isSystemInDarkTheme\\nimport androidx.compose.material3.MaterialTheme\\nimport androidx.compose.runtime.Composable\\nimport androidx.compose.runtime.CompositionLocalProvider\\nimport cash.z.ecc.ui.design.theme.ExtendedColors\\nimport cash. … (+7 chars)'
+   │   tail: 'nt = content\\n        )\\n    }\\n}\\n\\n// Use with eg. ZcashTheme.colors.tertiary\\nobject ZcashTheme {\\n    val colors: ExtendedColors\\n        @Composable\\n        get() = LocalExtendedColors.current\\n\\n    val typography: ExtendedTypography\\n        @Composable\\n        get() = LocalExtendedTypograp … (+15 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[12]  pos[13353:13788]  (435 tok)  doc_id=37300  component=0
+   normed_id : cash.z.ecc.ui.design.theme.ExtendedColors
+   title     : 'cash.z.ecc.ui.design.theme.ExtendedColors'
+   categories: ''
+   ┌ PREFIX  (19 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 43810, 13, 11627, 1631, 5216, 669, 628]
+   │   # cash.z.ecc.ui.design.theme.ExtendedColors
+   │   
+   ├ BODY    (415 tok)
+   │   head: 'package cash.z.ecc.ui.design.theme\\n\\nimport androidx.compose.material3.MaterialTheme\\nimport androidx.compose.runtime.Composable\\nimport androidx.compose.runtime.Immutable\\nimport androidx.compose.ui.graphics.Brush\\nimport androidx.compose.ui.graphics.Color\\nimport cash.z.ecc.ui.theme.ZcashTheme\\n\\ … (+9 chars)'
+   │   tail: 'or,\\n    val addressHighlightViewing: Color,\\n    val dangerous: Color,\\n    val onDangerous: Color\\n) {\\n    @Composable\\n    fun surfaceGradient() = Brush.verticalGradient(\\n        colors = listOf(\\n            MaterialTheme.colorScheme.surface,\\n            ZcashTheme.colors.surfaceEnd\\n         … (+13 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[13]  pos[13788:16384]  (2596 tok)  doc_id=37301  component=0
+   normed_id : cash.z.ecc.ui.design.theme.internal.DarkColorPalette
+   title     : 'cash.z.ecc.ui.design.theme.internal.DarkColorPalette'
+   categories: ''
+   ┌ PREFIX  (21 tok)  ids=[2, 5003, 13, 89, 13, 68, 535, 13, 9019, 13, 26124, 13, 43810, 13, 32538, 13, 17367, 10258, 11531, 5857, 628]
+   │   # cash.z.ecc.ui.design.theme.internal.DarkColorPalette
+   │   
+   ├ BODY    (2574 tok)
+   │   head: '@file:Suppress("MagicNumber")\\n\\npackage cash.z.ecc.ui.design.theme.internal\\n\\nimport androidx.compose.material3.darkColorScheme\\nimport androidx.compose.material3.lightColorScheme\\nimport androidx.compose.runtime.staticCompositionLocalOf\\nimport androidx.compose.ui.graphics.Color\\nimport cash.z.ec … (+8 chars)'
+   │   tail: '     addressHighlightUnified = Color.Unspecified,\\n        addressHighlightSapling = Color.Unspecified,\\n        addressHighlightTransparent = Color.Unspecified,\\n        addressHighlightViewing = Color.Unspecified,\\n        dangerous = Color.Unspecified,\\n        onDangerous = Color.Unspecified\\n   … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (kotlin detector; targets matched against in-pack docs)
+   @tok     44  from doc[0]  → 'androidx.compose.foundation.layout.Column'  not in pack (no grant)
+   @tok     57  from doc[0]  → 'androidx.compose.foundation.layout.Row'  not in pack (no grant)
+   @tok     71  from doc[0]  → 'androidx.compose.foundation.layout.Spacer'  not in pack (no grant)
+   @tok     86  from doc[0]  → 'androidx.compose.foundation.layout.fillMaxWidth'  not in pack (no grant)
+   @tok     99  from doc[0]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok    166  from doc[1]  → 'cash.z.ecc.ui.screen.backup.model.BackupStage'  not in pack (no grant)
+   @tok    183  from doc[1]  → 'kotlinx.coroutines.flow.MutableStateFlow'  not in pack (no grant)
+   @tok    198  from doc[1]  → 'kotlinx.coroutines.flow.StateFlow'  not in pack (no grant)
+   @tok    777  from doc[3]  → 'cash.z.ecc.android.sdk.type.WalletBirthday'  not in pack (no grant)
+   @tok    796  from doc[3]  → 'cash.z.ecc.android.sdk.type.ZcashNetwork'  not in pack (no grant)
+   @tok    814  from doc[3]  → 'cash.z.ecc.sdk.model.PersistableWallet'  not in pack (no grant)
+   @tok    832  from doc[3]  → 'cash.z.ecc.sdk.model.SeedPhrase'  IN-PACK → grants attention to doc[2]
+   @tok   1032  from doc[4]  → 'androidx.compose.foundation.layout.Box'  not in pack (no grant)
+   @tok   1045  from doc[4]  → 'androidx.compose.foundation.layout.Column'  not in pack (no grant)
+   @tok   1058  from doc[4]  → 'androidx.compose.foundation.layout.Row'  not in pack (no grant)
+   @tok   1072  from doc[4]  → 'androidx.compose.foundation.layout.Spacer'  not in pack (no grant)
+   @tok   1087  from doc[4]  → 'androidx.compose.foundation.layout.fillMaxHeight'  not in pack (no grant)
+   @tok   1102  from doc[4]  → 'androidx.compose.foundation.layout.fillMaxWidth'  not in pack (no grant)
+   @tok   1114  from doc[4]  → 'androidx.compose.material3.Card'  not in pack (no grant)
+   @tok   1131  from doc[4]  → 'androidx.compose.material3.ExperimentalMaterial3Api'  not in pack (no grant)
+   @tok   1144  from doc[4]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok   1157  from doc[4]  → 'androidx.compose.runtime.collectAsState'  not in pack (no grant)
+   @tok   1169  from doc[4]  → 'androidx.compose.ui.Modifier'  not in pack (no grant)
+   @tok   1183  from doc[4]  → 'androidx.compose.ui.platform.testTag'  not in pack (no grant)
+   @tok   1197  from doc[4]  → 'androidx.compose.ui.res.stringResource'  not in pack (no grant)
+   @tok   1215  from doc[4]  → 'androidx.compose.ui.tooling.preview.Devices'  not in pack (no grant)
+   @tok   1232  from doc[4]  → 'androidx.compose.ui.tooling.preview.Preview'  not in pack (no grant)
+   @tok   1253  from doc[4]  → 'cash.z.ecc.sdk.fixture.PersistableWalletFixture'  IN-PACK → grants attention to doc[3]
+   @tok   1271  from doc[4]  → 'cash.z.ecc.sdk.model.PersistableWallet'  not in pack (no grant)
+   @tok   1283  from doc[4]  → 'cash.z.ecc.ui.R'  not in pack (no grant)
+   @tok   1302  from doc[4]  → 'cash.z.ecc.ui.design.MINIMAL_WEIGHT'  not in pack (no grant)
+   @tok   1318  from doc[4]  → 'cash.z.ecc.ui.design.component.Body'  IN-PACK → grants attention to doc[5]
+   @tok   1343  from doc[4]  → 'cash.z.ecc.ui.design.component.CHIP_GRID_ROW_SIZE'  not in pack (no grant)
+   @tok   1359  from doc[4]  → 'cash.z.ecc.ui.design.component.Chip'  IN-PACK → grants attention to doc[6]
+   @tok   1376  from doc[4]  → 'cash.z.ecc.ui.design.component.ChipGrid'  IN-PACK → grants attention to doc[0]
+   @tok   1395  from doc[4]  → 'cash.z.ecc.ui.design.component.GradientSurface'  not in pack (no grant)
+   @tok   1411  from doc[4]  → 'cash.z.ecc.ui.design.component.Header'  IN-PACK → grants attention to doc[7]
+   @tok   1429  from doc[4]  → 'cash.z.ecc.ui.design.component.NavigationButton'  IN-PACK → grants attention to doc[8]
+   @tok   1446  from doc[4]  → 'cash.z.ecc.ui.design.component.PrimaryButton'  IN-PACK → grants attention to doc[9]
+   @tok   1465  from doc[4]  → 'cash.z.ecc.ui.design.component.TertiaryButton'  IN-PACK → grants attention to doc[10]
+   @tok   1484  from doc[4]  → 'cash.z.ecc.ui.screen.backup.BackupTag'  not in pack (no grant)
+   @tok   1505  from doc[4]  → 'cash.z.ecc.ui.screen.backup.model.BackupStage'  not in pack (no grant)
+   @tok   1526  from doc[4]  → 'cash.z.ecc.ui.screen.backup.state.BackupState'  IN-PACK → grants attention to doc[1]
+   @tok   1547  from doc[4]  → 'cash.z.ecc.ui.screen.backup.state.TestChoices'  not in pack (no grant)
+   @tok   1563  from doc[4]  → 'cash.z.ecc.ui.theme.ZcashTheme'  IN-PACK → grants attention to doc[11]
+   @tok   1579  from doc[4]  → 'co.electriccoin.zcash.spackle.model.Index'  not in pack (no grant)
+   @tok   5546  from doc[5]  → 'androidx.compose.material3.MaterialTheme'  not in pack (no grant)
+   @tok   5558  from doc[5]  → 'androidx.compose.material3.Text'  not in pack (no grant)
+   @tok   5571  from doc[5]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok   5583  from doc[5]  → 'androidx.compose.ui.Modifier'  not in pack (no grant)
+   @tok   5599  from doc[5]  → 'cash.z.ecc.ui.theme.ZcashTheme'  IN-PACK → grants attention to doc[11]
+   @tok   6078  from doc[6]  → 'androidx.compose.foundation.layout.Row'  not in pack (no grant)
+   @tok   6092  from doc[6]  → 'androidx.compose.foundation.layout.Spacer'  not in pack (no grant)
+   @tok   6105  from doc[6]  → 'androidx.compose.foundation.layout.padding'  not in pack (no grant)
+   @tok   6122  from doc[6]  → 'androidx.compose.foundation.shape.RoundedCornerShape'  not in pack (no grant)
+   @tok   6135  from doc[6]  → 'androidx.compose.material3.MaterialTheme'  not in pack (no grant)
+   @tok   6148  from doc[6]  → 'androidx.compose.material3.Surface'  not in pack (no grant)
+   @tok   6160  from doc[6]  → 'androidx.compose.material3.Text'  not in pack (no grant)
+   @tok   6173  from doc[6]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok   6185  from doc[6]  → 'androidx.compose.ui.Modifier'  not in pack (no grant)
+   @tok   6199  from doc[6]  → 'androidx.compose.ui.platform.testTag'  not in pack (no grant)
+   @tok   6216  from doc[6]  → 'androidx.compose.ui.tooling.preview.Preview'  not in pack (no grant)
+   @tok   6229  from doc[6]  → 'androidx.compose.ui.unit.dp'  not in pack (no grant)
+   @tok   6245  from doc[6]  → 'cash.z.ecc.ui.theme.ZcashTheme'  IN-PACK → grants attention to doc[11]
+   @tok   6261  from doc[6]  → 'co.electriccoin.zcash.spackle.model.Index'  not in pack (no grant)
+   @tok   6848  from doc[7]  → 'androidx.compose.material3.MaterialTheme'  not in pack (no grant)
+   @tok   6860  from doc[7]  → 'androidx.compose.material3.Text'  not in pack (no grant)
+   @tok   6873  from doc[7]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok   6885  from doc[7]  → 'androidx.compose.ui.Modifier'  not in pack (no grant)
+   @tok   6901  from doc[7]  → 'cash.z.ecc.ui.theme.ZcashTheme'  IN-PACK → grants attention to doc[11]
+   @tok   7382  from doc[8]  → 'androidx.compose.foundation.layout.Column'  not in pack (no grant)
+   @tok   7397  from doc[8]  → 'androidx.compose.foundation.layout.fillMaxWidth'  not in pack (no grant)
+   @tok   7410  from doc[8]  → 'androidx.compose.foundation.layout.padding'  not in pack (no grant)
+   @tok   7422  from doc[8]  → 'androidx.compose.material3.Button'  not in pack (no grant)
+   @tok   7436  from doc[8]  → 'androidx.compose.material3.ButtonDefaults'  not in pack (no grant)
+   @tok   7454  from doc[8]  → 'androidx.compose.material3.ButtonDefaults.buttonColors'  not in pack (no grant)
+   @tok   7467  from doc[8]  → 'androidx.compose.material3.MaterialTheme'  not in pack (no grant)
+   @tok   7479  from doc[8]  → 'androidx.compose.material3.Text'  not in pack (no grant)
+   @tok   7492  from doc[8]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok   7504  from doc[8]  → 'androidx.compose.ui.Modifier'  not in pack (no grant)
+   @tok   7521  from doc[8]  → 'androidx.compose.ui.tooling.preview.Preview'  not in pack (no grant)
+   @tok   7534  from doc[8]  → 'androidx.compose.ui.unit.dp'  not in pack (no grant)
+   @tok   7550  from doc[8]  → 'cash.z.ecc.ui.theme.ZcashTheme'  IN-PACK → grants attention to doc[11]
+   @tok   9176  from doc[9]  → 'androidx.compose.foundation.layout.Column'  not in pack (no grant)
+   @tok   9191  from doc[9]  → 'androidx.compose.foundation.layout.fillMaxWidth'  not in pack (no grant)
+   @tok   9204  from doc[9]  → 'androidx.compose.foundation.layout.padding'  not in pack (no grant)
+   @tok   9216  from doc[9]  → 'androidx.compose.material3.Button'  not in pack (no grant)
+   @tok   9230  from doc[9]  → 'androidx.compose.material3.ButtonDefaults'  not in pack (no grant)
+   @tok   9248  from doc[9]  → 'androidx.compose.material3.ButtonDefaults.buttonColors'  not in pack (no grant)
+   @tok   9261  from doc[9]  → 'androidx.compose.material3.MaterialTheme'  not in pack (no grant)
+   @tok   9273  from doc[9]  → 'androidx.compose.material3.Text'  not in pack (no grant)
+   @tok   9286  from doc[9]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok   9298  from doc[9]  → 'androidx.compose.ui.Modifier'  not in pack (no grant)
+   @tok   9315  from doc[9]  → 'androidx.compose.ui.tooling.preview.Preview'  not in pack (no grant)
+   @tok   9328  from doc[9]  → 'androidx.compose.ui.unit.dp'  not in pack (no grant)
+   @tok   9344  from doc[9]  → 'cash.z.ecc.ui.theme.ZcashTheme'  IN-PACK → grants attention to doc[11]
+   @tok  10972  from doc[10]  → 'androidx.compose.foundation.layout.Column'  not in pack (no grant)
+   @tok  10987  from doc[10]  → 'androidx.compose.foundation.layout.fillMaxWidth'  not in pack (no grant)
+   @tok  11000  from doc[10]  → 'androidx.compose.foundation.layout.padding'  not in pack (no grant)
+   @tok  11012  from doc[10]  → 'androidx.compose.material3.Button'  not in pack (no grant)
+   @tok  11026  from doc[10]  → 'androidx.compose.material3.ButtonDefaults'  not in pack (no grant)
+   @tok  11044  from doc[10]  → 'androidx.compose.material3.ButtonDefaults.buttonColors'  not in pack (no grant)
+   @tok  11057  from doc[10]  → 'androidx.compose.material3.MaterialTheme'  not in pack (no grant)
+   @tok  11069  from doc[10]  → 'androidx.compose.material3.Text'  not in pack (no grant)
+   @tok  11082  from doc[10]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok  11094  from doc[10]  → 'androidx.compose.ui.Modifier'  not in pack (no grant)
+   @tok  11111  from doc[10]  → 'androidx.compose.ui.tooling.preview.Preview'  not in pack (no grant)
+   @tok  11124  from doc[10]  → 'androidx.compose.ui.unit.dp'  not in pack (no grant)
+   @tok  11140  from doc[10]  → 'cash.z.ecc.ui.theme.ZcashTheme'  IN-PACK → grants attention to doc[11]
+   @tok  12765  from doc[11]  → 'androidx.compose.foundation.isSystemInDarkTheme'  not in pack (no grant)
+   @tok  12778  from doc[11]  → 'androidx.compose.material3.MaterialTheme'  not in pack (no grant)
+   @tok  12791  from doc[11]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok  12805  from doc[11]  → 'androidx.compose.runtime.CompositionLocalProvider'  not in pack (no grant)
+   @tok  12824  from doc[11]  → 'cash.z.ecc.ui.design.theme.ExtendedColors'  IN-PACK → grants attention to doc[12]
+   @tok  12845  from doc[11]  → 'cash.z.ecc.ui.design.theme.internal.DarkColorPalette'  IN-PACK → grants attention to doc[13]
+   @tok  12868  from doc[11]  → 'cash.z.ecc.ui.design.theme.internal.DarkExtendedColorPalette'  not in pack (no grant)
+   @tok  12889  from doc[11]  → 'cash.z.ecc.ui.design.theme.internal.ExtendedTypography'  not in pack (no grant)
+   @tok  12910  from doc[11]  → 'cash.z.ecc.ui.design.theme.internal.LightColorPalette'  not in pack (no grant)
+   @tok  12933  from doc[11]  → 'cash.z.ecc.ui.design.theme.internal.LightExtendedColorPalette'  not in pack (no grant)
+   @tok  12955  from doc[11]  → 'cash.z.ecc.ui.design.theme.internal.LocalExtendedColors'  not in pack (no grant)
+   @tok  12977  from doc[11]  → 'cash.z.ecc.ui.design.theme.internal.LocalExtendedTypography'  not in pack (no grant)
+   @tok  12996  from doc[11]  → 'cash.z.ecc.ui.design.theme.internal.Typography'  not in pack (no grant)
+   @tok  13399  from doc[12]  → 'androidx.compose.material3.MaterialTheme'  not in pack (no grant)
+   @tok  13412  from doc[12]  → 'androidx.compose.runtime.Composable'  not in pack (no grant)
+   @tok  13424  from doc[12]  → 'androidx.compose.runtime.Immutable'  not in pack (no grant)
+   @tok  13439  from doc[12]  → 'androidx.compose.ui.graphics.Brush'  not in pack (no grant)
+   @tok  13453  from doc[12]  → 'androidx.compose.ui.graphics.Color'  not in pack (no grant)
+   @tok  13469  from doc[12]  → 'cash.z.ecc.ui.theme.ZcashTheme'  IN-PACK → grants attention to doc[11]
+   @tok  13851  from doc[13]  → 'androidx.compose.material3.darkColorScheme'  not in pack (no grant)
+   @tok  13866  from doc[13]  → 'androidx.compose.material3.lightColorScheme'  not in pack (no grant)
+   @tok  13881  from doc[13]  → 'androidx.compose.runtime.staticCompositionLocalOf'  not in pack (no grant)
+   @tok  13895  from doc[13]  → 'androidx.compose.ui.graphics.Color'  not in pack (no grant)
+   @tok  13914  from doc[13]  → 'cash.z.ecc.ui.design.theme.ExtendedColors'  IN-PACK → grants attention to doc[12]
+
+####################################################################################################
+PACK 1   |   16,384 tokens   |   9 docs   |   4 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:228]  (228 tok)  doc_id=10961  component=0  TRUNCATED
+   normed_id : de.loosetie.k8s.dsl.manifests.VolumeError_storage_k8s_io_v1_k8s1_17
+   title     : 'de.loosetie.k8s.dsl.manifests.VolumeError_storage_k8s_io_v1_k8s1_17'
+   categories: ''
+   ┌ PREFIX  (40 tok)  ids=[2, 390, 13, 5439, 418, 316, 494, 13, 74, 23, 82, 13, 67, 6649, 13, 805, 361, 3558, 13, 31715, 12331, 62, 35350, 62, 74, 23, 82, 62, 952, 62, 85, 16, 62, 74, 23, 82, 16, 62, 1558, 628]
+   │   # de.loosetie.k8s.dsl.manifests.VolumeError_storage_k8s_io_v1_k8s1_17
+   │   
+   ├ BODY    (187 tok)
+   │   head: 'package de.loosetie.k8s.dsl.manifests\\n\\nimport de.loosetie.k8s.dsl.K8sTopLevel\\nimport de.loosetie.k8s.dsl.K8sDslMarker\\nimport de.loosetie.k8s.dsl.K8sManifest\\nimport de.loosetie.k8s.dsl.HasMetadata\\n      \\n@K8sDslMarker\\ninterface VolumeError_storage_k8s_io_v1_k8s1_16: K8sManifest {\\n  /** Strin … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[228:974]  (746 tok)  doc_id=40570  component=1
+   normed_id : org.simple.clinic.patient.Gender
+   title     : 'org.simple.clinic.patient.Gender'
+   categories: ''
+   ┌ PREFIX  (12 tok)  ids=[2, 8745, 13, 36439, 13, 565, 47277, 13, 26029, 13, 41394, 628]
+   │   # org.simple.clinic.patient.Gender
+   │   
+   ├ BODY    (733 tok)
+   │   head: 'package org.simple.clinic.patient\\n\\nimport android.os.Parcelable\\nimport androidx.annotation.VisibleForTesting\\nimport androidx.room.TypeConverter\\nimport com.squareup.moshi.FromJson\\nimport com.squareup.moshi.ToJson\\nimport kotlinx.android.parcel.Parcelize\\nimport org.simple.clinic.R\\nimport org.s … (+9 chars)'
+   │   tail: '\\n      is Unknown -> R.string.gender_unknown_letter\\n    }\\n\\nval Gender.displayIconRes: Int\\n  get() = when(this) {\\n    Male -> R.drawable.ic_patient_male\\n    Female -> R.drawable.ic_patient_female\\n    Transgender -> R.drawable.ic_patient_transgender\\n    is Unknown -> R.drawable.ic_patient_unk … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[974:2674]  (1700 tok)  doc_id=40564  component=1
+   normed_id : org.simple.clinic.util.Optional
+   title     : 'org.simple.clinic.util.Optional'
+   categories: ''
+   ┌ PREFIX  (12 tok)  ids=[2, 8745, 13, 36439, 13, 565, 47277, 13, 22602, 13, 30719, 628]
+   │   # org.simple.clinic.util.Optional
+   │   
+   ├ BODY    (1687 tok)
+   │   head: 'package org.simple.clinic.util\\n\\nimport java.util.Objects\\nimport java.util.function.Consumer\\nimport java.util.function.Function\\nimport java.util.function.Predicate\\nimport java.util.function.Supplier\\nimport java.util.Optional as JOptional\\n\\n/**\\n * Modified to use [Just] instead of Just.\\n *\\n … (+12 chars)'
+   │   tail: 'd(\\n    message = "Use .isPresent() instead.",\\n    replaceWith = ReplaceWith("!isPresent()")\\n)\\nfun Optional<*>.isEmpty(): Boolean = !isPresent()\\n\\n@Deprecated(\\n    message = "Use .isPresent() instead.",\\n    replaceWith = ReplaceWith("isPresent()")\\n)\\nfun Optional<*>.isNotEmpty(): Boolean = is … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[2674:3200]  (526 tok)  doc_id=41434  component=1
+   normed_id : org.simple.clinic.newentry.PatientDistrictTextChanged
+   title     : 'org.simple.clinic.newentry.PatientDistrictTextChanged'
+   categories: ''
+   ┌ PREFIX  (17 tok)  ids=[2, 8745, 13, 36439, 13, 565, 47277, 13, 3605, 13000, 13, 12130, 1153, 44857, 8206, 31813, 628]
+   │   # org.simple.clinic.newentry.PatientDistrictTextChanged
+   │   
+   ├ BODY    (508 tok)
+   │   head: 'package org.simple.clinic.newentry\\n\\nimport org.simple.clinic.patient.Gender\\nimport org.simple.clinic.patient.OngoingNewPatientEntry\\nimport org.simple.clinic.util.Optional\\nimport org.simple.clinic.widgets.UiEvent\\n\\ndata class PatientFullNameTextChanged(val fullName: String) : UiEvent {\\n  overr … (+8 chars)'
+   │   tail: 'Text Changed"\\n}\\n\\nclass PatientEntrySaveClicked : UiEvent {\\n  override val analyticsName = "Create Patient Entry:Save Clicked"\\n}\\n\\ndata class OngoingPatientEntryChanged(val entry: OngoingNewPatientEntry) : UiEvent {\\n  override val analyticsName = "Create Patient Entry:Ongoing Patient Entry Cha … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[4]  pos[3200:5140]  (1940 tok)  doc_id=14405  component=2
+   normed_id : org.jetbrains.kotlin.codegen.optimization.fixStack.top
+   title     : 'org.jetbrains.kotlin.codegen.optimization.fixStack.top'
+   categories: ''
+   ┌ PREFIX  (22 tok)  ids=[2, 8745, 13, 31173, 1671, 1299, 13, 74, 313, 2815, 13, 8189, 5235, 13, 40085, 1634, 13, 13049, 25896, 13, 4852, 628]
+   │   # org.jetbrains.kotlin.codegen.optimization.fixStack.top
+   │   
+   ├ BODY    (1917 tok)
+   │   head: '/*\\n * Copyright 2010-2015 JetBrains s.r.o.\\n *\\n * Licensed under the Apache License, Version 2.0 (the "License");\\n * you may not use this file except in compliance with the License.\\n * You may obtain a copy of the License at\\n *\\n * http://www.apache.org/licenses/LICENSE-2.0\\n *\\n * Unless requi … (+9 chars)'
+   │   tail: 'AbstractInsnNode, expectedStackSize: Int, stackContent: List<FixStackValue>) {\\n    with(methodNode.instructions) {\\n        for (stackValue in stackContent.subList(expectedStackSize, stackContent.size)) {\\n            insert(node, InsnNode(stackValue.popOpcode))\\n        }\\n        remove(node)\\n   … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[5]  pos[5140:7082]  (1942 tok)  doc_id=16230  component=2
+   normed_id : org.jetbrains.kotlin.codegen.optimization.fixStack.peekWords
+   title     : 'org.jetbrains.kotlin.codegen.optimization.fixStack.peekWords'
+   categories: ''
+   ┌ PREFIX  (24 tok)  ids=[2, 8745, 13, 31173, 1671, 1299, 13, 74, 313, 2815, 13, 8189, 5235, 13, 40085, 1634, 13, 13049, 25896, 13, 431, 988, 37117, 628]
+   │   # org.jetbrains.kotlin.codegen.optimization.fixStack.peekWords
+   │   
+   ├ BODY    (1917 tok)
+   │   head: '/*\\n * Copyright 2010-2015 JetBrains s.r.o.\\n *\\n * Licensed under the Apache License, Version 2.0 (the "License");\\n * you may not use this file except in compliance with the License.\\n * You may obtain a copy of the License at\\n *\\n * http://www.apache.org/licenses/LICENSE-2.0\\n *\\n * Unless requi … (+9 chars)'
+   │   tail: 'AbstractInsnNode, expectedStackSize: Int, stackContent: List<FixStackValue>) {\\n    with(methodNode.instructions) {\\n        for (stackValue in stackContent.subList(expectedStackSize, stackContent.size)) {\\n            insert(node, InsnNode(stackValue.popOpcode))\\n        }\\n        remove(node)\\n   … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[6]  pos[7082:11121]  (4039 tok)  doc_id=15282  component=2
+   normed_id : org.jetbrains.kotlin.codegen.optimization.boxing.isUnitInstance
+   title     : 'org.jetbrains.kotlin.codegen.optimization.boxing.isUnitInstance'
+   categories: ''
+   ┌ PREFIX  (23 tok)  ids=[2, 8745, 13, 31173, 1671, 1299, 13, 74, 313, 2815, 13, 8189, 5235, 13, 40085, 1634, 13, 45471, 13, 271, 26453, 33384, 628]
+   │   # org.jetbrains.kotlin.codegen.optimization.boxing.isUnitInstance
+   │   
+   ├ BODY    (4015 tok)
+   │   head: '/*\\n * Copyright 2010-2016 JetBrains s.r.o.\\n *\\n * Licensed under the Apache License, Version 2.0 (the "License");\\n * you may not use this file except in compliance with the License.\\n * You may obtain a copy of the License at\\n *\\n * http://www.apache.org/licenses/LICENSE-2.0\\n *\\n * Unless requi … (+9 chars)'
+   │   tail: '.isPop() =\\n    opcode == Opcodes.POP || opcode == Opcodes.POP2\\n\\nfun AbstractInsnNode.isUnitInstance() =\\n    opcode == Opcodes.GETSTATIC && this is FieldInsnNode && owner == "kotlin/Unit" && name == "INSTANCE"\\n\\nfun AbstractInsnNode.isPrimitiveTypeConversion() =\\n    opcode in Opcodes.I2L..Opcod … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[7]  pos[11121:15706]  (4585 tok)  doc_id=15284  component=2
+   normed_id : org.jetbrains.kotlin.codegen.coroutines.MethodNodeExaminer
+   title     : 'org.jetbrains.kotlin.codegen.coroutines.MethodNodeExaminer'
+   categories: ''
+   ┌ PREFIX  (23 tok)  ids=[2, 8745, 13, 31173, 1671, 1299, 13, 74, 313, 2815, 13, 8189, 5235, 13, 10215, 448, 1127, 13, 17410, 19667, 3109, 32086, 628]
+   │   # org.jetbrains.kotlin.codegen.coroutines.MethodNodeExaminer
+   │   
+   ├ BODY    (4561 tok)
+   │   head: '/*\\n * Copyright 2010-2020 JetBrains s.r.o. and Kotlin Programming Language contributors.\\n * Use of this source code is governed by the Apache 2.0 license that can be found in the license/LICENSE.txt file.\\n */\\n\\npackage org.jetbrains.kotlin.codegen.coroutines\\n\\nimport org.jetbrains.kotlin.codege … (+7 chars)'
+   │   tail: 'eration(insn: AbstractInsnNode, value1: BasicValue?, value2: BasicValue?): BasicValue? {\\n        return super.binaryOperation(insn, value1, value2).convert(insn)\\n    }\\n\\n    override fun newOperation(insn: AbstractInsnNode): BasicValue? {\\n        return super.newOperation(insn).convert(insn)\\n   … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[8]  pos[15706:16384]  (678 tok)  doc_id=18172  component=3
+   normed_id : org.kin.sdk.demo.viewmodel.WalletViewModel
+   title     : 'org.kin.sdk.demo.viewmodel.WalletViewModel'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[2, 8745, 13, 5116, 13, 21282, 74, 13, 9536, 78, 13, 1177, 19849, 13, 47152, 7680, 17633, 628]
+   │   # org.kin.sdk.demo.viewmodel.WalletViewModel
+   │   
+   ├ BODY    (659 tok)
+   │   head: 'package org.kin.sdk.demo.viewmodel\\n\\nimport org.kin.sdk.design.viewmodel.tools.ViewModel\\nimport java.math.BigDecimal\\n\\ninterface WalletViewModel : ViewModel<WalletViewModel.NavigationArgs, WalletViewModel.State> {\\n\\n    data class NavigationArgs(val walletIndex: Int, val publicAddress: String)\\n … (+9 chars)'
+   │   tail: 'nViewModel {\\n        fun onItemTapped(completed: (ex: Throwable?) -> Unit)\\n    }\\n\\n    interface ExportWalletActionViewModel : WalletActionViewModel {\\n        fun onItemTapped(activity: Any)\\n    }\\n\\n    interface InvoicesActionItemViewModel : WalletActionViewModel {\\n        fun onItemTapped() … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (kotlin detector; targets matched against in-pack docs)
+   @tok     80  from doc[0]  → 'de.loosetie.k8s.dsl.K8sTopLevel'  not in pack (no grant)
+   @tok    103  from doc[0]  → 'de.loosetie.k8s.dsl.K8sDslMarker'  not in pack (no grant)
+   @tok    124  from doc[0]  → 'de.loosetie.k8s.dsl.K8sManifest'  not in pack (no grant)
+   @tok    143  from doc[0]  → 'de.loosetie.k8s.dsl.HasMetadata'  not in pack (no grant)
+   @tok    259  from doc[1]  → 'android.os.Parcelable'  not in pack (no grant)
+   @tok    271  from doc[1]  → 'androidx.annotation.VisibleForTesting'  not in pack (no grant)
+   @tok    282  from doc[1]  → 'androidx.room.TypeConverter'  not in pack (no grant)
+   @tok    295  from doc[1]  → 'com.squareup.moshi.FromJson'  not in pack (no grant)
+   @tok    308  from doc[1]  → 'com.squareup.moshi.ToJson'  not in pack (no grant)
+   @tok    323  from doc[1]  → 'kotlinx.android.parcel.Parcelize'  not in pack (no grant)
+   @tok    333  from doc[1]  → 'org.simple.clinic.R'  not in pack (no grant)
+   @tok    347  from doc[1]  → 'org.simple.clinic.patient.Gender.Female'  not in pack (no grant)
+   @tok    361  from doc[1]  → 'org.simple.clinic.patient.Gender.Male'  not in pack (no grant)
+   @tok    376  from doc[1]  → 'org.simple.clinic.patient.Gender.Transgender'  not in pack (no grant)
+   @tok    390  from doc[1]  → 'org.simple.clinic.patient.Gender.Unknown'  not in pack (no grant)
+   @tok    408  from doc[1]  → 'org.simple.clinic.util.room.SafeEnumTypeAdapter'  not in pack (no grant)
+   @tok   1004  from doc[2]  → 'java.util.Objects'  not in pack (no grant)
+   @tok   1013  from doc[2]  → 'java.util.function.Consumer'  not in pack (no grant)
+   @tok   1022  from doc[2]  → 'java.util.function.Function'  not in pack (no grant)
+   @tok   1032  from doc[2]  → 'java.util.function.Predicate'  not in pack (no grant)
+   @tok   1042  from doc[2]  → 'java.util.function.Supplier'  not in pack (no grant)
+   @tok   1049  from doc[2]  → 'java.util.Optional'  not in pack (no grant)
+   @tok   2714  from doc[3]  → 'org.simple.clinic.patient.Gender'  IN-PACK → grants attention to doc[1]
+   @tok   2732  from doc[3]  → 'org.simple.clinic.patient.OngoingNewPatientEntry'  not in pack (no grant)
+   @tok   2744  from doc[3]  → 'org.simple.clinic.util.Optional'  IN-PACK → grants attention to doc[2]
+   @tok   2759  from doc[3]  → 'org.simple.clinic.widgets.UiEvent'  not in pack (no grant)
+   @tok   3418  from doc[4]  → 'org.jetbrains.org.objectweb.asm.Opcodes'  not in pack (no grant)
+   @tok   3456  from doc[4]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.BasicValue'  not in pack (no grant)
+   @tok   3476  from doc[4]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.Frame'  not in pack (no grant)
+   @tok   3496  from doc[4]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.Value'  not in pack (no grant)
+   @tok   5360  from doc[5]  → 'org.jetbrains.org.objectweb.asm.Opcodes'  not in pack (no grant)
+   @tok   5398  from doc[5]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.BasicValue'  not in pack (no grant)
+   @tok   5418  from doc[5]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.Frame'  not in pack (no grant)
+   @tok   5438  from doc[5]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.Value'  not in pack (no grant)
+   @tok   7306  from doc[6]  → 'org.jetbrains.kotlin.codegen.optimization.OptimizationMethodVisitor'  not in pack (no grant)
+   @tok   7330  from doc[6]  → 'org.jetbrains.kotlin.codegen.optimization.common.FastMethodAnalyzer'  not in pack (no grant)
+   @tok   7353  from doc[6]  → 'org.jetbrains.kotlin.codegen.optimization.common.isLoadOperation'  not in pack (no grant)
+   @tok   7377  from doc[6]  → 'org.jetbrains.kotlin.codegen.optimization.fixStack.peekWords'  IN-PACK → grants attention to doc[5]
+   @tok   7399  from doc[6]  → 'org.jetbrains.kotlin.codegen.optimization.fixStack.top'  IN-PACK → grants attention to doc[4]
+   @tok   7423  from doc[6]  → 'org.jetbrains.kotlin.codegen.optimization.transformer.MethodTransforme … (+1 chars)'  not in pack (no grant)
+   @tok   7441  from doc[6]  → 'org.jetbrains.org.objectweb.asm.Opcodes'  not in pack (no grant)
+   @tok   7462  from doc[6]  → 'org.jetbrains.org.objectweb.asm.tree.AbstractInsnNode'  not in pack (no grant)
+   @tok   7483  from doc[6]  → 'org.jetbrains.org.objectweb.asm.tree.FieldInsnNode'  not in pack (no grant)
+   @tok   7503  from doc[6]  → 'org.jetbrains.org.objectweb.asm.tree.InsnNode'  not in pack (no grant)
+   @tok   7522  from doc[6]  → 'org.jetbrains.org.objectweb.asm.tree.MethodNode'  not in pack (no grant)
+   @tok   7542  from doc[6]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.Frame'  not in pack (no grant)
+   @tok   7565  from doc[6]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.SourceInterpreter'  not in pack (no grant)
+   @tok   7586  from doc[6]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.SourceValue'  not in pack (no grant)
+   @tok  11242  from doc[7]  → 'org.jetbrains.kotlin.codegen.inline.isInlineMarker'  not in pack (no grant)
+   @tok  11265  from doc[7]  → 'org.jetbrains.kotlin.codegen.optimization.boxing.isUnitInstance'  IN-PACK → grants attention to doc[6]
+   @tok  11288  from doc[7]  → 'org.jetbrains.kotlin.codegen.optimization.common.ControlFlowGraph'  not in pack (no grant)
+   @tok  11311  from doc[7]  → 'org.jetbrains.kotlin.codegen.optimization.common.asSequence'  not in pack (no grant)
+   @tok  11335  from doc[7]  → 'org.jetbrains.kotlin.codegen.optimization.common.isMeaningful'  not in pack (no grant)
+   @tok  11357  from doc[7]  → 'org.jetbrains.kotlin.codegen.optimization.fixStack.top'  IN-PACK → grants attention to doc[4]
+   @tok  11381  from doc[7]  → 'org.jetbrains.kotlin.codegen.optimization.transformer.MethodTransforme … (+1 chars)'  not in pack (no grant)
+   @tok  11402  from doc[7]  → 'org.jetbrains.kotlin.resolve.jvm.AsmTypes'  not in pack (no grant)
+   @tok  11417  from doc[7]  → 'org.jetbrains.kotlin.utils.sure'  not in pack (no grant)
+   @tok  11433  from doc[7]  → 'org.jetbrains.org.objectweb.asm.Label'  not in pack (no grant)
+   @tok  11451  from doc[7]  → 'org.jetbrains.org.objectweb.asm.Opcodes'  not in pack (no grant)
+   @tok  11467  from doc[7]  → 'org.jetbrains.org.objectweb.asm.Type'  not in pack (no grant)
+   @tok  11507  from doc[7]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.BasicInterpreter'  not in pack (no grant)
+   @tok  11528  from doc[7]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.BasicValue'  not in pack (no grant)
+   @tok  11548  from doc[7]  → 'org.jetbrains.org.objectweb.asm.tree.analysis.Frame'  not in pack (no grant)
+   @tok  15756  from doc[8]  → 'org.kin.sdk.design.viewmodel.tools.ViewModel'  not in pack (no grant)
+   @tok  15765  from doc[8]  → 'java.math.BigDecimal'  not in pack (no grant)
+
+####################################################################################################
+PACK 2   |   16,384 tokens   |   4 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:1776]  (1776 tok)  doc_id=31102  component=0  TRUNCATED
+   normed_id : arrow.Kind
+   title     : 'arrow.Kind'
+   categories: ''
+   ┌ PREFIX  (5 tok)  ids=[2, 15452, 13, 35854, 628]
+   │   # arrow.Kind
+   │   
+   ├ BODY    (1770 tok)
+   │   head: 'package arrow\\n\\nconst val KindDeprecation =\\n  """Higher Kinded types and their related type classes will no longer be supported after Arrow 0.13.0. Most relevant APIs are now concrete over the data types available as members or top level extension functions"""\\n\\n/**\\n * `Kind<F, A>` represents a  … (+6 chars)'
+   │   tail: 'ypealias Kind21<F, A, B, C, D, E, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V> = Kind<Kind20<F, A, B, C, D, E, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U>, V>\\n\\n@Deprecated(KindDeprecation)\\ntypealias Kind22<F, A, B, C, D, E, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W> = Kind<Kind21<F, A … (+3 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[1776:10953]  (9177 tok)  doc_id=30889  component=0
+   normed_id : arrow.core.ForListK
+   title     : 'arrow.core.ForListK'
+   categories: ''
+   ┌ PREFIX  (9 tok)  ids=[2, 15452, 13, 7295, 13, 1890, 8053, 42, 628]
+   │   # arrow.core.ForListK
+   │   
+   ├ BODY    (9167 tok)
+   │   head: 'package arrow.core\\n\\nimport arrow.Kind\\nimport arrow.KindDeprecation\\nimport arrow.typeclasses.Applicative\\nimport arrow.typeclasses.Show\\nimport arrow.typeclasses.ShowDeprecation\\n\\nconst val ListKDeprecation =\\n  "ListK is deprecated along side Higher Kinded Types in Arrow. Prefer to simply use k … (+9 chars)'
+   │   tail: 'tKOf<A>.combineK(y: ListKOf<A>): ListK<A> =\\n  (fix() + y.fix()).k()\\n\\n@Deprecated(ListKDeprecation, ReplaceWith("this"))\\nfun <A> List<A>.k(): ListK<A> = ListK(this)\\n\\n@Deprecated(ListKDeprecation, ReplaceWith("listOf(elements)"))\\nfun <A> listKOf(vararg elements: A): ListK<A> =\\n  listOf(*elemen … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[10953:12468]  (1515 tok)  doc_id=31076  component=0
+   normed_id : arrow.core.Tuple2
+   title     : 'arrow.core.Tuple2'
+   categories: ''
+   ┌ PREFIX  (9 tok)  ids=[2, 15452, 13, 7295, 13, 51, 29291, 17, 628]
+   │   # arrow.core.Tuple2
+   │   
+   ├ BODY    (1505 tok)
+   │   head: '@file:JvmMultifileClass\\n@file:JvmName("TupleNKt")\\n\\npackage arrow.core\\n\\nimport arrow.KindDeprecation\\nimport arrow.typeclasses.Monoid\\nimport arrow.typeclasses.Semigroup\\nimport arrow.typeclasses.Show\\nimport arrow.typeclasses.ShowDeprecation\\n\\n@Deprecated(\\n  message = KindDeprecation,\\n  leve … (+13 chars)'
+   │   tail: 'anion.pair(MA: Monoid<A>, MB: Monoid<B>): Monoid<Pair<A, B>> =\\n  PairMonoid(MA, MB)\\n\\nprivate class PairMonoid<A, B>(\\n  private val MA: Monoid<A>,\\n  private val MB: Monoid<B>\\n) : Monoid<Pair<A, B>>, PairSemigroup<A, B>(MA, MB) {\\n  override fun empty(): Pair<A, B> =\\n    Pair(MA.empty(), MB.emp … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[12468:16384]  (3916 tok)  doc_id=31389  component=0
+   normed_id : arrow.core.extensions.list.monad.flatMap
+   title     : 'arrow.core.extensions.list.monad.flatMap'
+   categories: ''
+   ┌ PREFIX  (16 tok)  ids=[2, 15452, 13, 7295, 13, 2302, 5736, 13, 4868, 13, 2144, 324, 13, 38568, 13912, 628]
+   │   # arrow.core.extensions.list.monad.flatMap
+   │   
+   ├ BODY    (3899 tok)
+   │   head: 'package arrow.core.extensions.list.monad\\n\\nimport arrow.Kind\\nimport arrow.core.Either\\nimport arrow.core.Eval\\nimport arrow.core.ForListK\\nimport arrow.core.Tuple2\\nimport arrow.core.extensions.ListKMonad\\nimport arrow.core.fix\\nimport arrow.core.tailRecMIterable\\nimport kotlin.Boolean\\nimport kot … (+11 chars)'
+   │   tail: '], [Either], [List] ...\\n   *\\n   *  [The Monad Tutorial](https://arrow-kt.io/docs/patterns/monads/)\\n   */\\n  @Suppress(\\n    "UNCHECKED_CAST",\\n    "NOTHING_TO_INLINE"\\n  )\\n  @Deprecated("Monad typeclasses is deprecated. Use concrete methods on List")\\n  inline fun monad(): ListKMonad = monad_sin … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (kotlin detector; targets matched against in-pack docs)
+   @tok   1795  from doc[1]  → 'arrow.Kind'  IN-PACK → grants attention to doc[0]
+   @tok   1803  from doc[1]  → 'arrow.KindDeprecation'  not in pack (no grant)
+   @tok   1812  from doc[1]  → 'arrow.typeclasses.Applicative'  not in pack (no grant)
+   @tok   1820  from doc[1]  → 'arrow.typeclasses.Show'  not in pack (no grant)
+   @tok   1831  from doc[1]  → 'arrow.typeclasses.ShowDeprecation'  not in pack (no grant)
+   @tok  10999  from doc[2]  → 'arrow.KindDeprecation'  not in pack (no grant)
+   @tok  11008  from doc[2]  → 'arrow.typeclasses.Monoid'  not in pack (no grant)
+   @tok  11017  from doc[2]  → 'arrow.typeclasses.Semigroup'  not in pack (no grant)
+   @tok  11025  from doc[2]  → 'arrow.typeclasses.Show'  not in pack (no grant)
+   @tok  11036  from doc[2]  → 'arrow.typeclasses.ShowDeprecation'  not in pack (no grant)
+   @tok  12502  from doc[3]  → 'arrow.Kind'  IN-PACK → grants attention to doc[0]
+   @tok  12509  from doc[3]  → 'arrow.core.Either'  not in pack (no grant)
+   @tok  12517  from doc[3]  → 'arrow.core.Eval'  not in pack (no grant)
+   @tok  12526  from doc[3]  → 'arrow.core.ForListK'  IN-PACK → grants attention to doc[1]
+   @tok  12535  from doc[3]  → 'arrow.core.Tuple2'  IN-PACK → grants attention to doc[2]
+   @tok  12548  from doc[3]  → 'arrow.core.extensions.ListKMonad'  not in pack (no grant)
+   @tok  12555  from doc[3]  → 'arrow.core.fix'  not in pack (no grant)
+   @tok  12566  from doc[3]  → 'arrow.core.tailRecMIterable'  not in pack (no grant)
+   @tok  12574  from doc[3]  → 'kotlin.Boolean'  not in pack (no grant)
+   @tok  12585  from doc[3]  → 'kotlin.collections.flatMap'  not in pack (no grant)
+   @tok  12597  from doc[3]  → 'kotlin.Function0'  not in pack (no grant)
+   @tok  12605  from doc[3]  → 'kotlin.Function1'  not in pack (no grant)
+   @tok  12614  from doc[3]  → 'kotlin.PublishedApi'  not in pack (no grant)
+   @tok  12622  from doc[3]  → 'kotlin.Suppress'  not in pack (no grant)
+   @tok  12632  from doc[3]  → 'kotlin.collections.List'  not in pack (no grant)
+   @tok  12644  from doc[3]  → 'kotlin.jvm.JvmName'  not in pack (no grant)
+
+####################################################################################################
+PACK 3   |   16,384 tokens   |   1 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:16384]  (16384 tok)  doc_id=42720  component=0  TRUNCATED
+   normed_id : androidx.wear.watchface.editor.mockBackgroundCanvasComplication
+   title     : 'androidx.wear.watchface.editor.mockBackgroundCanvasComplication'
+   categories: ''
+   ┌ PREFIX  (19 tok)  ids=[2, 19286, 87, 13, 13927, 13, 8340, 2550, 13, 35352, 13, 76, 735, 21756, 6090, 11017, 38143, 3299, 628]
+   │   # androidx.wear.watchface.editor.mockBackgroundCanvasComplication
+   │   
+   ├ BODY    (16364 tok)
+   │   head: '/*\\n * Copyright 2021 The Android Open Source Project\\n *\\n * Licensed under the Apache License, Version 2.0 (the "License");\\n * you may not use this file except in compliance with the License.\\n * You may obtain a copy of the License at\\n *\\n *      http://www.apache.org/licenses/LICENSE-2.0\\n *\\n … (+9 chars)'
+   │   tail: 'omplicationData::class.java)\\n                assertThat(\\n                    (result as ShortTextComplicationData).text.getTextAt(\\n                        ApplicationProvider.getApplicationContext<Context>().resources,\\n                        Instant.EPOCH\\n                    )\\n                … (+6 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (kotlin detector; targets matched against in-pack docs)
+   @tok    198  from doc[0]  → 'android.annotation.SuppressLint'  not in pack (no grant)
+   @tok    205  from doc[0]  → 'android.app.Activity'  not in pack (no grant)
+   @tok    213  from doc[0]  → 'android.content.ComponentName'  not in pack (no grant)
+   @tok    220  from doc[0]  → 'android.content.Context'  not in pack (no grant)
+   @tok    228  from doc[0]  → 'android.content.Intent'  not in pack (no grant)
+   @tok    238  from doc[0]  → 'android.content.pm.PackageManager'  not in pack (no grant)
+   @tok    248  from doc[0]  → 'android.content.pm.ServiceInfo'  not in pack (no grant)
+   @tok    257  from doc[0]  → 'android.graphics.Bitmap'  not in pack (no grant)
+   @tok    266  from doc[0]  → 'android.graphics.Canvas'  not in pack (no grant)
+   @tok    274  from doc[0]  → 'android.graphics.Color'  not in pack (no grant)
+   @tok    282  from doc[0]  → 'android.graphics.Rect'  not in pack (no grant)
+   @tok    291  from doc[0]  → 'android.graphics.RectF'  not in pack (no grant)
+   @tok    302  from doc[0]  → 'android.graphics.drawable.Icon'  not in pack (no grant)
+   @tok    309  from doc[0]  → 'android.os.Build'  not in pack (no grant)
+   @tok    317  from doc[0]  → 'android.os.Bundle'  not in pack (no grant)
+   @tok    324  from doc[0]  → 'android.os.Handler'  not in pack (no grant)
+   @tok    332  from doc[0]  → 'android.os.HandlerThread'  not in pack (no grant)
+   @tok    340  from doc[0]  → 'android.os.IBinder'  not in pack (no grant)
+   @tok    348  from doc[0]  → 'android.os.Looper'  not in pack (no grant)
+   @tok    366  from doc[0]  → 'android.support.wearable.complications.IPreviewComplicationDataCallbac … (+1 chars)'  not in pack (no grant)
+   @tok    382  from doc[0]  → 'android.support.wearable.complications.IProviderInfoService'  not in pack (no grant)
+   @tok    396  from doc[0]  → 'android.support.wearable.watchface.Constants'  not in pack (no grant)
+   @tok    404  from doc[0]  → 'android.view.Surface'  not in pack (no grant)
+   @tok    414  from doc[0]  → 'android.view.SurfaceHolder'  not in pack (no grant)
+   @tok    423  from doc[0]  → 'androidx.activity.ComponentActivity'  not in pack (no grant)
+   @tok    437  from doc[0]  → 'androidx.test.core.app.ActivityScenario'  not in pack (no grant)
+   @tok    450  from doc[0]  → 'androidx.test.core.app.ApplicationProvider'  not in pack (no grant)
+   @tok    468  from doc[0]  → 'androidx.test.ext.junit.runners.AndroidJUnit4'  not in pack (no grant)
+   @tok    480  from doc[0]  → 'androidx.test.filters.MediumTest'  not in pack (no grant)
+   @tok    494  from doc[0]  → 'androidx.test.filters.SdkSuppress'  not in pack (no grant)
+   @tok    512  from doc[0]  → 'androidx.wear.watchface.complications.ComplicationDataSourceInfo'  not in pack (no grant)
+   @tok    533  from doc[0]  → 'androidx.wear.watchface.complications.ComplicationDataSourceInfoRetrie … (+3 chars)'  not in pack (no grant)
+   @tok    551  from doc[0]  → 'androidx.wear.watchface.complications.ComplicationSlotBounds'  not in pack (no grant)
+   @tok    570  from doc[0]  → 'androidx.wear.watchface.complications.DefaultComplicationDataSourcePol … (+3 chars)'  not in pack (no grant)
+   @tok    586  from doc[0]  → 'androidx.wear.watchface.complications.SystemDataSources'  not in pack (no grant)
+   @tok    604  from doc[0]  → 'androidx.wear.watchface.complications.data.ComplicationText'  not in pack (no grant)
+   @tok    622  from doc[0]  → 'androidx.wear.watchface.complications.data.ComplicationType'  not in pack (no grant)
+   @tok    641  from doc[0]  → 'androidx.wear.watchface.complications.data.EmptyComplicationData'  not in pack (no grant)
+   @tok    661  from doc[0]  → 'androidx.wear.watchface.complications.data.LongTextComplicationData'  not in pack (no grant)
+   @tok    681  from doc[0]  → 'androidx.wear.watchface.complications.data.PlainComplicationText'  not in pack (no grant)
+   @tok    701  from doc[0]  → 'androidx.wear.watchface.complications.data.ShortTextComplicationData'  not in pack (no grant)
+   @tok    715  from doc[0]  → 'androidx.wear.watchface.BroadcastsObserver'  not in pack (no grant)
+   @tok    729  from doc[0]  → 'androidx.wear.watchface.CanvasComplication'  not in pack (no grant)
+   @tok    742  from doc[0]  → 'androidx.wear.watchface.CanvasType'  not in pack (no grant)
+   @tok    760  from doc[0]  → 'androidx.wear.watchface.ComplicationDataSourceChooserIntent'  not in pack (no grant)
+   @tok    774  from doc[0]  → 'androidx.wear.watchface.ComplicationHelperActivity'  not in pack (no grant)
+   @tok    787  from doc[0]  → 'androidx.wear.watchface.ComplicationSlot'  not in pack (no grant)
+   @tok    802  from doc[0]  → 'androidx.wear.watchface.ComplicationSlotsManager'  not in pack (no grant)
+   @tok    816  from doc[0]  → 'androidx.wear.watchface.MutableWatchState'  not in pack (no grant)
+   @tok    828  from doc[0]  → 'androidx.wear.watchface.RenderParameters'  not in pack (no grant)
+   @tok    841  from doc[0]  → 'androidx.wear.watchface.Renderer'  not in pack (no grant)
+   @tok    853  from doc[0]  → 'androidx.wear.watchface.WatchFace'  not in pack (no grant)
+   @tok    868  from doc[0]  → 'androidx.wear.watchface.WatchFaceHostApi'  not in pack (no grant)
+   @tok    881  from doc[0]  → 'androidx.wear.watchface.WatchFaceImpl'  not in pack (no grant)
+   @tok    894  from doc[0]  → 'androidx.wear.watchface.WatchFaceService'  not in pack (no grant)
+   @tok    907  from doc[0]  → 'androidx.wear.watchface.WatchFaceType'  not in pack (no grant)
+   @tok    919  from doc[0]  → 'androidx.wear.watchface.WatchState'  not in pack (no grant)
+   @tok    933  from doc[0]  → 'androidx.wear.watchface.client.DeviceConfig'  not in pack (no grant)
+   @tok    948  from doc[0]  → 'androidx.wear.watchface.client.WatchFaceId'  not in pack (no grant)
+   @tok    965  from doc[0]  → 'androidx.wear.watchface.client.asApiEditorState'  not in pack (no grant)
+   @tok    987  from doc[0]  → 'androidx.wear.watchface.complications.rendering.CanvasComplicationDraw … (+4 chars)'  not in pack (no grant)
+   @tok   1007  from doc[0]  → 'androidx.wear.watchface.complications.rendering.ComplicationDrawable'  not in pack (no grant)
+   @tok   1023  from doc[0]  → 'androidx.wear.watchface.ComplicationSlotBoundsType'  not in pack (no grant)
+   @tok   1040  from doc[0]  → 'androidx.wear.watchface.DEFAULT_INSTANCE_ID'  not in pack (no grant)
+   @tok   1067  from doc[0]  → 'androidx.wear.watchface.SYSTEM_SUPPORTS_CONSISTENT_IDS_PREFIX'  not in pack (no grant)
+   @tok   1085  from doc[0]  → 'androidx.wear.watchface.complications.data.ComplicationData'  not in pack (no grant)
+   @tok   1111  from doc[0]  → 'androidx.wear.watchface.editor.EditorSession.Companion.EDITING_SESSION … (+8 chars)'  not in pack (no grant)
+   @tok   1129  from doc[0]  → 'androidx.wear.watchface.editor.data.EditorStateWireFormat'  not in pack (no grant)
+   @tok   1146  from doc[0]  → 'androidx.wear.watchface.style.CurrentUserStyleRepository'  not in pack (no grant)
+   @tok   1160  from doc[0]  → 'androidx.wear.watchface.style.UserStyle'  not in pack (no grant)
+   @tok   1175  from doc[0]  → 'androidx.wear.watchface.style.UserStyleData'  not in pack (no grant)
+   @tok   1191  from doc[0]  → 'androidx.wear.watchface.style.UserStyleSchema'  not in pack (no grant)
+   @tok   1206  from doc[0]  → 'androidx.wear.watchface.style.UserStyleSetting'  not in pack (no grant)
+   @tok   1229  from doc[0]  → 'androidx.wear.watchface.style.UserStyleSetting.ListUserStyleSetting.Li … (+8 chars)'  not in pack (no grant)
+   @tok   1246  from doc[0]  → 'androidx.wear.watchface.style.UserStyleSetting.Option'  not in pack (no grant)
+   @tok   1261  from doc[0]  → 'androidx.wear.watchface.style.WatchFaceLayer'  not in pack (no grant)
+   @tok   1275  from doc[0]  → 'com.google.common.truth.Truth.assertThat'  not in pack (no grant)
+   @tok   1291  from doc[0]  → 'kotlinx.coroutines.CompletableDeferred'  not in pack (no grant)
+   @tok   1305  from doc[0]  → 'kotlinx.coroutines.CoroutineScope'  not in pack (no grant)
+   @tok   1319  from doc[0]  → 'kotlinx.coroutines.Dispatchers'  not in pack (no grant)
+   @tok   1336  from doc[0]  → 'kotlinx.coroutines.TimeoutCancellationException'  not in pack (no grant)
+   @tok   1355  from doc[0]  → 'kotlinx.coroutines.android.asCoroutineDispatcher'  not in pack (no grant)
+   @tok   1368  from doc[0]  → 'kotlinx.coroutines.async'  not in pack (no grant)
+   @tok   1382  from doc[0]  → 'kotlinx.coroutines.flow.collect'  not in pack (no grant)
+   @tok   1396  from doc[0]  → 'kotlinx.coroutines.flow.update'  not in pack (no grant)
+   @tok   1408  from doc[0]  → 'kotlinx.coroutines.job'  not in pack (no grant)
+   @tok   1420  from doc[0]  → 'kotlinx.coroutines.launch'  not in pack (no grant)
+   @tok   1434  from doc[0]  → 'kotlinx.coroutines.runBlocking'  not in pack (no grant)
+   @tok   1447  from doc[0]  → 'kotlinx.coroutines.withContext'  not in pack (no grant)
+   @tok   1459  from doc[0]  → 'kotlin.test.assertFailsWith'  not in pack (no grant)
+   @tok   1467  from doc[0]  → 'org.junit.After'  not in pack (no grant)
+   @tok   1479  from doc[0]  → 'org.junit.Assert.assertFalse'  not in pack (no grant)
+   @tok   1492  from doc[0]  → 'org.junit.Assert.assertNotNull'  not in pack (no grant)
+   @tok   1504  from doc[0]  → 'org.junit.Assert.assertNull'  not in pack (no grant)
+   @tok   1516  from doc[0]  → 'org.junit.Assert.assertTrue'  not in pack (no grant)
+   @tok   1527  from doc[0]  → 'org.junit.Assert.fail'  not in pack (no grant)
+   @tok   1535  from doc[0]  → 'org.junit.Test'  not in pack (no grant)
+   @tok   1546  from doc[0]  → 'org.junit.runner.RunWith'  not in pack (no grant)
+   @tok   1560  from doc[0]  → 'org.mockito.ArgumentMatchers.any'  not in pack (no grant)
+   @tok   1574  from doc[0]  → 'org.mockito.ArgumentMatchers.eq'  not in pack (no grant)
+   @tok   1585  from doc[0]  → 'org.mockito.Mockito'  not in pack (no grant)
+   @tok   1600  from doc[0]  → 'org.mockito.Mockito.when'  not in pack (no grant)
+   @tok   1614  from doc[0]  → 'org.mockito.Mockito.doAnswer'  not in pack (no grant)
+   @tok   1628  from doc[0]  → 'org.mockito.Mockito.mock'  not in pack (no grant)
+   @tok   1639  from doc[0]  → 'java.lang.IllegalArgumentException'  not in pack (no grant)
+   @tok   1646  from doc[0]  → 'java.time.Instant'  not in pack (no grant)
+   @tok   1656  from doc[0]  → 'java.time.ZonedDateTime'  not in pack (no grant)
+   @tok   1669  from doc[0]  → 'java.util.concurrent.CountDownLatch'  not in pack (no grant)
+   @tok   1680  from doc[0]  → 'java.util.concurrent.TimeUnit'  not in pack (no grant)
+   @tok   1698  from doc[0]  → 'java.util.concurrent.TimeUnit.MILLISECONDS'  not in pack (no grant)
+
+####################################################################################################
+PACK 4   |   16,384 tokens   |   4 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:366]  (366 tok)  doc_id=31102  component=0  TRUNCATED
+   normed_id : arrow.Kind
+   title     : 'arrow.Kind'
+   categories: ''
+   ┌ PREFIX  (5 tok)  ids=[2, 15452, 13, 35854, 628]
+   │   # arrow.Kind
+   │   
+   ├ BODY    (360 tok)
+   │   head: 'package arrow\\n\\nconst val KindDeprecation =\\n  """Higher Kinded types and their related type classes will no longer be supported after Arrow 0.13.0. Most relevant APIs are now concrete over the data types available as members or top level extension functions"""\\n\\n/**\\n * `Kind<F, A>` represents a  … (+6 chars)'
+   │   tail: 'n)\\ninterface Kind<out F, out A>\\n\\n@Deprecated(KindDeprecation)\\ntypealias Kind2<F, A, B> = Kind<Kind<F, A>, B>\\n\\n@Deprecated(KindDeprecation)\\ntypealias Kind3<F, A, B, C> = Kind<Kind2<F, A, B>, C>\\n\\n@Deprecated(KindDeprecation)\\ntypealias Kind4<F, A, B, C, D> = Kind<Kind3<F, A, B, C>, D>\\n\\n@Dep … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[366:1882]  (1516 tok)  doc_id=31073  component=0
+   normed_id : arrow.core.ForTuple2
+   title     : 'arrow.core.ForTuple2'
+   categories: ''
+   ┌ PREFIX  (10 tok)  ids=[2, 15452, 13, 7295, 13, 1890, 51, 29291, 17, 628]
+   │   # arrow.core.ForTuple2
+   │   
+   ├ BODY    (1505 tok)
+   │   head: '@file:JvmMultifileClass\\n@file:JvmName("TupleNKt")\\n\\npackage arrow.core\\n\\nimport arrow.KindDeprecation\\nimport arrow.typeclasses.Monoid\\nimport arrow.typeclasses.Semigroup\\nimport arrow.typeclasses.Show\\nimport arrow.typeclasses.ShowDeprecation\\n\\n@Deprecated(\\n  message = KindDeprecation,\\n  leve … (+13 chars)'
+   │   tail: 'anion.pair(MA: Monoid<A>, MB: Monoid<B>): Monoid<Pair<A, B>> =\\n  PairMonoid(MA, MB)\\n\\nprivate class PairMonoid<A, B>(\\n  private val MA: Monoid<A>,\\n  private val MB: Monoid<B>\\n) : Monoid<Pair<A, B>>, PairSemigroup<A, B>(MA, MB) {\\n  override fun empty(): Pair<A, B> =\\n    Pair(MA.empty(), MB.emp … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[1882:15784]  (13902 tok)  doc_id=31553  component=0
+   normed_id : arrow.core.extensions.Tuple4Eq
+   title     : 'arrow.core.extensions.Tuple4Eq'
+   categories: ''
+   ┌ PREFIX  (14 tok)  ids=[2, 15452, 13, 7295, 13, 2302, 5736, 13, 51, 29291, 19, 36, 80, 628]
+   │   # arrow.core.extensions.Tuple4Eq
+   │   
+   ├ BODY    (13887 tok)
+   │   head: '@file:Suppress("UnusedImports")\\n\\npackage arrow.core.extensions\\n\\nimport arrow.Kind\\nimport arrow.core.Either\\nimport arrow.core.Either.Left\\nimport arrow.core.Either.Right\\nimport arrow.core.Eval\\nimport arrow.core.ForTuple2\\nimport arrow.core.Ordering\\nimport arrow.core.Tuple10\\nimport arrow.cor … (+13 chars)'
+   │   tail: ' fun SC(): Show<C>\\n  fun SD(): Show<D>\\n  fun SE(): Show<E>\\n  fun SF(): Show<F>\\n  fun SG(): Show<G>\\n  fun SH(): Show<H>\\n  fun SI(): Show<I>\\n  fun SJ(): Show<J>\\n  override fun Tuple10<A, B, C, D, E, F, G, H, I, J>.show(): String =\\n    show(SA(), SB(), SC(), SD(), SE(), SF(), SG(), SH(), SI(), … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[15784:16384]  (600 tok)  doc_id=34909  component=0
+   normed_id : arrow.core.extensions.tuple4.eq.eq
+   title     : 'arrow.core.extensions.tuple4.eq.eq'
+   categories: ''
+   ┌ PREFIX  (16 tok)  ids=[2, 15452, 13, 7295, 13, 2302, 5736, 13, 83, 29291, 19, 13, 27363, 13, 27363, 628]
+   │   # arrow.core.extensions.tuple4.eq.eq
+   │   
+   ├ BODY    (583 tok)
+   │   head: 'package arrow.core.extensions.tuple4.eq\\n\\nimport arrow.core.Tuple4\\nimport arrow.core.Tuple4.Companion\\nimport arrow.core.extensions.Tuple4Eq\\nimport arrow.typeclasses.Eq\\nimport arrow.typeclasses.EqDeprecation\\nimport kotlin.Boolean\\nimport kotlin.Deprecated\\nimport kotlin.Suppress\\nimport kotlin. … (+10 chars)'
+   │   tail: 'D>\\n): Tuple4Eq<A, B, C, D> = object : arrow.core.extensions.Tuple4Eq<A, B, C, D> {\\n  override fun EQA():\\n    arrow.typeclasses.Eq<A> = EQA\\n\\n  override fun EQB(): arrow.typeclasses.Eq<B> = EQB\\n\\n  override fun EQC(): arrow.typeclasses.Eq<C> = EQC\\n\\n  override fun EQD(): arrow.typeclasses.Eq<D> … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (kotlin detector; targets matched against in-pack docs)
+   @tok    413  from doc[1]  → 'arrow.KindDeprecation'  not in pack (no grant)
+   @tok    422  from doc[1]  → 'arrow.typeclasses.Monoid'  not in pack (no grant)
+   @tok    431  from doc[1]  → 'arrow.typeclasses.Semigroup'  not in pack (no grant)
+   @tok    439  from doc[1]  → 'arrow.typeclasses.Show'  not in pack (no grant)
+   @tok    450  from doc[1]  → 'arrow.typeclasses.ShowDeprecation'  not in pack (no grant)
+   @tok   1922  from doc[2]  → 'arrow.Kind'  IN-PACK → grants attention to doc[0]
+   @tok   1929  from doc[2]  → 'arrow.core.Either'  not in pack (no grant)
+   @tok   1938  from doc[2]  → 'arrow.core.Either.Left'  not in pack (no grant)
+   @tok   1947  from doc[2]  → 'arrow.core.Either.Right'  not in pack (no grant)
+   @tok   1955  from doc[2]  → 'arrow.core.Eval'  not in pack (no grant)
+   @tok   1965  from doc[2]  → 'arrow.core.ForTuple2'  IN-PACK → grants attention to doc[1]
+   @tok   1973  from doc[2]  → 'arrow.core.Ordering'  not in pack (no grant)
+   @tok   1982  from doc[2]  → 'arrow.core.Tuple10'  not in pack (no grant)
+   @tok   1991  from doc[2]  → 'arrow.core.Tuple2'  not in pack (no grant)
+   @tok   2001  from doc[2]  → 'arrow.core.Tuple2Of'  not in pack (no grant)
+   @tok   2013  from doc[2]  → 'arrow.core.Tuple2PartialOf'  not in pack (no grant)
+   @tok   2022  from doc[2]  → 'arrow.core.Tuple3'  not in pack (no grant)
+   @tok   2031  from doc[2]  → 'arrow.core.Tuple4'  not in pack (no grant)
+   @tok   2040  from doc[2]  → 'arrow.core.Tuple5'  not in pack (no grant)
+   @tok   2049  from doc[2]  → 'arrow.core.Tuple6'  not in pack (no grant)
+   @tok   2058  from doc[2]  → 'arrow.core.Tuple7'  not in pack (no grant)
+   @tok   2067  from doc[2]  → 'arrow.core.Tuple8'  not in pack (no grant)
+   @tok   2076  from doc[2]  → 'arrow.core.Tuple9'  not in pack (no grant)
+   @tok   2091  from doc[2]  → 'arrow.core.extensions.list.foldable.fold'  not in pack (no grant)
+   @tok   2107  from doc[2]  → 'arrow.core.extensions.ordering.monoid.monoid'  not in pack (no grant)
+   @tok   2114  from doc[2]  → 'arrow.core.fix'  not in pack (no grant)
+   @tok   2122  from doc[2]  → 'arrow.core.identity'  not in pack (no grant)
+   @tok   2130  from doc[2]  → 'arrow.core.toT'  not in pack (no grant)
+   @tok   2139  from doc[2]  → 'arrow.typeclasses.Applicative'  not in pack (no grant)
+   @tok   2147  from doc[2]  → 'arrow.typeclasses.Apply'  not in pack (no grant)
+   @tok   2158  from doc[2]  → 'arrow.typeclasses.Bifoldable'  not in pack (no grant)
+   @tok   2169  from doc[2]  → 'arrow.typeclasses.Bifunctor'  not in pack (no grant)
+   @tok   2179  from doc[2]  → 'arrow.typeclasses.Bitraverse'  not in pack (no grant)
+   @tok   2189  from doc[2]  → 'arrow.typeclasses.Comonad'  not in pack (no grant)
+   @tok   2198  from doc[2]  → 'arrow.typeclasses.Eq'  not in pack (no grant)
+   @tok   2210  from doc[2]  → 'arrow.typeclasses.EqDeprecation'  not in pack (no grant)
+   @tok   2220  from doc[2]  → 'arrow.typeclasses.Foldable'  not in pack (no grant)
+   @tok   2229  from doc[2]  → 'arrow.typeclasses.Functor'  not in pack (no grant)
+   @tok   2237  from doc[2]  → 'arrow.typeclasses.Hash'  not in pack (no grant)
+   @tok   2248  from doc[2]  → 'arrow.typeclasses.HashDeprecation'  not in pack (no grant)
+   @tok   2257  from doc[2]  → 'arrow.typeclasses.Monad'  not in pack (no grant)
+   @tok   2266  from doc[2]  → 'arrow.typeclasses.Monoid'  not in pack (no grant)
+   @tok   2274  from doc[2]  → 'arrow.typeclasses.Order'  not in pack (no grant)
+   @tok   2285  from doc[2]  → 'arrow.typeclasses.OrderDeprecation'  not in pack (no grant)
+   @tok   2294  from doc[2]  → 'arrow.typeclasses.Semigroup'  not in pack (no grant)
+   @tok   2302  from doc[2]  → 'arrow.typeclasses.Show'  not in pack (no grant)
+   @tok   2313  from doc[2]  → 'arrow.typeclasses.ShowDeprecation'  not in pack (no grant)
+   @tok   2322  from doc[2]  → 'arrow.typeclasses.Traverse'  not in pack (no grant)
+   @tok   2333  from doc[2]  → 'arrow.core.extensions.traverse'  not in pack (no grant)
+   @tok  15823  from doc[3]  → 'arrow.core.Tuple4'  not in pack (no grant)
+   @tok  15835  from doc[3]  → 'arrow.core.Tuple4.Companion'  not in pack (no grant)
+   @tok  15849  from doc[3]  → 'arrow.core.extensions.Tuple4Eq'  IN-PACK → grants attention to doc[2]
+   @tok  15858  from doc[3]  → 'arrow.typeclasses.Eq'  not in pack (no grant)
+   @tok  15870  from doc[3]  → 'arrow.typeclasses.EqDeprecation'  not in pack (no grant)
+   @tok  15878  from doc[3]  → 'kotlin.Boolean'  not in pack (no grant)
+   @tok  15886  from doc[3]  → 'kotlin.Deprecated'  not in pack (no grant)
+   @tok  15894  from doc[3]  → 'kotlin.Suppress'  not in pack (no grant)
+   @tok  15906  from doc[3]  → 'kotlin.jvm.JvmName'  not in pack (no grant)
+
+====================================================================================================
+done.
