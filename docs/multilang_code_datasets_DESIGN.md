@@ -1,6 +1,9 @@
 # Multi-language code datasets — design doc (stage 1 of 4)
 
-Status: **Go dataset DONE (training-ready); Java data pipeline running**. Author: Claude. Date: 2026-07-19.
+Status: **Go + Java + Rust + Kotlin + TypeScript datasets DONE (training-ready,
+built from FULL Stack subsets, split + audited clean); all 3 Tier-A langs reviewed
+by adversarial sub-agents (PASS) + review-artifact bundles ready for the human visual
+gate.** Awaiting human sign-off before training. Author: Claude. Date: 2026-07-21.
 
 Plan (agreed): **spec/design → harness → one pilot language → fan-out**, each stage
 possibly handed to a fresh session.
