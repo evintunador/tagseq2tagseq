@@ -10,6 +10,7 @@ from .java_spec import JAVA_SPEC
 from .typescript_spec import TYPESCRIPT_SPEC
 from .kotlin_spec import KOTLIN_SPEC
 from .rust_spec import RUST_SPEC
+from .zig_spec import ZIG_SPEC
 
 SPECS = {
     PYTHON_SPEC.name: PYTHON_SPEC,
@@ -18,6 +19,7 @@ SPECS = {
     TYPESCRIPT_SPEC.name: TYPESCRIPT_SPEC,
     KOTLIN_SPEC.name: KOTLIN_SPEC,
     RUST_SPEC.name: RUST_SPEC,
+    ZIG_SPEC.name: ZIG_SPEC,
 }
 
 
@@ -30,4 +32,4 @@ def get_spec(name: str) -> LanguageSpec:
 
 
 __all__ = ["SPECS", "get_spec", "PYTHON_SPEC", "GO_SPEC", "JAVA_SPEC",
-           "TYPESCRIPT_SPEC", "KOTLIN_SPEC", "RUST_SPEC"]
+           "TYPESCRIPT_SPEC", "KOTLIN_SPEC", "RUST_SPEC", "ZIG_SPEC"]

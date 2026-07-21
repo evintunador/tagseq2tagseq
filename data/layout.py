@@ -450,6 +450,7 @@ _DETECTOR_INFERENCE_LAYOUT = {
     "typescript": "slash_comment_prefix_eos",
     "kotlin":   "slash_comment_prefix_eos",
     "rust":     "slash_comment_prefix_eos",
+    "zig":      "slash_comment_prefix_eos",
     "arxiv":    "latex_comment_prefix",
     "null":     "eos",
 }

@@ -1,0 +1,7 @@
+[
+  {"from": "src/main.zig", "to": "src/util/helper.zig"},
+  {"from": "src/main.zig", "to": "src/sub/bar.zig"},
+  {"from": "src/main.zig", "to": "src/consts.zig"},
+  {"from": "src/util/helper.zig", "to": "src/consts.zig"},
+  {"from": "src/sub/bar.zig", "to": "src/util/helper.zig"}
+]
