@@ -88,6 +88,57 @@ doc_concatenated 2.140, doc_concat_link 2.133.
 Full run-by-run log + the yield-watcher/auto-kill system are documented in `TUNING_LESSONS.md`
 and `/fss-data/.../pipeline_logs/lrsweep_runmap.txt`.
 
+## CODE CROSS-DOC SWEEP (2026-07-21) — thesis generalizes to code, ~10× weaker than wiki
+
+Does the wiki cross-doc gain carry to code? 3 languages × 4 masks + a Python traversal
+ablation (18 runs), all 15k steps (~3.9B tok), tuned recipe (muon_lr=0.003/wd=0.1, VE-off,
+8×A100). thestack (Python, 9.29B tok) subset via 15k-step budget like arxiv; go (1.22B) /
+java (0.78B) below chinchilla so multi-epoch (6/7 epochs) like wiki. Full detail +
+per-run numbers in `RESULTS_code_crossdoc.md`; run map `runs/CODE_SWEEP_RUNMAP.txt`.
+
+**Headline code cross-doc metric = `repobench_cross_doc`** (Python-only): same tokens
+scored with cross-doc attention on vs flat-concat off.
+
+| condition | held_ppl | repobench_ppl | humaneval | repobench_cross_doc Δnll |
+|-----------|:--------:|:-------------:|:---------:|:------------------------:|
+| PY doc_causal        | 4.230 |  8.941 | 0.659 |   —    |
+| PY cross_doc_link    | 4.233 |  **7.248** | 0.640 | **+0.135** |
+| PY doc_concat        | 4.279 | 10.417 | 0.640 |   —    |
+| PY doc_concat_link   | 4.264 |  8.763 | 0.628 |   —    |
+| GO doc_causal        | 3.773 |   —    | 0.665 |   —    |
+| GO cross_doc_link    | 3.758 |   —    | 0.665 |   —    |
+| GO doc_concat        | 3.789 |   —    | 0.671 |   —    |
+| GO doc_concat_link   | 3.786 |   —    | 0.665 |   —    |
+| JAVA doc_causal      | 3.206 |   —    | 0.622 |   —    |
+| JAVA cross_doc_link  | 3.169 |   —    | 0.628 |   —    |
+| JAVA doc_concat      | 3.237 |   —    | 0.628 |   —    |
+| JAVA doc_concat_link | 3.181 |   —    | 0.659 |   —    |
+
+Python traversal ablation (mirrors the wiki bfs/dfs/rw/random × dc/cdl matrix):
+
+| traversal × mask | held_ppl | repobench_ppl | humaneval | repobench_cross_doc Δnll |
+|------------------|:--------:|:-------------:|:---------:|:------------------------:|
+| bfs    cross_doc_link | 4.233 | 7.248 | 0.640 | +0.135 |
+| dfs    cross_doc_link | 4.425 | 7.346 | 0.665 | +0.100 |
+| rw     cross_doc_link | 4.324 | 8.858 | 0.604 | +0.069 |
+| random cross_doc_link | 4.161 | 7.797 | 0.622 | +0.151 |
+
+- **Thesis generalizes — direction confirmed, ~10× smaller than wiki.** repobench_cross_doc
+  Δnll +0.07…+0.15 across all traversals (wiki hotpotqa was +1.29). Cross-file code
+  dependency is more local/predictable than Wikipedia bridge reasoning.
+- **Clearest signal: cross_doc_link beats doc_causal on repobench_ppl** (7.25 vs 8.94, holds
+  across every traversal) — a materially better cross-file next-line predictor.
+- **FLOP-control concat conditions do NOT beat cross_doc_link.** doc_concat is *worse* than
+  doc_causal on repobench (10.4 vs 8.9) — naive whole-file concat hurts; gated link attention wins.
+- **`community_pack_perplexity` is near-noise for code** (deltas 0.0002–0.03; Java sparsest ≈0),
+  unlike wiki — dense import graphs. Use repobench_cross_doc, not community_pack, for code.
+- **Traversal ablation mirrors wiki's decoupling**: cross-doc Δnll robust across all traversals,
+  no clean ordering (spread within noise at n≈430); traversal affects base-LM quality more than
+  the incremental cross-doc benefit — same two-axes story.
+- **Go/Java cross-doc claim INCONCLUSIVE**: no cross-doc code benchmark exists for them
+  (repobench_cross_doc asserts a PythonImportDetector), so their signal rests only on the weak
+  community_pack proxy. See TODO below.
+
 ---
 
 > Last updated: 2026-07-13. All numbers below regenerated in a full 12-model

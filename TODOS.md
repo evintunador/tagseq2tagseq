@@ -207,6 +207,27 @@ annotated path) but skips all `annotate()` machinery. Depends on a single-repo
 corpus so identifiers match (see `data/make_repo_corpus.py`). Alt candidate:
 CodeSearchNet with cross-file call graphs.
 
+### Create + re-run Go/Java (multi-language) cross-doc benchmarks (RAISED 2026-07-21 — action item)
+**Why now:** the 2026-07-21 code cross-doc sweep (see `RESULTS_code_crossdoc.md`) left
+the Go and Java cross-doc claims **INCONCLUSIVE**. Python confirmed the thesis via
+`repobench_cross_doc` (Δnll +0.135), but that benchmark is Python-hardcoded — it asserts
+`isinstance(model.link_detector, PythonImportDetector)` and loads `tianyang/repobench_python_v1.1`
+(see `eval/nlp_benchmarks.py::run_repobench_cross_doc`, ~L966-982). Go/Java had to fall back
+to `community_pack_perplexity`, which is **near-noise for code** (deltas 0.0002–0.03; Java
+sparsest graph ≈0) because import-graph neighborhoods are too predictable. So we have NO
+discriminating cross-doc signal for Go/Java yet.
+
+**To do:**
+- Split `run_repobench_cross_doc` by language and dispatch to the matching `<Lang>ImportDetector`
+  (the L969-974 comment already anticipates this). **Java is easy**: `tianyang/repobench_java_v1.1`
+  exists upstream — add it and match `JavaImportDetector`. Go has no RepoBench variant, so use the
+  **synthetic intra-repo benchmark** (designed above) with `GoImportDetector` instead.
+- Then re-run the eval-only pass on the finished checkpoints (no retrain needed): Go/Java
+  cross_doc_link + doc_concat_link runs from `runs/CODE_SWEEP_RUNMAP.txt` (45755/45760 go,
+  45761/45764 java). Their `best_model.pt`/`latest.pt` are saved; point `eval_checkpoints.py`
+  at them with the new benchmark in the eval list.
+- Fold in TypeScript too if the TS dataset (built 2026-07-20) gets a sweep — same benchmark gap.
+
 ### Better cross-doc benchmark for multi-language Stack models (future)
 Once TheStack is expanded to all languages, extend the synthetic intra-repo benchmark
 above to non-Python languages (e.g. JS/TS `require`/`import`, Ruby `require`).
