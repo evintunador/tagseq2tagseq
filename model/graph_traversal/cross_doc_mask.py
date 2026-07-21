@@ -1056,9 +1056,16 @@ class CrossDocLinkMaskCreator:
             device = tokens.device
 
         seq_len = tokens.shape[-1]
-        input_ids = tokens[0]
 
-        links = self.link_detector.detect_links(input_ids)
+        # Mirror __call__ EXACTLY: use per-doc detection when the detector supports
+        # it (Python/TypeScript/Rust relative imports), so target_str is the
+        # RESOLVED node key. Calling the flat detect_links here emits un-resolved
+        # specifier-space keys (e.g. TS './foo') that never match index_doc_span,
+        # falsely rendering a mask with NO cross-doc grants for those languages.
+        if hasattr(self.link_detector, "detect_links_for_doc"):
+            links = self._collect_links_per_doc(tokens, doc_spans)
+        else:
+            links = self.link_detector.detect_links(tokens[0])
         link_to_target = self._match_links_to_docs(links, doc_spans)
         cross_doc_mask = self._build_cross_doc_mask(
             seq_len, doc_spans, link_to_target, device
