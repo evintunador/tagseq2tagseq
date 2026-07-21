@@ -1,5 +1,0 @@
-Dataset: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript
-  nodes=7,482,656  edges=12,342,676  repos=425,436
-  out-degree: mean=1.65 median=1.0  in-degree mean=1.65
-  %out=0 (leaves)=32.5%  %in=0 (sources)=25.0%  isolated=0.0%
-  dangling-edge rate=0.00%  self-link rate=0.00%  reciprocal-edge rate=3.0%

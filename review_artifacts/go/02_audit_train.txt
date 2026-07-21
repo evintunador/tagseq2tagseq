@@ -1,5 +1,0 @@
-Dataset: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/train
-  nodes=322,900  edges=319,284
-  out-degree: mean=0.99 median=1.0  in-degree mean=0.96
-  %out=0 (leaves)=40.0%  %in=0 (sources)=44.1%  isolated=3.0%
-  dangling-edge rate=0.00%  self-link rate=0.00%  reciprocal-edge rate=0.0%

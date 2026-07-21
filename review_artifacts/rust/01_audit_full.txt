@@ -1,5 +1,0 @@
-Dataset: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust
-  nodes=580,313  edges=1,152,231  repos=63,082
-  out-degree: mean=1.99 median=1.0  in-degree mean=1.99
-  %out=0 (leaves)=29.3%  %in=0 (sources)=10.6%  isolated=0.0%
-  dangling-edge rate=0.00%  self-link rate=0.00%  reciprocal-edge rate=29.2%

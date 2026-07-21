@@ -1,5 +1,0 @@
-Dataset: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/kotlin
-  nodes=2,003,627  edges=4,879,011
-  out-degree: mean=2.44 median=1.0  in-degree mean=2.42
-  %out=0 (leaves)=25.4%  %in=0 (sources)=47.1%  isolated=0.0%
-  dangling-edge rate=0.00%  self-link rate=0.00%  reciprocal-edge rate=2.0%
