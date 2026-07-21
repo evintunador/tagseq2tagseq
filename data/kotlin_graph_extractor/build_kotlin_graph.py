@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -61,6 +62,10 @@ from data.jsonl_shards import iter_jsonl_records
 from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+# IDE/compiler test-fixture paths: intentionally-malformed / edge-case Kotlin that
+# is not a real module and, in several cases, hangs the tree-sitter-kotlin parser.
+_TESTDATA_RE = re.compile(r'(^|/)(testData|testdata|test-fixtures)/', re.IGNORECASE)
 
 # Top-level declaration node types whose FQN <package>.<Name> is importable.
 _DECL_TYPES = frozenset({
@@ -72,67 +77,92 @@ _DECL_TYPES = frozenset({
 })
 
 
+def _text(src: bytes, n) -> str:
+    return src[n.start_byte:n.end_byte].decode("utf-8", "replace")
+
+
+def _decl_name(src: bytes, node) -> Optional[str]:
+    """Name of a top-level declaration node (its declared symbol name)."""
+    for c in node.named_children:
+        if c.type == "identifier":
+            return _text(src, c).strip().strip("`")
+        if c.type == "variable_declaration":  # property: val/var
+            for v in c.named_children:
+                if v.type == "identifier":
+                    return _text(src, v).strip().strip("`")
+    return None
+
+
+def _kotlin_extract_for_safe(parser, src_bytes: bytes):
+    """Module-level extractor run INSIDE the SafeParser worker process.
+
+    Returns (package, [declared_names], [imported_fqns_non_wildcard]). Must be
+    importable + return picklable data (see data/graph_harness/safe_tree_sitter.py).
+    tree_sitter_kotlin 1.1.0 hangs indefinitely on some real files (array-literal
+    annotation syntax `@[Ann]`), so this runs in a killable subprocess.
+    """
+    tree = parser.parse(src_bytes)
+    root = tree.root_node
+    package = ""
+    names: List[str] = []
+    imports: List[str] = []
+    for c in root.children:
+        if c.type == "package_header":
+            for cc in c.named_children:
+                if cc.type in ("qualified_identifier", "identifier"):
+                    package = _text(src_bytes, cc).strip()
+                    break
+        elif c.type == "import":
+            fqn_node = None
+            for cc in c.named_children:
+                if cc.type in ("qualified_identifier", "identifier"):
+                    fqn_node = cc
+                    break
+            if fqn_node is None:
+                continue
+            raw = _text(src_bytes, c)
+            is_star = any(x.type == "*" for x in c.children) or raw.rstrip().endswith("*")
+            if is_star:
+                continue
+            fqn = _text(src_bytes, fqn_node).strip().strip("`")
+            if fqn:
+                imports.append(fqn)
+        elif c.type in _DECL_TYPES:
+            name = _decl_name(src_bytes, c)
+            if name:
+                names.append(name)
+    return package, names, imports
+
+
 class _KotlinParser:
-    """tree-sitter Kotlin parser: package header, top-level decl names, imports."""
+    """Kotlin parser guarded by a killable subprocess (SafeParser).
 
-    def __init__(self):
-        import tree_sitter_kotlin
-        from tree_sitter import Language, Parser
-        self._lang = Language(tree_sitter_kotlin.language())
-        self._parser = Parser(self._lang)
+    tree_sitter_kotlin 1.1.0 hangs uninterruptibly on some real Stack files, and
+    the C parse call ignores Python signals / the 0.26 progress_callback cancel
+    path segfaults — so parsing runs in a worker process with a per-file timeout.
+    A file that times out yields ("", [], []) (no nodes/edges) and is logged.
+    """
 
-    def _text(self, src: bytes, n) -> str:
-        return src[n.start_byte:n.end_byte].decode("utf-8", "replace")
+    def __init__(self, timeout_s: float = 20.0):
+        from data.graph_harness.safe_tree_sitter import SafeParser
+        self._safe = SafeParser(
+            "tree_sitter_kotlin",
+            "data.kotlin_graph_extractor.build_kotlin_graph._kotlin_extract_for_safe",
+            timeout_s=timeout_s,
+        )
 
-    def _decl_name(self, src: bytes, node) -> Optional[str]:
-        """Name of a top-level declaration node (its declared symbol name)."""
-        for c in node.named_children:
-            if c.type == "identifier":
-                return self._text(src, c).strip().strip("`")
-            if c.type == "variable_declaration":  # property: val/var
-                for v in c.named_children:
-                    if v.type == "identifier":
-                        return self._text(src, v).strip().strip("`")
-        return None
+    def parse(self, source: str, label: str = "") -> Tuple[str, List[str], List[str]]:
+        result = self._safe.parse(source, label=label)
+        if result is None:  # timed out or errored — treat as no declarations
+            return "", [], []
+        return result
 
-    def parse(self, source: str) -> Tuple[str, List[str], List[str]]:
-        """Return (package, [declared_names], [imported_fqns_non_wildcard])."""
-        src = source.encode("utf-8", errors="replace")
-        tree = self._parser.parse(src)
-        root = tree.root_node
+    def close(self):
+        self._safe.close()
 
-        package = ""
-        names: List[str] = []
-        imports: List[str] = []
-
-        for c in root.children:
-            if c.type == "package_header":
-                for cc in c.named_children:
-                    if cc.type in ("qualified_identifier", "identifier"):
-                        package = self._text(src, cc).strip()
-                        break
-            elif c.type == "import":
-                # skip the leaf 'import' keyword (no named children)
-                fqn_node = None
-                for cc in c.named_children:
-                    if cc.type in ("qualified_identifier", "identifier"):
-                        fqn_node = cc
-                        break
-                if fqn_node is None:
-                    continue
-                raw = self._text(src, c)
-                is_star = any(x.type == "*" for x in c.children) or raw.rstrip().endswith("*")
-                if is_star:
-                    continue
-                fqn = self._text(src, fqn_node).strip().strip("`")
-                if fqn:
-                    imports.append(fqn)
-            elif c.type in _DECL_TYPES:
-                name = self._decl_name(src, c)
-                if name:
-                    names.append(name)
-
-        return package, names, imports
+    @property
+    def n_skipped(self) -> int:
+        return self._safe.n_skipped
 
 
 def build_repo_nodes(
@@ -152,7 +182,7 @@ def build_repo_nodes(
     for path, content in repo_files:
         if not path.endswith(".kt") or path.endswith(".kts"):
             continue
-        package, names, imports = parser.parse(content)
+        package, names, imports = parser.parse(content, label=path)
         for name in names:
             fqn = f"{package}.{name}" if package else name
             if fqn in nodes:
@@ -191,9 +221,10 @@ def build_repo_nodes(
 
 
 def build(jsonl_path: Path, out_dir: Path, min_links: int = 1) -> dict:
-    parser = _KotlinParser()
+    parser = _KotlinParser(timeout_s=15.0)
     repos: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
     n_records = 0
+    n_testdata = 0
     for rec in iter_jsonl_records(jsonl_path):
         repo = rec.get("max_stars_repo_name")
         path = rec.get("max_stars_repo_path")
@@ -202,9 +233,18 @@ def build(jsonl_path: Path, out_dir: Path, min_links: int = 1) -> dict:
             continue
         if path.endswith(".kts"):
             continue
+        # Skip IDE/compiler test-fixture files: they are intentionally-malformed
+        # or edge-case Kotlin (not real modules), pollute the graph, AND several
+        # trigger a tree_sitter_kotlin parser hang (array-literal annotations,
+        # dangling constructs). SafeParser is the safety net for any that remain
+        # outside these paths; this filter removes the bulk cheaply.
+        if _TESTDATA_RE.search(path):
+            n_testdata += 1
+            continue
         repos[repo].append((path, content))
         n_records += 1
-    logger.info("Read %d Kotlin records across %d repos", n_records, len(repos))
+    logger.info("Read %d Kotlin records across %d repos (%d testData files skipped)",
+                n_records, len(repos), n_testdata)
 
     all_nodes: Dict[str, dict] = {}
     all_contents: Dict[str, str] = {}
@@ -213,7 +253,7 @@ def build(jsonl_path: Path, out_dir: Path, min_links: int = 1) -> dict:
     import time as _time
     _t0 = _time.time()
     for _i, (repo, files) in enumerate(repos.items()):
-        if _i % 10000 == 0:
+        if _i % 5000 == 0:
             logger.info("  repo %d/%d (%.0fs, %d nodes so far)",
                         _i, len(repos), _time.time() - _t0, len(all_nodes))
         if len(files) < 2:
@@ -250,6 +290,12 @@ def build(jsonl_path: Path, out_dir: Path, min_links: int = 1) -> dict:
             cf.write(json.dumps({"normed_identifier": k, "content": content}) + "\n")
     logger.info("write done in %.0fs", _time.time() - _tw)
 
+    n_skipped = parser.n_skipped
+    parser.close()
+    if n_skipped:
+        logger.warning("SafeParser skipped %d files that timed out/errored (parser hang)",
+                       n_skipped)
+
     n_edges = sum(len(n["outgoing"]) for n in all_nodes.values())
     stats = {
         "records_read": n_records,
@@ -260,6 +306,8 @@ def build(jsonl_path: Path, out_dir: Path, min_links: int = 1) -> dict:
         "graph_edges_internal_final": n_edges,
         "avg_out_degree": (n_edges / len(all_nodes)) if all_nodes else 0.0,
         "min_links": min_links,
+        "testdata_files_skipped": n_testdata,
+        "parser_timeouts_skipped": n_skipped,
     }
     with open(out_dir / "graph_stats.json", "w", encoding="utf-8") as sf:
         json.dump(stats, sf, indent=2)
