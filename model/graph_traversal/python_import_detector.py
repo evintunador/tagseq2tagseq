@@ -5,19 +5,36 @@ Detects Python ``import`` and ``from ... import`` statements in tokenized source
 code sequences and converts the module paths to candidate file paths for matching
 against document identifiers in the packed batch.
 
+The *build-time* import extractor (``data/github_graph_extractor/extract.py``)
+uses a tree-sitter grammar to enumerate import statements when constructing the
+shipped graph. This runtime detector re-detects links from *tokens* at
+train/inference time and — like the Go/Rust/TypeScript runtime detectors — works
+in token space with a comment/string-blanking pass plus compiled regexes (a
+tree-sitter parse per packed sequence would be far too slow in the training hot
+path). The two are graded for agreement against a THIRD, independent tree-sitter
+oracle (``data/graph_harness``).
+
 Design
 ------
-Detection works in three stages:
+Detection works in four stages:
 
 1. **Decode once**: the full token sequence is decoded to a string in a single
    ``decode_fn`` call.
-2. **Regex parse**: ``_parse_imports`` finds all import statements via two
+2. **Blank comments/strings**: ``_blank_comments_and_strings`` overwrites the
+   bodies of ``#`` comments and string literals (including triple-quoted
+   docstrings) with equal-length spaces, preserving every character offset. This
+   mirrors the Go/TS detectors and matches the tree-sitter oracle, which never
+   treats an ``import`` written inside a docstring or string as a real import.
+3. **Regex parse**: ``_parse_imports`` finds all import statements via two
    compiled patterns (one for plain ``import``, one for ``from ... import``
-   including multi-line parenthesised forms).
-3. **Char → token mapping**: a cumulative character-length index built by
-   decoding each token individually maps regex character offsets back to token
-   positions.  For Python source (nearly all ASCII) this is exact; for the rare
-   UTF-8 edge case the position may be off by one token, which is acceptable.
+   including multi-line parenthesised forms). ``as`` aliases are stripped from
+   both the module (``import x as y`` -> ``x``) and the imported names
+   (``from x import y as z`` -> name ``y``).
+4. **Char -> token mapping**: a cumulative character-length index (built with a
+   single batch ``decode_tokens_bytes`` call when available, else per-token) maps
+   regex character offsets back to token positions.  For Python source (nearly
+   all ASCII) this is exact; for the rare UTF-8 edge case the position may be off
+   by one token, which is acceptable.
 
 Relative imports
 ----------------
@@ -68,20 +85,112 @@ _SIMPLE_IMPORT_RE = re.compile(
     re.MULTILINE,
 )
 
-# "from foo.bar import name1, name2" — single-line, no parentheses.
-# Group 1: module path.  Group 2: imported names or "*".
+# "from foo.bar import name1, name2 [as alias]" — single-line, no parentheses.
+# Group 1: module path.  Group 2: imported names (each optionally ``as alias``)
+# or "*".  Aliases are stripped from the names later by ``_strip_alias``.
 _FROM_IMPORT_INLINE_RE = re.compile(
     r"^[ \t]*from\s+([\w.]+)\s+import\s+"
-    r"(\*|\w+(?:\s*,\s*\w+)*)[ \t]*(?:#.*)?$",
+    r"(\*|\w+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*)[ \t]*(?:#.*)?$",
     re.MULTILINE,
 )
 
-# "from foo.bar import (\n    name1,\n    name2,\n)" — parenthesised, may span lines.
-# Group 1: module path.  Group 2: contents of the parentheses (names + whitespace).
+# "from foo.bar import (\n    name1,\n    name2 as alias,\n)" — parenthesised,
+# may span lines.  Group 1: module path.  Group 2: contents of the parentheses
+# (names + optional ``as`` aliases + whitespace).
 _FROM_IMPORT_PAREN_RE = re.compile(
     r"^[ \t]*from\s+([\w.]+)\s+import\s+\(([^)]*)\)",
     re.MULTILINE | re.DOTALL,
 )
+
+
+def _strip_alias(name: str) -> str:
+    """Return the imported name with any ``as <alias>`` suffix removed.
+
+    ``'y as z'`` -> ``'y'``; ``'y'`` -> ``'y'``.  Splitting on whitespace and
+    taking the first token is robust to arbitrary spacing around ``as``.  Returns
+    ``''`` for an all-whitespace input (e.g. a trailing-comma artifact).
+    """
+    parts = name.split()
+    return parts[0] if parts else ""
+
+
+# ---------------------------------------------------------------------------
+# Comment / string blanking
+# ---------------------------------------------------------------------------
+
+
+def _blank_comments_and_strings(text: str) -> str:
+    """Blank ``#`` comments and string-literal bodies to equal-length spaces.
+
+    Newlines are preserved (kept as ``\\n``) so line structure — and therefore
+    every character offset used for ``link_end_pos`` — is unchanged, and the
+    ``re.MULTILINE`` ``^`` anchors still see the true line boundaries.
+
+    This mirrors the Go/Rust/TypeScript runtime detectors and the tree-sitter
+    oracle: an ``import`` statement written inside a docstring, a comment, or any
+    string literal is NOT real code and must not be detected.  Unlike Go/TS —
+    where the import *specifier* is itself a quoted string — a Python import
+    target is always a bare identifier, so every string body can be blanked
+    without erasing anything the parser needs.
+
+    A hand-written scanner (not a regex) is used so that ``#`` inside a string
+    and quotes inside a comment are handled correctly, and so triple-quoted
+    strings (docstrings) are treated as a single span.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        # --- line comment ---
+        if c == "#":
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        # --- string literal (single/double, optionally triple-quoted) ---
+        if c == '"' or c == "'":
+            quote = c
+            # triple-quoted?
+            if i + 2 < n and text[i + 1] == quote and text[i + 2] == quote:
+                out[i] = out[i + 1] = out[i + 2] = " "
+                i += 3
+                while i < n:
+                    if text[i] == "\\":  # escape — blank the pair
+                        out[i] = " "
+                        if i + 1 < n and text[i + 1] != "\n":
+                            out[i + 1] = " "
+                        i += 2
+                        continue
+                    if (i + 2 < n and text[i] == quote
+                            and text[i + 1] == quote and text[i + 2] == quote):
+                        out[i] = out[i + 1] = out[i + 2] = " "
+                        i += 3
+                        break
+                    if text[i] != "\n":
+                        out[i] = " "
+                    i += 1
+                continue
+            # single-quoted (ends at matching quote or newline)
+            out[i] = " "
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    out[i] = " "
+                    if i + 1 < n and text[i + 1] != "\n":
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    out[i] = " "
+                    i += 1
+                    break
+                if text[i] == "\n":
+                    break
+                out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -135,11 +244,13 @@ def _parse_relative_imports(text: str) -> List[Tuple[str, str, int, int]]:
     Same return format as ``_parse_imports`` — ``(module_path, from_name,
     char_start, char_end)`` — but only entries whose ``module_path`` starts
     with ``'.'``.  Plain ``import .foo`` is a syntax error in Python so only
-    the ``from … import`` patterns are checked.
+    the ``from … import`` patterns are checked.  ``as`` aliases on the imported
+    names are stripped; comments/strings are blanked first.
     """
+    text = _blank_comments_and_strings(text)
     results: List[Tuple[str, str, int, int]] = []
 
-    # --- "from .foo import name1, name2" (single-line) ---
+    # --- "from .foo import name1, name2 [as alias]" (single-line) ---
     for m in _FROM_IMPORT_INLINE_RE.finditer(text):
         module_path = m.group(1)
         if not module_path.startswith("."):
@@ -149,11 +260,11 @@ def _parse_relative_imports(text: str) -> List[Tuple[str, str, int, int]]:
             results.append((module_path, "*", m.start(), m.end()))
         else:
             for name in names_str.split(","):
-                name = name.strip()
+                name = _strip_alias(name)
                 if name:
                     results.append((module_path, name, m.start(), m.end()))
 
-    # --- "from .foo import (\n    name1,\n    name2\n)" ---
+    # --- "from .foo import (\n    name1,\n    name2 as alias\n)" ---
     for m in _FROM_IMPORT_PAREN_RE.finditer(text):
         module_path = m.group(1)
         if not module_path.startswith("."):
@@ -163,7 +274,7 @@ def _parse_relative_imports(text: str) -> List[Tuple[str, str, int, int]]:
             for line in m.group(2).split("\n")
         ]
         for name in " ".join(clean_lines).split(","):
-            name = name.strip()
+            name = _strip_alias(name)
             if name:
                 results.append((module_path, name, m.start(), m.end()))
 
@@ -246,7 +357,13 @@ def _parse_imports(text: str) -> List[Tuple[str, str, int, int]]:
     Multiple entries with the same ``(char_start, char_end)`` are emitted when
     a single statement imports several names
     (e.g. ``from foo import bar, baz``).
+
+    Comments and string literals are blanked before matching, so ``import``
+    statements appearing inside docstrings/strings/comments are NOT detected.
+    Character offsets in the returned tuples index into the ORIGINAL ``text``
+    (blanking preserves every offset).
     """
+    text = _blank_comments_and_strings(text)
     results: List[Tuple[str, str, int, int]] = []
 
     # --- "import foo.bar [as x], baz.qux [as y]" ---
@@ -257,7 +374,7 @@ def _parse_imports(text: str) -> List[Tuple[str, str, int, int]]:
             if module_path and not module_path.startswith("."):
                 results.append((module_path, "", m.start(), m.end()))
 
-    # --- "from foo.bar import name1, name2" (single-line) ---
+    # --- "from foo.bar import name1, name2 [as alias]" (single-line) ---
     for m in _FROM_IMPORT_INLINE_RE.finditer(text):
         module_path = m.group(1)
         if module_path.startswith("."):
@@ -267,24 +384,23 @@ def _parse_imports(text: str) -> List[Tuple[str, str, int, int]]:
             results.append((module_path, "*", m.start(), m.end()))
         else:
             for name in names_str.split(","):
-                name = name.strip()
+                name = _strip_alias(name)
                 if name:
                     results.append((module_path, name, m.start(), m.end()))
 
-    # --- "from foo.bar import (\n    name1,\n    name2\n)" ---
+    # --- "from foo.bar import (\n    name1,\n    name2 as alias\n)" ---
     for m in _FROM_IMPORT_PAREN_RE.finditer(text):
         module_path = m.group(1)
         if module_path.startswith("."):
             continue
-        # Strip inline comments line-by-line BEFORE comma-splitting so that
-        # a comment like ``bar,  # the bar module\n    baz`` doesn't absorb
-        # names on the lines that follow.
+        # Comments are already blanked upstream, but keep the ``#`` / line-cont
+        # strip as belt-and-braces before comma-splitting.
         clean_lines = [
             line.split("#")[0].rstrip("\\")
             for line in m.group(2).split("\n")
         ]
         for name in " ".join(clean_lines).split(","):
-            name = name.strip()
+            name = _strip_alias(name)
             if name:
                 results.append((module_path, name, m.start(), m.end()))
 
@@ -318,6 +434,14 @@ class PythonImportDetector:
 
     def __init__(self, decode_fn: Callable[[List[int]], str]) -> None:
         self.decode_fn = decode_fn
+        # Fast path for the char->token index: tiktoken exposes
+        # ``decode_tokens_bytes`` on the bound method's ``__self__`` encoder,
+        # which returns per-token byte strings in ONE call instead of one
+        # ``decode_fn`` call per token (O(tokens) -> O(1) Python round-trips,
+        # ~2x faster on large files). Detected once here; falls back cleanly.
+        enc = getattr(decode_fn, "__self__", None)
+        batch = getattr(enc, "decode_tokens_bytes", None)
+        self._decode_tokens_bytes = batch if callable(batch) else None
 
     # ------------------------------------------------------------------
     # LinkDetector protocol
@@ -435,12 +559,24 @@ class PythonImportDetector:
         ``cumulative[i]`` = total number of characters in
         ``decode_fn(tokens[:i])``, with ``cumulative[0] = 0``.
 
-        Each token is decoded individually to get its character contribution.
+        Each token's character contribution is summed.  When the encoder exposes
+        ``decode_tokens_bytes`` (tiktoken) all per-token byte strings are fetched
+        in a single call and decoded individually to chars — ~2x faster than one
+        ``decode_fn`` call per token on large files, with identical results.
         For pure-ASCII source (the common case for Python code) this is exact.
         For the rare multi-byte UTF-8 token the count may be off by a character
         or two, which is acceptable for ``link_end_pos`` precision.
         """
         cumulative = [0] * (len(tokens) + 1)
+        if self._decode_tokens_bytes is not None:
+            try:
+                per_token = self._decode_tokens_bytes(tokens)
+                for i, b in enumerate(per_token):
+                    cumulative[i + 1] = cumulative[i] + len(b.decode("utf-8", "replace"))
+                return cumulative
+            except Exception:
+                # Fall through to the safe per-token path on any surprise.
+                cumulative = [0] * (len(tokens) + 1)
         for i, tok in enumerate(tokens):
             try:
                 char_len = len(self.decode_fn([tok]))

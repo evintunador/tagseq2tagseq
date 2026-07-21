@@ -15,9 +15,11 @@ import torch
 
 from model.graph_traversal.python_import_detector import (
     PythonImportDetector,
+    _blank_comments_and_strings,
     _parse_imports,
     _parse_relative_imports,
     _resolve_relative_import,
+    _strip_alias,
     module_path_to_file_paths,
 )
 
@@ -622,3 +624,158 @@ class TestDetectLinksForDoc:
         links = detector.detect_links_for_doc(tokens, "pkg/sub/mod.py")
         targets = {lk.target_str for lk in links}
         assert "pkg/sub/foo.py" in targets
+
+
+# ===========================================================================
+# _strip_alias
+# ===========================================================================
+
+
+class TestStripAlias:
+    def test_no_alias(self):
+        assert _strip_alias("foo") == "foo"
+
+    def test_simple_alias(self):
+        assert _strip_alias("foo as bar") == "foo"
+
+    def test_extra_whitespace(self):
+        assert _strip_alias("  foo   as   bar  ") == "foo"
+
+    def test_empty(self):
+        assert _strip_alias("   ") == ""
+
+
+# ===========================================================================
+# The `from x import y as z` alias bug (design §10a) — REGRESSION TESTS
+# ===========================================================================
+
+
+class TestAliasedFromImportBug:
+    """The pre-migration regex missed inline-aliased from-imports entirely and,
+    where it matched, emitted a target_str of literally ``x/y as z`` (design
+    §10a). These lock in the fix."""
+
+    def test_inline_aliased_from_import_detected(self):
+        # Previously MISSED completely (inline regex forbade the `as` clause).
+        result = _parse_imports("from gettext import gettext as _\n")
+        assert len(result) == 1
+        module_path, from_name, _cs, _ce = result[0]
+        assert module_path == "gettext"
+        assert from_name == "gettext"  # NOT "gettext as _"
+
+    def test_alias_stripped_from_dotted_module(self):
+        result = _parse_imports("from keyword import iskeyword as is_kw\n")
+        assert result == [("keyword", "iskeyword", result[0][2], result[0][3])]
+
+    def test_target_str_has_no_alias(self, detector, enc):
+        ids = _encode(enc, "from a.b import c as d\n")
+        targets = {l.target_str for l in detector.detect_links(ids)}
+        # No emitted target may contain " as " (the old bug produced "a/b/c as d").
+        assert all(" as " not in t for t in targets)
+        assert "a/b/c.py" in targets
+
+    def test_multiple_names_with_aliases(self):
+        result = _parse_imports("from mod import a as x, b, c as z\n")
+        names = {fn for _, fn, _, _ in result}
+        assert names == {"a", "b", "c"}
+
+    def test_parenthesised_alias_stripped(self):
+        code = "from mod import (\n    a as x,\n    b,\n)\n"
+        names = {fn for _, fn, _, _ in _parse_imports(code)}
+        assert names == {"a", "b"}
+
+    def test_relative_inline_alias_stripped(self):
+        result = _parse_relative_imports("from .schema import User as U\n")
+        assert len(result) == 1
+        assert result[0][1] == "User"
+
+
+# ===========================================================================
+# Comment / string blanking (docstring false-positive fix)
+# ===========================================================================
+
+
+class TestBlankCommentsAndStrings:
+    def test_offsets_preserved(self):
+        code = "import os\n# comment\nimport sys\n"
+        blanked = _blank_comments_and_strings(code)
+        assert len(blanked) == len(code)
+        # newlines preserved so MULTILINE ^ anchors still work
+        assert blanked.count("\n") == code.count("\n")
+
+    def test_import_in_line_comment_not_detected(self):
+        # A line comment that itself contains an import statement.
+        code = "x = 1\n#import evil\nimport real\n"
+        modules = {mp for mp, _, _, _ in _parse_imports(code)}
+        assert "real" in modules
+        assert "evil" not in modules
+
+    def test_import_in_docstring_not_detected(self):
+        code = (
+            '"""\n'
+            "Example usage::\n\n"
+            "    from jinja2 import BaseLoader\n"
+            "    from os.path import join\n"
+            '"""\n'
+            "import real_module\n"
+        )
+        result = _parse_imports(code)
+        modules = {mp for mp, _, _, _ in result}
+        assert "real_module" in modules
+        assert "jinja2" not in modules
+        assert "os.path" not in modules
+
+    def test_import_in_single_quoted_string_not_detected(self):
+        code = "s = 'from secret import key'\nimport real\n"
+        modules = {mp for mp, _, _, _ in _parse_imports(code)}
+        assert modules == {"real"}
+
+    def test_hash_inside_string_not_treated_as_comment(self):
+        # '#' inside a string must not start a comment that eats the next import.
+        code = "s = 'a # b'\nimport real\n"
+        modules = {mp for mp, _, _, _ in _parse_imports(code)}
+        assert "real" in modules
+
+    def test_real_imports_still_detected_after_docstring(self, detector, enc):
+        code = (
+            '"""module docstring: import fake"""\n'
+            "import os\n"
+            "from typing import List\n"
+        )
+        ids = _encode(enc, code)
+        targets = {l.target_str for l in detector.detect_links(ids)}
+        assert "os.py" in targets
+        assert "typing.py" in targets
+        assert all("fake" not in t for t in targets)
+
+
+# ===========================================================================
+# Batch-decode char->token index (perf path) equals per-token path
+# ===========================================================================
+
+
+class TestBatchDecodeIndex:
+    def test_batch_path_active_for_tiktoken(self, detector):
+        # tiktoken exposes decode_tokens_bytes -> fast path must be selected.
+        assert detector._decode_tokens_bytes is not None
+
+    def test_batch_index_matches_per_token(self, detector, enc):
+        code = "import os\nfrom a.b import c\nx = 'hello world'\n"
+        tokens = enc.encode(code)
+        fast = detector._build_char_to_token_index(tokens)
+        # force the fallback and recompute
+        saved = detector._decode_tokens_bytes
+        detector._decode_tokens_bytes = None
+        try:
+            slow = detector._build_char_to_token_index(tokens)
+        finally:
+            detector._decode_tokens_bytes = saved
+        assert fast == slow
+
+    def test_no_batch_capability_falls_back(self):
+        # A plain decode callable (no __self__ encoder) uses the per-token path.
+        enc2 = tiktoken.get_encoding("gpt2")
+        det = PythonImportDetector(decode_fn=lambda ids: enc2.decode(ids))
+        assert det._decode_tokens_bytes is None
+        idx = det._build_char_to_token_index(enc2.encode("import os\n"))
+        assert idx[0] == 0 and idx[-1] > 0
