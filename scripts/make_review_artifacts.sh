@@ -32,9 +32,12 @@ python -m data.graph_harness.run_audit "$DS" > "$OUT/01_audit_full.txt" 2>&1
 echo "  02 audit (train split)"
 python -m data.graph_harness.run_audit "$DS/splits/train" > "$OUT/02_audit_train.txt" 2>&1
 
-echo "  03 sample dump (detector=$DET)"
-python -m data.graph_harness.run_sample_dump "$DS/splits/train" \
-    --detector "$DET" --n 40 --seed 0 --snippet-chars 400 \
+# Sample-dump on val_community (a smaller split): loading a multi-million-node
+# GraphIndex + scanning for linked docs is slow, and val_community is dense
+# (BFS communities) so links are found fast. Same resolution logic as train.
+echo "  03 sample dump (detector=$DET, on val_community)"
+python -m data.graph_harness.run_sample_dump "$DS/splits/val_community" \
+    --detector "$DET" --n 40 --seed 0 --snippet-chars 400 --max-scan 5000 \
     > "$OUT/03_sample_dump.txt" 2>&1
 
 echo "  04 packed batches (visualize_llm_input)"
