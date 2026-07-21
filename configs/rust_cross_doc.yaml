@@ -8,7 +8,7 @@ data:
   train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/train
   # epoch_dirs set after precompute (see design doc §Go pilot); until then the
   # live PackedSequenceDataset runs (single-GPU) — for multi-GPU precompute first.
-  # epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/rust_bfs/epoch_0
+  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/rust_bfs/epoch_0
   val_dirs:
     val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_community
     val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_random
