@@ -1,0 +1,88 @@
+# RUST SWEEP (bfs) — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
+# Layout: stochastic_slash_comment_prefix (// comment card — C-family fix for the # prefix bug).
+# Chinchilla: 4 epoch_dir(s) cover max_optimizer_steps=15000 @ world=8.
+data:
+  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust
+  strategy: 'bfs'
+  layout_policy: 'stochastic_slash_comment_prefix'
+  inference_layout_policy: 'slash_comment_prefix_eos'
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/train
+  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/rust_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/rust_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/rust_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/rust_bfs/epoch_3]
+  val_dirs:
+    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_community
+    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_random
+  test_dirs:
+    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/test_community
+    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/test_random
+
+model:
+  compile: true
+  compile_mode: 'default'
+  attention_backend: 'triton'
+  inference_attention_backend: 'flex'
+  mask_type: 'cross_doc_link'
+  link_detector: 'rust'
+  max_grants: 256
+  activation_checkpointing: false
+  model_dim: 1024
+  num_layers: 24
+  num_heads: 8    # 8H × 128Dh = 1024
+  max_seq_len: 32768
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  untie_at_frac: 0.667
+  ignore_index: -100
+  dtype: 'bfloat16'
+  logit_softcap: 30.0
+  mtp_extra_weights: [0.5, 0.25]
+  mtp_decay_steps: 0
+  ve_layers: []
+  shared_ve_bank: false
+
+optimizer:
+  type: 'muon'
+  muon_wd: 0.1
+  adamw_wd: 0.005
+  momentum: 0.95
+  muon_beta2: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.003
+  adamw_lr: 3e-05
+  muon_momentum_warmup_steps: 300
+  adamw_embed_beta1: 0.5
+
+train_loop:
+  epochs: 1
+  max_optimizer_steps: 15000   # fixed budget ~3.9B tok; enables cooldown+untie
+  warmup_steps: 300
+  cooldown_frac: 0.4
+  min_lr_ratio: 0.1
+  val_steps: 20
+  val_interval: 250
+  save_latest_interval: 250
+  atomic_feature_kwargs:
+    norm_clip_value: 1.0
+    accum_steps: 1
+
+seed: 42
+
+eval:
+  run_on_completion: true
+  benchmarks:
+    - {name: held_out_perplexity,       conditions: [doceval]}
+    # community_pack_perplexity [baseline, experimental] = headline cross-doc metric
+    # (language-agnostic; repobench_cross_doc is Python-hardcoded).
+    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
+    - {name: humaneval_buggy,           conditions: [doceval], language: rust}
+  max_docs: 500
+  link_fuzzy_match: false
+
+# --- Smoke-test overrides (pass on CLI, don't edit here) ---
+# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
+# --model.max_seq_len 2048  --model.mtp_extra_weights '[]' --model.ve_layers '[]'
+# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
+# --eval.max_docs 20
