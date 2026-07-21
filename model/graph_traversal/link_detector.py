@@ -72,7 +72,7 @@ class LinkDetector(Protocol):
 
 # Valid names accepted by ``make_link_detector`` (and the ``model.link_detector``
 # config key), kept here as the single source of truth for error messages.
-LINK_DETECTOR_NAMES = ("markdown", "python", "go", "java", "typescript", "kotlin", "rust", "zig", "dart", "arxiv", "null")
+LINK_DETECTOR_NAMES = ("markdown", "python", "go", "java", "typescript", "javascript", "kotlin", "rust", "zig", "dart", "arxiv", "null")
 
 
 def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "LinkDetector":
@@ -108,6 +108,9 @@ def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "Lin
     if name == "typescript":
         from .typescript_import_detector import TypeScriptImportDetector
         return TypeScriptImportDetector(decode_fn=decode_fn)
+    if name == "javascript":
+        from .javascript_import_detector import JavaScriptImportDetector
+        return JavaScriptImportDetector(decode_fn=decode_fn)
     if name == "kotlin":
         from .kotlin_import_detector import KotlinImportDetector
         return KotlinImportDetector(decode_fn=decode_fn)

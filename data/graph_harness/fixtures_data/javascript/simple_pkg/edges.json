@@ -1,0 +1,7 @@
+[
+  {"from": "src/main", "to": "src/util/helper"},
+  {"from": "src/main", "to": "src/models/index"},
+  {"from": "src/main", "to": "src/consts"},
+  {"from": "src/models/index", "to": "src/consts"},
+  {"from": "src/util/helper", "to": "src/consts"}
+]

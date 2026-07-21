@@ -448,6 +448,7 @@ _DETECTOR_INFERENCE_LAYOUT = {
     "go":       "slash_comment_prefix_eos",
     "java":     "slash_comment_prefix_eos",
     "typescript": "slash_comment_prefix_eos",
+    "javascript": "slash_comment_prefix_eos",
     "kotlin":   "slash_comment_prefix_eos",
     "rust":     "slash_comment_prefix_eos",
     "zig":      "slash_comment_prefix_eos",
