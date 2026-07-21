@@ -64,7 +64,7 @@ from data.pack_sampler import PackBatchSampler
 from data.traversal import (
     BFSStrategy, DFSStrategy, RandomSelectionStrategy, RandomWalkStrategy,
 )
-from model.graph_traversal.link_detector import make_link_detector
+from model.graph_traversal.link_detector import make_link_detector, LinkInfo
 
 # ---------------------------------------------------------------------------
 # Defaults (mirror configs/arxiv_cross_doc.yaml)
@@ -221,7 +221,25 @@ def _render_pack(placements, label, graph, backend, layout, enc, detector,
         f"── CROSS-DOC LINKS ({args.link_detector} detector; targets matched "
         f"against in-pack docs)", "1;34", use_color,
     ))
-    links = detector.detect_links(flat)
+    # Mirror the TRAINING mask's link detection exactly (cross_doc_mask.py): when a
+    # detector implements ``detect_links_for_doc`` (Python/TypeScript/Rust — relative
+    # imports that must resolve against the importing file's path), collect links
+    # PER DOC so target_str is the RESOLVED node key. Calling the flat-sequence
+    # ``detect_links`` here would emit un-resolved specifier-space keys (e.g. TS
+    # ``./foo``) that never match ``index_doc_span``, falsely showing 0 grants and
+    # misrepresenting the training signal in this human-gate artifact.
+    if hasattr(detector, "detect_links_for_doc"):
+        links = []
+        for span in spans:
+            for lk in detector.detect_links_for_doc(
+                flat[span.start:span.end], span.raw_identifier
+            ):
+                links.append(LinkInfo(
+                    link_end_pos=lk.link_end_pos + span.start,
+                    target_str=lk.target_str,
+                ))
+    else:
+        links = detector.detect_links(flat)
     if not links:
         print("   (none detected)")
     else:
