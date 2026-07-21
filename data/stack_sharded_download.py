@@ -44,6 +44,12 @@ _KEEP_PATH: Dict[str, Callable[[str], bool]] = {
     "go":         lambda p: p.endswith(".go") or p == "go.mod" or p.endswith("/go.mod"),
     "java":       lambda p: p.endswith(".java"),
     "python":     lambda p: p.endswith(".py"),
+    # JS: .js/.jsx/.mjs/.cjs but NOT minified bundles (stem ending in .min —
+    # matches build_javascript_graph's _is_js_node exclusion exactly).
+    "javascript": lambda p: (p.endswith((".js", ".jsx", ".mjs", ".cjs"))
+                             and not p.rsplit("/", 1)[-1].rsplit(".", 1)[0].endswith(".min")),
+    "zig":        lambda p: p.endswith(".zig"),
+    "dart":       lambda p: p.endswith(".dart"),
 }
 
 
