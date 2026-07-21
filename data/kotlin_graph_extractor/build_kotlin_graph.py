@@ -210,7 +210,12 @@ def build(jsonl_path: Path, out_dir: Path, min_links: int = 1) -> dict:
     all_contents: Dict[str, str] = {}
     repos_kept = 0
     nodes_before = 0
-    for repo, files in repos.items():
+    import time as _time
+    _t0 = _time.time()
+    for _i, (repo, files) in enumerate(repos.items()):
+        if _i % 10000 == 0:
+            logger.info("  repo %d/%d (%.0fs, %d nodes so far)",
+                        _i, len(repos), _time.time() - _t0, len(all_nodes))
         if len(files) < 2:
             continue
         nodes, contents = build_repo_nodes(files, parser)
@@ -233,13 +238,17 @@ def build(jsonl_path: Path, out_dir: Path, min_links: int = 1) -> dict:
                 all_nodes[k] = n
                 all_contents[k] = contents[k]
 
+    logger.info("repo loop done in %.0fs: %d nodes, writing...",
+                _time.time() - _t0, len(all_nodes))
     out_dir.mkdir(parents=True, exist_ok=True)
+    _tw = _time.time()
     with open(out_dir / "graph.jsonl", "w", encoding="utf-8") as gf:
         for n in all_nodes.values():
             gf.write(json.dumps(n) + "\n")
     with open(out_dir / "content.jsonl", "w", encoding="utf-8") as cf:
         for k, content in all_contents.items():
             cf.write(json.dumps({"normed_identifier": k, "content": content}) + "\n")
+    logger.info("write done in %.0fs", _time.time() - _tw)
 
     n_edges = sum(len(n["outgoing"]) for n in all_nodes.values())
     stats = {
