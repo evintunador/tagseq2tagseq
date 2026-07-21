@@ -1,0 +1,195 @@
+====================================================================================================
+Loading GraphIndex from /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_community ...
+  nodes=14,516  tokenizer=gpt2  eos=50256  dtype=uint16
+  LIVE sample  |  strategy=bfs  layout=slash_comment_prefix_eos  order_mode=prefer_targets_first  token_budget=16384  doc_budget=None  epoch=0
+====================================================================================================
+
+####################################################################################################
+PACK 0   |   16,384 tokens   |   1 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:16384]  (16384 tok)  doc_id=9344  component=0  TRUNCATED
+   normed_id : typerslow/helix@crate::selection
+   title     : 'typerslow/helix@crate::selection'
+   categories: ''
+   ┌ PREFIX  (13 tok)  ids=[1003, 2170, 364, 9319, 14, 2978, 844, 31, 66, 4873, 3712, 49283, 628]
+   │   // typerslow/helix@crate::selection
+   │   
+   ├ BODY    (16370 tok)
+   │   head: '//! Selections are the primary editing construct. Even cursors are\\n//! defined as a selection range.\\n//!\\n//! All positioning is done via `char` offsets into the buffer.\\nuse crate::{\\n    graphemes::{\\n        ensure_grapheme_boundary_next, ensure_grapheme_boundary_prev, next_grapheme_boundary,\\n … (+7 chars)'
+   │   tail: 'e::new(11, 13),\\n                Range::new(16, 19),\\n                // In contrast to the comment above, there is no\\n                // _trailing_ zero-width range despite the trailing\\n                // match, because ranges are exclusive on the right.\\n            ]\\n        );\\n\\n        asse … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (rust detector; targets matched against in-pack docs)
+   @tok    160  from doc[0]  → 'crate::graphemes'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::graphemes::ensure_grapheme_boundary_next'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::graphemes::ensure_grapheme_boundary_prev'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::graphemes::next_grapheme_boundary'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::graphemes::prev_grapheme_boundary'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::movement'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::movement::Direction'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::Assoc'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::ChangeSet'  not in pack (no grant)
+   @tok    160  from doc[0]  → 'crate::RopeSlice'  not in pack (no grant)
+   @tok    173  from doc[0]  → 'smallvec'  not in pack (no grant)
+   @tok    173  from doc[0]  → 'smallvec::smallvec'  not in pack (no grant)
+   @tok    173  from doc[0]  → 'smallvec::SmallVec'  not in pack (no grant)
+   @tok    182  from doc[0]  → 'std::borrow'  not in pack (no grant)
+   @tok    182  from doc[0]  → 'std::borrow::Cow'  not in pack (no grant)
+   @tok   1853  from doc[0]  → 'std::cmp'  not in pack (no grant)
+   @tok   1853  from doc[0]  → 'std::cmp::Ordering'  not in pack (no grant)
+   @tok   3219  from doc[0]  → 'std::cmp'  not in pack (no grant)
+   @tok   3219  from doc[0]  → 'std::cmp::Ordering'  not in pack (no grant)
+   @tok   9521  from doc[0]  → 'crate'  not in pack (no grant)
+   @tok   9532  from doc[0]  → 'crate'  not in pack (no grant)
+   @tok   9532  from doc[0]  → 'crate::Rope'  not in pack (no grant)
+   @tok  15782  from doc[0]  → 'crate::regex'  not in pack (no grant)
+   @tok  15782  from doc[0]  → 'crate::regex::Regex'  not in pack (no grant)
+
+####################################################################################################
+PACK 1   |   16,384 tokens   |   3 docs   |   2 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:13884]  (13884 tok)  doc_id=2740  component=0  TRUNCATED
+   normed_id : kiffie/pic32-pac@crate::spi1::con1
+   title     : 'kiffie/pic32-pac@crate::spi1::con1'
+   categories: ''
+   ┌ PREFIX  (20 tok)  ids=[1003, 479, 733, 494, 14, 16564, 2624, 12, 33587, 31, 66, 4873, 3712, 2777, 72, 16, 3712, 1102, 16, 628]
+   │   // kiffie/pic32-pac@crate::spi1::con1
+   │   
+   ├ BODY    (13863 tok)
+   │   head: '#[doc = "Register `CON1` reader"]\\npub struct R(crate::R<CON1_SPEC>);\\nimpl core::ops::Deref for R {\\n    type Target = crate::R<CON1_SPEC>;\\n    #[inline(always)]\\n    fn deref(&self) -> &Self::Target {\\n        &self.0\\n    }\\n}\\nimpl core::convert::From<crate::R<CON1_SPEC>> for R {\\n    fn from(r … (+10 chars)'
+   │   tail: ' #[inline(always)]\\n    pub fn frmcnt(&mut self) -> FRMCNT_W {\\n        FRMCNT_W { w: self }\\n    }\\n    #[doc = "Bit 27"]\\n    #[inline(always)]\\n    pub fn frmsypw(&mut self) -> FRMSYPW_W {\\n        FRMSYPW_W { w: self }\\n    }\\n    #[doc = "Bit 28"]\\n    #[inline(always)]\\n    pub fn mssen(&mut s … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[13884:15402]  (1518 tok)  doc_id=10398  component=1
+   normed_id : lucab/efm32hg-pac@crate::emu::ctrl
+   title     : 'lucab/efm32hg-pac@crate::emu::ctrl'
+   categories: ''
+   ┌ PREFIX  (20 tok)  ids=[1003, 17115, 397, 14, 891, 76, 2624, 71, 70, 12, 33587, 31, 66, 4873, 3712, 368, 84, 3712, 44755, 628]
+   │   // lucab/efm32hg-pac@crate::emu::ctrl
+   │   
+   ├ BODY    (1497 tok)
+   │   head: '#[doc = "Reader of register CTRL"]\\npub type R = crate::R<u32, super::CTRL>;\\n#[doc = "Writer for register CTRL"]\\npub type W = crate::W<u32, super::CTRL>;\\n#[doc = "Register CTRL `reset()`\'s with value 0"]\\nimpl crate::ResetValue for super::CTRL {\\n    type Type = u32;\\n    #[inline(always)]\\n    f … (+8 chars)'
+   │   tail: '  #[doc = "Bit 1 - Energy Mode 2 Block"]\\n    #[inline(always)]\\n    pub fn em2block(&mut self) -> EM2BLOCK_W {\\n        EM2BLOCK_W { w: self }\\n    }\\n    #[doc = "Bits 2:3 - Energy Mode 4 Control"]\\n    #[inline(always)]\\n    pub fn em4ctrl(&mut self) -> EM4CTRL_W {\\n        EM4CTRL_W { w: self }\\ … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[15402:16384]  (982 tok)  doc_id=10358  component=1
+   normed_id : lucab/efm32hg-pac@crate::emu
+   title     : 'lucab/efm32hg-pac@crate::emu'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[1003, 17115, 397, 14, 891, 76, 2624, 71, 70, 12, 33587, 31, 66, 4873, 3712, 368, 84, 628]
+   │   // lucab/efm32hg-pac@crate::emu
+   │   
+   ├ BODY    (963 tok)
+   │   head: '#[doc = r"Register block"]\\n#[repr(C)]\\npub struct RegisterBlock {\\n    #[doc = "0x00 - Control Register"]\\n    pub ctrl: CTRL,\\n    _reserved1: [u8; 4usize],\\n    #[doc = "0x08 - Configuration Lock Register"]\\n    pub lock: LOCK,\\n    _reserved2: [u8; 24usize],\\n    #[doc = "0x24 - Auxiliary Contro … (+9 chars)'
+   │   tail: 'uct _AUXCTRL;\\n#[doc = "`read()` method returns [auxctrl::R](auxctrl::R) reader structure"]\\nimpl crate::Readable for AUXCTRL {}\\n#[doc = "`write(|w| ..)` method takes [auxctrl::W](auxctrl::W) writer structure"]\\nimpl crate::Writable for AUXCTRL {}\\n#[doc = "Auxiliary Control Register"]\\npub mod aux … (+7 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (rust detector; targets matched against in-pack docs)
+   @tok  15827  from doc[2]  → 'crate::emu::ctrl'  IN-PACK → grants attention to doc[1]
+   @tok  16093  from doc[2]  → 'crate::emu::lock'  not in pack (no grant)
+   @tok  16382  from doc[2]  → 'crate::emu::auxctrl'  not in pack (no grant)
+
+####################################################################################################
+PACK 2   |   16,384 tokens   |   5 docs   |   3 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:3346]  (3346 tok)  doc_id=13385  component=1  TRUNCATED
+   normed_id : bjoernQ/esp32@crate::dport::tag_fo_ctrl
+   title     : 'bjoernQ/esp32@crate::dport::tag_fo_ctrl'
+   categories: ''
+   ┌ PREFIX  (21 tok)  ids=[1003, 275, 7639, 1142, 48, 14, 9774, 2624, 31, 66, 4873, 3712, 67, 634, 3712, 12985, 62, 6513, 62, 44755, 628]
+   │   // bjoernQ/esp32@crate::dport::tag_fo_ctrl
+   │   
+   ├ BODY    (3324 tok)
+   │   head: '#[doc = "Register `TAG_FO_CTRL` reader"]\\npub struct R(crate::R<TAG_FO_CTRL_SPEC>);\\nimpl core::ops::Deref for R {\\n    type Target = crate::R<TAG_FO_CTRL_SPEC>;\\n    #[inline(always)]\\n    fn deref(&self) -> &Self::Target {\\n        &self.0\\n    }\\n}\\nimpl From<crate::R<TAG_FO_CTRL_SPEC>> for R {\\n … (+10 chars)'
+   │   tail: ' 8"]\\n    #[inline(always)]\\n    pub fn app_cache_tag_force_on(&mut self) -> APP_CACHE_TAG_FORCE_ON_W {\\n        APP_CACHE_TAG_FORCE_ON_W { w: self }\\n    }\\n    #[doc = "Bit 9"]\\n    #[inline(always)]\\n    pub fn app_cache_tag_pd(&mut self) -> APP_CACHE_TAG_PD_W {\\n        APP_CACHE_TAG_PD_W { w: s … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[3346:12163]  (8817 tok)  doc_id=13775  component=2
+   normed_id : bjoernQ/esp32@crate::slc::_1int_st
+   title     : 'bjoernQ/esp32@crate::slc::_1int_st'
+   categories: ''
+   ┌ PREFIX  (21 tok)  ids=[1003, 275, 7639, 1142, 48, 14, 9774, 2624, 31, 66, 4873, 3712, 6649, 66, 3712, 62, 16, 600, 62, 301, 628]
+   │   // bjoernQ/esp32@crate::slc::_1int_st
+   │   
+   ├ BODY    (8795 tok)
+   │   head: '#[doc = "Register `_1INT_ST` reader"]\\npub struct R(crate::R<_1INT_ST_SPEC>);\\nimpl core::ops::Deref for R {\\n    type Target = crate::R<_1INT_ST_SPEC>;\\n    #[inline(always)]\\n    fn deref(&self) -> &Self::Target {\\n        &self.0\\n    }\\n}\\nimpl From<crate::R<_1INT_ST_SPEC>> for R {\\n    #[inline … (+11 chars)'
+   │   tail: 'c = "`read()` method returns [_1int_st::R](R) reader structure"]\\nimpl crate::Readable for _1INT_ST_SPEC {\\n    type Reader = R;\\n}\\n#[doc = "`reset()` method sets _1INT_ST to value 0"]\\nimpl crate::Resettable for _1INT_ST_SPEC {\\n    #[inline(always)]\\n    fn reset_value() -> Self::Ux {\\n        0\\ … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[12163:12199]  (36 tok)  doc_id=4555  component=3
+   normed_id : shampoofactory/lzfse_rust@crate::base
+   title     : 'shampoofactory/lzfse_rust@crate::base'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[1003, 427, 696, 37711, 9548, 14, 75, 89, 69, 325, 62, 11469, 31, 66, 4873, 3712, 8692, 628]
+   │   // shampoofactory/lzfse_rust@crate::base
+   │   
+   ├ BODY    (17 tok)
+   │   head: 'mod magic_bytes;\\n\\npub use magic_bytes::MagicBytes;\\n'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[12199:13561]  (1362 tok)  doc_id=4575  component=3
+   normed_id : shampoofactory/lzfse_rust@crate::error
+   title     : 'shampoofactory/lzfse_rust@crate::error'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[1003, 427, 696, 37711, 9548, 14, 75, 89, 69, 325, 62, 11469, 31, 66, 4873, 3712, 18224, 628]
+   │   // shampoofactory/lzfse_rust@crate::error
+   │   
+   ├ BODY    (1343 tok)
+   │   head: 'use crate::fse;\\nuse crate::vn;\\n\\nuse std::error;\\nuse std::fmt;\\nuse std::io;\\n\\n/// Decoding error Result.\\npub type Result<T> = std::result::Result<T, Error>;\\n\\n/// Decoding errors.\\n///\\n/// You may want to convert [Error] to [io::Error](std::io::Error) either directly or by using\\n/// the `?` … (+13 chars)'
+   │   tail: 'm<io::Error> for Error {\\n    fn from(err: io::Error) -> Error {\\n        Error::Io(err)\\n    }\\n}\\n\\nimpl From<Error> for io::Error {\\n    fn from(err: Error) -> Self {\\n        match err {\\n            Error::Io(e) => e,\\n            err => io::Error::new(io::ErrorKind::InvalidData, err),\\n        … (+14 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[4]  pos[13561:16384]  (2823 tok)  doc_id=4543  component=3
+   normed_id : shampoofactory/lzfse_rust@crate::decode::decoder
+   title     : 'shampoofactory/lzfse_rust@crate::decode::decoder'
+   categories: ''
+   ┌ PREFIX  (22 tok)  ids=[1003, 427, 696, 37711, 9548, 14, 75, 89, 69, 325, 62, 11469, 31, 66, 4873, 3712, 12501, 1098, 3712, 12501, 12342, 628]
+   │   // shampoofactory/lzfse_rust@crate::decode::decoder
+   │   
+   ├ BODY    (2800 tok)
+   │   head: 'use crate::base::MagicBytes;\\nuse crate::error::Error;\\nuse crate::fse::FseCore;\\nuse crate::lz::LzWriter;\\nuse crate::raw::RawBlock;\\nuse crate::types::ByteReader;\\nuse crate::vn::VnCore;\\n\\nuse std::convert::TryInto;\\nuse std::fmt;\\n\\n/// LZFSE decoder.\\n///\\n///\\n/// This basic implementation dec … (+14 chars)'
+   │   tail: 'mpl Default for LzfseDecoder {\\n    fn default() -> Self {\\n        Self { fse_core: FseCore::default(), n_payload_bytes: 0, dst_mark: 0 }\\n    }\\n}\\n\\nimpl fmt::Debug for LzfseDecoder {\\n    fn fmt(&self, f: &mut fmt::Formatter<\'_>) -> fmt::Result {\\n        f.debug_struct("LzfseDecoder").finish()\\ … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (rust detector; targets matched against in-pack docs)
+   @tok  12197  from doc[2]  → 'magic_bytes'  not in pack (no grant)
+   @tok  12197  from doc[2]  → 'magic_bytes::MagicBytes'  not in pack (no grant)
+   @tok  12186  from doc[2]  → 'crate::base::magic_bytes'  not in pack (no grant)
+   @tok  12223  from doc[3]  → 'crate'  not in pack (no grant)
+   @tok  12223  from doc[3]  → 'crate::fse'  not in pack (no grant)
+   @tok  12230  from doc[3]  → 'crate'  not in pack (no grant)
+   @tok  12230  from doc[3]  → 'crate::vn'  not in pack (no grant)
+   @tok  12237  from doc[3]  → 'std'  not in pack (no grant)
+   @tok  12237  from doc[3]  → 'std::error'  not in pack (no grant)
+   @tok  12244  from doc[3]  → 'std'  not in pack (no grant)
+   @tok  12244  from doc[3]  → 'std::fmt'  not in pack (no grant)
+   @tok  12250  from doc[3]  → 'std'  not in pack (no grant)
+   @tok  12250  from doc[3]  → 'std::io'  not in pack (no grant)
+   @tok  13591  from doc[4]  → 'crate::base'  IN-PACK → grants attention to doc[2]
+   @tok  13591  from doc[4]  → 'crate::base::MagicBytes'  not in pack (no grant)
+   @tok  13599  from doc[4]  → 'crate::error'  IN-PACK → grants attention to doc[3]
+   @tok  13599  from doc[4]  → 'crate::error::Error'  not in pack (no grant)
+   @tok  13610  from doc[4]  → 'crate::fse'  not in pack (no grant)
+   @tok  13610  from doc[4]  → 'crate::fse::FseCore'  not in pack (no grant)
+   @tok  13621  from doc[4]  → 'crate::lz'  not in pack (no grant)
+   @tok  13621  from doc[4]  → 'crate::lz::LzWriter'  not in pack (no grant)
+   @tok  13630  from doc[4]  → 'crate::raw'  not in pack (no grant)
+   @tok  13630  from doc[4]  → 'crate::raw::RawBlock'  not in pack (no grant)
+   @tok  13639  from doc[4]  → 'crate::types'  not in pack (no grant)
+   @tok  13639  from doc[4]  → 'crate::types::ByteReader'  not in pack (no grant)
+   @tok  13650  from doc[4]  → 'crate::vn'  not in pack (no grant)
+   @tok  13650  from doc[4]  → 'crate::vn::VnCore'  not in pack (no grant)
+   @tok  13662  from doc[4]  → 'std::convert'  not in pack (no grant)
+   @tok  13662  from doc[4]  → 'std::convert::TryInto'  not in pack (no grant)
+   @tok  13669  from doc[4]  → 'std'  not in pack (no grant)
+   @tok  13669  from doc[4]  → 'std::fmt'  not in pack (no grant)
+
+====================================================================================================
+done.

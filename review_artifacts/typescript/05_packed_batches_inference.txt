@@ -1,0 +1,1288 @@
+====================================================================================================
+Loading GraphIndex from /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_community ...
+  nodes=187,215  tokenizer=gpt2  eos=50256  dtype=uint16
+  LIVE sample  |  strategy=bfs  layout=slash_comment_prefix_eos  order_mode=prefer_targets_first  token_budget=16384  doc_budget=None  epoch=0
+====================================================================================================
+
+####################################################################################################
+PACK 0   |   16,384 tokens   |   23 docs   |   8 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:1568]  (1568 tok)  doc_id=89103  component=3  TRUNCATED
+   normed_id : tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/domain/export/export
+   title     : 'tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/domain/export/export'
+   categories: ''
+   ┌ PREFIX  (32 tok)  ids=[1003, 256, 10782, 12, 25471, 14, 3876, 87, 272, 12, 17721, 25, 15042, 14, 18211, 14, 15042, 14, 10677, 14, 18170, 14, 21018, 14, 39344, 14, 27830, 14, 39344, 14, 39344, 628]
+   │   // tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/domain/export/export
+   │   
+   ├ BODY    (1535 tok)
+   │   head: "import { ExportRequested } from '@marxan-api/modules/clone/export/domain';\\nimport {\\n  ArchiveLocation,\\n  ComponentId,\\n  ComponentLocation,\\n  ResourceId,\\n  ResourceKind,\\n} from '@marxan/cloning/domain';\\nimport { UserId } from '@marxan/domain-ids';\\nimport { AggregateRoot } from '@nestjs/cqrs' … (+10 chars)"
+   │   tail: ' #allPiecesReady = () => this.pieces.every((piece) => piece.isReady());\\n\\n  isCloning = () => Boolean(this.importResourceId);\\n\\n  hasFinished = () => Boolean(this.archiveLocation);\\n\\n  isForeignExport = () => this.foreignExport;\\n\\n  isForProject() {\\n    return this.resourceKind === ResourceKind … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[1568:1784]  (216 tok)  doc_id=89027  component=3
+   normed_id : tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/domain/index
+   title     : 'tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/domain/index'
+   categories: ''
+   ┌ PREFIX  (30 tok)  ids=[1003, 256, 10782, 12, 25471, 14, 3876, 87, 272, 12, 17721, 25, 15042, 14, 18211, 14, 15042, 14, 10677, 14, 18170, 14, 21018, 14, 39344, 14, 27830, 14, 9630, 628]
+   │   // tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/domain/index
+   │   
+   ├ BODY    (185 tok)
+   │   head: "export { ArchiveReady } from './events/archive-ready.event';\\nexport { PieceExported } from './events/piece-exported.event';\\nexport { PieceExportRequested } from './events/piece-export-requested.event';\\nexport { AllPiecesExported } from './events/all-pieces-exported.event';\\nexport { ExportRequest … (+4 chars)"
+   │   tail: "t { ExportId } from './export/export.id';\\nexport { Export } from './export/export';\\nexport { ExportSnapshot } from './export/export.snapshot';\\nexport { ExportComponentSnapshot } from './export/export-component.snapshot';\\n\\nexport { ExportComponent } from './export/export-component/export-compone … (+6 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[1784:1900]  (116 tok)  doc_id=89117  component=3
+   normed_id : tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/application/finalize-archive.command
+   title     : 'tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/application/finalize-archive.command'
+   categories: ''
+   ┌ PREFIX  (35 tok)  ids=[1003, 256, 10782, 12, 25471, 14, 3876, 87, 272, 12, 17721, 25, 15042, 14, 18211, 14, 15042, 14, 10677, 14, 18170, 14, 21018, 14, 39344, 14, 31438, 14, 20311, 1096, 12, 17474, 13, 21812, 628]
+   │   // tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/application/finalize-archive.command
+   │   
+   ├ BODY    (80 tok)
+   │   head: "import { Command } from '@nestjs-architects/typed-cqrs';\\nimport { ExportId } from '../domain';\\n\\nexport { ExportId };\\n\\nexport class FinalizeArchive extends Command<void> {\\n  constructor(public readonly exportId: ExportId) {\\n    super();\\n  }\\n}\\n"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[1900:2145]  (245 tok)  doc_id=89251  component=3
+   normed_id : tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/application/all-pieces-ready.saga
+   title     : 'tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/application/all-pieces-ready.saga'
+   categories: ''
+   ┌ PREFIX  (37 tok)  ids=[1003, 256, 10782, 12, 25471, 14, 3876, 87, 272, 12, 17721, 25, 15042, 14, 18211, 14, 15042, 14, 10677, 14, 18170, 14, 21018, 14, 39344, 14, 31438, 14, 439, 12, 34154, 12, 1493, 13, 82, 8126, 628]
+   │   // tnc-css/marxan-cloud:api/apps/api/src/modules/clone/export/application/all-pieces-ready.saga
+   │   
+   ├ BODY    (207 tok)
+   │   head: "import { Injectable } from '@nestjs/common';\\nimport { ICommand, ofType, Saga } from '@nestjs/cqrs';\\nimport { Observable } from 'rxjs';\\nimport { map } from 'rxjs/operators';\\n\\nimport { AllPiecesExported } from '@marxan-api/modules/clone/export/domain';\\nimport { FinalizeArchive } from './finalize … (+6 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[4]  pos[2145:2182]  (37 tok)  doc_id=40081  component=4
+   normed_id : alexzimakov/react-draft-ui:src/components/svg-icon/index
+   title     : 'alexzimakov/react-draft-ui:src/components/svg-icon/index'
+   categories: ''
+   ┌ PREFIX  (25 tok)  ids=[1003, 257, 2588, 89, 320, 44715, 14, 45018, 12, 35679, 12, 9019, 25, 10677, 14, 5589, 3906, 14, 21370, 70, 12, 4749, 14, 9630, 628]
+   │   // alexzimakov/react-draft-ui:src/components/svg-icon/index
+   │   
+   ├ BODY    (11 tok)
+   │   head: "export * from './svg-icon';\\n"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[5]  pos[2182:2589]  (407 tok)  doc_id=40382  component=4
+   normed_id : alexzimakov/react-draft-ui:src/bootstrap-icons/handbag
+   title     : 'alexzimakov/react-draft-ui:src/bootstrap-icons/handbag'
+   categories: ''
+   ┌ PREFIX  (23 tok)  ids=[1003, 257, 2588, 89, 320, 44715, 14, 45018, 12, 35679, 12, 9019, 25, 10677, 14, 18769, 26418, 12, 34280, 14, 4993, 21454, 628]
+   │   // alexzimakov/react-draft-ui:src/bootstrap-icons/handbag
+   │   
+   ├ BODY    (383 tok)
+   │   head: "/**\\n * This file auto-generated with the `scripts/bootstrap-icons.js` script.\\n */\\nimport { Icon } from '../components/svg-icon';\\n\\n// https://github.com/twbs/icons/blob/main/icons/handbag.svg\\nexport const handbag: Icon = {\\n  name: 'handbag',\\n  width: 16,\\n  height: 16,\\n  viewBox: '0 0 16 16' … (+11 chars)"
+   │   tail: '83 1.277L.85 13.13A2.5 2.5 0 0 0 3.322 16h9.355a2.5 2.5 0 0 0 2.473-2.87l-1.028-6.853A1.5 1.5 0 0 0 12.64 5H11zm-1 1v1.5a.5.5 0 0 0 1 0V6h1.639a.5.5 0 0 1 .494.426l1.028 6.851A1.5 1.5 0 0 1 12.678 15H3.322a1.5 1.5 0 0 1-1.483-1.723l1.028-6.851A.5.5 0 0 1 3.36 6H5v1.5a.5.5 0 1 0 1 0V6h4z" />\\n  ),\\n} … (+3 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[6]  pos[2589:2956]  (367 tok)  doc_id=74948  component=5
+   normed_id : biutas/ng-bootstrap-icons:icons/svg/bootstrap-reboot
+   title     : 'biutas/ng-bootstrap-icons:icons/svg/bootstrap-reboot'
+   categories: ''
+   ┌ PREFIX  (23 tok)  ids=[1003, 3182, 315, 292, 14, 782, 12, 18769, 26418, 12, 34280, 25, 34280, 14, 21370, 70, 14, 18769, 26418, 12, 260, 18769, 628]
+   │   // biutas/ng-bootstrap-icons:icons/svg/bootstrap-reboot
+   │   
+   ├ BODY    (343 tok)
+   │   head: 'export const BootstrapReboot = `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" fill="currentColor" class="bi bi-bootstrap-reboot" viewBox="0 0 16 16">\\n  <path d="M1.161 8a6.84 6.84 0 1 0 6.842-6.84.58.58 0 1 1 0-1.16 8 8 0 1 1-6.556 3.412l-.663-.577a.58.58 0 0 1 .227-.997l2.52-. … (+1 chars)'
+   │   tail: '592a.58.58 0 0 1-.956.364l-.643-.56A6.812 6.812 0 0 0 1.16 8z"/>\\n  <path d="M6.641 11.671V8.843h1.57l1.498 2.828h1.314L9.377 8.665c.897-.3 1.427-1.106 1.427-2.1 0-1.37-.943-2.246-2.456-2.246H5.5v7.352h1.141zm0-3.75V5.277h1.57c.881 0 1.416.499 1.416 1.32 0 .84-.504 1.324-1.386 1.324h-1.6z"/>\\n</svg> … (+3 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[7]  pos[2956:3323]  (367 tok)  doc_id=112965  component=6
+   normed_id : IMRZ/tw-db:src/generated/warhammer2/collections/BuildingSets
+   title     : 'IMRZ/tw-db:src/generated/warhammer2/collections/BuildingSets'
+   categories: ''
+   ┌ PREFIX  (24 tok)  ids=[1003, 8959, 49, 57, 14, 4246, 12, 9945, 25, 10677, 14, 27568, 14, 5767, 17980, 17, 14, 4033, 26448, 14, 25954, 50, 1039, 628]
+   │   // IMRZ/tw-db:src/generated/warhammer2/collections/BuildingSets
+   │   
+   ├ BODY    (342 tok)
+   │   head: '\\nimport { CollectionCache, CollectionKey } from "../../../common";\\n\\n\\nexport namespace BuildingSets {\\n  export const KEY = new CollectionKey("building_sets");\\n\\n  export class Entry {\\n    private readonly collectionCache: CollectionCache;\\n\\n    readonly key: string;\\n    readonly onscreenName … (+12 chars)'
+   │   tail: 'n = values["icon"];\\n      this.sortOrder = values["sort_order"];\\n      this.colourR = values["colour_r"];\\n      this.colourG = values["colour_g"];\\n      this.colourB = values["colour_b"];\\n      this.onscreenDescription = values["onscreen_description"];\\n    }\\n    \\n  }\\n}\\n\\nexport default Bui … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[8]  pos[3323:3741]  (418 tok)  doc_id=113197  component=6
+   normed_id : IMRZ/tw-db:src/generated/warhammer2/collections/Effects
+   title     : 'IMRZ/tw-db:src/generated/warhammer2/collections/Effects'
+   categories: ''
+   ┌ PREFIX  (22 tok)  ids=[1003, 8959, 49, 57, 14, 4246, 12, 9945, 25, 10677, 14, 27568, 14, 5767, 17980, 17, 14, 4033, 26448, 14, 47738, 628]
+   │   // IMRZ/tw-db:src/generated/warhammer2/collections/Effects
+   │   
+   ├ BODY    (395 tok)
+   │   head: '\\nimport { CollectionCache, CollectionKey } from "../../../common";\\nimport { EffectCategories } from "./EffectCategories";\\n\\nexport namespace Effects {\\n  export const KEY = new CollectionKey("effects");\\n\\n  export class Entry {\\n    private readonly collectionCache: CollectionCache;\\n\\n    reado … (+10 chars)'
+   │   tail: '   \\n    get category(): EffectCategories.Entry | undefined {\\n      const collection = <EffectCategories.Entry[]>this.collectionCache.getCollection(EffectCategories.KEY, EffectCategories.Entry);\\n      return collection.find(entry => entry.key === this._category);\\n    }\\n  }\\n}\\n\\nexport default E … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[9]  pos[3741:4304]  (563 tok)  doc_id=113174  component=6
+   normed_id : IMRZ/tw-db:src/generated/warhammer2/collections/EffectBonusValueBuildingSetJunctions
+   title     : 'IMRZ/tw-db:src/generated/warhammer2/collections/EffectBonusValueBuildingSetJunctions'
+   categories: ''
+   ┌ PREFIX  (28 tok)  ids=[1003, 8959, 49, 57, 14, 4246, 12, 9945, 25, 10677, 14, 27568, 14, 5767, 17980, 17, 14, 4033, 26448, 14, 18610, 29435, 11395, 25954, 7248, 22396, 2733, 628]
+   │   // IMRZ/tw-db:src/generated/warhammer2/collections/EffectBonusValueBuildingSetJunctions
+   │   
+   ├ BODY    (534 tok)
+   │   head: '\\nimport { CollectionCache, CollectionKey } from "../../../common";\\nimport { Effects } from "./Effects";\\nimport { CampaignBonusValueIdsBuildingSets } from "./CampaignBonusValueIdsBuildingSets";\\nimport { BuildingSets } from "./BuildingSets";\\n\\nexport namespace EffectBonusValueBuildingSetJunctions … (+7 chars)'
+   │   tail: 'gSet(): BuildingSets.Entry | undefined {\\n      const collection = <BuildingSets.Entry[]>this.collectionCache.getCollection(BuildingSets.KEY, BuildingSets.Entry);\\n      return collection.find(entry => entry.key === this._buildingSet);\\n    }\\n  }\\n}\\n\\nexport default EffectBonusValueBuildingSetJunc … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[10]  pos[4304:4389]  (85 tok)  doc_id=66593  component=7
+   normed_id : ficsit/data-landing:interfaces/classes/UFGItemCategory
+   title     : 'ficsit/data-landing:interfaces/classes/UFGItemCategory'
+   categories: ''
+   ┌ PREFIX  (20 tok)  ids=[1003, 277, 873, 270, 14, 7890, 12, 1044, 278, 25, 3849, 32186, 14, 37724, 14, 52, 30386, 7449, 27313, 628]
+   │   // ficsit/data-landing:interfaces/classes/UFGItemCategory
+   │   
+   ├ BODY    (64 tok)
+   │   head: "import { UObject } from '../native/classes';\\nimport { localized } from '../native/primitive';\\n\\nexport interface UFGItemCategory extends UObject {\\n  /**\\n   * Name of this item category\\n   */\\n  mDisplayName: localized;\\n}\\n"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[11]  pos[4389:4591]  (202 tok)  doc_id=66747  component=7
+   normed_id : ficsit/data-landing:interfaces/enums/EResourceForm
+   title     : 'ficsit/data-landing:interfaces/enums/EResourceForm'
+   categories: ''
+   ┌ PREFIX  (21 tok)  ids=[1003, 277, 873, 270, 14, 7890, 12, 1044, 278, 25, 3849, 32186, 14, 268, 5700, 14, 1137, 274, 1668, 8479, 628]
+   │   // ficsit/data-landing:interfaces/enums/EResourceForm
+   │   
+   ├ BODY    (180 tok)
+   │   head: "export enum EResourceForm {\\n  RF_INVALID,\\n  RF_SOLID,\\n  RF_LIQUID,\\n  RF_GAS,\\n  RF_HEAT,\\n  RF_LAST_ENUM,\\n}\\n\\nexport const EResourceFormDisplayName = {\\n  [EResourceForm.RF_INVALID]: 'Invalid',\\n  [EResourceForm.RF_SOLID]: 'Solid',\\n  [EResourceForm.RF_LIQUID]: 'Liquid',\\n  [EResourceForm.RF_G … (+14 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[12]  pos[4591:4803]  (212 tok)  doc_id=66737  component=7
+   normed_id : ficsit/data-landing:interfaces/enums/EStackSize
+   title     : 'ficsit/data-landing:interfaces/enums/EStackSize'
+   categories: ''
+   ┌ PREFIX  (20 tok)  ids=[1003, 277, 873, 270, 14, 7890, 12, 1044, 278, 25, 3849, 32186, 14, 268, 5700, 14, 36, 25896, 10699, 628]
+   │   // ficsit/data-landing:interfaces/enums/EStackSize
+   │   
+   ├ BODY    (191 tok)
+   │   head: "export enum EStackSize {\\n  SS_ONE,\\n  SS_SMALL,\\n  SS_MEDIUM,\\n  SS_BIG,\\n  SS_HUGE,\\n  SS_FLUID,\\n  SS_LAST_ENUM,\\n}\\n\\nexport const EStackSizeDisplayName = {\\n  [EStackSize.SS_ONE]: 'One',\\n  [EStackSize.SS_SMALL]: 'Small',\\n  [EStackSize.SS_MEDIUM]: 'Medium',\\n  [EStackSize.SS_BIG]: 'Big',\\n  [E … (+15 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[13]  pos[4803:4957]  (154 tok)  doc_id=66141  component=7
+   normed_id : ficsit/data-landing:interfaces/structs/FItemView
+   title     : 'ficsit/data-landing:interfaces/structs/FItemView'
+   categories: ''
+   ┌ PREFIX  (20 tok)  ids=[1003, 277, 873, 270, 14, 7890, 12, 1044, 278, 25, 3849, 32186, 14, 7249, 82, 14, 37, 7449, 7680, 628]
+   │   // ficsit/data-landing:interfaces/structs/FItemView
+   │   
+   ├ BODY    (133 tok)
+   │   head: "import { float } from '../native/primitive';\\nimport { Vector } from '../native/structs';\\n\\nexport interface FItemView {\\n  /**\\n   * The distance to the object when creating it's view\\n   */\\n  Distance: float;\\n\\n  /**\\n   * Where should the camera focus offsetted on the mesh\\n   */\\n  FocalOffse … (+14 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[14]  pos[4957:5901]  (944 tok)  doc_id=66594  component=7
+   normed_id : ficsit/data-landing:interfaces/classes/UFGItemDescriptor
+   title     : 'ficsit/data-landing:interfaces/classes/UFGItemDescriptor'
+   categories: ''
+   ┌ PREFIX  (22 tok)  ids=[1003, 277, 873, 270, 14, 7890, 12, 1044, 278, 25, 3849, 32186, 14, 37724, 14, 52, 30386, 7449, 24564, 1968, 273, 628]
+   │   // ficsit/data-landing:interfaces/classes/UFGItemDescriptor
+   │   
+   ├ BODY    (921 tok)
+   │   head: "import { EResourceForm } from '../enums/EResourceForm';\\nimport { EStackSize } from '../enums/EStackSize';\\nimport { FSlateBrush, UStaticMesh, UTexture2D } from '../native/assets';\\nimport { UObject } from '../native/classes';\\nimport { float, int32, localized } from '../native/primitive';\\nimport { … (+5 chars)"
+   │   tail: 'for icon capture\\n   */\\n  mIconObjectOrientation: Rotator;\\n\\n  /**\\n   * The spring arm distance used for icon capture\\n   */\\n  mIconCameraDistance: float;\\n\\n  /**\\n   * The sky orientation used for icon capture\\n   */\\n  mIconSkyOrientation: Rotator;\\n\\n  mFluidColor: Color;\\n\\n  mResourceSinkP … (+18 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[15]  pos[5901:6090]  (189 tok)  doc_id=66099  component=7
+   normed_id : ficsit/data-landing:interfaces/structs/FCostIngredientEffectActorInfo
+   title     : 'ficsit/data-landing:interfaces/structs/FCostIngredientEffectActorInfo'
+   categories: ''
+   ┌ PREFIX  (25 tok)  ids=[1003, 277, 873, 270, 14, 7890, 12, 1044, 278, 25, 3849, 32186, 14, 7249, 82, 14, 4851, 455, 27682, 445, 1153, 18610, 40277, 12360, 628]
+   │   // ficsit/data-landing:interfaces/structs/FCostIngredientEffectActorInfo
+   │   
+   ├ BODY    (163 tok)
+   │   head: "import { UFGItemDescriptor } from '../classes/UFGItemDescriptor';\\nimport { float } from '../native/primitive';\\nimport { classReference } from '../native/references';\\nimport { Vector } from '../native/structs';\\n\\nexport interface FCostIngredientEffectActorInfo {\\n  /**\\n   * What class is this co … (+8 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[16]  pos[6090:6365]  (275 tok)  doc_id=148633  component=8
+   normed_id : Nick-Goorwah/origin:packages/ui/libs/ui/core/src/components/images/ImagesCarousel/ImagesCarousel.effects
+   title     : 'Nick-Goorwah/origin:packages/ui/libs/ui/core/src/components/images/ImagesCarousel/ImagesCarousel.effects'
+   categories: ''
+   ┌ PREFIX  (38 tok)  ids=[1003, 8047, 12, 38, 2675, 86, 993, 14, 47103, 25, 43789, 14, 9019, 14, 8019, 82, 14, 9019, 14, 7295, 14, 10677, 14, 5589, 3906, 14, 17566, 14, 29398, 9914, 48355, 14, 29398, 9914, 48355, 13, 34435, 628]
+   │   // Nick-Goorwah/origin:packages/ui/libs/ui/core/src/components/images/ImagesCarousel/ImagesCarousel.effects
+   │   
+   ├ BODY    (236 tok)
+   │   head: "import { useEffect, useState } from 'react';\\n\\nconst REFRESH_INTERVAL_MS = 5000;\\n\\nexport const useImagesCarouselEffects = (\\n  imagesLength: number,\\n  refreshInterval?: number\\n) => {\\n  const [currentIndex, setCurrentIndex] = useState(0);\\n\\n  const updateIndex = () => {\\n    if (currentIndex + … (+11 chars)"
+   │   tail: 'x + 1);\\n    } else {\\n      setCurrentIndex(0);\\n    }\\n  };\\n\\n  useEffect(() => {\\n    const intervalRef = setInterval(\\n      updateIndex,\\n      refreshInterval ?? REFRESH_INTERVAL_MS\\n    );\\n    return () => {\\n      clearInterval(intervalRef);\\n    };\\n  }, [currentIndex]);\\n\\n  return { cur … (+18 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[17]  pos[6365:6593]  (228 tok)  doc_id=148567  component=8
+   normed_id : Nick-Goorwah/origin:packages/ui/libs/ui/core/src/components/images/ImagesCarousel/ImagesCarousel
+   title     : 'Nick-Goorwah/origin:packages/ui/libs/ui/core/src/components/images/ImagesCarousel/ImagesCarousel'
+   categories: ''
+   ┌ PREFIX  (36 tok)  ids=[1003, 8047, 12, 38, 2675, 86, 993, 14, 47103, 25, 43789, 14, 9019, 14, 8019, 82, 14, 9019, 14, 7295, 14, 10677, 14, 5589, 3906, 14, 17566, 14, 29398, 9914, 48355, 14, 29398, 9914, 48355, 628]
+   │   // Nick-Goorwah/origin:packages/ui/libs/ui/core/src/components/images/ImagesCarousel/ImagesCarousel
+   │   
+   ├ BODY    (191 tok)
+   │   head: "import React, { FC } from 'react';\\nimport { useImagesCarouselEffects } from './ImagesCarousel.effects';\\n\\nexport interface ImagesCarouselProps {\\n  images: string[];\\n  refreshInterval?: number;\\n  imagesProps?: React.SVGAttributes<HTMLOrSVGElement>;\\n}\\n\\nexport const ImagesCarousel: FC<ImagesCar … (+9 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[18]  pos[6593:8330]  (1737 tok)  doc_id=16224  component=9
+   normed_id : leechanghoon3024/react-native-boilerplate:src/assets/icons/waste.icon
+   title     : 'leechanghoon3024/react-native-boilerplate:src/assets/icons/waste.icon'
+   categories: ''
+   ┌ PREFIX  (28 tok)  ids=[1003, 443, 3055, 272, 456, 2049, 1270, 1731, 14, 45018, 12, 30191, 12, 2127, 5329, 6816, 25, 10677, 14, 19668, 14, 34280, 14, 86, 4594, 13, 4749, 628]
+   │   // leechanghoon3024/react-native-boilerplate:src/assets/icons/waste.icon
+   │   
+   ├ BODY    (1708 tok)
+   │   head: 'import React from \'react\';\\nimport { Svg, G, Path, Defs, ClipPath, Rect } from \'react-native-svg\';\\n\\nconst WasteIcon = () => {\\n    return (\\n        <Svg width="71" height="71" viewBox="0 0 71 71" fill="none">\\n            <G clip-path="url(#clip0_422_4720)">\\n                <Path\\n               … (+8 chars)'
+   │   tail: '        />\\n            </G>\\n            <Defs>\\n                <ClipPath id="clip0_422_4720">\\n                    <Rect width="70" height="70" fill="white" transform="translate(0.134766 0.163696)" />\\n                </ClipPath>\\n            </Defs>\\n        </Svg>\\n    );\\n};\\n\\nexport default  … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[19]  pos[8330:10001]  (1671 tok)  doc_id=16129  component=9
+   normed_id : leechanghoon3024/react-native-boilerplate:src/themes/font.style
+   title     : 'leechanghoon3024/react-native-boilerplate:src/themes/font.style'
+   categories: ''
+   ┌ PREFIX  (26 tok)  ids=[1003, 443, 3055, 272, 456, 2049, 1270, 1731, 14, 45018, 12, 30191, 12, 2127, 5329, 6816, 25, 10677, 14, 1169, 6880, 14, 10331, 13, 7635, 628]
+   │   // leechanghoon3024/react-native-boilerplate:src/themes/font.style
+   │   
+   ├ BODY    (1644 tok)
+   │   head: "export const Ar17RBlack = {\\n    fontSize: '14px',\\n    fontWeight: 200,\\n    fontFamily: 'Arch',\\n    color: 'black.100',\\n};\\n\\nexport const Ar14Sb = {\\n    fontSize: '12px',\\n    fontWeight: 500,\\n    fontFamily: 'Arch',\\n    color: 'black.100',\\n};\\n\\nexport const Ar21B = {\\n    fontSize: '21px' … (+16 chars)"
+   │   tail: "9N = {\\n    fontSize: '19px',\\n    fontWeight: 500,\\n    fontFamily: 'Lato',\\n};\\n\\nexport const La17N = {\\n    fontSize: '15px',\\n    fontWeight: 500,\\n    fontFamily: 'Lato',\\n};\\n\\nexport const Ar10r = {\\n    fontSize: '10px',\\n    fontWeight: 50,\\n    fontFamily: 'Arch',\\n};\\n\\nexport const Moda … (+19 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[20]  pos[10001:10477]  (476 tok)  doc_id=16203  component=9
+   normed_id : leechanghoon3024/react-native-boilerplate:src/components/card/Dashboard.card
+   title     : 'leechanghoon3024/react-native-boilerplate:src/components/card/Dashboard.card'
+   categories: ''
+   ┌ PREFIX  (29 tok)  ids=[1003, 443, 3055, 272, 456, 2049, 1270, 1731, 14, 45018, 12, 30191, 12, 2127, 5329, 6816, 25, 10677, 14, 5589, 3906, 14, 9517, 14, 43041, 3526, 13, 9517, 628]
+   │   // leechanghoon3024/react-native-boilerplate:src/components/card/Dashboard.card
+   │   
+   ├ BODY    (446 tok)
+   │   head: "import React from 'react';\\nimport { Box, Center, Image, Text, VStack, WarningIcon } from 'native-base';\\nimport { Dimensions } from 'react-native';\\nimport { La15N, La15Sb, La28B } from '../../themes/font.style';\\nimport WasteIcon from '../../assets/icons/waste.icon';\\n\\ninterface Props {\\n    Icon … (+8 chars)"
+   │   tail: " color={'gray.300'}>\\n                    {value}\\n                </Text>\\n                <Text {...La15Sb} numberOfLines={2} textAlign={'center'} color={'black.100'}>\\n                    {subTitle}\\n                </Text>\\n            </Box>\\n        </VStack>\\n    );\\n};\\n\\nexport default Dash … (+12 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[21]  pos[10477:16236]  (5759 tok)  doc_id=137805  component=10
+   normed_id : logaritmdev/dezel:src/application/Application
+   title     : 'logaritmdev/dezel:src/application/Application'
+   categories: ''
+   ┌ PREFIX  (16 tok)  ids=[1003, 2604, 283, 270, 76, 7959, 14, 2934, 17396, 25, 10677, 14, 31438, 14, 23416, 628]
+   │   // logaritmdev/dezel:src/application/Application
+   │   
+   ├ BODY    (5742 tok)
+   │   head: "import { Dictionary } from 'lodash'\\nimport { bridge } from '../decorator/bridge'\\nimport { native } from '../decorator/native'\\nimport { watch } from '../decorator/watch'\\nimport { Emitter } from '../event/Emitter'\\nimport { Event } from '../event/Event'\\nimport { PanGesture } from '../gesture/PanG … (+6 chars)"
+   │   tail: 't(Object.keys(touches).map(key => touches[key]))\\n}\\n\\n/**\\n * @function getTargetTouchList\\n * @since 0.4.0\\n * @hidden\\n */\\nfunction getTargetTouchList(touches: Dictionary<Touch>, target: any) {\\n\treturn new TouchList(Object.keys(touches).map(key => touches[key]).filter(touch => touch.target == t … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[22]  pos[16236:16384]  (148 tok)  doc_id=137823  component=10
+   normed_id : logaritmdev/dezel:src/application/ApplicationLauncher
+   title     : 'logaritmdev/dezel:src/application/ApplicationLauncher'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[1003, 2604, 283, 270, 76, 7959, 14, 2934, 17396, 25, 10677, 14, 31438, 14, 23416, 46182, 2044, 628]
+   │   // logaritmdev/dezel:src/application/ApplicationLauncher
+   │   
+   ├ BODY    (129 tok)
+   │   head: "import { Application } from './Application'\\n\\n/**\\n * The application launcher.\\n * @class Application\\n * @super Emitter\\n * @since 0.5.0\\n */\\nexport class ApplicationLauncher {\\n\\n\t//--------------------------------------------------------------------------\\n\t// Static Methods\\n\t//-------------- … (+12 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (typescript detector; targets matched against in-pack docs)
+   @tok    172  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/events/all-pieces-exporte … (+7 chars)'  not in pack (no grant)
+   @tok    172  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/events/all-pieces-exporte … (+13 chars)'  not in pack (no grant)
+   @tok    189  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/events/archive-ready.even … (+1 chars)'  not in pack (no grant)
+   @tok    189  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/events/archive-ready.even … (+7 chars)'  not in pack (no grant)
+   @tok    211  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/events/piece-export-reque … (+10 chars)'  not in pack (no grant)
+   @tok    211  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/events/piece-export-reque … (+16 chars)'  not in pack (no grant)
+   @tok    230  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/events/piece-exported.eve … (+2 chars)'  not in pack (no grant)
+   @tok    230  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/events/piece-exported.eve … (+8 chars)'  not in pack (no grant)
+   @tok    247  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/export/export-component/e … (+15 chars)'  not in pack (no grant)
+   @tok    247  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/export/export-component/e … (+21 chars)'  not in pack (no grant)
+   @tok    260  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/export/export.id'  not in pack (no grant)
+   @tok    260  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/export/export.id/index'  not in pack (no grant)
+   @tok    275  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/export/export.snapshot'  not in pack (no grant)
+   @tok    275  from doc[0]  → 'api/apps/api/src/modules/clone/export/domain/export/export.snapshot/in … (+3 chars)'  not in pack (no grant)
+   @tok   1614  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/archive-ready.even … (+1 chars)'  not in pack (no grant)
+   @tok   1614  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/archive-ready.even … (+7 chars)'  not in pack (no grant)
+   @tok   1633  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/piece-exported.eve … (+2 chars)'  not in pack (no grant)
+   @tok   1633  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/piece-exported.eve … (+8 chars)'  not in pack (no grant)
+   @tok   1655  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/piece-export-reque … (+10 chars)'  not in pack (no grant)
+   @tok   1655  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/piece-export-reque … (+16 chars)'  not in pack (no grant)
+   @tok   1678  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/all-pieces-exporte … (+7 chars)'  not in pack (no grant)
+   @tok   1678  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/all-pieces-exporte … (+13 chars)'  not in pack (no grant)
+   @tok   1697  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/export-requested.e … (+4 chars)'  not in pack (no grant)
+   @tok   1697  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/events/export-requested.e … (+10 chars)'  not in pack (no grant)
+   @tok   1713  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export.id'  not in pack (no grant)
+   @tok   1713  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export.id/index'  not in pack (no grant)
+   @tok   1725  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export'  IN-PACK → grants attention to doc[0]
+   @tok   1725  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export/index'  not in pack (no grant)
+   @tok   1742  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export.snapshot'  not in pack (no grant)
+   @tok   1742  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export.snapshot/in … (+3 chars)'  not in pack (no grant)
+   @tok   1762  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export-component.s … (+7 chars)'  not in pack (no grant)
+   @tok   1762  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export-component.s … (+13 chars)'  not in pack (no grant)
+   @tok   1782  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export-component/e … (+15 chars)'  not in pack (no grant)
+   @tok   1782  from doc[1]  → 'api/apps/api/src/modules/clone/export/domain/export/export-component/e … (+21 chars)'  not in pack (no grant)
+   @tok   1852  from doc[2]  → 'api/apps/api/src/modules/clone/export/domain'  not in pack (no grant)
+   @tok   1852  from doc[2]  → 'api/apps/api/src/modules/clone/export/domain/index'  IN-PACK → grants attention to doc[1]
+   @tok   2043  from doc[3]  → 'api/apps/api/src/modules/clone/export/application/finalize-archive.com … (+4 chars)'  IN-PACK → grants attention to doc[2]
+   @tok   2043  from doc[3]  → 'api/apps/api/src/modules/clone/export/application/finalize-archive.com … (+10 chars)'  not in pack (no grant)
+   @tok   2180  from doc[4]  → 'src/components/svg-icon/svg-icon'  not in pack (no grant)
+   @tok   2180  from doc[4]  → 'src/components/svg-icon/svg-icon/index'  not in pack (no grant)
+   @tok   2245  from doc[5]  → 'src/components/svg-icon'  not in pack (no grant)
+   @tok   2245  from doc[5]  → 'src/components/svg-icon/index'  IN-PACK → grants attention to doc[4]
+   @tok   2996  from doc[7]  → 'src/common'  not in pack (no grant)
+   @tok   2996  from doc[7]  → 'src/common/index'  not in pack (no grant)
+   @tok   3361  from doc[8]  → 'src/common'  not in pack (no grant)
+   @tok   3361  from doc[8]  → 'src/common/index'  not in pack (no grant)
+   @tok   3375  from doc[8]  → 'src/generated/warhammer2/collections/EffectCategories'  not in pack (no grant)
+   @tok   3375  from doc[8]  → 'src/generated/warhammer2/collections/EffectCategories/index'  not in pack (no grant)
+   @tok   3785  from doc[9]  → 'src/common'  not in pack (no grant)
+   @tok   3785  from doc[9]  → 'src/common/index'  not in pack (no grant)
+   @tok   3795  from doc[9]  → 'src/generated/warhammer2/collections/Effects'  IN-PACK → grants attention to doc[8]
+   @tok   3795  from doc[9]  → 'src/generated/warhammer2/collections/Effects/index'  not in pack (no grant)
+   @tok   3819  from doc[9]  → 'src/generated/warhammer2/collections/CampaignBonusValueIdsBuildingSets'  not in pack (no grant)
+   @tok   3819  from doc[9]  → 'src/generated/warhammer2/collections/CampaignBonusValueIdsBuildingSets … (+6 chars)'  not in pack (no grant)
+   @tok   3833  from doc[9]  → 'src/generated/warhammer2/collections/BuildingSets'  IN-PACK → grants attention to doc[7]
+   @tok   3833  from doc[9]  → 'src/generated/warhammer2/collections/BuildingSets/index'  not in pack (no grant)
+   @tok   4336  from doc[10]  → 'interfaces/native/classes'  not in pack (no grant)
+   @tok   4336  from doc[10]  → 'interfaces/native/classes/index'  not in pack (no grant)
+   @tok   4349  from doc[10]  → 'interfaces/native/primitive'  not in pack (no grant)
+   @tok   4349  from doc[10]  → 'interfaces/native/primitive/index'  not in pack (no grant)
+   @tok   4835  from doc[13]  → 'interfaces/native/primitive'  not in pack (no grant)
+   @tok   4835  from doc[13]  → 'interfaces/native/primitive/index'  not in pack (no grant)
+   @tok   4848  from doc[13]  → 'interfaces/native/structs'  not in pack (no grant)
+   @tok   4848  from doc[13]  → 'interfaces/native/structs/index'  not in pack (no grant)
+   @tok   4996  from doc[14]  → 'interfaces/enums/EResourceForm'  IN-PACK → grants attention to doc[11]
+   @tok   4996  from doc[14]  → 'interfaces/enums/EResourceForm/index'  not in pack (no grant)
+   @tok   5013  from doc[14]  → 'interfaces/enums/EStackSize'  IN-PACK → grants attention to doc[12]
+   @tok   5013  from doc[14]  → 'interfaces/enums/EStackSize/index'  not in pack (no grant)
+   @tok   5038  from doc[14]  → 'interfaces/native/assets'  not in pack (no grant)
+   @tok   5038  from doc[14]  → 'interfaces/native/assets/index'  not in pack (no grant)
+   @tok   5051  from doc[14]  → 'interfaces/native/classes'  not in pack (no grant)
+   @tok   5051  from doc[14]  → 'interfaces/native/classes/index'  not in pack (no grant)
+   @tok   5069  from doc[14]  → 'interfaces/native/primitive'  not in pack (no grant)
+   @tok   5069  from doc[14]  → 'interfaces/native/primitive/index'  not in pack (no grant)
+   @tok   5083  from doc[14]  → 'interfaces/native/references'  not in pack (no grant)
+   @tok   5083  from doc[14]  → 'interfaces/native/references/index'  not in pack (no grant)
+   @tok   5099  from doc[14]  → 'interfaces/native/structs'  not in pack (no grant)
+   @tok   5099  from doc[14]  → 'interfaces/native/structs/index'  not in pack (no grant)
+   @tok   5111  from doc[14]  → 'interfaces/native/unknown'  not in pack (no grant)
+   @tok   5111  from doc[14]  → 'interfaces/native/unknown/index'  not in pack (no grant)
+   @tok   5128  from doc[14]  → 'interfaces/structs/FItemView'  IN-PACK → grants attention to doc[13]
+   @tok   5128  from doc[14]  → 'interfaces/structs/FItemView/index'  not in pack (no grant)
+   @tok   5145  from doc[14]  → 'interfaces/classes/UFGItemCategory'  IN-PACK → grants attention to doc[10]
+   @tok   5145  from doc[14]  → 'interfaces/classes/UFGItemCategory/index'  not in pack (no grant)
+   @tok   5947  from doc[15]  → 'interfaces/classes/UFGItemDescriptor'  IN-PACK → grants attention to doc[14]
+   @tok   5947  from doc[15]  → 'interfaces/classes/UFGItemDescriptor/index'  not in pack (no grant)
+   @tok   5960  from doc[15]  → 'interfaces/native/primitive'  not in pack (no grant)
+   @tok   5960  from doc[15]  → 'interfaces/native/primitive/index'  not in pack (no grant)
+   @tok   5974  from doc[15]  → 'interfaces/native/references'  not in pack (no grant)
+   @tok   5974  from doc[15]  → 'interfaces/native/references/index'  not in pack (no grant)
+   @tok   5987  from doc[15]  → 'interfaces/native/structs'  not in pack (no grant)
+   @tok   5987  from doc[15]  → 'interfaces/native/structs/index'  not in pack (no grant)
+   @tok   6429  from doc[17]  → 'packages/ui/libs/ui/core/src/components/images/ImagesCarousel/ImagesCa … (+14 chars)'  IN-PACK → grants attention to doc[16]
+   @tok   6429  from doc[17]  → 'packages/ui/libs/ui/core/src/components/images/ImagesCarousel/ImagesCa … (+20 chars)'  not in pack (no grant)
+   @tok  10097  from doc[20]  → 'src/themes/font.style'  IN-PACK → grants attention to doc[19]
+   @tok  10097  from doc[20]  → 'src/themes/font.style/index'  not in pack (no grant)
+   @tok  10114  from doc[20]  → 'src/assets/icons/waste.icon'  IN-PACK → grants attention to doc[18]
+   @tok  10114  from doc[20]  → 'src/assets/icons/waste.icon/index'  not in pack (no grant)
+   @tok  10517  from doc[21]  → 'src/decorator/bridge'  not in pack (no grant)
+   @tok  10517  from doc[21]  → 'src/decorator/bridge/index'  not in pack (no grant)
+   @tok  10531  from doc[21]  → 'src/decorator/native'  not in pack (no grant)
+   @tok  10531  from doc[21]  → 'src/decorator/native/index'  not in pack (no grant)
+   @tok  10545  from doc[21]  → 'src/decorator/watch'  not in pack (no grant)
+   @tok  10545  from doc[21]  → 'src/decorator/watch/index'  not in pack (no grant)
+   @tok  10559  from doc[21]  → 'src/event/Emitter'  not in pack (no grant)
+   @tok  10559  from doc[21]  → 'src/event/Emitter/index'  not in pack (no grant)
+   @tok  10571  from doc[21]  → 'src/event/Event'  not in pack (no grant)
+   @tok  10571  from doc[21]  → 'src/event/Event/index'  not in pack (no grant)
+   @tok  10590  from doc[21]  → 'src/gesture/PanGesture'  not in pack (no grant)
+   @tok  10590  from doc[21]  → 'src/gesture/PanGesture/index'  not in pack (no grant)
+   @tok  10609  from doc[21]  → 'src/gesture/TapGesture'  not in pack (no grant)
+   @tok  10609  from doc[21]  → 'src/gesture/TapGesture/index'  not in pack (no grant)
+   @tok  10623  from doc[21]  → 'src/screen/Enclosure'  not in pack (no grant)
+   @tok  10623  from doc[21]  → 'src/screen/Enclosure/index'  not in pack (no grant)
+   @tok  10635  from doc[21]  → 'src/screen/Screen'  not in pack (no grant)
+   @tok  10635  from doc[21]  → 'src/screen/Screen/index'  not in pack (no grant)
+   @tok  10647  from doc[21]  → 'src/touch/Touch'  not in pack (no grant)
+   @tok  10647  from doc[21]  → 'src/touch/Touch/index'  not in pack (no grant)
+   @tok  10661  from doc[21]  → 'src/touch/TouchEvent'  not in pack (no grant)
+   @tok  10661  from doc[21]  → 'src/touch/TouchEvent/index'  not in pack (no grant)
+   @tok  10675  from doc[21]  → 'src/touch/TouchList'  not in pack (no grant)
+   @tok  10675  from doc[21]  → 'src/touch/TouchList/index'  not in pack (no grant)
+   @tok  10687  from doc[21]  → 'src/view/Window'  not in pack (no grant)
+   @tok  10687  from doc[21]  → 'src/view/Window/index'  not in pack (no grant)
+   @tok  10693  from doc[21]  → 'src/index'  not in pack (no grant)
+   @tok  16263  from doc[22]  → 'src/application/Application'  IN-PACK → grants attention to doc[21]
+   @tok  16263  from doc[22]  → 'src/application/Application/index'  not in pack (no grant)
+
+####################################################################################################
+PACK 1   |   16,384 tokens   |   49 docs   |   5 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:106]  (106 tok)  doc_id=171130  component=1  TRUNCATED
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/createPermission/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/createPermission/Signature'
+   categories: ''
+   ┌ PREFIX  (36 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 525, 8481, 14, 17953, 5990, 3411, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/createPermission/Signature
+   │   
+   ├ BODY    (69 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport { PermissionAttributes} from '../../../../models/interfaces/permission';\\nexport interface Options {\\n    readonly name: string;\\n    readonly label?: string;\\n    readonly description?:"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[106:221]  (115 tok)  doc_id=171133  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/getPermissionById/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/getPermissionById/Signature'
+   categories: ''
+   ┌ PREFIX  (37 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 525, 8481, 14, 1136, 5990, 3411, 48364, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/getPermissionById/Signature
+   │   
+   ├ BODY    (77 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport { PermissionAttributes} from '../../../../models/interfaces/permission';\\n\\nexport interface Options {\\n    readonly id: number;\\n}\\n\\ntype Signature = AsyncHandler<Options, PermissionAttributes>;\\n\\nexport default Signature;\\n"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[221:349]  (128 tok)  doc_id=171149  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/getUserPermissions/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/getUserPermissions/Signature'
+   categories: ''
+   ┌ PREFIX  (37 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 525, 8481, 14, 1136, 12982, 5990, 8481, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/getUserPermissions/Signature
+   │   
+   ├ BODY    (90 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport * as SequelizeStatic from 'sequelize';\\nimport { PermissionAttributes} from '../../../../models/interfaces/permission';\\n\\nexport interface Options {\\n    readonly userId: number;\\n}\\n\\ntype Signature = AsyncHandler<Options,any[]>;\\n … (+10 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[349:499]  (150 tok)  doc_id=171139  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/updatePermission/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/updatePermission/Signature'
+   categories: ''
+   ┌ PREFIX  (36 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 525, 8481, 14, 19119, 5990, 3411, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/updatePermission/Signature
+   │   
+   ├ BODY    (113 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport {PermissionAttributes} from '../../../../models/interfaces/permission';\\n\\nexport interface Data {\\n  readonly name?: string;\\n  readonly label?: string;\\n  readonly description?: string;\\n}\\n\\nexport interface Options {\\n  readonly  … (+10 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[4]  pos[499:631]  (132 tok)  doc_id=171167  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/models/interfaces/role
+   title     : 'mariocoski/rest-api-node-typescript:src/models/interfaces/role'
+   categories: ''
+   ┌ PREFIX  (26 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 27530, 14, 3849, 32186, 14, 18090, 628]
+   │   // mariocoski/rest-api-node-typescript:src/models/interfaces/role
+   │   
+   ├ BODY    (105 tok)
+   │   head: 'import {Instance} from "sequelize";\\nimport {PermissionInstance} from \'./permission\';\\nexport interface RoleAttributes {\\n  id?: string,\\n  name?: string,\\n  description?: string,\\n  created_at?: string,\\n  updated_at?: string,\\n  deleted_at?: string\\n}\\n\\nexport interface RoleInstance extends Insta … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[5]  pos[631:803]  (172 tok)  doc_id=171135  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/createUserPermissions/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/createUserPermissions/Signature'
+   categories: ''
+   ┌ PREFIX  (37 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 525, 8481, 14, 17953, 12982, 5990, 8481, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/createUserPermissions/Signature
+   │   
+   ├ BODY    (134 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport * as SequelizeStatic from 'sequelize';\\nimport { PermissionAttributes} from '../../../../models/interfaces/permission';\\nimport { RoleAttributes} from '../../../../models/interfaces/role';\\n\\nexport interface Options {\\n    readonly  … (+6 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[6]  pos[803:1026]  (223 tok)  doc_id=171208  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/index
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/index'
+   categories: ''
+   ┌ PREFIX  (31 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 525, 8481, 14, 9630, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/permissions/index
+   │   
+   ├ BODY    (191 tok)
+   │   head: "import CreatePermissionSignature from './createPermission/Signature';\\nimport DeletePermissionByIdSignature from './deletePermissionById/Signature';\\nimport GetPermissionByIdSignature from './getPermissionById/Signature';\\nimport GetPermissionsSignature from './getPermissions/Signature';\\nimport Get … (+4 chars)"
+   │   tail: "ture';\\nimport UpdatePermissionSignature from './updatePermission/Signature';\\n\\nexport {\\n  CreatePermissionSignature,\\n  DeletePermissionByIdSignature,\\n  GetPermissionByIdSignature,\\n  GetPermissionsSignature,\\n  CreateUserPermissionsSignature,\\n  GetUserPermissionsSignature,\\n  UpdatePermissionS … (+11 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[7]  pos[1026:1178]  (152 tok)  doc_id=171123  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/roles/createRole/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/roles/createRole/Signature'
+   categories: ''
+   ┌ PREFIX  (35 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 305, 829, 14, 17953, 47445, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/roles/createRole/Signature
+   │   
+   ├ BODY    (116 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport { RoleAttributes} from '../../../../models/interfaces/role';\\nexport interface Options {\\n    readonly name: string;\\n    readonly description?: string;\\n    readonly createdAt?: string;\\n    readonly updatedAt?: string; \\n    readon … (+7 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[8]  pos[1178:1395]  (217 tok)  doc_id=171181  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/roles/index
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/roles/index'
+   categories: ''
+   ┌ PREFIX  (31 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 305, 829, 14, 9630, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/roles/index
+   │   
+   ├ BODY    (185 tok)
+   │   head: "import CreateRoleSignature from './createRole/Signature';\\nimport DeleteRoleByIdSignature from './deleteRoleById/Signature';\\nimport GetRoleByIdSignature from './getRoleById/Signature';\\nimport GetRolesSignature from './getRoles/Signature';\\nimport UpdateRoleSignature from './updateRole/Signature';\\ … (+5 chars)"
+   │   tail: "eRolePermission/Signature';\\nimport AssignRolePermissionSignature from './assignRolePermission/Signature';\\n\\nexport {\\n  CreateRoleSignature,\\n  DeleteRoleByIdSignature,\\n  GetRoleByIdSignature,\\n  GetRolesSignature,\\n  UpdateRoleSignature,\\n  AssignRolePermissionSignature,\\n  RevokeRolePermissionS … (+11 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[9]  pos[1395:1514]  (119 tok)  doc_id=171154  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/models/interfaces/post
+   title     : 'mariocoski/rest-api-node-typescript:src/models/interfaces/post'
+   categories: ''
+   ┌ PREFIX  (26 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 27530, 14, 3849, 32186, 14, 7353, 628]
+   │   // mariocoski/rest-api-node-typescript:src/models/interfaces/post
+   │   
+   ├ BODY    (92 tok)
+   │   head: 'import {Instance} from "sequelize";\\n\\nexport interface PostAttributes {\\n  id?: string,\\n  user_id?: string,\\n  title?: string,\\n  body?: string,\\n  created_at?: string,\\n  updated_at?: string,\\n  deleted_at?: string\\n}\\n\\nexport interface PostInstance extends Instance<PostAttributes> {\\n  dataValu … (+13 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[10]  pos[1514:1644]  (130 tok)  doc_id=171126  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/createPost/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/createPost/Signature'
+   categories: ''
+   ┌ PREFIX  (34 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 24875, 14, 17953, 6307, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/createPost/Signature
+   │   
+   ├ BODY    (95 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport { PostAttributes} from '../../../../models/interfaces/post';\\n\\nexport interface Options {\\n    readonly user_id: string;\\n    readonly title: string;\\n    readonly body: string;\\n}\\n\\ntype Signature = AsyncHandler<Options, PostAttri … (+11 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[11]  pos[1644:1754]  (110 tok)  doc_id=171129  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/getPostById/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/getPostById/Signature'
+   categories: ''
+   ┌ PREFIX  (35 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 24875, 14, 1136, 6307, 48364, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/getPostById/Signature
+   │   
+   ├ BODY    (74 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport { PostAttributes} from '../../../../models/interfaces/post';\\n\\nexport interface Options {\\n    readonly id: number;\\n}\\n\\ntype Signature = AsyncHandler<Options, PostAttributes>;\\n\\nexport default Signature;\\n"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[12]  pos[1754:1905]  (151 tok)  doc_id=171185  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/index
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/index'
+   categories: ''
+   ┌ PREFIX  (30 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 24875, 14, 9630, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/posts/index
+   │   
+   ├ BODY    (120 tok)
+   │   head: "import CreatePostSignature from './createPost/Signature';\\nimport DeletePostByIdSignature from './deletePostById/Signature';\\nimport GetPostByIdSignature from './getPostById/Signature';\\nimport GetPostsSignature from './getPosts/Signature';\\nimport UpdatePostSignature from './updatePost/Signature';\\ … (+6 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[13]  pos[1905:2031]  (126 tok)  doc_id=171166  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/models/interfaces/reset_password_token
+   title     : 'mariocoski/rest-api-node-typescript:src/models/interfaces/reset_password_token'
+   categories: ''
+   ┌ PREFIX  (30 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 27530, 14, 3849, 32186, 14, 42503, 62, 28712, 62, 30001, 628]
+   │   // mariocoski/rest-api-node-typescript:src/models/interfaces/reset_password_token
+   │   
+   ├ BODY    (95 tok)
+   │   head: 'import {Instance} from "sequelize";\\n\\nexport interface ResetPasswordTokenAttributes {\\n  id?: number,\\n  user_id: number,\\n  token: string,\\n  created_at?: string,\\n  updated_at?: string,\\n  deleted_at?: string\\n}\\n\\nexport interface ResetPasswordTokenInstance extends Instance<ResetPasswordTokenAtt … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[14]  pos[2031:2141]  (110 tok)  doc_id=171168  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/models/interfaces/role_permission
+   title     : 'mariocoski/rest-api-node-typescript:src/models/interfaces/role_permission'
+   categories: ''
+   ┌ PREFIX  (29 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 27530, 14, 3849, 32186, 14, 18090, 62, 525, 3411, 628]
+   │   // mariocoski/rest-api-node-typescript:src/models/interfaces/role_permission
+   │   
+   ├ BODY    (80 tok)
+   │   head: 'import {Instance} from "sequelize";\\n\\nexport interface RolePermissionAttributes {\\n  id?: number,\\n  role_id?: string,\\n  permission_id?: string,\\n  deleted_at?: string\\n}\\n\\nexport interface RolePermissionInstance extends Instance<RolePermissionAttributes> {\\n  dataValues: RolePermissionAttributes … (+4 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[15]  pos[2141:2246]  (105 tok)  doc_id=171169  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/models/interfaces/user_role
+   title     : 'mariocoski/rest-api-node-typescript:src/models/interfaces/user_role'
+   categories: ''
+   ┌ PREFIX  (28 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 27530, 14, 3849, 32186, 14, 7220, 62, 18090, 628]
+   │   // mariocoski/rest-api-node-typescript:src/models/interfaces/user_role
+   │   
+   ├ BODY    (76 tok)
+   │   head: 'import {Instance} from "sequelize";\\n\\nexport interface UserRoleAttributes {\\n  id: number,\\n  user_id: number,\\n  role_id: number,\\n  deleted_at: string\\n}\\n\\nexport interface UserRoleInstance extends Instance<UserRoleAttributes> {\\n  dataValues: UserRoleAttributes;\\n}'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[16]  pos[2246:4195]  (1949 tok)  doc_id=171157  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/utils/constants/index
+   title     : 'mariocoski/rest-api-node-typescript:src/utils/constants/index'
+   categories: ''
+   ┌ PREFIX  (26 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 26791, 14, 9979, 1187, 14, 9630, 628]
+   │   // mariocoski/rest-api-node-typescript:src/utils/constants/index
+   │   
+   ├ BODY    (1922 tok)
+   │   head: "import {RoleAttributes} from '../../models/interfaces/role';\\nimport {PermissionAttributes} from '../../models/interfaces/permission';\\n\\nexport const DEFAULT_USERS_PAGINATION_LIMIT = 10;\\nexport const DEFAULT_USERS_PAGINATION_OFFSET = 0;\\nexport const DEFAULT_POSTS_PAGINATION_LIMIT = 10;\\nexport co … (+6 chars)"
+   │   tail: "'\\n  },\\n  { \\n    name: CAN_UPDATE_COMMENT,\\n    label: 'Allows to update comment for a given id'\\n  },\\n  { \\n    name: CAN_DELETE_COMMENT,\\n    label: 'Soft deletes comment by a given id'\\n  },\\n\\n];\\n\\nexport const DEFAULT_USER_ROLE: RoleAttributes = {\\n  name: 'user',\\n  description: 'default u … (+18 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[17]  pos[4195:4283]  (88 tok)  doc_id=171324  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/utils/config/getBooleanOption
+   title     : 'mariocoski/rest-api-node-typescript:src/utils/config/getBooleanOption'
+   categories: ''
+   ┌ PREFIX  (28 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 26791, 14, 11250, 14, 1136, 46120, 13087, 19722, 628]
+   │   // mariocoski/rest-api-node-typescript:src/utils/config/getBooleanOption
+   │   
+   ├ BODY    (59 tok)
+   │   head: "import { defaultTo } from 'ramda';\\nimport * as boolean from 'boolean';\\n\\nexport default (value: any, defaultValue: boolean = true): boolean => {\\n  return boolean(defaultTo<any, boolean>(value, defaultValue));\\n};\\n"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[18]  pos[4283:4357]  (74 tok)  doc_id=171317  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/utils/config/getNumberOption
+   title     : 'mariocoski/rest-api-node-typescript:src/utils/config/getNumberOption'
+   categories: ''
+   ┌ PREFIX  (27 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 26791, 14, 11250, 14, 1136, 15057, 19722, 628]
+   │   // mariocoski/rest-api-node-typescript:src/utils/config/getNumberOption
+   │   
+   ├ BODY    (46 tok)
+   │   head: "import { defaultTo } from 'ramda';\\n\\nexport default (value: any, defaultValue: number): number => {\\n  return defaultTo<any, number>(Number(value), defaultValue);\\n};"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[19]  pos[4357:4429]  (72 tok)  doc_id=171318  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/utils/config/getStringOption
+   title     : 'mariocoski/rest-api-node-typescript:src/utils/config/getStringOption'
+   categories: ''
+   ┌ PREFIX  (27 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 26791, 14, 11250, 14, 1136, 10100, 19722, 628]
+   │   // mariocoski/rest-api-node-typescript:src/utils/config/getStringOption
+   │   
+   ├ BODY    (44 tok)
+   │   head: "import { defaultTo } from 'ramda';\\n\\nexport default (value: any, defaultValue = ''): string => {\\n  return defaultTo<any,string>(value, defaultValue);\\n};"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[20]  pos[4429:4495]  (66 tok)  doc_id=171159  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/utils/hashPassword
+   title     : 'mariocoski/rest-api-node-typescript:src/utils/hashPassword'
+   categories: ''
+   ┌ PREFIX  (24 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 26791, 14, 17831, 35215, 628]
+   │   // mariocoski/rest-api-node-typescript:src/utils/hashPassword
+   │   
+   ├ BODY    (41 tok)
+   │   head: "import * as bcrypt from 'bcrypt';\\n\\nexport default async function(input: string): Promise<string>{\\n  return bcrypt.hash(input, 12);\\n}\\n\\n"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[21]  pos[4495:4601]  (106 tok)  doc_id=171285  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/utils/index
+   title     : 'mariocoski/rest-api-node-typescript:src/utils/index'
+   categories: ''
+   ┌ PREFIX  (23 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 26791, 14, 9630, 628]
+   │   // mariocoski/rest-api-node-typescript:src/utils/index
+   │   
+   ├ BODY    (82 tok)
+   │   head: "import getNumberOption from './config/getNumberOption';\\nimport getStringOption from './config/getStringOption';\\nimport getBooleanOption from './config/getBooleanOption';\\nimport hashPassword from './hashPassword';\\nexport {\\n  getNumberOption,\\n  getStringOption,\\n  getBooleanOption,\\n  hashPasswo … (+7 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[22]  pos[4601:5865]  (1264 tok)  doc_id=171164  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/config
+   title     : 'mariocoski/rest-api-node-typescript:src/config'
+   categories: ''
+   ┌ PREFIX  (21 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 11250, 628]
+   │   // mariocoski/rest-api-node-typescript:src/config
+   │   
+   ├ BODY    (1242 tok)
+   │   head: "import {ONE_HOUR} from './utils/constants';\\nimport {getNumberOption, getStringOption, getBooleanOption} from './utils';\\nimport {defaultTo} from 'ramda';\\n\\nexport interface Config {\\n  lang: string;\\n  express: any;\\n  sequelize: any;\\n  winston: any;\\n  jwt: any;\\n  mail: any;\\n  modelRepo: any;\\ … (+12 chars)"
+   │   tail: " getStringOption(defaultTo<any>(\\n      process.env.MODEL_MAIL_REPO\\n    ), 'nodemailer'),\\n  },\\n  winston: {\\n    level: getStringOption(process.env.WINSTON_LEVEL, 'info'),\\n    winstonDirectory: getStringOption(\\n      process.env.WINSTON_DIRECTORY,\\n      `${process.cwd()}/logs`,\\n    ),\\n  }\\n} … (+11 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[23]  pos[5865:6922]  (1057 tok)  doc_id=171153  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/Repo
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/Repo'
+   categories: ''
+   ┌ PREFIX  (25 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 6207, 78, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/Repo
+   │   
+   ├ BODY    (1031 tok)
+   │   head: "import {CreateUserSignature, GetUserByIdSignature,GetUserByEmailSignature,  GetUsersSignature, UpdateUserSignature, DeleteUserByIdSignature, AssignUserRoleSignature, RevokeUserRoleSignature} from './modelRepo/users';\\nimport {CreatePostSignature, GetPostByIdSignature, GetPostsSignature, UpdatePostSi … (+1 chars)"
+   │   tail: 'e;\\n    readonly clearRepo: () => Promise<void>;\\n    readonly migrate: () => Promise<void>;\\n    readonly rollback: () => Promise<void>;\\n}\\n\\nexport interface MailRepoInterface {\\n    readonly sendEmail: SendEmailSignature;\\n}\\n\\nexport default interface Repo extends ModelRepoInterface, MailRepoIn … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[24]  pos[6922:7159]  (237 tok)  doc_id=171206  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/index
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/index'
+   categories: ''
+   ┌ PREFIX  (30 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 18417, 14, 9630, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/index
+   │   
+   ├ BODY    (206 tok)
+   │   head: "import CreateUserSignature from './createUser/Signature';\\nimport DeleteUserByIdSignature from './deleteUserById/Signature';\\nimport GetUserByIdSignature from './getUserById/Signature';\\nimport GetUserByEmailSignature from './getUserByEmail/Signature';\\nimport GetUsersSignature from './getUsers/Sign … (+4 chars)"
+   │   tail: "Role/Signature';\\nimport RevokeUserRoleSignature from './RevokeUserRoleSignature/Signature'\\nexport {\\n  CreateUserSignature,\\n  DeleteUserByIdSignature,\\n  GetUserByIdSignature,\\n  GetUserByEmailSignature,\\n  GetUsersSignature,\\n  UpdateUserSignature,\\n  AssignUserRoleSignature,\\n  RevokeUserRoleSi … (+12 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[25]  pos[7159:7329]  (170 tok)  doc_id=171150  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/createUser/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/createUser/Signature'
+   categories: ''
+   ┌ PREFIX  (34 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 18417, 14, 17953, 12982, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/createUser/Signature
+   │   
+   ├ BODY    (135 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport * as SequelizeStatic from 'sequelize';\\nimport { UserAttributes} from '../../../../models/interfaces/user';\\n\\nexport interface Options {\\n    readonly firstname?:  string;\\n    readonly lastname?:  string;\\n    readonly bio?:  strin … (+8 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[26]  pos[7329:7452]  (123 tok)  doc_id=171143  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/getUserById/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/getUserById/Signature'
+   categories: ''
+   ┌ PREFIX  (35 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 18417, 14, 1136, 12982, 48364, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/getUserById/Signature
+   │   
+   ├ BODY    (87 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport * as SequelizeStatic from 'sequelize';\\nimport { UserAttributes} from '../../../../models/interfaces/user';\\n\\nexport interface Options {\\n    readonly id: number;\\n}\\n\\ntype Signature = AsyncHandler<Options,UserAttributes>;\\n\\nexpor … (+10 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[27]  pos[7452:7574]  (122 tok)  doc_id=171137  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/getUsers/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/getUsers/Signature'
+   categories: ''
+   ┌ PREFIX  (34 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 18417, 14, 1136, 14490, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/getUsers/Signature
+   │   
+   ├ BODY    (87 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport {UserAttributes} from '../../../../models/interfaces/user';\\n\\n\\nexport interface Options { \\n  readonly limit?: number;\\n  readonly offset?: number;\\n  readonly order?: string;\\n}\\n\\ntype Signature = AsyncHandler<Options, any>;\\n\\ne … (+12 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[28]  pos[7574:7751]  (177 tok)  doc_id=171141  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/updateUser/Signature
+   title     : 'mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/updateUser/Signature'
+   categories: ''
+   ┌ PREFIX  (34 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 260, 7501, 14, 19849, 6207, 78, 14, 18417, 14, 19119, 12982, 14, 11712, 1300, 628]
+   │   // mariocoski/rest-api-node-typescript:src/repo/modelRepo/users/updateUser/Signature
+   │   
+   ├ BODY    (142 tok)
+   │   head: "import AsyncHandler from '../../../../utils/AsyncHandler';\\nimport * as SequelizeStatic from 'sequelize';\\nimport { UserAttributes} from '../../../../models/interfaces/user';\\n\\nexport interface Data {\\n  readonly firstname?: string;\\n  readonly lastname?: string;\\n  readonly bio?: string;\\n  readon … (+8 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[29]  pos[7751:7935]  (184 tok)  doc_id=171155  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/models/interfaces/user
+   title     : 'mariocoski/rest-api-node-typescript:src/models/interfaces/user'
+   categories: ''
+   ┌ PREFIX  (26 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 27530, 14, 3849, 32186, 14, 7220, 628]
+   │   // mariocoski/rest-api-node-typescript:src/models/interfaces/user
+   │   
+   ├ BODY    (157 tok)
+   │   head: 'import {Instance} from "sequelize";\\nimport {RoleInstance} from \'./role\';\\nimport {PostInstance} from \'./post\';\\nimport {SequelizeModels} from \'../index\';\\n\\nexport interface UserAttributes {\\n  id?: number;\\n  firstname?: string;\\n  lastname?: string;\\n  bio?: string;\\n  email?: string;\\n  password … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[30]  pos[7935:9072]  (1137 tok)  doc_id=171119  component=1
+   normed_id : mariocoski/rest-api-node-typescript:src/models/index
+   title     : 'mariocoski/rest-api-node-typescript:src/models/index'
+   categories: ''
+   ┌ PREFIX  (23 tok)  ids=[1003, 1667, 72, 420, 418, 4106, 14, 2118, 12, 15042, 12, 17440, 12, 28004, 3798, 1968, 25, 10677, 14, 27530, 14, 9630, 628]
+   │   // mariocoski/rest-api-node-typescript:src/models/index
+   │   
+   ├ BODY    (1113 tok)
+   │   head: "import * as fs from 'fs';\\nimport * as path from 'path';\\nimport * as SequelizeStatic from 'sequelize';\\nimport {UserAttributes, UserInstance} from './interfaces/user';\\nimport {RoleAttributes, RoleInstance} from './interfaces/role';\\nimport {PermissionAttributes, PermissionInstance} from './interfa … (+5 chars)"
+   │   tail: "n, unique: false} ,onDelete: 'CASCADE', as: 'permissions'});\\n_models.Permission.belongsToMany(_models.Role,  { through: {model: _models.RolePermission, unique: false},onDelete: 'CASCADE', as: 'roles'});\\n\\nexport const models: SequelizeModels = _models;\\nexport const sequelize: Sequelize = _sequeli … (+5 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[31]  pos[9072:9149]  (77 tok)  doc_id=95474  component=2
+   normed_id : HugoJBello/hl7-service:src/models/Hl7GeneratedModels/Segment
+   title     : 'HugoJBello/hl7-service:src/models/Hl7GeneratedModels/Segment'
+   categories: ''
+   ┌ PREFIX  (25 tok)  ids=[1003, 25930, 47858, 11109, 14, 18519, 22, 12, 15271, 25, 10677, 14, 27530, 14, 39, 75, 22, 8645, 515, 5841, 1424, 14, 41030, 434, 628]
+   │   // HugoJBello/hl7-service:src/models/Hl7GeneratedModels/Segment
+   │   
+   ├ BODY    (51 tok)
+   │   head: '// Generated typescript code\\nexport default interface Segment {\\n hl7Segment: string\\n hl7Version: string\\n id: string\\n\\n}\\n\\nexport type SegmentExtended = any & Segment;\\n\\n'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[32]  pos[9149:10127]  (978 tok)  doc_id=96107  component=2
+   normed_id : HugoJBello/hl7-service:src/models/Hl7GeneratedModels/HL7ObservationRequestSegmentV3
+   title     : 'HugoJBello/hl7-service:src/models/Hl7GeneratedModels/HL7ObservationRequestSegmentV3'
+   categories: ''
+   ┌ PREFIX  (32 tok)  ids=[1003, 25930, 47858, 11109, 14, 18519, 22, 12, 15271, 25, 10677, 14, 27530, 14, 39, 75, 22, 8645, 515, 5841, 1424, 14, 6581, 22, 31310, 13208, 18453, 41030, 434, 53, 18, 628]
+   │   // HugoJBello/hl7-service:src/models/Hl7GeneratedModels/HL7ObservationRequestSegmentV3
+   │   
+   ├ BODY    (945 tok)
+   │   head: '\\n// Generated typescript code of HL7v 2.3 OBR  (Observation request segment)\\n\\nimport mongoose from "mongoose";\\nimport Segment from "./Segment";\\n\\nexport type HL7ObservationRequestSegmentV3Document = mongoose.Document & HL7ObservationRequestSegmentV3I\\n\\nconst HL7ObservationRequestSegmentV3Schem … (+8 chars)'
+   │   tail: 'onsibility: string\\n  transportArranged: string\\n  escortRequired: string\\n  plannedPatientTransportComment: string[]\\n  \\n  }\\n  export const HL7ObservationRequestSegmentV3 = mongoose.model<HL7ObservationRequestSegmentV3Document> ("HL7ObservationRequestSegmentV3", HL7ObservationRequestSegmentV3Sche … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[33]  pos[10127:10627]  (500 tok)  doc_id=95496  component=2
+   normed_id : HugoJBello/hl7-service:src/models/Hl7GeneratedModels/HL7InventoryItemMasterV8
+   title     : 'HugoJBello/hl7-service:src/models/Hl7GeneratedModels/HL7InventoryItemMasterV8'
+   categories: ''
+   ┌ PREFIX  (31 tok)  ids=[1003, 25930, 47858, 11109, 14, 18519, 22, 12, 15271, 25, 10677, 14, 27530, 14, 39, 75, 22, 8645, 515, 5841, 1424, 14, 6581, 22, 818, 17158, 7449, 18254, 53, 23, 628]
+   │   // HugoJBello/hl7-service:src/models/Hl7GeneratedModels/HL7InventoryItemMasterV8
+   │   
+   ├ BODY    (468 tok)
+   │   head: '\\n// Generated typescript code of HL7v 2.8 IIM  (Inventory Item Master)\\n\\nimport mongoose from "mongoose";\\nimport Segment from "./Segment";\\n\\nexport type HL7InventoryItemMasterV8Document = mongoose.Document & HL7InventoryItemMasterV8I\\n\\nconst HL7InventoryItemMasterV8Schema = new mongoose.Schema( … (+9 chars)'
+   │   tail: ': string\\n  inventoryOnHandQuantity: number\\n  inventoryOnHandQuantityUnit: string\\n  procedureCode: string\\n  procedureCodeModifier: string[]\\n  \\n  }\\n  export const HL7InventoryItemMasterV8 = mongoose.model<HL7InventoryItemMasterV8Document> ("HL7InventoryItemMasterV8", HL7InventoryItemMasterV8Sch … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[34]  pos[10627:10748]  (121 tok)  doc_id=153130  component=3
+   normed_id : lifaon74/rx-js-light:src/observer/type/observer.type
+   title     : 'lifaon74/rx-js-light:src/observer/type/observer.type'
+   categories: ''
+   ┌ PREFIX  (24 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 15388, 14, 4906, 14, 672, 15388, 13, 4906, 628]
+   │   // lifaon74/rx-js-light:src/observer/type/observer.type
+   │   
+   ├ BODY    (96 tok)
+   │   head: '\\nexport interface IObserver<GValue> {\\n  (value: GValue): void;\\n}\\n\\n/* derived */\\n\\nexport type IGenericObserver = IObserver<any>;\\n\\nexport type IInferObserverGValue<GObserver extends IGenericObserver> =\\n  GObserver extends IObserver<infer GValue>\\n    ? GValue\\n    : never;\\n'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[35]  pos[10748:10926]  (178 tok)  doc_id=153103  component=3
+   normed_id : lifaon74/rx-js-light:src/observable/type/observable.type
+   title     : 'lifaon74/rx-js-light:src/observable/type/observable.type'
+   categories: ''
+   ┌ PREFIX  (26 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 3168, 540, 14, 4906, 14, 672, 3168, 540, 13, 4906, 628]
+   │   // lifaon74/rx-js-light:src/observable/type/observable.type
+   │   
+   ├ BODY    (151 tok)
+   │   head: "import { IObserver } from '../../observer/type/observer.type';\\n\\nexport interface IObservable<GValue> {\\n  (emit: IObserver<GValue>): IUnsubscribe;\\n}\\n\\nexport interface IUnsubscribe {\\n  (): void;\\n}\\n\\n/* derived */\\n\\nexport type IGenericObservable = IObservable<any>;\\n\\nexport type IInferObser … (+14 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[36]  pos[10926:11110]  (184 tok)  doc_id=153157  component=3
+   normed_id : lifaon74/rx-js-light:src/observable/pipes/type/observable-pipe.type
+   title     : 'lifaon74/rx-js-light:src/observable/pipes/type/observable-pipe.type'
+   categories: ''
+   ┌ PREFIX  (31 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 3168, 540, 14, 79, 18636, 14, 4906, 14, 672, 3168, 540, 12, 34360, 13, 4906, 628]
+   │   // lifaon74/rx-js-light:src/observable/pipes/type/observable-pipe.type
+   │   
+   ├ BODY    (152 tok)
+   │   head: "import { IObservable } from '../../type/observable.type';\\n\\n/**\\n * Receives data, performs some operation on it, and may emits same or other data\\n * Similar to ObserverPipe but works with Observable instead\\n * => Lazy loaded PUSH destination (return) and Lazy loaded PUSH source (subscribe)\\n */\\ … (+7 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[37]  pos[11110:11383]  (273 tok)  doc_id=153297  component=3
+   normed_id : lifaon74/rx-js-light:src/observer/pipes/type/observer-pipe.type
+   title     : 'lifaon74/rx-js-light:src/observer/pipes/type/observer-pipe.type'
+   categories: ''
+   ┌ PREFIX  (29 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 15388, 14, 79, 18636, 14, 4906, 14, 672, 15388, 12, 34360, 13, 4906, 628]
+   │   // lifaon74/rx-js-light:src/observer/pipes/type/observer-pipe.type
+   │   
+   ├ BODY    (243 tok)
+   │   head: "import { IObserver } from '../../type/observer.type';\\n\\n/**\\n * Receives data, performs some operation on it, and may emits same or other data\\n * => PUSH destination (return) and PUSH source (emit)\\n */\\nexport interface IObserverPipe<GIn, GOut> {\\n  (emit: IObserver<GOut>): IObserver<GIn>;\\n}\\n\\n … (+10 chars)"
+   │   tail: 'port type IInferObserverPipeGIn<GObserver extends IGenericObserverPipe> =\\n  GObserver extends IObserverPipe<infer GIn, any>\\n    ? GIn\\n    : never;\\n\\nexport type IInferObserverPipeGOut<GObserver extends IGenericObserverPipe> =\\n  GObserver extends IObserverPipe<any, infer GOut>\\n    ? GOut\\n    : … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[38]  pos[11383:11624]  (241 tok)  doc_id=153263  component=3
+   normed_id : lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/helpers/transform-observable-with-observer-pipe
+   title     : 'lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/helpers/transform-observable-with-observer-pipe'
+   categories: ''
+   ┌ PREFIX  (53 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 3168, 540, 14, 79, 18636, 14, 18780, 12, 259, 14, 19419, 12, 1662, 6637, 14, 672, 15388, 12, 34360, 12, 5363, 14, 16794, 364, 14, 35636, 12, 672, 3168, 540, 12, 4480, 12, 672, 15388, 12, 34360, 628]
+   │   // lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/helpers/transform-observable-with-observer-pipe
+   │   
+   ├ BODY    (187 tok)
+   │   head: "import { IObserverPipe } from '../../../../../../observer/pipes/type/observer-pipe.type';\\nimport { IObserver } from '../../../../../../observer/type/observer.type';\\nimport { IObservable, IUnsubscribe } from '../../../../../type/observable.type';\\n\\nexport function transformObservableWithObserverPi … (+4 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[39]  pos[11624:11801]  (177 tok)  doc_id=153306  component=3
+   normed_id : lifaon74/rx-js-light:src/observer/pipes/built-in/distinct/distinct-observer
+   title     : 'lifaon74/rx-js-light:src/observer/pipes/built-in/distinct/distinct-observer'
+   categories: ''
+   ┌ PREFIX  (33 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 15388, 14, 79, 18636, 14, 18780, 12, 259, 14, 17080, 4612, 14, 17080, 4612, 12, 672, 15388, 628]
+   │   // lifaon74/rx-js-light:src/observer/pipes/built-in/distinct/distinct-observer
+   │   
+   ├ BODY    (143 tok)
+   │   head: "import { IObserver } from '../../../type/observer.type';\\n\\n/**\\n * Returns an Observer that emits all items emitted by the source Observer that are distinct by comparison from previous values\\n */\\nexport function distinctObserver<GValue>(\\n  emit: IObserver<GValue>,\\n): IObserver<GValue> {\\n  let  … (+8 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[40]  pos[11801:11938]  (137 tok)  doc_id=153394  component=3
+   normed_id : lifaon74/rx-js-light:src/observer/pipes/built-in/distinct/distinct-observer-pipe
+   title     : 'lifaon74/rx-js-light:src/observer/pipes/built-in/distinct/distinct-observer-pipe'
+   categories: ''
+   ┌ PREFIX  (35 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 15388, 14, 79, 18636, 14, 18780, 12, 259, 14, 17080, 4612, 14, 17080, 4612, 12, 672, 15388, 12, 34360, 628]
+   │   // lifaon74/rx-js-light:src/observer/pipes/built-in/distinct/distinct-observer-pipe
+   │   
+   ├ BODY    (101 tok)
+   │   head: "import { IObserverPipe } from '../../type/observer-pipe.type';\\nimport { distinctObserver } from './distinct-observer';\\n\\n/**\\n * Returns an Observer that emits all items emitted by the source Observer that are distinct by comparison from previous values\\n */\\nexport function distinctObserverPipe<G … (+6 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[41]  pos[11938:12161]  (223 tok)  doc_id=153177  component=3
+   normed_id : lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable
+   title     : 'lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable'
+   categories: ''
+   ┌ PREFIX  (47 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 3168, 540, 14, 79, 18636, 14, 18780, 12, 259, 14, 19419, 12, 1662, 6637, 14, 672, 15388, 12, 34360, 12, 5363, 14, 17080, 4612, 14, 17080, 4612, 12, 672, 3168, 540, 628]
+   │   // lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable
+   │   
+   ├ BODY    (175 tok)
+   │   head: "import { distinctObserverPipe } from '../../../../../../observer/pipes/built-in/distinct/distinct-observer-pipe';\\nimport { IObservable } from '../../../../../type/observable.type';\\nimport { transformObservableWithObserverPipe } from '../helpers/transform-observable-with-observer-pipe';\\n\\n/**\\n *  … (+5 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[42]  pos[12161:12354]  (193 tok)  doc_id=153206  component=3
+   normed_id : lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable-pipe
+   title     : 'lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable-pipe'
+   categories: ''
+   ┌ PREFIX  (49 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 3168, 540, 14, 79, 18636, 14, 18780, 12, 259, 14, 19419, 12, 1662, 6637, 14, 672, 15388, 12, 34360, 12, 5363, 14, 17080, 4612, 14, 17080, 4612, 12, 672, 3168, 540, 12, 34360, 628]
+   │   // lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable-pipe
+   │   
+   ├ BODY    (143 tok)
+   │   head: "import { IObservable } from '../../../../../type/observable.type';\\nimport { IObservablePipe } from '../../../../type/observable-pipe.type';\\nimport { distinctObservable } from './distinct-observable';\\n\\nexport function distinctObservablePipe<GValue>(): IObservablePipe<GValue, GValue> {\\n  return ( … (+5 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[43]  pos[12354:12434]  (80 tok)  doc_id=153432  component=3
+   normed_id : lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable-pipe.shortcut
+   title     : 'lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable-pipe.shortcut'
+   categories: ''
+   ┌ PREFIX  (52 tok)  ids=[1003, 3868, 64, 261, 4524, 14, 40914, 12, 8457, 12, 2971, 25, 10677, 14, 672, 3168, 540, 14, 79, 18636, 14, 18780, 12, 259, 14, 19419, 12, 1662, 6637, 14, 672, 15388, 12, 34360, 12, 5363, 14, 17080, 4612, 14, 17080, 4612, 12, 672, 3168, 540, 12, 34360, 13, 19509, 8968, 628]
+   │   // lifaon74/rx-js-light:src/observable/pipes/built-in/without-notifications/observer-pipe-related/distinct/distinct-observable-pipe.shortcut
+   │   
+   ├ BODY    (27 tok)
+   │   head: "export { distinctObservablePipe as distinct$$$ } from './distinct-observable-pipe';\\n\\n\\n"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[44]  pos[12434:12689]  (255 tok)  doc_id=25352  component=4
+   normed_id : meepobrother/nger:packages/nger-core/lib/sdk/http
+   title     : 'meepobrother/nger:packages/nger-core/lib/sdk/http'
+   categories: ''
+   ┌ PREFIX  (24 tok)  ids=[1003, 502, 538, 672, 305, 490, 14, 782, 263, 25, 43789, 14, 782, 263, 12, 7295, 14, 8019, 14, 21282, 74, 14, 4023, 628]
+   │   // meepobrother/nger:packages/nger-core/lib/sdk/http
+   │   
+   ├ BODY    (230 tok)
+   │   head: "import { AxiosRequestConfig, AxiosPromise } from 'axios'\\nexport abstract class Http {\\n    abstract request<T = any>(config: AxiosRequestConfig): AxiosPromise<T>;\\n    abstract get<T = any>(url: string, config?: AxiosRequestConfig): AxiosPromise<T>;\\n    abstract delete(url: string, config?: AxiosR … (+4 chars)"
+   │   tail: ';\\n    abstract post<T = any>(url: string, data?: any, config?: AxiosRequestConfig): AxiosPromise<T>;\\n    abstract put<T = any>(url: string, data?: any, config?: AxiosRequestConfig): AxiosPromise<T>;\\n    abstract patch<T = any>(url: string, data?: any, config?: AxiosRequestConfig): AxiosPromise<T> … (+4 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[45]  pos[12689:12803]  (114 tok)  doc_id=2202  component=5
+   normed_id : phuhgh/js-util:src/set/impl/set-values-to-array
+   title     : 'phuhgh/js-util:src/set/impl/set-values-to-array'
+   categories: ''
+   ┌ PREFIX  (23 tok)  ids=[1003, 872, 7456, 456, 14, 8457, 12, 22602, 25, 10677, 14, 2617, 14, 23928, 14, 2617, 12, 27160, 12, 1462, 12, 18747, 628]
+   │   // phuhgh/js-util:src/set/impl/set-values-to-array
+   │   
+   ├ BODY    (90 tok)
+   │   head: '/**\\n * @public\\n * Converts a set into an array of its values.\\n *\\n * @returns The values of the set.\\n *\\n * @remarks\\n * See {@link setValuesToArray}.\\n */\\nexport function setValuesToArray<TItem>(set: Set<TItem>): TItem[]\\n{\\n    return Array.from(set.values());\\n}'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[46]  pos[12803:15406]  (2603 tok)  doc_id=2115  component=5
+   normed_id : phuhgh/js-util:src/debug/_debug
+   title     : 'phuhgh/js-util:src/debug/_debug'
+   categories: ''
+   ┌ PREFIX  (15 tok)  ids=[1003, 872, 7456, 456, 14, 8457, 12, 22602, 25, 10677, 14, 24442, 47835, 24442, 628]
+   │   // phuhgh/js-util:src/debug/_debug
+   │   
+   ├ BODY    (2587 tok)
+   │   head: 'import { getGlobal } from "../runtime/get-global";\\n\\n/**\\n * @public\\n * Utilities for debug builds.\\n */\\nexport class _Debug\\n{\\n    public static get label(): string | undefined\\n    {\\n        return _Debug._label;\\n    }\\n\\n    public static set label(label: string | undefined)\\n    {\\n        … (+15 chars)'
+   │   tail: 'n(getGlobal()[flag]);\\n    }\\n\\n    private static onBreakpoint = () =>\\n    {\\n        // eslint-disable-next-line no-debugger\\n        debugger;\\n    }\\n\\n    private static _label: string | undefined = undefined;\\n}\\n\\n// eslint-disable-next-line @typescript-eslint/no-explicit-any\\ndeclare const  … (+13 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[47]  pos[15406:16214]  (808 tok)  doc_id=2058  component=5
+   normed_id : phuhgh/js-util:src/test-utils
+   title     : 'phuhgh/js-util:src/test-utils'
+   categories: ''
+   ┌ PREFIX  (15 tok)  ids=[1003, 872, 7456, 456, 14, 8457, 12, 22602, 25, 10677, 14, 9288, 12, 26791, 628]
+   │   // phuhgh/js-util:src/test-utils
+   │   
+   ├ BODY    (792 tok)
+   │   head: 'import { _Debug } from "./debug/_debug";\\nimport { setDefaultUnitTestFlags } from "./debug/impl/set-default-unit-test-flags";\\nimport { RcJsUtilDebugImpl } from "./debug/debug-namepace";\\n\\nexport function itShouldCallAssert(times: number, runTest: () => void): void\\n{\\n    it("| has the correct num … (+6 chars)'
+   │   tail: '\\n\\nexport function debugIt(label: string, callback: () => void): void\\n{\\n    _Debug.label = label;\\n    it(label, callback);\\n    _Debug.label = undefined;\\n}\\n\\nexport function applyLabel(label: string, callback: () => void): void\\n{\\n    _Debug.label = label;\\n    callback();\\n    _Debug.label = … (+14 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[48]  pos[16214:16384]  (170 tok)  doc_id=2259  component=5
+   normed_id : phuhgh/js-util:src/set/impl/set-values-to-array.spec
+   title     : 'phuhgh/js-util:src/set/impl/set-values-to-array.spec'
+   categories: ''
+   ┌ PREFIX  (25 tok)  ids=[1003, 872, 7456, 456, 14, 8457, 12, 22602, 25, 10677, 14, 2617, 14, 23928, 14, 2617, 12, 27160, 12, 1462, 12, 18747, 13, 16684, 628]
+   │   // phuhgh/js-util:src/set/impl/set-values-to-array.spec
+   │   
+   ├ BODY    (144 tok)
+   │   head: 'import { setValuesToArray } from "./set-values-to-array";\\nimport { debugDescribe } from "../../test-utils";\\n\\ndebugDescribe("=> setValuesToArray", () =>\\n{\\n    const values = new Set([1, 2, 3] as const);\\n\\n    it("| returns the map\'s values", () =>\\n    {\\n        const result: (1 | 2 | 3)[] = s … (+9 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (typescript detector; targets matched against in-pack docs)
+   @tok     51  from doc[0]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok     51  from doc[0]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok     72  from doc[0]  → 'src/models/interfaces/permission'  not in pack (no grant)
+   @tok     72  from doc[0]  → 'src/models/interfaces/permission/index'  not in pack (no grant)
+   @tok    158  from doc[1]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok    158  from doc[1]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok    179  from doc[1]  → 'src/models/interfaces/permission'  not in pack (no grant)
+   @tok    179  from doc[1]  → 'src/models/interfaces/permission/index'  not in pack (no grant)
+   @tok    273  from doc[2]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok    273  from doc[2]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok    308  from doc[2]  → 'src/models/interfaces/permission'  not in pack (no grant)
+   @tok    308  from doc[2]  → 'src/models/interfaces/permission/index'  not in pack (no grant)
+   @tok    400  from doc[3]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok    400  from doc[3]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok    421  from doc[3]  → 'src/models/interfaces/permission'  not in pack (no grant)
+   @tok    421  from doc[3]  → 'src/models/interfaces/permission/index'  not in pack (no grant)
+   @tok    548  from doc[4]  → 'src/models/interfaces/permission'  not in pack (no grant)
+   @tok    548  from doc[4]  → 'src/models/interfaces/permission/index'  not in pack (no grant)
+   @tok    683  from doc[5]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok    683  from doc[5]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok    718  from doc[5]  → 'src/models/interfaces/permission'  not in pack (no grant)
+   @tok    718  from doc[5]  → 'src/models/interfaces/permission/index'  not in pack (no grant)
+   @tok    737  from doc[5]  → 'src/models/interfaces/role'  IN-PACK → grants attention to doc[4]
+   @tok    737  from doc[5]  → 'src/models/interfaces/role/index'  not in pack (no grant)
+   @tok    850  from doc[6]  → 'src/repo/modelRepo/permissions/createPermission/Signature'  IN-PACK → grants attention to doc[0]
+   @tok    850  from doc[6]  → 'src/repo/modelRepo/permissions/createPermission/Signature/index'  not in pack (no grant)
+   @tok    869  from doc[6]  → 'src/repo/modelRepo/permissions/deletePermissionById/Signature'  not in pack (no grant)
+   @tok    869  from doc[6]  → 'src/repo/modelRepo/permissions/deletePermissionById/Signature/index'  not in pack (no grant)
+   @tok    888  from doc[6]  → 'src/repo/modelRepo/permissions/getPermissionById/Signature'  IN-PACK → grants attention to doc[1]
+   @tok    888  from doc[6]  → 'src/repo/modelRepo/permissions/getPermissionById/Signature/index'  not in pack (no grant)
+   @tok    905  from doc[6]  → 'src/repo/modelRepo/permissions/getPermissions/Signature'  not in pack (no grant)
+   @tok    905  from doc[6]  → 'src/repo/modelRepo/permissions/getPermissions/Signature/index'  not in pack (no grant)
+   @tok    924  from doc[6]  → 'src/repo/modelRepo/permissions/getUserPermissions/Signature'  IN-PACK → grants attention to doc[2]
+   @tok    924  from doc[6]  → 'src/repo/modelRepo/permissions/getUserPermissions/Signature/index'  not in pack (no grant)
+   @tok    943  from doc[6]  → 'src/repo/modelRepo/permissions/createUserPermissions/Signature'  IN-PACK → grants attention to doc[5]
+   @tok    943  from doc[6]  → 'src/repo/modelRepo/permissions/createUserPermissions/Signature/index'  not in pack (no grant)
+   @tok    960  from doc[6]  → 'src/repo/modelRepo/permissions/updatePermission/Signature'  IN-PACK → grants attention to doc[3]
+   @tok    960  from doc[6]  → 'src/repo/modelRepo/permissions/updatePermission/Signature/index'  not in pack (no grant)
+   @tok   1076  from doc[7]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok   1076  from doc[7]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok   1095  from doc[7]  → 'src/models/interfaces/role'  IN-PACK → grants attention to doc[4]
+   @tok   1095  from doc[7]  → 'src/models/interfaces/role/index'  not in pack (no grant)
+   @tok   1223  from doc[8]  → 'src/repo/modelRepo/roles/createRole/Signature'  IN-PACK → grants attention to doc[7]
+   @tok   1223  from doc[8]  → 'src/repo/modelRepo/roles/createRole/Signature/index'  not in pack (no grant)
+   @tok   1240  from doc[8]  → 'src/repo/modelRepo/roles/deleteRoleById/Signature'  not in pack (no grant)
+   @tok   1240  from doc[8]  → 'src/repo/modelRepo/roles/deleteRoleById/Signature/index'  not in pack (no grant)
+   @tok   1257  from doc[8]  → 'src/repo/modelRepo/roles/getRoleById/Signature'  not in pack (no grant)
+   @tok   1257  from doc[8]  → 'src/repo/modelRepo/roles/getRoleById/Signature/index'  not in pack (no grant)
+   @tok   1274  from doc[8]  → 'src/repo/modelRepo/roles/getRoles/Signature'  not in pack (no grant)
+   @tok   1274  from doc[8]  → 'src/repo/modelRepo/roles/getRoles/Signature/index'  not in pack (no grant)
+   @tok   1289  from doc[8]  → 'src/repo/modelRepo/roles/updateRole/Signature'  not in pack (no grant)
+   @tok   1289  from doc[8]  → 'src/repo/modelRepo/roles/updateRole/Signature/index'  not in pack (no grant)
+   @tok   1310  from doc[8]  → 'src/repo/modelRepo/roles/revokeRolePermission/Signature'  not in pack (no grant)
+   @tok   1310  from doc[8]  → 'src/repo/modelRepo/roles/revokeRolePermission/Signature/index'  not in pack (no grant)
+   @tok   1331  from doc[8]  → 'src/repo/modelRepo/roles/assignRolePermission/Signature'  not in pack (no grant)
+   @tok   1331  from doc[8]  → 'src/repo/modelRepo/roles/assignRolePermission/Signature/index'  not in pack (no grant)
+   @tok   1563  from doc[10]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok   1563  from doc[10]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok   1582  from doc[10]  → 'src/models/interfaces/post'  IN-PACK → grants attention to doc[9]
+   @tok   1582  from doc[10]  → 'src/models/interfaces/post/index'  not in pack (no grant)
+   @tok   1694  from doc[11]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok   1694  from doc[11]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok   1713  from doc[11]  → 'src/models/interfaces/post'  IN-PACK → grants attention to doc[9]
+   @tok   1713  from doc[11]  → 'src/models/interfaces/post/index'  not in pack (no grant)
+   @tok   1798  from doc[12]  → 'src/repo/modelRepo/posts/createPost/Signature'  IN-PACK → grants attention to doc[10]
+   @tok   1798  from doc[12]  → 'src/repo/modelRepo/posts/createPost/Signature/index'  not in pack (no grant)
+   @tok   1815  from doc[12]  → 'src/repo/modelRepo/posts/deletePostById/Signature'  not in pack (no grant)
+   @tok   1815  from doc[12]  → 'src/repo/modelRepo/posts/deletePostById/Signature/index'  not in pack (no grant)
+   @tok   1832  from doc[12]  → 'src/repo/modelRepo/posts/getPostById/Signature'  IN-PACK → grants attention to doc[11]
+   @tok   1832  from doc[12]  → 'src/repo/modelRepo/posts/getPostById/Signature/index'  not in pack (no grant)
+   @tok   1847  from doc[12]  → 'src/repo/modelRepo/posts/getPosts/Signature'  not in pack (no grant)
+   @tok   1847  from doc[12]  → 'src/repo/modelRepo/posts/getPosts/Signature/index'  not in pack (no grant)
+   @tok   1862  from doc[12]  → 'src/repo/modelRepo/posts/updatePost/Signature'  not in pack (no grant)
+   @tok   1862  from doc[12]  → 'src/repo/modelRepo/posts/updatePost/Signature/index'  not in pack (no grant)
+   @tok   2288  from doc[16]  → 'src/models/interfaces/role'  IN-PACK → grants attention to doc[4]
+   @tok   2288  from doc[16]  → 'src/models/interfaces/role/index'  not in pack (no grant)
+   @tok   2307  from doc[16]  → 'src/models/interfaces/permission'  not in pack (no grant)
+   @tok   2307  from doc[16]  → 'src/models/interfaces/permission/index'  not in pack (no grant)
+   @tok   4531  from doc[21]  → 'src/utils/config/getNumberOption'  IN-PACK → grants attention to doc[18]
+   @tok   4531  from doc[21]  → 'src/utils/config/getNumberOption/index'  not in pack (no grant)
+   @tok   4545  from doc[21]  → 'src/utils/config/getStringOption'  IN-PACK → grants attention to doc[19]
+   @tok   4545  from doc[21]  → 'src/utils/config/getStringOption/index'  not in pack (no grant)
+   @tok   4561  from doc[21]  → 'src/utils/config/getBooleanOption'  IN-PACK → grants attention to doc[17]
+   @tok   4561  from doc[21]  → 'src/utils/config/getBooleanOption/index'  not in pack (no grant)
+   @tok   4571  from doc[21]  → 'src/utils/hashPassword'  IN-PACK → grants attention to doc[20]
+   @tok   4571  from doc[21]  → 'src/utils/hashPassword/index'  not in pack (no grant)
+   @tok   4637  from doc[22]  → 'src/utils/constants'  not in pack (no grant)
+   @tok   4637  from doc[22]  → 'src/utils/constants/index'  IN-PACK → grants attention to doc[16]
+   @tok   4658  from doc[22]  → 'src/utils'  not in pack (no grant)
+   @tok   4658  from doc[22]  → 'src/utils/index'  IN-PACK → grants attention to doc[21]
+   @tok   5950  from doc[23]  → 'src/repo/modelRepo/users'  not in pack (no grant)
+   @tok   5950  from doc[23]  → 'src/repo/modelRepo/users/index'  IN-PACK → grants attention to doc[24]
+   @tok   5989  from doc[23]  → 'src/repo/modelRepo/posts'  not in pack (no grant)
+   @tok   5989  from doc[23]  → 'src/repo/modelRepo/posts/index'  IN-PACK → grants attention to doc[12]
+   @tok   6028  from doc[23]  → 'src/repo/modelRepo/comments'  not in pack (no grant)
+   @tok   6028  from doc[23]  → 'src/repo/modelRepo/comments/index'  not in pack (no grant)
+   @tok   6085  from doc[23]  → 'src/repo/modelRepo/roles'  not in pack (no grant)
+   @tok   6085  from doc[23]  → 'src/repo/modelRepo/roles/index'  IN-PACK → grants attention to doc[8]
+   @tok   6152  from doc[23]  → 'src/repo/modelRepo/permissions'  not in pack (no grant)
+   @tok   6152  from doc[23]  → 'src/repo/modelRepo/permissions/index'  IN-PACK → grants attention to doc[6]
+   @tok   6201  from doc[23]  → 'src/repo/modelRepo/resetPasswordTokens'  not in pack (no grant)
+   @tok   6201  from doc[23]  → 'src/repo/modelRepo/resetPasswordTokens/index'  not in pack (no grant)
+   @tok   6220  from doc[23]  → 'src/repo/mailRepo/sendEmail/Signature'  not in pack (no grant)
+   @tok   6220  from doc[23]  → 'src/repo/mailRepo/sendEmail/Signature/index'  not in pack (no grant)
+   @tok   6966  from doc[24]  → 'src/repo/modelRepo/users/createUser/Signature'  IN-PACK → grants attention to doc[25]
+   @tok   6966  from doc[24]  → 'src/repo/modelRepo/users/createUser/Signature/index'  not in pack (no grant)
+   @tok   6983  from doc[24]  → 'src/repo/modelRepo/users/deleteUserById/Signature'  not in pack (no grant)
+   @tok   6983  from doc[24]  → 'src/repo/modelRepo/users/deleteUserById/Signature/index'  not in pack (no grant)
+   @tok   7000  from doc[24]  → 'src/repo/modelRepo/users/getUserById/Signature'  IN-PACK → grants attention to doc[26]
+   @tok   7000  from doc[24]  → 'src/repo/modelRepo/users/getUserById/Signature/index'  not in pack (no grant)
+   @tok   7019  from doc[24]  → 'src/repo/modelRepo/users/getUserByEmail/Signature'  not in pack (no grant)
+   @tok   7019  from doc[24]  → 'src/repo/modelRepo/users/getUserByEmail/Signature/index'  not in pack (no grant)
+   @tok   7034  from doc[24]  → 'src/repo/modelRepo/users/getUsers/Signature'  IN-PACK → grants attention to doc[27]
+   @tok   7034  from doc[24]  → 'src/repo/modelRepo/users/getUsers/Signature/index'  not in pack (no grant)
+   @tok   7049  from doc[24]  → 'src/repo/modelRepo/users/updateUser/Signature'  IN-PACK → grants attention to doc[28]
+   @tok   7049  from doc[24]  → 'src/repo/modelRepo/users/updateUser/Signature/index'  not in pack (no grant)
+   @tok   7068  from doc[24]  → 'src/repo/modelRepo/users/assignUserRole/Signature'  not in pack (no grant)
+   @tok   7068  from doc[24]  → 'src/repo/modelRepo/users/assignUserRole/Signature/index'  not in pack (no grant)
+   @tok   7089  from doc[24]  → 'src/repo/modelRepo/users/RevokeUserRoleSignature/Signature'  not in pack (no grant)
+   @tok   7089  from doc[24]  → 'src/repo/modelRepo/users/RevokeUserRoleSignature/Signature/index'  not in pack (no grant)
+   @tok   7208  from doc[25]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok   7208  from doc[25]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok   7241  from doc[25]  → 'src/models/interfaces/user'  IN-PACK → grants attention to doc[29]
+   @tok   7241  from doc[25]  → 'src/models/interfaces/user/index'  not in pack (no grant)
+   @tok   7379  from doc[26]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok   7379  from doc[26]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok   7412  from doc[26]  → 'src/models/interfaces/user'  IN-PACK → grants attention to doc[29]
+   @tok   7412  from doc[26]  → 'src/models/interfaces/user/index'  not in pack (no grant)
+   @tok   7501  from doc[27]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok   7501  from doc[27]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok   7520  from doc[27]  → 'src/models/interfaces/user'  IN-PACK → grants attention to doc[29]
+   @tok   7520  from doc[27]  → 'src/models/interfaces/user/index'  not in pack (no grant)
+   @tok   7623  from doc[28]  → 'src/utils/AsyncHandler'  not in pack (no grant)
+   @tok   7623  from doc[28]  → 'src/utils/AsyncHandler/index'  not in pack (no grant)
+   @tok   7656  from doc[28]  → 'src/models/interfaces/user'  IN-PACK → grants attention to doc[29]
+   @tok   7656  from doc[28]  → 'src/models/interfaces/user/index'  not in pack (no grant)
+   @tok   7798  from doc[29]  → 'src/models/interfaces/role'  IN-PACK → grants attention to doc[4]
+   @tok   7798  from doc[29]  → 'src/models/interfaces/role/index'  not in pack (no grant)
+   @tok   7809  from doc[29]  → 'src/models/interfaces/post'  IN-PACK → grants attention to doc[9]
+   @tok   7809  from doc[29]  → 'src/models/interfaces/post/index'  not in pack (no grant)
+   @tok   7823  from doc[29]  → 'src/models/index'  IN-PACK → grants attention to doc[30]
+   @tok   8006  from doc[30]  → 'src/models/interfaces/user'  IN-PACK → grants attention to doc[29]
+   @tok   8006  from doc[30]  → 'src/models/interfaces/user/index'  not in pack (no grant)
+   @tok   8023  from doc[30]  → 'src/models/interfaces/role'  IN-PACK → grants attention to doc[4]
+   @tok   8023  from doc[30]  → 'src/models/interfaces/role/index'  not in pack (no grant)
+   @tok   8043  from doc[30]  → 'src/models/interfaces/permission'  not in pack (no grant)
+   @tok   8043  from doc[30]  → 'src/models/interfaces/permission/index'  not in pack (no grant)
+   @tok   8060  from doc[30]  → 'src/models/interfaces/post'  IN-PACK → grants attention to doc[9]
+   @tok   8060  from doc[30]  → 'src/models/interfaces/post/index'  not in pack (no grant)
+   @tok   8077  from doc[30]  → 'src/models/interfaces/comment'  not in pack (no grant)
+   @tok   8077  from doc[30]  → 'src/models/interfaces/comment/index'  not in pack (no grant)
+   @tok   8103  from doc[30]  → 'src/models/interfaces/reset_password_token'  IN-PACK → grants attention to doc[13]
+   @tok   8103  from doc[30]  → 'src/models/interfaces/reset_password_token/index'  not in pack (no grant)
+   @tok   8127  from doc[30]  → 'src/models/interfaces/role_permission'  IN-PACK → grants attention to doc[14]
+   @tok   8127  from doc[30]  → 'src/models/interfaces/role_permission/index'  not in pack (no grant)
+   @tok   8148  from doc[30]  → 'src/models/interfaces/user_role'  IN-PACK → grants attention to doc[15]
+   @tok   8148  from doc[30]  → 'src/models/interfaces/user_role/index'  not in pack (no grant)
+   @tok   8347  from doc[30]  → 'src/config'  IN-PACK → grants attention to doc[22]
+   @tok   8347  from doc[30]  → 'src/config/index'  not in pack (no grant)
+   @tok   9227  from doc[32]  → 'src/models/Hl7GeneratedModels/Segment'  IN-PACK → grants attention to doc[31]
+   @tok   9227  from doc[32]  → 'src/models/Hl7GeneratedModels/Segment/index'  not in pack (no grant)
+   @tok  10204  from doc[33]  → 'src/models/Hl7GeneratedModels/Segment'  IN-PACK → grants attention to doc[31]
+   @tok  10204  from doc[33]  → 'src/models/Hl7GeneratedModels/Segment/index'  not in pack (no grant)
+   @tok  10794  from doc[35]  → 'src/observer/type/observer.type'  IN-PACK → grants attention to doc[34]
+   @tok  10794  from doc[35]  → 'src/observer/type/observer.type/index'  not in pack (no grant)
+   @tok  10976  from doc[36]  → 'src/observable/type/observable.type'  IN-PACK → grants attention to doc[35]
+   @tok  10976  from doc[36]  → 'src/observable/type/observable.type/index'  not in pack (no grant)
+   @tok  11156  from doc[37]  → 'src/observer/type/observer.type'  IN-PACK → grants attention to doc[34]
+   @tok  11156  from doc[37]  → 'src/observer/type/observer.type/index'  not in pack (no grant)
+   @tok  11467  from doc[38]  → 'src/observer/pipes/type/observer-pipe.type'  IN-PACK → grants attention to doc[37]
+   @tok  11467  from doc[38]  → 'src/observer/pipes/type/observer-pipe.type/index'  not in pack (no grant)
+   @tok  11492  from doc[38]  → 'src/observer/type/observer.type'  IN-PACK → grants attention to doc[34]
+   @tok  11492  from doc[38]  → 'src/observer/type/observer.type/index'  not in pack (no grant)
+   @tok  11520  from doc[38]  → 'src/observable/type/observable.type'  IN-PACK → grants attention to doc[35]
+   @tok  11520  from doc[38]  → 'src/observable/type/observable.type/index'  not in pack (no grant)
+   @tok  11675  from doc[39]  → 'src/observer/type/observer.type'  IN-PACK → grants attention to doc[34]
+   @tok  11675  from doc[39]  → 'src/observer/type/observer.type/index'  not in pack (no grant)
+   @tok  11857  from doc[40]  → 'src/observer/pipes/type/observer-pipe.type'  IN-PACK → grants attention to doc[37]
+   @tok  11857  from doc[40]  → 'src/observer/pipes/type/observer-pipe.type/index'  not in pack (no grant)
+   @tok  11873  from doc[40]  → 'src/observer/pipes/built-in/distinct/distinct-observer'  IN-PACK → grants attention to doc[39]
+   @tok  11873  from doc[40]  → 'src/observer/pipes/built-in/distinct/distinct-observer/index'  not in pack (no grant)
+   @tok  12022  from doc[41]  → 'src/observer/pipes/built-in/distinct/distinct-observer-pipe'  IN-PACK → grants attention to doc[40]
+   @tok  12022  from doc[41]  → 'src/observer/pipes/built-in/distinct/distinct-observer-pipe/index'  not in pack (no grant)
+   @tok  12045  from doc[41]  → 'src/observable/type/observable.type'  IN-PACK → grants attention to doc[35]
+   @tok  12045  from doc[41]  → 'src/observable/type/observable.type/index'  not in pack (no grant)
+   @tok  12077  from doc[41]  → 'src/observable/pipes/built-in/without-notifications/observer-pipe-rela … (+51 chars)'  IN-PACK → grants attention to doc[38]
+   @tok  12077  from doc[41]  → 'src/observable/pipes/built-in/without-notifications/observer-pipe-rela … (+57 chars)'  not in pack (no grant)
+   @tok  12232  from doc[42]  → 'src/observable/type/observable.type'  IN-PACK → grants attention to doc[35]
+   @tok  12232  from doc[42]  → 'src/observable/type/observable.type/index'  not in pack (no grant)
+   @tok  12258  from doc[42]  → 'src/observable/pipes/type/observable-pipe.type'  IN-PACK → grants attention to doc[36]
+   @tok  12258  from doc[42]  → 'src/observable/pipes/type/observable-pipe.type/index'  not in pack (no grant)
+   @tok  12276  from doc[42]  → 'src/observable/pipes/built-in/without-notifications/observer-pipe-rela … (+32 chars)'  IN-PACK → grants attention to doc[41]
+   @tok  12276  from doc[42]  → 'src/observable/pipes/built-in/without-notifications/observer-pipe-rela … (+38 chars)'  not in pack (no grant)
+   @tok  12431  from doc[43]  → 'src/observable/pipes/built-in/without-notifications/observer-pipe-rela … (+37 chars)'  IN-PACK → grants attention to doc[42]
+   @tok  12431  from doc[43]  → 'src/observable/pipes/built-in/without-notifications/observer-pipe-rela … (+43 chars)'  not in pack (no grant)
+   @tok  12832  from doc[46]  → 'src/runtime/get-global'  not in pack (no grant)
+   @tok  12832  from doc[46]  → 'src/runtime/get-global/index'  not in pack (no grant)
+   @tok  15433  from doc[47]  → 'src/debug/_debug'  IN-PACK → grants attention to doc[46]
+   @tok  15433  from doc[47]  → 'src/debug/_debug/index'  not in pack (no grant)
+   @tok  15459  from doc[47]  → 'src/debug/impl/set-default-unit-test-flags'  not in pack (no grant)
+   @tok  15459  from doc[47]  → 'src/debug/impl/set-default-unit-test-flags/index'  not in pack (no grant)
+   @tok  15480  from doc[47]  → 'src/debug/debug-namepace'  not in pack (no grant)
+   @tok  15480  from doc[47]  → 'src/debug/debug-namepace/index'  not in pack (no grant)
+   @tok  16257  from doc[48]  → 'src/set/impl/set-values-to-array'  IN-PACK → grants attention to doc[45]
+   @tok  16257  from doc[48]  → 'src/set/impl/set-values-to-array/index'  not in pack (no grant)
+   @tok  16272  from doc[48]  → 'src/test-utils'  IN-PACK → grants attention to doc[47]
+   @tok  16272  from doc[48]  → 'src/test-utils/index'  not in pack (no grant)
+
+####################################################################################################
+PACK 2   |   16,384 tokens   |   7 docs   |   2 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:2842]  (2842 tok)  doc_id=134741  component=0  TRUNCATED
+   normed_id : villekulla-nma/booking:client/src/api
+   title     : 'villekulla-nma/booking:client/src/api'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[1003, 410, 8270, 74, 47972, 12, 77, 2611, 14, 2070, 278, 25, 16366, 14, 10677, 14, 15042, 628]
+   │   // villekulla-nma/booking:client/src/api
+   │   
+   ├ BODY    (2823 tok)
+   │   head: "import type {\\n  UserAttributes,\\n  ResourceAttributes,\\n  EventAttributes,\\n  EventResult,\\n  LoginResult,\\n  UserResponse,\\n  UserRole,\\n  UnitAttributes,\\n} from '@booking/types';\\n\\nimport { isUser } from './helpers/is-user';\\nimport { isUnit } from './helpers/is-unit';\\nimport { isEvent } from  … (+13 chars)"
+   │   tail: "wn): event is CalendarEventResult =>\\n          isEvent(event) &&\\n          typeof (event as CalendarEventResult).color === 'string'\\n      )\\n    : [];\\n};\\n\\nexport const getEventById = async (eventId: string): Promise<EventByIdData> => {\\n  const response = await fetch(`/api/events/${eventId}`); … (+10 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[2842:3336]  (494 tok)  doc_id=134766  component=0
+   normed_id : villekulla-nma/booking:client/src/hooks/use-redirect-unauthenticated-user
+   title     : 'villekulla-nma/booking:client/src/hooks/use-redirect-unauthenticated-user'
+   categories: ''
+   ┌ PREFIX  (30 tok)  ids=[1003, 410, 8270, 74, 47972, 12, 77, 2611, 14, 2070, 278, 25, 16366, 14, 10677, 14, 25480, 82, 14, 1904, 12, 445, 1060, 12, 403, 41299, 3474, 12, 7220, 628]
+   │   // villekulla-nma/booking:client/src/hooks/use-redirect-unauthenticated-user
+   │   
+   ├ BODY    (463 tok)
+   │   head: "import { useRef, useEffect, useCallback } from 'react';\\nimport { useHistory, useLocation } from 'react-router-dom';\\nimport type { Location } from 'history';\\n\\nimport { UnauthenticatedError } from '../api';\\n\\ntype IsRedirecting = boolean;\\n\\ntype RedirectFn = (\\n  error: unknown,\\n  fn?: (error:  … (+10 chars)"
+   │   tail: ' else {\\n          throw error;\\n        }\\n      }\\n    },\\n    [location, history]\\n  );\\n  const redirect = useRef<RedirectFn>(redirectFn);\\n\\n  useEffect(\\n    () =>\\n      history.listen((newLocation) => {\\n        location.current = newLocation;\\n      }),\\n    [history]\\n  );\\n\\n  return redi … (+19 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[3336:3462]  (126 tok)  doc_id=134746  component=0
+   normed_id : villekulla-nma/booking:client/src/hooks/use-user-context
+   title     : 'villekulla-nma/booking:client/src/hooks/use-user-context'
+   categories: ''
+   ┌ PREFIX  (25 tok)  ids=[1003, 410, 8270, 74, 47972, 12, 77, 2611, 14, 2070, 278, 25, 16366, 14, 10677, 14, 25480, 82, 14, 1904, 12, 7220, 12, 22866, 628]
+   │   // villekulla-nma/booking:client/src/hooks/use-user-context
+   │   
+   ├ BODY    (100 tok)
+   │   head: "import { useContext } from 'react';\\nimport type { UserResponse } from '@booking/types';\\n\\nimport { UserContext } from '../contexts/user-context';\\nimport { isUser } from '../helpers/is-user';\\n\\nexport const useUserContext = (): UserResponse | null => {\\n  const user = useContext(UserContext);\\n\\n … (+9 chars)"
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[3462:3722]  (260 tok)  doc_id=134765  component=0
+   normed_id : villekulla-nma/booking:client/src/hooks/use-user-events
+   title     : 'villekulla-nma/booking:client/src/hooks/use-user-events'
+   categories: ''
+   ┌ PREFIX  (25 tok)  ids=[1003, 410, 8270, 74, 47972, 12, 77, 2611, 14, 2070, 278, 25, 16366, 14, 10677, 14, 25480, 82, 14, 1904, 12, 7220, 12, 31534, 628]
+   │   // villekulla-nma/booking:client/src/hooks/use-user-events
+   │   
+   ├ BODY    (234 tok)
+   │   head: "import { useEffect, useState } from 'react';\\n\\nimport type { UserEvent } from '../api';\\nimport { getUserEvents } from '../api';\\nimport { useUserContext } from './use-user-context';\\nimport { useRedirectUnauthenticatedUser } from './use-redirect-unauthenticated-user';\\n\\nexport const useUserEvents … (+7 chars)"
+   │   tail: 'r = useUserContext();\\n  const [events, setEvents] = useState<UserEvent[] | undefined>();\\n\\n  useEffect(() => {\\n    if (user) {\\n      getUserEvents(limit).then(\\n        (events) => setEvents(events),\\n        (error) => redirect(error)\\n      );\\n    }\\n  }, [limit, user, redirect]);\\n\\n  return … (+14 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[4]  pos[3722:6584]  (2862 tok)  doc_id=2736  component=1
+   normed_id : vilyLei/voxweb3d:src/vox/math/MathConst
+   title     : 'vilyLei/voxweb3d:src/vox/math/MathConst'
+   categories: ''
+   ┌ PREFIX  (22 tok)  ids=[1003, 410, 813, 3123, 72, 14, 85, 1140, 12384, 18, 67, 25, 10677, 14, 85, 1140, 14, 11018, 14, 37372, 34184, 628]
+   │   // vilyLei/voxweb3d:src/vox/math/MathConst
+   │   
+   ├ BODY    (2839 tok)
+   │   head: '\\n/***************************************************************************/\\n/*                                                                         */\\n/*  Copyright 2018-2022 by                                                 */\\n/*  Vily(vily313@126.com)                                     … (+4 chars)'
+   │   tail: '    }\\n    }\\n    static GetRadianByCos(cosv: number, dx: number, dy: number): number {\\n        var rad = Math.acos(cosv);//Math.atan(dy/dx);\\n        if (dx >= 0) {\\n            return rad;\\n        }\\n        else {\\n            return MathConst.MATH_PI + rad;\\n        }\\n    }\\n}\\n\\nexport defau … (+13 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[5]  pos[6584:11708]  (5124 tok)  doc_id=2514  component=1
+   normed_id : vilyLei/voxweb3d:src/vox/math/Vector3D
+   title     : 'vilyLei/voxweb3d:src/vox/math/Vector3D'
+   categories: ''
+   ┌ PREFIX  (23 tok)  ids=[1003, 410, 813, 3123, 72, 14, 85, 1140, 12384, 18, 67, 25, 10677, 14, 85, 1140, 14, 11018, 14, 38469, 18, 35, 628]
+   │   // vilyLei/voxweb3d:src/vox/math/Vector3D
+   │   
+   ├ BODY    (5100 tok)
+   │   head: '/***************************************************************************/\\n/*                                                                         */\\n/*  Copyright 2018-2022 by                                                 */\\n/*  Vily(vily313@126.com)                                       … (+3 chars)'
+   │   tail: 'v: Vector3D, rv: Vector3D): void {\\n        let idotn2: number = (iv.x * nv.x + iv.y * nv.y + iv.z * nv.z) * 2.0;\\n        rv.x = iv.x - idotn2 * nv.x;\\n        rv.y = iv.y - idotn2 * nv.y;\\n        rv.z = iv.z - idotn2 * nv.z;\\n    }\\n    static ZERO: Vector3D = new Vector3D();\\n}\\nexport default V … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[6]  pos[11708:16384]  (4676 tok)  doc_id=2955  component=1
+   normed_id : vilyLei/voxweb3d:src/vox/geom/curve/BezierCurve
+   title     : 'vilyLei/voxweb3d:src/vox/geom/curve/BezierCurve'
+   categories: ''
+   ┌ PREFIX  (29 tok)  ids=[1003, 410, 813, 3123, 72, 14, 85, 1140, 12384, 18, 67, 25, 10677, 14, 85, 1140, 14, 469, 296, 14, 22019, 303, 14, 3856, 89, 959, 26628, 303, 628]
+   │   // vilyLei/voxweb3d:src/vox/geom/curve/BezierCurve
+   │   
+   ├ BODY    (4646 tok)
+   │   head: '/***************************************************************************/\\n/*                                                                         */\\n/*  Copyright 2018-2022 by                                                 */\\n/*  Vily(vily313@126.com)                                       … (+3 chars)'
+   │   tail: '\t}\\n\t/**\\n\t * 设置曲线的分段总数\\n\t * @param\t\t\ttot\t\t分段数量\\n\t * */\\n\tsetSegTot(tot: number): void {\\n\t\tthis.m_segTot = tot;\\n\t}\\n\tgetSegTot(): number {\\n\t\treturn this.m_segTot;\\n\t}\\n\tgetCurveType(): number {\\n\t\treturn this.m_curveType;\\n\t}\\n}\\n\\nexport { CurveSrcCalc, Bezier2Curve, Bezier3Curve };\\nexport defa … (+17 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (typescript detector; targets matched against in-pack docs)
+   @tok     88  from doc[0]  → 'client/src/helpers/is-user'  not in pack (no grant)
+   @tok     88  from doc[0]  → 'client/src/helpers/is-user/index'  not in pack (no grant)
+   @tok    104  from doc[0]  → 'client/src/helpers/is-unit'  not in pack (no grant)
+   @tok    104  from doc[0]  → 'client/src/helpers/is-unit/index'  not in pack (no grant)
+   @tok    120  from doc[0]  → 'client/src/helpers/is-event'  not in pack (no grant)
+   @tok    120  from doc[0]  → 'client/src/helpers/is-event/index'  not in pack (no grant)
+   @tok   2929  from doc[1]  → 'client/src/api'  IN-PACK → grants attention to doc[0]
+   @tok   2929  from doc[1]  → 'client/src/api/index'  not in pack (no grant)
+   @tok   3402  from doc[2]  → 'client/src/contexts/user-context'  not in pack (no grant)
+   @tok   3402  from doc[2]  → 'client/src/contexts/user-context/index'  not in pack (no grant)
+   @tok   3418  from doc[2]  → 'client/src/helpers/is-user'  not in pack (no grant)
+   @tok   3418  from doc[2]  → 'client/src/helpers/is-user/index'  not in pack (no grant)
+   @tok   3512  from doc[3]  → 'client/src/api'  IN-PACK → grants attention to doc[0]
+   @tok   3512  from doc[3]  → 'client/src/api/index'  not in pack (no grant)
+   @tok   3524  from doc[3]  → 'client/src/api'  IN-PACK → grants attention to doc[0]
+   @tok   3524  from doc[3]  → 'client/src/api/index'  not in pack (no grant)
+   @tok   3540  from doc[3]  → 'client/src/hooks/use-user-context'  IN-PACK → grants attention to doc[2]
+   @tok   3540  from doc[3]  → 'client/src/hooks/use-user-context/index'  not in pack (no grant)
+   @tok   3565  from doc[3]  → 'client/src/hooks/use-redirect-unauthenticated-user'  IN-PACK → grants attention to doc[1]
+   @tok   3565  from doc[3]  → 'client/src/hooks/use-redirect-unauthenticated-user/index'  not in pack (no grant)
+   @tok   6909  from doc[5]  → 'src/vox/math/MathConst'  IN-PACK → grants attention to doc[4]
+   @tok   6909  from doc[5]  → 'src/vox/math/MathConst/index'  not in pack (no grant)
+   @tok  12042  from doc[6]  → 'src/vox/math/Vector3D'  IN-PACK → grants attention to doc[5]
+   @tok  12042  from doc[6]  → 'src/vox/math/Vector3D/index'  not in pack (no grant)
+
+====================================================================================================
+done.

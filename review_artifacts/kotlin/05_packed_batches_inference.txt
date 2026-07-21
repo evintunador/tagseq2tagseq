@@ -1,0 +1,260 @@
+====================================================================================================
+Loading GraphIndex from /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/kotlin/splits/val_community ...
+  nodes=50,141  tokenizer=gpt2  eos=50256  dtype=uint16
+  LIVE sample  |  strategy=bfs  layout=slash_comment_prefix_eos  order_mode=prefer_targets_first  token_budget=16384  doc_budget=None  epoch=0
+====================================================================================================
+
+####################################################################################################
+PACK 0   |   16,384 tokens   |   2 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:15740]  (15740 tok)  doc_id=31638  component=0  TRUNCATED
+   normed_id : arrow.fx.ForIO
+   title     : 'arrow.fx.ForIO'
+   categories: ''
+   ┌ PREFIX  (8 tok)  ids=[1003, 15452, 13, 21373, 13, 1890, 9399, 628]
+   │   // arrow.fx.ForIO
+   │   
+   ├ BODY    (15731 tok)
+   │   head: 'package arrow.fx\\n\\nimport arrow.core.Either\\nimport arrow.core.Either.Left\\nimport arrow.core.EitherOf\\nimport arrow.core.Eval\\nimport arrow.core.NonFatal\\nimport arrow.core.Option\\nimport arrow.core.Some\\nimport arrow.core.andThen\\nimport arrow.core.fix\\nimport arrow.core.identity\\nimport arrow.co … (+12 chars)'
+   │   tail: 'pendConnection, CoroutineContext>)?\\n  ) : IO<A>() {\\n    override fun unsafeRunTimedTotal(limit: Duration): Option<A> = throw AssertionError("Unreachable")\\n\\n    companion object {\\n      // Internal reusable reference.\\n      internal val makeUncancellable: (SuspendConnection, CoroutineContext) - … (+6 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[15740:16384]  (644 tok)  doc_id=34664  component=0
+   normed_id : arrow.fx.test.generators.timeUnit
+   title     : 'arrow.fx.test.generators.timeUnit'
+   categories: ''
+   ┌ PREFIX  (13 tok)  ids=[1003, 15452, 13, 21373, 13, 9288, 13, 8612, 2024, 13, 2435, 26453, 628]
+   │   // arrow.fx.test.generators.timeUnit
+   │   
+   ├ BODY    (630 tok)
+   │   head: 'package arrow.fx.test.generators\\n\\nimport arrow.Kind\\nimport arrow.core.Eval\\nimport arrow.core.test.generators.GenK\\nimport arrow.core.test.generators.intSmall\\nimport arrow.core.test.generators.throwable\\nimport arrow.fx.DecisionPartialOf\\nimport arrow.fx.ForIO\\nimport arrow.fx.IO\\nimport arrow.f … (+10 chars)'
+   │   tail: 'tialOf<Any?>> = object : GenK<DecisionPartialOf<Any?>> {\\n  override fun <A> genK(gen: Gen<A>): Gen<Kind<DecisionPartialOf<Any?>, A>> =\\n    Gen.bind(\\n      Gen.bool(),\\n      Gen.intSmall(),\\n      gen\\n    ) { cont, delay, res -> Schedule.Decision(cont, delay.nanoseconds, 0 as Any?, Eval.now(res) … (+8 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (kotlin detector; targets matched against in-pack docs)
+   @tok     20  from doc[0]  → 'arrow.core.Either'  not in pack (no grant)
+   @tok     29  from doc[0]  → 'arrow.core.Either.Left'  not in pack (no grant)
+   @tok     37  from doc[0]  → 'arrow.core.EitherOf'  not in pack (no grant)
+   @tok     45  from doc[0]  → 'arrow.core.Eval'  not in pack (no grant)
+   @tok     54  from doc[0]  → 'arrow.core.NonFatal'  not in pack (no grant)
+   @tok     61  from doc[0]  → 'arrow.core.Option'  not in pack (no grant)
+   @tok     68  from doc[0]  → 'arrow.core.Some'  not in pack (no grant)
+   @tok     76  from doc[0]  → 'arrow.core.andThen'  not in pack (no grant)
+   @tok     83  from doc[0]  → 'arrow.core.fix'  not in pack (no grant)
+   @tok     91  from doc[0]  → 'arrow.core.identity'  not in pack (no grant)
+   @tok    102  from doc[0]  → 'arrow.core.nonFatalOrThrow'  not in pack (no grant)
+   @tok    109  from doc[0]  → 'arrow.core.right'  not in pack (no grant)
+   @tok    118  from doc[0]  → 'arrow.fx.IO.Pure'  not in pack (no grant)
+   @tok    129  from doc[0]  → 'arrow.fx.IO.RaiseError'  not in pack (no grant)
+   @tok    147  from doc[0]  → 'arrow.fx.OnCancel.Companion.CancellationException'  not in pack (no grant)
+   @tok    159  from doc[0]  → 'arrow.fx.OnCancel.Silent'  not in pack (no grant)
+   @tok    175  from doc[0]  → 'arrow.fx.OnCancel.ThrowCancellationException'  not in pack (no grant)
+   @tok    189  from doc[0]  → 'arrow.fx.coroutines.SuspendConnection'  not in pack (no grant)
+   @tok    205  from doc[0]  → 'arrow.fx.extensions.io.async.effectMap'  not in pack (no grant)
+   @tok    221  from doc[0]  → 'arrow.fx.extensions.io.concurrent.concurrent'  not in pack (no grant)
+   @tok    233  from doc[0]  → 'arrow.fx.internal.AtomicRefW'  not in pack (no grant)
+   @tok    246  from doc[0]  → 'arrow.fx.internal.ForwardCancellable'  not in pack (no grant)
+   @tok    257  from doc[0]  → 'arrow.fx.internal.IOBracket'  not in pack (no grant)
+   @tok    268  from doc[0]  → 'arrow.fx.internal.IOFiber'  not in pack (no grant)
+   @tok    281  from doc[0]  → 'arrow.fx.internal.IOForkedStart'  not in pack (no grant)
+   @tok    295  from doc[0]  → 'arrow.fx.internal.Platform.maxStackDepthSize'  not in pack (no grant)
+   @tok    307  from doc[0]  → 'arrow.fx.internal.Platform.onceOnly'  not in pack (no grant)
+   @tok    321  from doc[0]  → 'arrow.fx.internal.Platform.unsafeResync'  not in pack (no grant)
+   @tok    332  from doc[0]  → 'arrow.fx.internal.ShiftTick'  not in pack (no grant)
+   @tok    344  from doc[0]  → 'arrow.fx.internal.UnsafePromise'  not in pack (no grant)
+   @tok    355  from doc[0]  → 'arrow.fx.internal.scheduler'  not in pack (no grant)
+   @tok    367  from doc[0]  → 'arrow.fx.typeclasses.CancelToken'  not in pack (no grant)
+   @tok    379  from doc[0]  → 'arrow.fx.typeclasses.Disposable'  not in pack (no grant)
+   @tok    389  from doc[0]  → 'arrow.fx.typeclasses.Duration'  not in pack (no grant)
+   @tok    400  from doc[0]  → 'arrow.fx.typeclasses.ExitCase'  not in pack (no grant)
+   @tok    411  from doc[0]  → 'arrow.fx.typeclasses.Fiber'  not in pack (no grant)
+   @tok    422  from doc[0]  → 'arrow.fx.typeclasses.mapUnit'  not in pack (no grant)
+   @tok    433  from doc[0]  → 'arrow.fx.typeclasses.rightUnit'  not in pack (no grant)
+   @tok    445  from doc[0]  → 'kotlinx.coroutines.Job'  not in pack (no grant)
+   @tok    461  from doc[0]  → 'kotlinx.coroutines.NonCancellable'  not in pack (no grant)
+   @tok    474  from doc[0]  → 'kotlin.coroutines.CoroutineContext'  not in pack (no grant)
+   @tok    488  from doc[0]  → 'kotlin.coroutines.EmptyCoroutineContext'  not in pack (no grant)
+   @tok    500  from doc[0]  → 'kotlin.coroutines.resume'  not in pack (no grant)
+   @tok    514  from doc[0]  → 'kotlin.coroutines.resumeWithException'  not in pack (no grant)
+   @tok    528  from doc[0]  → 'kotlin.coroutines.suspendCoroutine'  not in pack (no grant)
+   @tok  15768  from doc[1]  → 'arrow.Kind'  not in pack (no grant)
+   @tok  15776  from doc[1]  → 'arrow.core.Eval'  not in pack (no grant)
+   @tok  15789  from doc[1]  → 'arrow.core.test.generators.GenK'  not in pack (no grant)
+   @tok  15802  from doc[1]  → 'arrow.core.test.generators.intSmall'  not in pack (no grant)
+   @tok  15815  from doc[1]  → 'arrow.core.test.generators.throwable'  not in pack (no grant)
+   @tok  15826  from doc[1]  → 'arrow.fx.DecisionPartialOf'  not in pack (no grant)
+   @tok  15834  from doc[1]  → 'arrow.fx.ForIO'  IN-PACK → grants attention to doc[0]
+   @tok  15841  from doc[1]  → 'arrow.fx.IO'  not in pack (no grant)
+   @tok  15849  from doc[1]  → 'arrow.fx.Schedule'  not in pack (no grant)
+   @tok  15859  from doc[1]  → 'arrow.fx.typeclasses.Duration'  not in pack (no grant)
+   @tok  15870  from doc[1]  → 'arrow.fx.typeclasses.Fiber'  not in pack (no grant)
+   @tok  15884  from doc[1]  → 'arrow.fx.typeclasses.FiberPartialOf'  not in pack (no grant)
+   @tok  15897  from doc[1]  → 'arrow.fx.typeclasses.nanoseconds'  not in pack (no grant)
+   @tok  15906  from doc[1]  → 'arrow.typeclasses.Applicative'  not in pack (no grant)
+   @tok  15916  from doc[1]  → 'arrow.typeclasses.ApplicativeError'  not in pack (no grant)
+   @tok  15929  from doc[1]  → 'io.kotlintest.properties.Gen'  not in pack (no grant)
+   @tok  15940  from doc[1]  → 'java.util.concurrent.TimeUnit'  not in pack (no grant)
+
+####################################################################################################
+PACK 1   |   16,384 tokens   |   3 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:8762]  (8762 tok)  doc_id=23320  component=0  TRUNCATED
+   normed_id : no.nav.helse.person.IAktivitetslogg
+   title     : 'no.nav.helse.person.IAktivitetslogg'
+   categories: ''
+   ┌ PREFIX  (18 tok)  ids=[1003, 645, 13, 28341, 13, 2978, 325, 13, 6259, 13, 3539, 21841, 452, 270, 1039, 6404, 70, 628]
+   │   // no.nav.helse.person.IAktivitetslogg
+   │   
+   ├ BODY    (8743 tok)
+   │   head: 'package no.nav.helse.person\\n\\nimport no.nav.helse.Toggles\\nimport no.nav.helse.hendelser.Hendelseskontekst\\nimport no.nav.helse.hendelser.Periode\\nimport no.nav.helse.person.Aktivitetslogg.Aktivitet.Behov\\nimport no.nav.helse.person.vilkår.Etterlevelse\\nimport no.nav.helse.serde.reflection.Aktivite … (+7 chars)'
+   │   tail: '                   arbeidsforholdId: String?,\\n                ) {\\n                    aktivitetslogg.behov(\\n                        Behovtype.Godkjenning, "Forespør godkjenning fra saksbehandler", mapOf(\\n                            "periodeFom" to periodeFom.toString(),\\n                         … (+5 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[8762:9535]  (773 tok)  doc_id=23283  component=0
+   normed_id : no.nav.helse.hendelser.Medlemskapsvurdering
+   title     : 'no.nav.helse.hendelser.Medlemskapsvurdering'
+   categories: ''
+   ┌ PREFIX  (21 tok)  ids=[1003, 645, 13, 28341, 13, 2978, 325, 13, 15631, 1424, 263, 13, 9921, 46367, 74, 1686, 85, 333, 1082, 278, 628]
+   │   // no.nav.helse.hendelser.Medlemskapsvurdering
+   │   
+   ├ BODY    (751 tok)
+   │   head: 'package no.nav.helse.hendelser\\n\\nimport no.nav.helse.person.IAktivitetslogg\\nimport no.nav.helse.person.Periodetype\\nimport no.nav.helse.person.Periodetype.FORLENGELSE\\nimport no.nav.helse.person.Periodetype.INFOTRYGDFORLENGELSE\\n\\nclass Medlemskapsvurdering(\\n    internal val medlemskapstatus: Med … (+8 chars)'
+   │   tail: '-> {\\n                aktivitetslogg.etterlevelse.`§2`(false)\\n                aktivitetslogg.warn("Perioden er avslått på grunn av at den sykmeldte ikke er medlem av Folketrygden")\\n                false\\n            }\\n        }\\n    }\\n\\n    enum class Medlemskapstatus {\\n        Ja, Nei, VetIkke … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[9535:16384]  (6849 tok)  doc_id=23401  component=0
+   normed_id : no.nav.helse.serde.api.v2.buildere.IVilkårsgrunnlag
+   title     : 'no.nav.helse.serde.api.v2.buildere.IVilkårsgrunnlag'
+   categories: ''
+   ┌ PREFIX  (27 tok)  ids=[1003, 645, 13, 28341, 13, 2978, 325, 13, 2655, 2934, 13, 15042, 13, 85, 17, 13, 11249, 567, 13, 3824, 43545, 29090, 3808, 2164, 20935, 30909, 628]
+   │   // no.nav.helse.serde.api.v2.buildere.IVilkårsgrunnlag
+   │   
+   ├ BODY    (6821 tok)
+   │   head: 'package no.nav.helse.serde.api.v2.buildere\\n\\nimport no.nav.helse.Grunnbeløp\\nimport no.nav.helse.hendelser.Medlemskapsvurdering\\nimport no.nav.helse.person.*\\nimport no.nav.helse.person.Inntektshistorikk.*\\nimport no.nav.helse.person.VilkårsgrunnlagHistorikk.Grunnlagsdata\\nimport no.nav.helse.perso … (+7 chars)'
+   │   tail: ' beskrivelse: String,\\n                    tidsstempel: LocalDateTime\\n                ) {\\n                    val inntekt = InntektBuilder(beløp).build()\\n                    inntekterFraAOrdningen.add(IInntekterFraAOrdningen(måned, inntekt.månedlig))\\n                }\\n            }\\n        }\\n … (+10 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (kotlin detector; targets matched against in-pack docs)
+   @tok     39  from doc[0]  → 'no.nav.helse.Toggles'  not in pack (no grant)
+   @tok     60  from doc[0]  → 'no.nav.helse.hendelser.Hendelseskontekst'  not in pack (no grant)
+   @tok     76  from doc[0]  → 'no.nav.helse.hendelser.Periode'  not in pack (no grant)
+   @tok    103  from doc[0]  → 'no.nav.helse.person.Aktivitetslogg.Aktivitet.Behov'  not in pack (no grant)
+   @tok    124  from doc[0]  → 'no.nav.helse.person.vilkår.Etterlevelse'  not in pack (no grant)
+   @tok    147  from doc[0]  → 'no.nav.helse.serde.reflection.AktivitetsloggMap'  not in pack (no grant)
+   @tok    166  from doc[0]  → 'no.nav.helse.utbetalingslinjer.Oppdrag'  not in pack (no grant)
+   @tok    190  from doc[0]  → 'no.nav.helse.utbetalingslinjer.Utbetaling.Utbetalingtype'  not in pack (no grant)
+   @tok    198  from doc[0]  → 'java.time.LocalDate'  not in pack (no grant)
+   @tok    207  from doc[0]  → 'java.time.LocalDateTime'  not in pack (no grant)
+   @tok    215  from doc[0]  → 'java.time.YearMonth'  not in pack (no grant)
+   @tok    227  from doc[0]  → 'java.time.format.DateTimeFormatter'  not in pack (no grant)
+   @tok   8813  from doc[1]  → 'no.nav.helse.person.IAktivitetslogg'  IN-PACK → grants attention to doc[0]
+   @tok   8828  from doc[1]  → 'no.nav.helse.person.Periodetype'  not in pack (no grant)
+   @tok   8849  from doc[1]  → 'no.nav.helse.person.Periodetype.FORLENGELSE'  not in pack (no grant)
+   @tok   8876  from doc[1]  → 'no.nav.helse.person.Periodetype.INFOTRYGDFORLENGELSE'  not in pack (no grant)
+   @tok   9596  from doc[2]  → 'no.nav.helse.Grunnbeløp'  not in pack (no grant)
+   @tok   9617  from doc[2]  → 'no.nav.helse.hendelser.Medlemskapsvurdering'  IN-PACK → grants attention to doc[1]
+   @tok   9674  from doc[2]  → 'no.nav.helse.person.VilkårsgrunnlagHistorikk.Grunnlagsdata'  not in pack (no grant)
+   @tok   9707  from doc[2]  → 'no.nav.helse.person.VilkårsgrunnlagHistorikk.InfotrygdVilkårsgrunnlag'  not in pack (no grant)
+   @tok   9734  from doc[2]  → 'no.nav.helse.serde.api.v2.SpleisVilkårsgrunnlag'  not in pack (no grant)
+   @tok   9758  from doc[2]  → 'no.nav.helse.serde.api.v2.Vilkårsgrunnlag'  not in pack (no grant)
+   @tok   9784  from doc[2]  → 'java.time.LocalDate'  not in pack (no grant)
+   @tok   9793  from doc[2]  → 'java.time.LocalDateTime'  not in pack (no grant)
+   @tok   9801  from doc[2]  → 'java.time.YearMonth'  not in pack (no grant)
+   @tok   9817  from doc[2]  → 'kotlin.properties.Delegates'  not in pack (no grant)
+
+####################################################################################################
+PACK 2   |   16,384 tokens   |   5 docs   |   1 connected component(s)
+  (model sees input_ids = tokens[:-1] = 16,383 tokens, predicts labels = tokens[1:])
+####################################################################################################
+
+── doc[0]  pos[0:1582]  (1582 tok)  doc_id=37986  component=0  TRUNCATED
+   normed_id : info.laht.threekt.core.FloatBufferAttribute
+   title     : 'info.laht.threekt.core.FloatBufferAttribute'
+   categories: ''
+   ┌ PREFIX  (16 tok)  ids=[1003, 7508, 13, 9271, 83, 13, 400, 10316, 83, 13, 7295, 13, 43879, 28632, 33682, 628]
+   │   // info.laht.threekt.core.FloatBufferAttribute
+   │   
+   ├ BODY    (1565 tok)
+   │   head: 'package info.laht.threekt.core\\n\\nimport info.laht.threekt.math.Color\\nimport info.laht.threekt.math.Vector2\\nimport info.laht.threekt.math.Vector3\\nimport info.laht.threekt.math.Vector4\\nimport org.lwjgl.BufferUtils\\nimport org.lwjgl.system.APIUtil\\nimport java.nio.ByteBuffer\\nimport java.nio.Float … (+10 chars)'
+   │   tail: 'eturn this\\n    }\\n\\n    fun setXYZW(index: Int, x: Int, y: Int, z: Int, w: Int): IntBufferAttribute {\\n        @Suppress("NAME_SHADOWING")\\n        val index = index * itemSize\\n\\n        buffer[index + 0] = x\\n        buffer[index + 1] = y\\n        buffer[index + 2] = z\\n        buffer[index + 3]  … (+12 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[1]  pos[1582:2526]  (944 tok)  doc_id=37989  component=0
+   normed_id : info.laht.threekt.core.Intersection
+   title     : 'info.laht.threekt.core.Intersection'
+   categories: ''
+   ┌ PREFIX  (15 tok)  ids=[1003, 7508, 13, 9271, 83, 13, 400, 10316, 83, 13, 7295, 13, 9492, 5458, 628]
+   │   // info.laht.threekt.core.Intersection
+   │   
+   ├ BODY    (928 tok)
+   │   head: 'package info.laht.threekt.core\\n\\nimport info.laht.threekt.cameras.Camera\\nimport info.laht.threekt.math.Ray\\nimport info.laht.threekt.math.Vector2\\nimport info.laht.threekt.math.Vector3\\n\\nclass Intersection(\\n    val distance: Float,\\n    val distanceToRay: Float?,\\n    val point: Vector3,\\n    va … (+11 chars)'
+   │   tail: 'Array is instantiated. If set, you must clear this array prior to each call (i.e., array.length = 0)\\n     */\\n    fun intersectObjects(\\n        objects: List<Object3D>,\\n        recursive: Boolean = false,\\n        optionalTarget: List<Intersection>?\\n    ): List<Intersection> {\\n        TODO()\\n  … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[2]  pos[2526:3470]  (944 tok)  doc_id=37990  component=0
+   normed_id : info.laht.threekt.core.Raycaster
+   title     : 'info.laht.threekt.core.Raycaster'
+   categories: ''
+   ┌ PREFIX  (15 tok)  ids=[1003, 7508, 13, 9271, 83, 13, 400, 10316, 83, 13, 7295, 13, 19591, 17970, 628]
+   │   // info.laht.threekt.core.Raycaster
+   │   
+   ├ BODY    (928 tok)
+   │   head: 'package info.laht.threekt.core\\n\\nimport info.laht.threekt.cameras.Camera\\nimport info.laht.threekt.math.Ray\\nimport info.laht.threekt.math.Vector2\\nimport info.laht.threekt.math.Vector3\\n\\nclass Intersection(\\n    val distance: Float,\\n    val distanceToRay: Float?,\\n    val point: Vector3,\\n    va … (+11 chars)'
+   │   tail: 'Array is instantiated. If set, you must clear this array prior to each call (i.e., array.length = 0)\\n     */\\n    fun intersectObjects(\\n        objects: List<Object3D>,\\n        recursive: Boolean = false,\\n        optionalTarget: List<Intersection>?\\n    ): List<Intersection> {\\n        TODO()\\n  … (+11 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[3]  pos[3470:8977]  (5507 tok)  doc_id=37914  component=0
+   normed_id : info.laht.threekt.math.Vector2
+   title     : 'info.laht.threekt.math.Vector2'
+   categories: ''
+   ┌ PREFIX  (15 tok)  ids=[1003, 7508, 13, 9271, 83, 13, 400, 10316, 83, 13, 11018, 13, 38469, 17, 628]
+   │   // info.laht.threekt.math.Vector2
+   │   
+   ├ BODY    (5491 tok)
+   │   head: 'package info.laht.threekt.math\\n\\nimport info.laht.threekt.core.Cloneable\\nimport info.laht.threekt.core.FloatBufferAttribute\\nimport kotlin.math.*\\n\\n\\nclass Vector2(\\n    var x: Float,\\n    var y: Float\\n) : Cloneable, Flattable {\\n\\n    override val size = 2\\n\\n    constructor() : this(0.toFloat( … (+14 chars)'
+   │   tail: '   fun rotateAround(center: Vector2, angle: Float): Vector2 {\\n        val c = cos(angle)\\n        val s = sin(angle)\\n\\n        val x = this.x - center.x\\n        val y = this.y - center.y\\n\\n        this.x = x * c - y * s + center.x\\n        this.y = x * s + y * c + center.y\\n\\n        return this … (+14 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── doc[4]  pos[8977:16384]  (7407 tok)  doc_id=37984  component=0
+   normed_id : info.laht.threekt.math.Vector3
+   title     : 'info.laht.threekt.math.Vector3'
+   categories: ''
+   ┌ PREFIX  (15 tok)  ids=[1003, 7508, 13, 9271, 83, 13, 400, 10316, 83, 13, 11018, 13, 38469, 18, 628]
+   │   // info.laht.threekt.math.Vector3
+   │   
+   ├ BODY    (7391 tok)
+   │   head: 'package info.laht.threekt.math\\n\\nimport info.laht.threekt.cameras.Camera\\nimport info.laht.threekt.core.Cloneable\\nimport info.laht.threekt.core.FloatBufferAttribute\\nimport kotlin.math.*\\n\\nclass Vector3(\\n    var x: Float,\\n    var y: Float,\\n    var z: Float\\n): Cloneable, Flattable {\\n\\n    ove … (+13 chars)'
+   │   tail: '     result = 31 * result + z.hashCode()\\n        return result\\n    }\\n\\n    override fun toString(): String {\\n        return "Vector3(x=$x, y=$y, z=$z)"\\n    }\\n\\n    companion object {\\n\\n        val X = Vector3(1f, 0f, 0f)\\n        val Y = Vector3(0f, 1f, 0f)\\n        val Z = Vector3(0f, 0f, 1f … (+17 chars)'
+   └ SUFFIX  (1 tok)  ids=[50256]  decoded='<|endoftext|>'  (EOS / doc boundary)
+
+── CROSS-DOC LINKS (kotlin detector; targets matched against in-pack docs)
+   @tok     42  from doc[0]  → 'info.laht.threekt.math.Color'  not in pack (no grant)
+   @tok     57  from doc[0]  → 'info.laht.threekt.math.Vector2'  IN-PACK → grants attention to doc[3]
+   @tok     72  from doc[0]  → 'info.laht.threekt.math.Vector3'  IN-PACK → grants attention to doc[4]
+   @tok     87  from doc[0]  → 'info.laht.threekt.math.Vector4'  not in pack (no grant)
+   @tok     99  from doc[0]  → 'org.lwjgl.BufferUtils'  not in pack (no grant)
+   @tok    113  from doc[0]  → 'org.lwjgl.system.APIUtil'  not in pack (no grant)
+   @tok    122  from doc[0]  → 'java.nio.ByteBuffer'  not in pack (no grant)
+   @tok    131  from doc[0]  → 'java.nio.FloatBuffer'  not in pack (no grant)
+   @tok    140  from doc[0]  → 'java.nio.IntBuffer'  not in pack (no grant)
+   @tok    150  from doc[0]  → 'kotlin.properties.Delegates'  not in pack (no grant)
+   @tok   1625  from doc[1]  → 'info.laht.threekt.cameras.Camera'  not in pack (no grant)
+   @tok   1639  from doc[1]  → 'info.laht.threekt.math.Ray'  not in pack (no grant)
+   @tok   1654  from doc[1]  → 'info.laht.threekt.math.Vector2'  IN-PACK → grants attention to doc[3]
+   @tok   1669  from doc[1]  → 'info.laht.threekt.math.Vector3'  IN-PACK → grants attention to doc[4]
+   @tok   2569  from doc[2]  → 'info.laht.threekt.cameras.Camera'  not in pack (no grant)
+   @tok   2583  from doc[2]  → 'info.laht.threekt.math.Ray'  not in pack (no grant)
+   @tok   2598  from doc[2]  → 'info.laht.threekt.math.Vector2'  IN-PACK → grants attention to doc[3]
+   @tok   2613  from doc[2]  → 'info.laht.threekt.math.Vector3'  IN-PACK → grants attention to doc[4]
+   @tok   3513  from doc[3]  → 'info.laht.threekt.core.Cloneable'  not in pack (no grant)
+   @tok   3529  from doc[3]  → 'info.laht.threekt.core.FloatBufferAttribute'  IN-PACK → grants attention to doc[0]
+   @tok   9020  from doc[4]  → 'info.laht.threekt.cameras.Camera'  not in pack (no grant)
+   @tok   9036  from doc[4]  → 'info.laht.threekt.core.Cloneable'  not in pack (no grant)
+   @tok   9052  from doc[4]  → 'info.laht.threekt.core.FloatBufferAttribute'  IN-PACK → grants attention to doc[0]
+
+====================================================================================================
+done.
