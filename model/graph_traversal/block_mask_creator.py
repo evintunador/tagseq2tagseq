@@ -470,10 +470,10 @@ if __name__ == "__main__":
                         help="Link detector for cross_doc_link (markdown=Wikipedia, "
                              "python/go/java=code, arxiv=unarXive)")
     parser.add_argument("--layout-policy", type=str, default="stochastic_identifier_prefix",
-                        choices=["null", "eos", "identifier_prefix",
-                                 "identifier_prefix_eos", "stochastic_identifier_prefix"],
-                        help="Layout policy for packing. Defaults to the training policy "
-                             "'stochastic_identifier_prefix' so link targets resolve to "
+                        help="Layout policy for packing (validated by make_layout_policy; "
+                             "e.g. identifier_prefix_eos, slash_comment_prefix_eos, "
+                             "latex_comment_prefix, and their stochastic variants). "
+                             "Defaults to a training policy so link targets resolve to "
                              "co-packed docs (cross_doc_link / doc_concat_link grants only "
                              "fire when the identifier prefix is emitted into the tokens).")
     args = parser.parse_args()

@@ -144,8 +144,27 @@ class EOSLayoutPolicy(DocLayoutPolicy):
 # shared by PrefixLayoutPolicy below.
 
 def _markdown_heading_format(info: DocLayoutInfo) -> str:
-    """Wikipedia / TheStack style: ``# {raw_identifier}\\n\\n``."""
+    """Wikipedia / Python-TheStack style: ``# {raw_identifier}\\n\\n``.
+
+    ``#`` is a Markdown heading (wiki) AND a valid Python comment, so the card
+    stays in-distribution for both. It is NOT a valid comment for C-family code
+    languages (Go/Java/Kotlin/Rust/TypeScript use ``//``) — those use
+    ``_slash_comment_format`` instead so the identifier card is a real comment
+    rather than a syntax error injected atop every doc.
+    """
     return f"# {info.raw_identifier}\n\n"
+
+
+def _slash_comment_format(info: DocLayoutInfo) -> str:
+    """C-family code style: ``// {raw_identifier}\\n\\n``.
+
+    Go/Java/Kotlin/Rust/TypeScript use ``//`` line comments. A path-naming comment
+    at the top of a source file is idiomatic and in-distribution, matching the
+    rationale for arxiv's valid-LaTeX ``%`` card: the identifier card should be
+    valid syntax in the document's own language, not OOD noise the model must
+    learn to expect.
+    """
+    return f"// {info.raw_identifier}\n\n"
 
 
 def _latex_comment_card(info: DocLayoutInfo) -> str:
@@ -274,6 +293,31 @@ class StochasticIdentifierPrefixLayoutPolicy(PrefixLayoutPolicy):
                          stochastic=True, eos_token_id=eos_token_id)
 
 
+class SlashCommentPrefixEOSLayoutPolicy(PrefixLayoutPolicy):
+    """``// {raw_identifier}\\n\\n`` prefix + EOS suffix (C-family code langs).
+
+    Deterministic inference counterpart to
+    ``StochasticSlashCommentPrefixLayoutPolicy`` for Go/Java/Kotlin/Rust/TypeScript.
+    """
+
+    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
+        super().__init__(encode_fn, _slash_comment_format, eos_token_id=eos_token_id)
+
+
+class StochasticSlashCommentPrefixLayoutPolicy(PrefixLayoutPolicy):
+    """50-50 per-(doc, epoch) ``// {raw_identifier}\\n\\n`` prefix + EOS suffix.
+
+    C-family code analogue of ``StochasticIdentifierPrefixLayoutPolicy``: the card
+    is a valid ``//`` comment (not the OOD ``#`` heading) for Go/Java/Kotlin/Rust/
+    TypeScript. Train with 50-50 card/no-card; wire ``slash_comment_prefix_eos``
+    for inference.
+    """
+
+    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
+        super().__init__(encode_fn, _slash_comment_format,
+                         stochastic=True, eos_token_id=eos_token_id)
+
+
 class LatexCommentPrefixLayoutPolicy(PrefixLayoutPolicy):
     """Deterministic LaTeX-comment card (title + categories) + EOS suffix.
 
@@ -353,6 +397,14 @@ def make_layout_policy(
                 "(a tokeniser callable)."
             )
         return StochasticIdentifierPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
+    if name in ("slash_comment_prefix_eos", "stochastic_slash_comment_prefix"):
+        if encode_fn is None:
+            raise ValueError(
+                f"layout_policy='{name}' requires encode_fn (a tokeniser callable)."
+            )
+        if name == "slash_comment_prefix_eos":
+            return SlashCommentPrefixEOSLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
+        return StochasticSlashCommentPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
     if name == "latex_comment_prefix":
         if encode_fn is None:
             raise ValueError(
@@ -371,6 +423,7 @@ def make_layout_policy(
         f"Unknown layout_policy '{name}'. "
         "Valid options: 'null', 'eos', 'identifier_prefix', "
         "'identifier_prefix_eos', 'stochastic_identifier_prefix', "
+        "'slash_comment_prefix_eos', 'stochastic_slash_comment_prefix', "
         "'latex_comment_prefix', 'stochastic_latex_comment_prefix'."
     )
 
@@ -386,14 +439,17 @@ def make_layout_policy(
 # the benchmark implies (Tier-1 per-benchmark inference).  These pin the
 # DETERMINISTIC variants (the stochastic coin is a training-only device); they
 # mirror the inference_layout_policy fields in the per-source configs.
+# python uses '#' (valid Python comment + markdown heading); markdown/wiki uses '#'
+# heading; the C-family code langs use '//' (their real line comment); arxiv uses
+# '%' (valid LaTeX). The card must be valid syntax in the doc's own language.
 _DETECTOR_INFERENCE_LAYOUT = {
     "python":   "identifier_prefix_eos",
     "markdown": "identifier_prefix_eos",
-    "go":       "identifier_prefix_eos",
-    "java":     "identifier_prefix_eos",
-    "typescript": "identifier_prefix_eos",
-    "kotlin":   "identifier_prefix_eos",
-    "rust":     "identifier_prefix_eos",
+    "go":       "slash_comment_prefix_eos",
+    "java":     "slash_comment_prefix_eos",
+    "typescript": "slash_comment_prefix_eos",
+    "kotlin":   "slash_comment_prefix_eos",
+    "rust":     "slash_comment_prefix_eos",
     "arxiv":    "latex_comment_prefix",
     "null":     "eos",
 }

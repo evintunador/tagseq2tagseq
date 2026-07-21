@@ -5,7 +5,7 @@
 data:
   dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go
   strategy: 'bfs'
-  layout_policy: 'stochastic_identifier_prefix'
+  layout_policy: 'stochastic_slash_comment_prefix'
   inference_layout_policy: 'eos'
   order_mode: 'prefer_targets_first'
   doc_budget: null
