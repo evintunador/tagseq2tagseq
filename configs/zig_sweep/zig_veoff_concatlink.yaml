@@ -1,0 +1,79 @@
+# ZIG SWEEP — mask=doc_concat_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
+# zig is FAR below chinchilla (59M tok); 16 epochs ≈ 1800 steps — a pragmatic
+# floor, NOT the 15k budget (that would need ~131 epochs). Interpret zig cautiously.
+data:
+  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/zig
+  strategy: 'bfs'
+  layout_policy: 'stochastic_slash_comment_prefix'
+  inference_layout_policy: 'eos'
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/zig/splits/train
+  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_3,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_4,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_5,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_6,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_7,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_8,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_9,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_10,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_11,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_12,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_13,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_14,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_bfs/epoch_15]
+  val_dirs:
+    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/zig/splits/val_community
+    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/zig/splits/val_random
+  test_dirs:
+    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/zig/splits/test_community
+    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/zig/splits/test_random
+
+model:
+  compile: true
+  compile_mode: 'default'
+  attention_backend: 'triton'
+  inference_attention_backend: 'flex'
+  mask_type: 'doc_concat_link'
+  link_detector: 'zig'
+  max_grants: 256
+  activation_checkpointing: false
+  model_dim: 1024
+  num_layers: 24
+  num_heads: 8    # 8H × 128Dh = 1024
+  max_seq_len: 32768
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  untie_at_frac: 0.667
+  ignore_index: -100
+  dtype: 'bfloat16'
+  logit_softcap: 30.0
+  mtp_extra_weights: [0.5, 0.25]
+  mtp_decay_steps: 0
+  ve_layers: []
+  shared_ve_bank: false
+
+optimizer:
+  type: 'muon'
+  muon_wd: 0.1
+  adamw_wd: 0.005
+  momentum: 0.95
+  muon_beta2: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.003
+  adamw_lr: 3e-05
+  muon_momentum_warmup_steps: 300
+  adamw_embed_beta1: 0.5
+
+train_loop:
+  epochs: 1
+  max_optimizer_steps: 1800
+  warmup_steps: 300
+  cooldown_frac: 0.4
+  min_lr_ratio: 0.1
+  val_steps: 20
+  val_interval: 250
+  save_latest_interval: 250
+  atomic_feature_kwargs:
+    norm_clip_value: 1.0
+    accum_steps: 1
+
+seed: 42
+
+eval:
+  run_on_completion: true
+  benchmarks:
+    - {name: held_out_perplexity,       conditions: [doceval]}
+    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
+  max_docs: 500
+  link_fuzzy_match: false
