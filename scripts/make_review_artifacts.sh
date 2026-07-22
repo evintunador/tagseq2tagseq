@@ -87,10 +87,16 @@ python visualize_llm_input.py \
     > "$OUT/05_packed_batches_inference.txt" 2>&1
 
 echo "  06 attention-mask PNG (cross_doc_link, real batch)"
-python -m model.graph_traversal.block_mask_creator "$DS/splits/val_community" \
+# block_mask_creator imports FlexAttention; on some CPU-only compute nodes its
+# torch/CUDA init hangs indefinitely (observed: a compute node stalled >1h here
+# while an interactive run finishes in seconds). Cap it with a hard timeout so a
+# stuck node can't burn hours — if it times out, regenerate the PNG interactively
+# (in-session) where it's reliable. The text artifacts (01-05) are the gate; the
+# PNG is a convenience visual.
+timeout 600 python -m model.graph_traversal.block_mask_creator "$DS/splits/val_community" \
     --mask-type cross_doc_link --link-detector "$DET" \
     --layout-policy "$INF_LP" --token-budget 16384 --seed $SEED \
-    > "$OUT/06_mask_build.log" 2>&1 || true
+    > "$OUT/06_mask_build.log" 2>&1 || echo "  (06 mask step timed out/failed — regenerate PNG in-session)" >> "$OUT/06_mask_build.log"
 # block_mask_creator writes the PNG under model/graph_traversal/artifacts/
 cp -f "$REPO/model/graph_traversal/artifacts/mask_viz_cross_doc_link_seed$SEED.png" \
       "$OUT/06_attention_mask.png" 2>/dev/null || true
