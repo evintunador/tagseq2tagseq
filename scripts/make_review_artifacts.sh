@@ -24,7 +24,8 @@ DET="${2:?usage: make_review_artifacts.sh <lang> <detector>}"
 REPO=/fss/evin_t/tagseq2tagseq
 ART=/fss-data/evin_t/tagseq2tagseq_artifacts
 DS=$ART/pretokenized_datasets/${LANG}
-OUT=$REPO/review_artifacts/${LANG}
+# Review bundles live on /fss-data (bulk artifacts off /fss; referenced across runs).
+OUT=$ART/review_artifacts/${LANG}
 cd "$REPO"
 mkdir -p "$OUT"
 
