@@ -225,3 +225,4 @@ benchmarks/.autotune_cache*.json
 # Pre-computed epoch data (large binary parquet files, dataset-specific)
 schedules/
 review_artifacts/
+review_artifacts_view
