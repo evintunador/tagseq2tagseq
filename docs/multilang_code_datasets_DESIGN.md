@@ -209,7 +209,27 @@ shipped without validation.
   intra-repo (audit 0% dangling). Same documented artifact as Java framework-FQNs,
   worst-case for Rust. NOT a training defect. Review-artifact bundles per language:
   `scripts/make_review_artifacts.sh` → `review_artifacts/<lang>/`.
-- **Python→tree-sitter migration (§10a):** deferred to end of fan-out (per human).
+- **ROUND 2 (2026-07-22) — JavaScript + Zig + Dart + Python-migration, all gated +
+  merged to main.** Orchestrator re-verified each detection gate on fresh samples:
+  - **Zig** P=1.0/R=1.0 — SIMPLE path, explicit `@import("x.zig")` file paths (no
+    candidate expansion — cleanest lang). FILE-node, .zig-kept keys.
+  - **Dart** P=1.0/R=0.996 — SIMPLE, relative `.dart` imports; `package:`/`dart:`
+    treated as external (no pubspec in Stack → can't infer own pkg name; documented
+    undercount, relative imports carry the graph).
+  - **JavaScript** P=0.998/R=1.0 — TS-clone; `require()`/CommonJS + dynamic import()
+    + ESM; `.min.js` excluded like TS `.d.ts`.
+  - **Python→tree-sitter migration (§10a) DONE:** detection 0.988/0.977 → **1.0/1.0**;
+    the `from x import y as z` alias bug FIXED (no more `"x/y as z"` mangling);
+    extractor `extract.py` now tree-sitter (was regex); detector 1.55× faster
+    (batch-decode). 305 tests pass. Shipped thestack graph NOT rebuilt — the change is
+    strictly-better-if-rebuilt (recovers dropped 2nd module in `import a,b`); flagged
+    a `random.choice` nondeterminism in `_pick_from_candidates` for any future rebuild.
+  - Integrated via serialized cherry-picks (union-resolved shared registries); **all 9
+    languages wire correctly (detector+layout+spec); 297 detector/harness tests pass.**
+  - Prefix layout: all C-family/JS code langs use `//` (`slash_comment_prefix`);
+    Python/wiki `#`; arxiv `%`.
+  - Data pipeline: full downloads done (zig 15,913 / dart 932,583 / **javascript
+    20,843,276** files); builds + precompute in progress (same SLURM pipeline as Tier A).
 
 **The Stack has NO go.mod** (filtered to ext==go) → module path is INFERRED from
 each repo's own imports vs. its directory layout (`build_go_graph.infer_module_path`).
