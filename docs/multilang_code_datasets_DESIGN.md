@@ -228,8 +228,15 @@ shipped without validation.
     languages wire correctly (detector+layout+spec); 297 detector/harness tests pass.**
   - Prefix layout: all C-family/JS code langs use `//` (`slash_comment_prefix`);
     Python/wiki `#`; arxiv `%`.
-  - Data pipeline: full downloads done (zig 15,913 / dart 932,583 / **javascript
-    20,843,276** files); builds + precompute in progress (same SLURM pipeline as Tier A).
+  - Data pipeline COMPLETE (2026-07-22): zig 8,798 nodes / dart 344,788 / **javascript
+    9,736,820** (full subsets; JS build 8h over 21M files). All split + audited clean
+    (0% dangling/self), 4-strategy precompute schedules each, configs wired, smoke-
+    verified training (rust/dart/javascript). **All 9 code langs training-ready; 36
+    precompute schedules total.** Review bundles + CONNECTIVITY_COMPARISON.md on
+    /fss-data/.../review_artifacts/ (VSCode-visible via repo symlink review_artifacts_view/).
+  - SLURM gotcha: nodes GPU-954/GPU-495 instant-fail jobs (exit 0:53, 0 elapsed) —
+    now excluded in all pipeline sbatch headers. Mask-PNG step hard-timeout'd (600s)
+    because block_mask_creator's FlexAttention init hangs on some CPU-only nodes.
 
 **The Stack has NO go.mod** (filtered to ext==go) → module path is INFERRED from
 each repo's own imports vs. its directory layout (`build_go_graph.infer_module_path`).
