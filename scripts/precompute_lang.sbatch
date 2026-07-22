@@ -6,6 +6,7 @@
 #            sbatch scripts/precompute_lang.sbatch
 #SBATCH --job-name=precompute
 #SBATCH --partition=compute
+#SBATCH --exclude=GPU-954,GPU-495   # known-bad nodes (instant-fail exit 0:53); see project memory
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=192G
 #SBATCH --time=24:00:00

@@ -5,6 +5,7 @@
 # Submit:  LANG=rust DET=rust sbatch scripts/make_review_artifacts.sbatch
 #SBATCH --job-name=stack_artifacts
 #SBATCH --partition=compute
+#SBATCH --exclude=GPU-954,GPU-495   # known-bad nodes (instant-fail exit 0:53); see project memory
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=03:00:00
