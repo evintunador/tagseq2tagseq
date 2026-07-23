@@ -218,15 +218,19 @@ sparsest graph ≈0) because import-graph neighborhoods are too predictable. So 
 discriminating cross-doc signal for Go/Java yet.
 
 **To do:**
-- Split `run_repobench_cross_doc` by language and dispatch to the matching `<Lang>ImportDetector`
-  (the L969-974 comment already anticipates this). **Java is easy**: `tianyang/repobench_java_v1.1`
-  exists upstream — add it and match `JavaImportDetector`. Go has no RepoBench variant, so use the
-  **synthetic intra-repo benchmark** (designed above) with `GoImportDetector` instead.
-- Then re-run the eval-only pass on the finished checkpoints (no retrain needed): Go/Java
-  cross_doc_link + doc_concat_link runs from `runs/CODE_SWEEP_RUNMAP.txt` (45755/45760 go,
-  45761/45764 java). Their `best_model.pt`/`latest.pt` are saved; point `eval_checkpoints.py`
-  at them with the new benchmark in the eval list.
-- Fold in TypeScript too if the TS dataset (built 2026-07-20) gets a sweep — same benchmark gap.
+- ~~Split `run_repobench_cross_doc` by language and dispatch to the matching
+  `<Lang>ImportDetector`.~~ **DONE 2026-07-23** (commit 91cb33f): `language` param +
+  `_REPOBENCH_LANGUAGES` (python, java) + `--repobench-language`. Java fix: strip the
+  build source root from snippet paths so import FQNs resolve (`_repobench_aux_identifier`).
+  Provisional Java results in `RESULTS_code_crossdoc.md` — cross_doc_link beats flat on
+  every traversal (Δnll +0.065..+0.194), the discriminating signal community_pack lacked.
+- **Still open:** re-run all Java cross_doc_link runs on their FINAL `best_model.pt` once
+  the java ablations finish training (current numbers used available/early checkpoints; the
+  random_walk ablation ckpt is undertrained, abs ppl ~1047).
+- **Go** has no RepoBench variant → survey the internet for a RepoBench-analogous Go
+  cross-file dataset that can be hacked to expose import edges as cross-doc aux DocSpans;
+  else fall back to the self-built test_community benchmark (filed below).
+- Fold in TypeScript too — RepoBench has no TS variant either; same survey/self-built path.
 
 ### Self-built cross-doc code benchmark from test_community splits (future — filed 2026-07-23)
 External RepoBench only exists for Python + Java. For the other languages (Go, TS, Rust,
