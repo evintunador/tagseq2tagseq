@@ -69,9 +69,40 @@ paired delta is the language-agnostic proxy.
 6. **Single-doc metrics tied across masks** (held_ppl, humaneval within CI) — expected;
    cross-doc structure only helps cross-doc-structured benchmarks, matching wiki.
 
+## Java cross-doc benchmark — RepoBench-Java port (added 2026-07-23)
+
+The Java cross-doc claim was inconclusive because `repobench_cross_doc` was
+Python-hardcoded and community_pack is near-noise for code. `run_repobench_cross_doc`
+is now language-parametrized (`language="java"` → `tianyang/repobench_java_v1.1` +
+JavaImportDetector; see `eval/nlp_benchmarks.py` + `--repobench-language`). The one
+Java-specific fix: imports are dotted FQNs but snippet paths carry a build source
+root (`.../src/main/java/...`), so `_repobench_aux_identifier` strips the root; 91%
+of context snippets then match their import, 470/500 examples get a cross-doc grant.
+
+Eval on the current Java cross_doc_link checkpoints (`experimental` = model's own
+cross_doc_link mask; paired flat = doc_causal on the same next-lines, n=500):
+
+| traversal | run | ppl_cross | ppl_flat | repobench Δnll |
+|-----------|-----|----------:|---------:|---------------:|
+| bfs (sweep)   | run_20260722_063905_465684 |    3.99 |    4.25 | **+0.065** |
+| dfs (abl)     | run_20260722_191916_590119 |    8.71 |   10.27 | **+0.165** |
+| random_walk (abl) | run_20260722_194928_381368 | 1046.9 | 1271.6 | +0.194 ⚠ |
+
+**RepoBench-Java gives Java a discriminating cross-doc signal** — every traversal
+shows cross_doc_link beating flat doc_causal on the same next-line completions, in
+the same +0.07..+0.19 Δnll band Python's repobench_cross_doc showed (+0.135). This is
+100–1000× the community_pack delta (~0.0002 for Java), confirming the direction the
+weak metric couldn't. ⚠ The random_walk ablation checkpoint has absurd absolute
+perplexity (~1047) — it is an early/undertrained `best_model.pt` (these ablations
+launched 2026-07-22 eve); its Δnll direction holds but the magnitude sits on a broken
+base LM. **These are provisional (available-checkpoint) numbers; re-run all Java
+cross_doc_link runs on their FINAL best_model.pt once training completes.**
+
 ## Caveats
-- Java/Go have no cross-doc code benchmark, so their cross-doc claim rests only on the
-  weak community_pack signal — inconclusive for those languages. A language-split
-  RepoBench adapter (tianyang/repobench_java_v1.1 exists) would close this.
+- Go still has no cross-doc code benchmark (no RepoBench-Go upstream), so its
+  cross-doc claim rests only on the weak community_pack signal — inconclusive.
+  Options: a self-built benchmark from Go's test_community split, or an internet
+  survey for a RepoBench-analogous Go cross-file dataset (see TODOS.md).
 - 15k-step chinchilla subset; larger budgets may widen or shrink the gap.
-- Run map: runs/CODE_SWEEP_RUNMAP.txt. Per-run detail: runs/<id>/eval_results.json.
+- Run map: runs/CODE_SWEEP_RUNMAP.txt. Per-run detail: runs/<id>/eval_results.json
+  (Java RepoBench in runs/<id>/eval_java_repobench.json).
