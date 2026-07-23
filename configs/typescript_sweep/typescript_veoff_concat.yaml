@@ -55,7 +55,7 @@ optimizer:
 
 train_loop:
   epochs: 1
-  max_optimizer_steps: 15000   # fixed budget ~3.9B tok; enables cooldown+untie
+  max_optimizer_steps: null  # auto-derive from epoch_dirs (was 15000; schedule capacity varies, hard cap could exceed it)
   warmup_steps: 300
   cooldown_frac: 0.4
   min_lr_ratio: 0.1
