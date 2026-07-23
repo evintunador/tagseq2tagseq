@@ -168,6 +168,36 @@ doc_causal on the same next-lines, n=500):
 - **Still open**: Go/TS/Rust/Kotlin/Dart/Zig have no upstream RepoBench — survey for analogous
   cross-file datasets or self-build from `test_community` splits (TODOS.md).
 
+## NEW-LANGUAGE SWEEPS (2026-07-23) — TS/Rust/Kotlin/JS/Dart/Zig, IN PROGRESS
+
+Extending the 4-condition sweep to all built code languages (same tuned recipe:
+muon_lr=0.003/wd=0.1, VE-off, // slash-comment layout — the C-family prefix-bug fix).
+Chinchilla budget = 15k steps where the corpus allows: TS (8.0B tok) / JS (13.3B) 1-epoch
+subset; Kotlin (4.2B) 2ep; Rust (1.7B) 4ep; Dart (0.6B) 9ep; Zig (0.06B, far below
+chinchilla) capped at **1800 steps, interpret with caution**. `held_ppl` = held_out
+perplexity (doceval); `commPk_expΔ` = community_pack cross−base delta (near-noise for
+code, per above — shown for completeness, not a headline). Cells `-` = still running.
+
+| lang (tok) | doc_causal | cross_doc_link | doc_concat | doc_concat_link |
+|------------|:----------:|:--------------:|:----------:|:---------------:|
+| **typescript** (8.0B) | 4.252 | **4.197** | 4.205 | 4.214 | ← held_ppl, 4/4 DONE |
+| **rust** (1.7B)       | 3.777 | 3.814 | — | 3.827 | concat running |
+| **kotlin** (4.2B)     | 4.632 | 4.784 | — | 4.890 | concat running |
+| **javascript** (13.3B)| — | 4.046 | — | 3.943 | dc/concat running |
+| **dart** (0.6B)       | — | — | — | — | 4×resuming from latest.pt |
+| **zig** (0.06B)       | — | — | — | — | 4×resuming (capped 1800 steps) |
+
+humaneval_buggy (single-doc code quality, where HumanEvalPack has the lang): rust 0.610
+(all masks), js 0.628 (cdl)/0.707 (concatlink). TS/Kotlin/Dart/Zig not in HumanEvalPack.
+
+- **TypeScript complete**: cross_doc_link has the best held_ppl (4.197 < doc_causal 4.252) —
+  consistent with cross-doc helping, though held_ppl isn't the discriminating cross-doc metric
+  (no RepoBench-TS exists yet; see "Still open" above).
+- No language has a cross-doc *benchmark* yet except Python/Java (RepoBench). These held_ppl /
+  community_pack numbers establish the base-LM sweep; the cross-doc thesis test for these langs
+  awaits self-built benchmarks (TODOS.md).
+- Live status + resumes: `runs/CODE_SWEEP_RUNMAP.txt`. Numbers from `runs/<id>/eval_results.json`.
+
 ---
 
 > Last updated: 2026-07-13. All numbers below regenerated in a full 12-model
