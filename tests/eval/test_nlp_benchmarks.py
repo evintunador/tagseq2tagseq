@@ -773,6 +773,110 @@ class _FakeHFDataset:
         return iter(self._rows)
 
 
+# ─── RepoBench cross-doc: multi-language port ─────────────────────────────────
+
+def _make_java_cross_doc_model():
+    """Mock cross_doc_link model backed by a real JavaImportDetector."""
+    from model.graph_traversal.java_import_detector import JavaImportDetector
+    model = _make_mock_model(tokenizer=True)
+    model.mask_type = "cross_doc_link"
+    model.link_detector = JavaImportDetector(decode_fn=lambda toks: "")
+    return model
+
+
+def test_repobench_cross_doc_invalid_language_raises():
+    model = _make_cross_doc_model()
+    with pytest.raises(ValueError, match="language must be one of"):
+        run_repobench_cross_doc(model=model, language="cobol", device="cpu")
+
+
+def test_repobench_cross_doc_java_requires_java_detector():
+    # A Python detector must be rejected when language='java'.
+    model = _make_cross_doc_model()  # PythonImportDetector
+    with pytest.raises(ValueError, match="JavaImportDetector"):
+        run_repobench_cross_doc(model=model, language="java", device="cpu")
+
+
+def test_repobench_cross_doc_python_requires_python_detector():
+    # A Java detector must be rejected when language='python' (the default).
+    model = _make_java_cross_doc_model()
+    with pytest.raises(ValueError, match="PythonImportDetector"):
+        run_repobench_cross_doc(model=model, language="python", device="cpu")
+
+
+def test_strip_java_source_root():
+    strip = _bench._strip_java_source_root
+    assert strip("service-core/x/src/main/java/fun/isite/entity/SystemMenu.java") == \
+        "fun/isite/entity/SystemMenu.java"
+    assert strip("backend/src/test/java/com/foo/BarTest.java") == "com/foo/BarTest.java"
+    assert strip("app/src/main/kotlin/com/foo/Baz.kt") == "com/foo/Baz.kt"
+    # No known source root → returned unchanged (falls back to flat scoring).
+    assert strip("com/foo/Bar.java") == "com/foo/Bar.java"
+
+
+def test_repobench_java_aux_identifier_roundtrips_to_import_fqn():
+    """The Java aux identifier must dotify (via index_doc_span) to the import FQN.
+
+    This is the crux of the Java port: RepoBench-Java imports are dotted FQNs
+    (com.foo.Bar) but snippet paths carry a build source root. The aux
+    identifier must be shaped so JavaImportDetector.index_doc_span yields the
+    exact FQN the detector emits for the import, or no grant fires.
+    """
+    from model.graph_traversal.java_import_detector import JavaImportDetector
+
+    class _Span:
+        def __init__(self, rid):
+            self.raw_identifier = rid
+
+    det = JavaImportDetector(decode_fn=lambda toks: "")
+    rid = _bench._repobench_aux_identifier(
+        "java", "myrepo",
+        "service/src/main/java/fun/isite/entity/SystemMenu.java",
+        "public class SystemMenu {}",
+    )
+    # index_doc_span strips the repo prefix and dotifies the FQN path.
+    assert det.index_doc_span(_Span(rid)) == "fun.isite.entity.SystemMenu"
+
+
+def test_repobench_python_aux_identifier_uses_path_verbatim():
+    rid = _bench._repobench_aux_identifier(
+        "python", "myrepo", "pkg/sub/module.py", "def f(): pass",
+    )
+    assert rid == "myrepo:pkg/sub/module.py"
+
+
+def test_repobench_cross_doc_java_loads_java_repo(monkeypatch):
+    """language='java' must load the java HF repo, not the python one."""
+    model = _make_java_cross_doc_model()
+    examples = [{
+        "next_line": "    List<X> f();",
+        "context": [{"identifier": "X",
+                     "path": "svc/src/main/java/com/foo/X.java",
+                     "snippet": "public class X {}"}],
+        "import_statement": "import com.foo.X;",
+        "cropped_code": "class Y {\n",
+        "file_path": "svc/src/main/java/com/foo/Y.java",
+        "repo_name": "myrepo",
+    }]
+    seen = {}
+
+    def _fake_load(repo, **kw):
+        seen["repo"] = repo
+        seen["verification_mode"] = kw.get("verification_mode")
+        return _FakeHFDataset(examples)
+
+    with patch("datasets.load_dataset", side_effect=_fake_load), \
+         patch.object(_bench, "score_completion_with_context_docs", return_value=1.5), \
+         patch.object(_bench, "score_completions_independent_batched",
+                      side_effect=lambda m, pairs, **kw: [2.0] * len(pairs)):
+        result = run_repobench_cross_doc(model=model, language="java",
+                                         max_examples=1, device="cpu")
+
+    assert seen["repo"] == "tianyang/repobench_java_v1.1"
+    assert seen["verification_mode"] == "no_checks"
+    assert result["n_link_found"] == 1
+
+
 # ─── HumanEvalPack canonical-vs-buggy ─────────────────────────────────────────
 
 def test_humaneval_buggy_invalid_language_raises():

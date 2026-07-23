@@ -212,7 +212,7 @@ _MULTI_DOC_MASK_TYPES = frozenset({
 # perplexity / single-doc suites that never resolve links. The inference layout
 # for each detector is derived via data.layout.inference_layout_for_detector.
 _BENCHMARK_LINK_DETECTOR = {
-    "repobench_cross_doc": "python",
+    "repobench_cross_doc": "python",  # default; overridden by spec["language"]
     "hotpotqa_cross_doc":  "markdown",
     # Annotated NLP benchmarks inject markdown links via MarkdownPromptAnnotator.
     "wiki_qa":             "markdown",
@@ -227,9 +227,14 @@ def detector_for_benchmark(spec: dict) -> Optional[str]:
 
     ``annotated`` in a benchmark's conditions forces the markdown annotator path
     regardless of the base benchmark, so those always need the markdown detector.
+    ``repobench_cross_doc`` needs the detector for its ``language`` (the import
+    detector must match the benchmark language), so its ``spec["language"]``
+    overrides the default python entry.
     """
     if "annotated" in (spec.get("conditions") or []):
         return "markdown"
+    if spec.get("name") == "repobench_cross_doc":
+        return spec.get("language", "python")
     return _BENCHMARK_LINK_DETECTOR.get(spec.get("name"))
 
 _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
@@ -542,6 +547,7 @@ def run_benchmarks_on_model(
                         continue
                     results[key] = run_repobench_cross_doc(
                         model=model,
+                        language=spec.get("language", "python"),
                         max_examples=max_docs,
                         device=device,
                     )
@@ -1083,6 +1089,13 @@ def main() -> None:
         help="HumanEvalPack language (used when 'humaneval_buggy' is in --benchmarks).",
     )
     parser.add_argument(
+        "--repobench-language", default="python",
+        choices=["python", "java"],
+        help="RepoBench language (used when 'repobench_cross_doc' is in "
+             "--benchmarks). Must match the model's link detector. "
+             "RepoBench exists upstream for python and java only.",
+    )
+    parser.add_argument(
         "--conditions", nargs="+", default=["experimental"],
         help="Named conditions to run each benchmark under. "
              "Built-in: 'baseline' (doc_causal + eos layout), "
@@ -1202,6 +1215,7 @@ def main() -> None:
     # Per-benchmark extra params from CLI — folded into each spec dict.
     _bench_extras: Dict[str, Dict[str, Any]] = {
         "repobench":                {"split": args.repobench_split},
+        "repobench_cross_doc":      {"language": args.repobench_language},
         "humaneval_buggy":          {"language": args.humaneval_language},
         "community_pack_perplexity": {"split": args.split},
     }

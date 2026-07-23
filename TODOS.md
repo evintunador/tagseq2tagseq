@@ -228,6 +228,29 @@ discriminating cross-doc signal for Go/Java yet.
   at them with the new benchmark in the eval list.
 - Fold in TypeScript too if the TS dataset (built 2026-07-20) gets a sweep — same benchmark gap.
 
+### Self-built cross-doc code benchmark from test_community splits (future — filed 2026-07-23)
+External RepoBench only exists for Python + Java. For the other languages (Go, TS, Rust,
+Kotlin, Dart, Zig, JS) with no upstream cross-file benchmark, build one from our OWN
+held-out `test_community` splits (the import-graph neighborhoods we already carve). Two
+token-scope variants considered (human is most interested in these two):
+  1. **Import-dependent tokens only** — score ONLY tokens that actually use an
+     imported/cross-file symbol (identifiers resolved to the linked doc, or the line
+     following an import reference), not all body tokens. This is why the current
+     `community_pack_perplexity` is near-noise: it dilutes the cross-doc signal across
+     every body token of dense/predictable import neighborhoods. Restricting to the
+     import-consuming spans should recover a discriminating Δnll (this is the same token
+     scope RepoBench's "next_line" achieves, just carved from our own graph instead of an
+     external dataset).
+  3. **Whole-body on sparser communities** — keep whole-doc scoring but curate to
+     sparser / high-out-degree communities where each import carries more predictive
+     weight. Simplest change to the existing metric; may still be diluted.
+Both reuse `score_completion_with_context_docs` (already language-agnostic — takes any
+`link_detector`) + the per-language `test_community` split; no external dataset, no
+annotator/injection. Sequencing: do the external Java RepoBench port FIRST (below), then
+survey the internet for RepoBench-analogous cross-file datasets for the other languages
+that can be similarly hacked to expose import edges as cross-doc aux DocSpans; fall back
+to this self-built path only where none exist.
+
 ### Better cross-doc benchmark for multi-language Stack models (future)
 Once TheStack is expanded to all languages, extend the synthetic intra-repo benchmark
 above to non-Python languages (e.g. JS/TS `require`/`import`, Ruby `require`).

@@ -23,7 +23,7 @@ Entry points (code):
   run_codexglue_line_completion(model, max_examples, cache_dir, device) -> Dict[str, Any]
   run_codexglue_code_to_text(model, max_examples, cache_dir, device)    -> Dict[str, Any]
   run_repobench(model, split, max_examples, cache_dir, device)          -> Dict[str, Any]
-  run_repobench_cross_doc(model, max_examples, cache_dir, device)       -> Dict[str, Any]
+  run_repobench_cross_doc(model, language, max_examples, cache_dir, device) -> Dict[str, Any]
   run_humaneval_buggy(model, language, max_examples, cache_dir, device) -> Dict[str, Any]
 
 All adapters share the same design:
@@ -52,6 +52,7 @@ imported from tunalab at module load time.
 
 import logging
 import math as _math_module
+import re
 import numpy as _np_module
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -912,8 +913,80 @@ def run_repobench(
 
 # ─── RepoBench-C cross-doc-link variant ──────────────────────────────────────
 
+#: Per-language RepoBench-C configuration. RepoBench exists upstream for Python
+#: and Java only (``tianyang/repobench_{python,java}_v1.1``). Each entry names
+#: the HF repo and the link-detector class that must back the model for imports
+#: to resolve to cross-file snippets. Add a language here + an aux-identifier
+#: builder in ``_repobench_aux_identifier`` to extend coverage.
+_REPOBENCH_LANGUAGES: Dict[str, Dict[str, str]] = {
+    "python": {
+        "hf_repo":         "tianyang/repobench_python_v1.1",
+        "detector_module": "model.graph_traversal.python_import_detector",
+        "detector_class":  "PythonImportDetector",
+    },
+    "java": {
+        "hf_repo":         "tianyang/repobench_java_v1.1",
+        "detector_module": "model.graph_traversal.java_import_detector",
+        "detector_class":  "JavaImportDetector",
+    },
+}
+
+#: Java/Kotlin build source roots. A Java import is a package-qualified FQN
+#: (``com.foo.Bar``); the file path prefixes that FQN-path with a build source
+#: root (Maven/Gradle ``src/main/java/``, etc.). Stripping the root leaves the
+#: FQN path, which ``JavaImportDetector.index_doc_span`` dotifies back to the
+#: import FQN. Ordered most-specific first; the first marker present is stripped.
+_JAVA_SOURCE_ROOTS = (
+    "src/main/java/",
+    "src/test/java/",
+    "src/main/kotlin/",
+    "src/test/kotlin/",
+    "src/main/scala/",
+    "src/",
+)
+
+
+def _strip_java_source_root(path: str) -> str:
+    """Return the FQN-path portion of a Java file path (source root removed).
+
+    ``service-core/.../src/main/java/fun/isite/entity/SystemMenu.java`` ->
+    ``fun/isite/entity/SystemMenu.java``. Falls back to the path unchanged when
+    no known source root is present (the dotified key then simply won't match,
+    and that example falls back to flat scoring — no crash).
+    """
+    p = path.replace("\\", "/")
+    for marker in _JAVA_SOURCE_ROOTS:
+        idx = p.rfind(marker)
+        if idx != -1:
+            return p[idx + len(marker):]
+    return p
+
+
+def _repobench_aux_identifier(language: str, repo: str, path: str, snippet: str) -> str:
+    """Build the aux DocSpan ``raw_identifier`` for one cross-file snippet.
+
+    The identifier must be shaped so the language's ``index_doc_span`` produces
+    a key that exactly matches what its import detector emits as ``target_str``:
+
+    - **python**: import candidates are module *paths* (``pkg/module.py``), and
+      ``PythonImportDetector.index_doc_span`` just strips the ``repo:`` prefix,
+      so the snippet path is used verbatim.
+    - **java**: imports are dotted FQNs (``com.foo.Bar``) while snippet paths
+      carry a build source root (``.../src/main/java/com/foo/Bar.java``) that
+      would dotify to a non-matching key. RepoBench strips the ``package``
+      declaration from snippets, so the FQN is recovered from the path instead:
+      drop the source root, leaving ``com/foo/Bar.java`` which
+      ``JavaImportDetector.index_doc_span`` dotifies to ``com.foo.Bar``.
+    """
+    if language == "java":
+        return f"{repo}:{_strip_java_source_root(path)}"
+    # python (default): snippet path verbatim.
+    return f"{repo}:{path}"
+
+
 def run_repobench_cross_doc(
     model,
+    language: str = "python",
     max_examples: Optional[int] = None,
     cache_dir: Optional[str] = None,
     device: str = "cuda",
@@ -921,11 +994,16 @@ def run_repobench_cross_doc(
     """RepoBench-C cross_file_first scored with cross-doc-link attention.
 
     Packs each example's cross-file snippets as aux DocSpans preceding the
-    primary file context. Uses PythonImportDetector to match each import
-    statement in the primary doc to its specific snippet via the snippet's
-    file path (precise matching — each import grants attention only to the
-    snippet it actually imports). Requires a cross_doc_link model with a
-    link_detector set.
+    primary file context. Uses the language's import detector to match each
+    import statement in the primary doc to its specific snippet (precise
+    matching — each import grants attention only to the snippet it actually
+    imports). Requires a cross_doc_link model whose ``link_detector`` matches
+    ``language`` (PythonImportDetector for python, JavaImportDetector for java).
+
+    RepoBench exists upstream for python and java only; see
+    ``_REPOBENCH_LANGUAGES``. Other languages have no RepoBench variant — use
+    ``community_pack_perplexity`` or a self-built cross-doc benchmark instead
+    (see TODOS.md).
 
     Reports two perplexity figures for transparency:
       - ``cross_doc_only``: only examples where an import link was detected
@@ -936,6 +1014,8 @@ def run_repobench_cross_doc(
     Args:
         model: TS2TSModel in eval mode. Must have mask_type='cross_doc_link'
             and link_detector set. Must have model.tokenizer set.
+        language: RepoBench language — one of ``_REPOBENCH_LANGUAGES`` keys
+            (``'python'`` or ``'java'``). Default ``'python'``.
         max_examples: Limit number of examples (None = full split).
         cache_dir: HuggingFace cache directory.
         device: Device for token tensors.
@@ -952,7 +1032,13 @@ def run_repobench_cross_doc(
             "n_link_not_found":           int,
         }
     """
-    _require_tokenizer(model, "RepoBench/cross_file_first (cross-doc)")
+    if language not in _REPOBENCH_LANGUAGES:
+        raise ValueError(
+            f"run_repobench_cross_doc language must be one of "
+            f"{sorted(_REPOBENCH_LANGUAGES)}, got {language!r}."
+        )
+    lang_cfg = _REPOBENCH_LANGUAGES[language]
+    _require_tokenizer(model, f"RepoBench/{language}/cross_file_first (cross-doc)")
     if not hasattr(model, "mask_type") or model.mask_type != "cross_doc_link":
         raise ValueError(
             "run_repobench_cross_doc requires a cross_doc_link model. "
@@ -963,27 +1049,30 @@ def run_repobench_cross_doc(
             "run_repobench_cross_doc requires model.link_detector to be set. "
             "Use to_inference_model(link_detector=...) or TS2TSModel.__init__."
         )
-    from model.graph_traversal.python_import_detector import PythonImportDetector
-    if not isinstance(model.link_detector, PythonImportDetector):
+    import importlib
+    _det_cls = getattr(
+        importlib.import_module(lang_cfg["detector_module"]),
+        lang_cfg["detector_class"],
+    )
+    if not isinstance(model.link_detector, _det_cls):
         raise ValueError(
-            f"run_repobench_cross_doc requires a PythonImportDetector "
-            f"(got {type(model.link_detector).__name__!r}). "
-            "RepoBench is a Python dataset; other link detectors cannot match "
-            "Python import statements to cross-file snippets. When support for "
-            "additional programming languages is added, consider splitting this "
-            "benchmark by language and matching each to its <Language>ImportDetector."
+            f"run_repobench_cross_doc(language={language!r}) requires a "
+            f"{lang_cfg['detector_class']} (got "
+            f"{type(model.link_detector).__name__!r}). The link detector must "
+            "match the benchmark language so import statements resolve to the "
+            "cross-file snippets."
         )
 
     from datasets import load_dataset as _load_dataset
     raw = _load_dataset(
-        "tianyang/repobench_python_v1.1",
+        lang_cfg["hf_repo"],
         split="cross_file_first",
         cache_dir=cache_dir or "data/.cache/repobench",
+        verification_mode="no_checks",  # upstream split-size metadata lags parquet
     )
 
     enc = _make_encoder(model.tokenizer)
     link_detector = model.link_detector
-    repo_name = None  # populated per-example below
 
     # Per-example, in loop order: the cross-doc NLL (None if the link didn't
     # fire) and the flat (context, completion) pair. The flat forwards are all
@@ -1003,9 +1092,10 @@ def run_repobench_cross_doc(
         context_items = ex.get("context", [])
         repo = ex.get("repo_name", "repo")
 
-        # raw_identifier "repo:path/to/file.py" — PythonImportDetector.index_doc_span
-        # strips the repo prefix, so candidate paths produced by the import detector
-        # (e.g. "pkg/module.py") match the path component of the identifier.
+        # aux raw_identifier is built per-language so index_doc_span yields the
+        # exact key the import detector emits: for python the snippet path
+        # verbatim; for java the FQN (from the snippet's package + class name)
+        # re-encoded as a source-root-relative path (see _repobench_aux_identifier).
         aux_token_lists: List[List[int]] = []
         aux_raw_identifiers: List[str] = []
         for item in context_items:
@@ -1014,11 +1104,13 @@ def run_repobench_cross_doc(
             if not snippet.strip():
                 continue
             aux_token_lists.append(enc(snippet))
-            aux_raw_identifiers.append(f"{repo}:{path}")
+            aux_raw_identifiers.append(
+                _repobench_aux_identifier(language, repo, path, snippet)
+            )
 
         # import_statement contains the imports that reference the cross-file snippets;
         # cropped_code is the file body starting after those imports. Concatenate so
-        # PythonImportDetector can detect the relevant import positions in the sequence.
+        # the import detector can detect the relevant import positions in the sequence.
         import_stmt    = ex.get("import_statement", "")
         context_tokens = enc(import_stmt + "\n" + ex.get("cropped_code", ""))
         completion_tokens = enc("\n" + next_line)
