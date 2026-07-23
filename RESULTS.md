@@ -135,9 +135,38 @@ Python traversal ablation (mirrors the wiki bfs/dfs/rw/random × dc/cdl matrix):
 - **Traversal ablation mirrors wiki's decoupling**: cross-doc Δnll robust across all traversals,
   no clean ordering (spread within noise at n≈430); traversal affects base-LM quality more than
   the incremental cross-doc benefit — same two-axes story.
-- **Go/Java cross-doc claim INCONCLUSIVE**: no cross-doc code benchmark exists for them
-  (repobench_cross_doc asserts a PythonImportDetector), so their signal rests only on the weak
-  community_pack proxy. See TODO below.
+- **Go/Java cross-doc claim was INCONCLUSIVE** (community_pack too weak); **Java now RESOLVED**
+  via the RepoBench-Java port below. Go still lacks a cross-doc code benchmark.
+
+## JAVA CROSS-DOC RESOLVED (2026-07-23) — RepoBench-Java port
+
+`run_repobench_cross_doc` was Python-hardcoded (asserted `PythonImportDetector`). Now
+parametrized by `language` (python/java — the only two RepoBench exists for upstream):
+`--repobench-language java` → `tianyang/repobench_java_v1.1` + `JavaImportDetector`. The one
+Java-specific fix: imports are dotted FQNs (`com.foo.Bar`) but snippet paths carry a build
+source root (`.../src/main/java/...`), so `_repobench_aux_identifier` strips the root →
+`index_doc_span` dotifies back to the FQN. 91% of context snippets match their import;
+470/500 examples get a cross-doc grant (≈ Python). Eval on FINAL best_model.pt (all 4
+traversals, 15k steps, val_loss≈1.05; `experimental` cross_doc_link mask vs paired flat
+doc_causal on the same next-lines, n=500):
+
+| traversal × mask | ppl_cross | ppl_flat | repobench_cross_doc Δnll |
+|------------------|:---------:|:--------:|:------------------------:|
+| bfs    cross_doc_link | 3.988 | 4.255 | **+0.0646** |
+| dfs    cross_doc_link | 4.058 | 4.369 | **+0.0738** |
+| rw     cross_doc_link | 4.029 | 4.360 | **+0.0788** |
+| random cross_doc_link | 4.166 | 4.299 | **+0.0314** |
+
+- **Java gets a discriminating cross-doc signal** — cross_doc_link beats flat doc_causal on
+  every traversal (Δnll +0.03…+0.08), in Python's band (+0.135) and 100–1000× the near-noise
+  community_pack delta (~0.0002) that couldn't resolve direction.
+- **Traversal ordering mirrors wiki/Python**: graph traversals (bfs/dfs/rw) cluster tightly
+  (+0.065…+0.079); graph-blind `random` is weakest (+0.031). Base LM (ppl_flat) is ~traversal-
+  independent (~4.3), so the Δnll spread is the incremental cross-doc effect.
+- Full detail + supersession note (yesterday's provisional table used undertrained ablation
+  ckpts) in `RESULTS_code_crossdoc.md`. Per-run: `runs/<id>/eval_java_repobench_final.json`.
+- **Still open**: Go/TS/Rust/Kotlin/Dart/Zig have no upstream RepoBench — survey for analogous
+  cross-file datasets or self-build from `test_community` splits (TODOS.md).
 
 ---
 

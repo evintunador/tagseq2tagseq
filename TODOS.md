@@ -224,9 +224,11 @@ discriminating cross-doc signal for Go/Java yet.
   build source root from snippet paths so import FQNs resolve (`_repobench_aux_identifier`).
   Provisional Java results in `RESULTS_code_crossdoc.md` — cross_doc_link beats flat on
   every traversal (Δnll +0.065..+0.194), the discriminating signal community_pack lacked.
-- **Still open:** re-run all Java cross_doc_link runs on their FINAL `best_model.pt` once
-  the java ablations finish training (current numbers used available/early checkpoints; the
-  random_walk ablation ckpt is undertrained, abs ppl ~1047).
+- ~~re-run all Java cross_doc_link runs on their FINAL `best_model.pt`.~~ **DONE 2026-07-23**:
+  all 4 traversals (bfs/dfs/rw/random) evaluated on final ckpts (step 14000–14750, val_loss≈1.05).
+  Final Δnll +0.0646/+0.0738/+0.0788/+0.0314 — all positive, graph traversals cluster, random
+  weakest. Supersedes the provisional (undertrained-ckpt) numbers. See RESULTS.md + RESULTS_code_crossdoc.md;
+  per-run `runs/<id>/eval_java_repobench_final.json`.
 - **Go** has no RepoBench variant → survey the internet for a RepoBench-analogous Go
   cross-file dataset that can be hacked to expose import edges as cross-doc aux DocSpans;
   else fall back to the self-built test_community benchmark (filed below).

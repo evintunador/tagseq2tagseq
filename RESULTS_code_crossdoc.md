@@ -79,24 +79,31 @@ Java-specific fix: imports are dotted FQNs but snippet paths carry a build sourc
 root (`.../src/main/java/...`), so `_repobench_aux_identifier` strips the root; 91%
 of context snippets then match their import, 470/500 examples get a cross-doc grant.
 
-Eval on the current Java cross_doc_link checkpoints (`experimental` = model's own
-cross_doc_link mask; paired flat = doc_causal on the same next-lines, n=500):
+Eval on the FINAL Java cross_doc_link checkpoints (all 4 traversals, 15k-step
+budget, best_model.pt step 14000–14750, val_loss ≈1.05; `experimental` = model's
+own cross_doc_link mask; paired flat = doc_causal on the same next-lines, n=500,
+470/500 examples get a cross-doc grant):
 
 | traversal | run | ppl_cross | ppl_flat | repobench Δnll |
 |-----------|-----|----------:|---------:|---------------:|
-| bfs (sweep)   | run_20260722_063905_465684 |    3.99 |    4.25 | **+0.065** |
-| dfs (abl)     | run_20260722_191916_590119 |    8.71 |   10.27 | **+0.165** |
-| random_walk (abl) | run_20260722_194928_381368 | 1046.9 | 1271.6 | +0.194 ⚠ |
+| bfs (sweep)   | run_20260722_063905_465684 | 3.988 | 4.255 | **+0.0646** |
+| dfs (abl)     | run_20260722_191916_590119 | 4.058 | 4.369 | **+0.0738** |
+| random_walk (abl) | run_20260722_194928_381368 | 4.029 | 4.360 | **+0.0788** |
+| random (abl)  | run_20260722_201940_182374 | 4.166 | 4.299 | **+0.0314** |
 
 **RepoBench-Java gives Java a discriminating cross-doc signal** — every traversal
-shows cross_doc_link beating flat doc_causal on the same next-line completions, in
-the same +0.07..+0.19 Δnll band Python's repobench_cross_doc showed (+0.135). This is
-100–1000× the community_pack delta (~0.0002 for Java), confirming the direction the
-weak metric couldn't. ⚠ The random_walk ablation checkpoint has absurd absolute
-perplexity (~1047) — it is an early/undertrained `best_model.pt` (these ablations
-launched 2026-07-22 eve); its Δnll direction holds but the magnitude sits on a broken
-base LM. **These are provisional (available-checkpoint) numbers; re-run all Java
-cross_doc_link runs on their FINAL best_model.pt once training completes.**
+shows cross_doc_link beating flat doc_causal on the same next-line completions
+(Δnll +0.03..+0.08), in the same band as Python's repobench_cross_doc (+0.135) and
+100–1000× the community_pack delta (~0.0002 for Java) that couldn't resolve the
+direction. Traversal ordering mirrors the wiki/Python decoupling: bfs/dfs/rw cluster
+tightly (+0.065..+0.079); the graph-blind `random` traversal is weakest (+0.031),
+consistent with cross-doc benefit needing linked docs co-packed. Base LM quality
+(ppl_flat) is nearly traversal-independent (~4.3), so the Δnll spread is the
+incremental cross-doc effect, not a base-model artifact.
+
+(Yesterday's provisional table used early/undertrained ablation checkpoints — the
+random_walk one had abs ppl ~1047 and an inflated Δnll +0.194. These FINAL numbers
+supersede them; the direction held but magnitudes needed the trained base LM.)
 
 ## Caveats
 - Go still has no cross-doc code benchmark (no RepoBench-Go upstream), so its
@@ -105,4 +112,4 @@ cross_doc_link runs on their FINAL best_model.pt once training completes.**
   survey for a RepoBench-analogous Go cross-file dataset (see TODOS.md).
 - 15k-step chinchilla subset; larger budgets may widen or shrink the gap.
 - Run map: runs/CODE_SWEEP_RUNMAP.txt. Per-run detail: runs/<id>/eval_results.json
-  (Java RepoBench in runs/<id>/eval_java_repobench.json).
+  (Java RepoBench final numbers in runs/<id>/eval_java_repobench_final.json).
