@@ -168,35 +168,53 @@ doc_causal on the same next-lines, n=500):
 - **Still open**: Go/TS/Rust/Kotlin/Dart/Zig have no upstream RepoBench — survey for analogous
   cross-file datasets or self-build from `test_community` splits (TODOS.md).
 
-## NEW-LANGUAGE SWEEPS (2026-07-23) — TS/Rust/Kotlin/JS/Dart/Zig, IN PROGRESS
+## NEW-LANGUAGE SWEEPS (2026-07-24) — TS/Rust/Kotlin/JS/Dart/Zig, ALL 6 SWEEPS COMPLETE
 
-Extending the 4-condition sweep to all built code languages (same tuned recipe:
+Extended the 4-condition sweep to all built code languages (same tuned recipe:
 muon_lr=0.003/wd=0.1, VE-off, // slash-comment layout — the C-family prefix-bug fix).
-Chinchilla budget = 15k steps where the corpus allows: TS (8.0B tok) / JS (13.3B) 1-epoch
-subset; Kotlin (4.2B) 2ep; Rust (1.7B) 4ep; Dart (0.6B) 9ep; Zig (0.06B, far below
-chinchilla) capped at **1800 steps, interpret with caution**. `held_ppl` = held_out
-perplexity (doceval); `commPk_expΔ` = community_pack cross−base delta (near-noise for
-code, per above — shown for completeness, not a headline). Cells `-` = still running.
+Chinchilla budget = auto-derived from schedule (max_optimizer_steps: null): TS (8.0B tok) /
+JS (13.3B) ~1-epoch subset; Kotlin (4.2B) 2ep; Rust (1.7B) 4ep; Dart (0.6B) 9ep; Zig
+(0.06B, far below chinchilla) 16ep ≈ 1800 steps — **interpret zig with caution**.
+`held_ppl` = held_out perplexity; `commPk_Δ` = community_pack experimental cross−base delta
+(near-noise for code — dense import graphs — shown for completeness, NOT a headline metric).
+All 24 sweep cells (6 langs × 4 masks) DONE.
 
+held_ppl (perplexity ↓):
 | lang (tok) | doc_causal | cross_doc_link | doc_concat | doc_concat_link |
 |------------|:----------:|:--------------:|:----------:|:---------------:|
-| **typescript** (8.0B) | 4.252 | **4.197** | 4.205 | 4.214 | ← held_ppl, 4/4 DONE |
-| **rust** (1.7B)       | 3.777 | 3.814 | — | 3.827 | concat running |
-| **kotlin** (4.2B)     | 4.632 | 4.784 | — | 4.890 | concat running |
-| **javascript** (13.3B)| — | 4.046 | — | 3.943 | dc/concat running |
-| **dart** (0.6B)       | — | — | — | — | 4×resuming from latest.pt |
-| **zig** (0.06B)       | — | — | — | — | 4×resuming (capped 1800 steps) |
+| **typescript** (8.0B) | 4.252 | **4.197** | 4.205 | 4.214 |
+| **rust** (1.7B)       | **3.777** | 3.814 | 3.876 | 3.827 |
+| **kotlin** (4.2B)     | 4.632 | 4.784 | **4.629** | 4.890 |
+| **javascript** (13.3B)| 4.028 | 4.046 | 4.050 | **3.943** |
+| **dart** (0.6B)       | 3.276 | **3.184** | 3.273 | 3.214 |
+| **zig** (0.06B)⚠      | 7.374 | **7.323** | 7.646 | 7.362 |
 
-humaneval_buggy (single-doc code quality, where HumanEvalPack has the lang): rust 0.610
-(all masks), js 0.628 (cdl)/0.707 (concatlink). TS/Kotlin/Dart/Zig not in HumanEvalPack.
+community_pack experimental Δ (val_community; near-noise, as expected for code):
+| lang | dc | cdl | concat | concatlink |
+|------|:--:|:---:|:------:|:----------:|
+| typescript | 0.000 | 0.007 | 0.057 | 0.034 |
+| rust | 0.000 | 0.013 | 0.039 | 0.018 |
+| kotlin | 0.000 | 0.001 | 0.067 | 0.006 |
+| javascript | 0.000 | 0.022 | 0.092 | 0.041 |
+| dart | 0.000 | 0.005 | 0.039 | 0.017 |
+| zig | 0.000 | 0.001 | 0.002 | 0.007 |
 
-- **TypeScript complete**: cross_doc_link has the best held_ppl (4.197 < doc_causal 4.252) —
-  consistent with cross-doc helping, though held_ppl isn't the discriminating cross-doc metric
-  (no RepoBench-TS exists yet; see "Still open" above).
-- No language has a cross-doc *benchmark* yet except Python/Java (RepoBench). These held_ppl /
-  community_pack numbers establish the base-LM sweep; the cross-doc thesis test for these langs
-  awaits self-built benchmarks (TODOS.md).
-- Live status + resumes: `runs/CODE_SWEEP_RUNMAP.txt`. Numbers from `runs/<id>/eval_results.json`.
+humaneval_buggy (single-doc code quality, where HumanEvalPack has the lang): rust ~0.610,
+js 0.628 (cdl)/0.707 (concatlink). TS/Kotlin/Dart/Zig not in HumanEvalPack.
+
+- **No consistent held_ppl winner across masks** — cross_doc_link is best for TS/dart/zig,
+  doc_causal for rust, concat for kotlin, concatlink for js. held_ppl is a single-doc metric,
+  so this is expected noise; it is NOT the discriminating cross-doc test.
+- **community_pack stays near-noise for code everywhere** (cdl Δ ≤ 0.02), confirming the Python/Java
+  finding — dense/predictable import graphs mean toggling the cross-doc mask barely moves held-out
+  NLL. concat masks show larger Δ but that metric is unreliable for code (see CODE CROSS-DOC SWEEP §3).
+- **The cross-doc thesis test for these 6 langs still awaits a discriminating benchmark** —
+  only Python & Java have RepoBench. TS/Rust/Kotlin/JS/Dart/Zig need self-built cross-file
+  benchmarks (TODOS.md). Their sweeps establish the base-LM numbers only.
+- **Traversal ablations (dfs/rw/random × dc/cdl) for these 6 langs: IN PROGRESS** — 14 running,
+  the 12 orphaned-eval cells recovered 2026-07-24 (job 48575). Ablation table to follow once complete.
+- Numbers: `runs/<id>/eval_results.json` + `eval_commpack_valcommunity.json` (community_pack was
+  re-run on val_community after a --split bug zeroed it in the main file for java/dart/zig).
 
 ---
 
