@@ -257,6 +257,31 @@ survey the internet for RepoBench-analogous cross-file datasets for the other la
 that can be similarly hacked to expose import edges as cross-doc aux DocSpans; fall back
 to this self-built path only where none exist.
 
+### Dataset-side dedup blacklist + rebuild/retrain (deferred — filed 2026-07-24)
+The external-benchmark ports (Go←CoLT-132K, TS←CrossCodeEval, Kotlin←ASE-2025;
+see `docs/crossdoc_benchmark_port_harness_DESIGN.md`) enforce hard dedup on the
+BENCHMARK side: repo-name intersection with our training corpora (a repo lives in
+the dataset or the benchmark, never both) + file-hash exclusion of cross-repo
+copy-pastes. If exclusion ever guts a benchmark below Tier-2 power (n_cross_doc≥200),
+the fix is the inverse direction: add a repo blacklist stage to the dataset pipeline
+(`data/stack_sharded_download.py` / graph builders), rebuild the affected language
+dataset, regenerate schedules (see schedule-staleness memory), and RETRAIN its sweep
+ckpts. Expensive — deferred until benchmark-side exclusion proves insufficient. Also
+rerun the repo intersection against Stack-v2 repo lists before any v2 retrain
+(CrossCodeEval's 2023 repos fall inside v2's crawl window).
+
+### LLM conceptual-dependency audit of ALL cross-doc benchmarks (deferred — filed 2026-07-25)
+The port harness deliberately has NO syntactic "target-uses-aux-symbol" gate (rejected:
+an example's dependency on its cross-file snippet can be conceptual — patterns,
+invariants, config values — with no in-line identifier match, so a tree-sitter check
+is fragile in both directions). Instead, once ports exist, run a smarter LLM over the
+ENTIRETY of every cross-doc benchmark — the new ports AND the existing python/java
+RepoBench ones — asking per example: "does predicting this completion genuinely benefit
+from the granted cross-file snippet(s), and how (symbol use / conceptual / not at all)?"
+Report the per-benchmark dependency-type distribution and the no-benefit fraction;
+compare against each benchmark's placebo gap (Tier 2). Cheap to run on a few hundred
+examples per benchmark; gives the quality signal the syntactic check couldn't.
+
 ### Better cross-doc benchmark for multi-language Stack models (future)
 Once TheStack is expanded to all languages, extend the synthetic intra-repo benchmark
 above to non-Python languages (e.g. JS/TS `require`/`import`, Ruby `require`).
