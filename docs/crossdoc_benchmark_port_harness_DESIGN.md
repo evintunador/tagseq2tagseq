@@ -123,6 +123,50 @@ cross_doc_link), java = run_20260722_191916_590119.
 | repobench_python | PASS | 1.000 | 0.618 | 0.660 | 0.870 | +0.094 (0.072..0.117) | +0.127 (0.105..0.150) |
 | repobench_java   | PASS | 1.000 | 0.940 | 0.996 | 0.940 | +0.072 (0.053..0.091) | +0.086 (0.068..0.107) |
 
+New ports (2026-07-25, built by sub-agents against the frozen harness):
+
+| port | T0 | T1 prec | T1 fire/reach | T2 fire | Δnll_real (CI) | placebo sep (CI) | verdict |
+|---|---|---|---|---|---|---|---|
+| ase_kotlin | PASS | 1.000 | 0.996/1.000 | 0.979 | **−0.056 (−0.134..+0.011)** | −0.033 (−0.099..+0.019) | **T2 FAIL** — CI includes 0 |
+| crosscodeeval_ts | PASS | 1.000 | 0.400/0.480 (static, advisory) | 0.400 | +0.013 (−0.003..+0.031) | **+0.023 (+0.007..+0.040)** | T2 near-miss (see below) |
+| colt_go | — | — | — | — | — | — | BLOCKED (empty aux upstream) |
+
+**Kotlin T2 negative (ckpt run_20260724_095209_785799, 242 ex, 237 fired, 4
+oversized-skipped):** aux made next-line prediction slightly WORSE on average
+and placebo separation is negative-CI-crosses-0. The harness worked exactly as
+designed — it caught a port that does NOT demonstrate genuine cross-file
+dependence on this checkpoint. Candidate causes (NOT yet disambiguated, do not
+assume): (1) the Kotlin sweep ckpt may exploit cross-doc links weakly vs the
+python/java ckpts; (2) ASE-2025 `middle`-first-line targets are arbitrary FIM
+spans, NOT RepoBench's "first USE of an imported symbol" — so they may not be
+import-dependent; (3) whole-file aux dilution / 32k truncation. This is a real
+result to surface, not iterate away silently.
+
+**TS T2 near-miss (ckpt run_20260722_003634_268441, 500 ex, 200 fired):**
+Δnll_real +0.013 CI (−0.003..+0.031) barely includes 0, BUT placebo separation
++0.023 CI (+0.007..+0.040) EXCLUDES 0. Interpretation: the right retrieved
+chunk beats a wrong one significantly (the discriminating placebo signal fires),
+but the absolute cross-vs-flat gain is small and underpowered — expected,
+because the shipped aux are retrieval CHUNKS that often lack the imported symbol
+body, and only 200/500 fire under static grants. The placebo-positive result is
+the encouraging half: it says the benchmark IS sensitive to context correctness.
+Path to a clean pass: the v2 whole-file re-clone (from metadata.repository) +
+runtime relative-import resolution to lift fire-rate from 0.40 → ~0.67, which
+also raises n and should tighten Δnll_real CI above 0.
+
+## Verdict summary (2026-07-25)
+Harness + calibration COMPLETE and committed. Of the 3 external ports:
+- **Kotlin/ASE-2025**: builds + passes CPU gates, but FAILS Tier 2 — no cross-doc
+  benefit on the current ckpt. Needs cause diagnosis before it can be a headline
+  benchmark (ckpt strength vs target import-dependence vs aux dilution).
+- **TS/CrossCodeEval**: builds + passes CPU gates; Tier 2 near-miss with a
+  POSITIVE placebo signal. Promising; needs the v2 whole-file upgrade for a clean
+  pass.
+- **Go/CoLT-132K**: BLOCKED upstream (empty aux in released data).
+The harness itself is validated: it PASSED the two known-good references and
+correctly withheld a pass from all three unproven ports. Next actions filed in
+TODOS.md.
+
 ALL GATES PASS on both reference ports. Notable: placebo separation EXCEEDS
 Δnll_real on both — wrong-but-plausible aux actively hurts vs flat. The
 benchmarks demonstrably reward the right cross-file context, not extra
@@ -150,19 +194,52 @@ as graph_harness).
 
 ## Per-port notes (from the 2026-07-24 survey)
 
-- **Go / CoLT-132K**: verify on download that `prefix` starts at file top
-  (imports visible) — UNVERIFIED in survey. Aux `abstraction` is a signature
-  skeleton, not the full file: Tier-1 target-uses-aux must tolerate
-  declaration-only aux bodies. 3 scenario types — port only the cross-file
-  API-invocation scenario first (the dependency-based one).
-- **TS / CrossCodeEval**: aux are retrieval CHUNKS keyed by filename; a chunk's
-  path can be import-licensed while the chunk text lacks the symbol. Two-stage
-  plan: v1 accepts chunks (Tier-1 path-level checks only), v2 re-clones repos
-  from `metadata.repository` for whole-file aux. Gate v1 on placebo separation.
-- **Kotlin / ASE-2025**: we mine aux ourselves from full snapshots (best fit).
-  Reuse java FQN machinery incl. source-root strip; note Kotlin files live
-  under BOTH `src/main/kotlin/` and `src/main/java/` roots. Use `middle` first
-  line as target; `modified` field filters self-referential context files.
+- **Go / CoLT-132K — BLOCKED (verified 2026-07-25)**: the released
+  `CoLT-132K.zip` has EMPTY `cross_file_dependency` in all 3,000 Go test rows
+  (Python ~6.8k entries/1k, Java ~128k/1k). The dependency records live in
+  external `godata` JSONs (`dependency_file_path`) NOT shipped in the zip.
+  `prefix` DOES include the import block (929/1000 parseable) — the survey's
+  cropped-prefix risk was NOT the problem; the aux docs themselves are absent.
+  Adapter `ports/colt_go.py` is written correctly and will work IF the
+  dependency JSONs are recovered (email authors), else Go falls to the
+  self-built path (like Kotlin/ASE: mine aux from repo snapshots). NOT
+  registered/committed until unblocked.
+- **TS / CrossCodeEval (built 2026-07-25, `ports/crosscodeeval_ts.py`)**: PASS
+  Tier 0; precision 1.000; but Tier 1 STATIC fire-rate 0.400 < parity gate
+  (0.9×0.480). Root cause (agent-verified, NOT a shaping bug): Tier 1 matches
+  via stateless `detect_links` specifier keys, so relative imports through a
+  subdir (`./sub/x`) or parent (`../x/y`) — 5.6% of examples reachable only
+  that way — cannot resolve without the importing file's directory. Resolving
+  specifiers against `ex.file_path` (what `score_completion_with_context_docs`
+  does at RUNTIME via source_file_path) lifts fire-rate to 0.674 on the same
+  500. So Tier 2 is the arbiter for TS; the static Tier-1 gate structurally
+  under-fires on relative-import languages. Identifier shaping = ext-stripped
+  basename + directory-index refinement (`src/foo/index.ts`→`foo/index`).
+  0/3356 examples had cropped imports (context_start_lineno all 0). aux remain
+  retrieval CHUNKS (v1); v2 = re-clone repos from `metadata.repository` for
+  whole-file aux. Tier C: 500/500 survive (2023 repos disjoint from v1 by date).
+- **Kotlin / ASE-2025 (built 2026-07-25, `ports/ase_kotlin.py`)**: PASS all CPU
+  gates — Tier 0 PASS (242 examples of 430 datapoints; ~56% yield, rest resolve
+  to zero cross-file siblings), Tier 1 precision 1.000 / fire 0.996 /
+  oracle-reach 1.000 (dead in the reference band). Reused
+  `_strip_java_source_root` unchanged (already had kotlin roots); file-path
+  matching only (Java-style), NOT symbol→file — a file whose name ≠ imported
+  symbol dotifies to an unemittable key, so including it would be dead context.
+  target = first line of `middle` with NO prepended `\n` (prefix cuts mid-line,
+  unlike RepoBench's fresh-line next_line). Tier C: 235/242 survive (0 repo
+  overlap, 7 file-hash cross-repo copy-pastes). Data:
+  /fss-data/.../raw/ase2025_kotlin/ (practice+public, 20 repos, ~2.4G; private
+  split skipped — no public ground truth).
+
+**Tier-1 gate limitation (noted 2026-07-25):** the static fire-rate-parity gate
+structurally under-fires on RELATIVE-import languages (TS/JS/Dart/Zig) because
+`detect_links` keys are stateless specifiers and subdir/parent relative imports
+need the importing file's directory to resolve. FQN/absolute-import languages
+(python/java/kotlin/go) are unaffected (kotlin fires 0.996). For relative-import
+ports, treat Tier 1 fire-rate as ADVISORY and Tier 2 (runtime source_file_path
+resolution) as authoritative. Precision stays a hard gate for all. Deferred
+option: add a Tier-1 runtime-resolution mode mirroring
+score_completion_with_context_docs' relative path handling.
 
 ## Dedup / contamination decision (settled 2026-07-24)
 

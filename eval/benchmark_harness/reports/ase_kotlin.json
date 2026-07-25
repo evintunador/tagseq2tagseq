@@ -1,0 +1,32 @@
+{
+  "port": "ase_kotlin",
+  "language": "kotlin",
+  "max_examples": 500,
+  "tier2": {
+    "port": "ase_kotlin",
+    "checkpoint": "?",
+    "n_examples": 242,
+    "n_fired": 237,
+    "n_oversized_skipped": 4,
+    "mean_nll_cross": 3.0834640724976174,
+    "mean_nll_flat": 3.0276384769335327,
+    "mean_nll_placebo": 3.050936575099634,
+    "delta_real": -0.055825595564085014,
+    "delta_real_ci": [
+      -0.1341716938424264,
+      0.010911911690823492
+    ],
+    "delta_placebo": -0.023298098166101067,
+    "placebo_separation": -0.03252749739798354,
+    "placebo_separation_ci": [
+      -0.09900117902157132,
+      0.01869363984964436
+    ],
+    "failures": [
+      "\u0394nll_real -0.0558 CI (-0.1341716938424264, 0.010911911690823492) does not exclude 0",
+      "placebo separation -0.0325 CI (-0.09900117902157132, 0.01869363984964436) does not exclude 0 \u2014 benchmark may reward ANY extra context, not the imported code"
+    ],
+    "passed": false,
+    "fire_rate": 0.9793388429752066
+  }
+}

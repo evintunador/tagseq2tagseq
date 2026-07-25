@@ -332,3 +332,25 @@ Still open:
 - **Markdown merged-punctuation openers** (` ([` 29565, ` "[` 12878, ...) are
   deliberately excluded (<2% coverage; injecting them splices malformed markdown).
   Would need generalized splice logic to include as scan-but-not-inject targets.
+
+### Cross-doc benchmark ports — follow-ups (filed 2026-07-25)
+Harness in eval/benchmark_harness/ + 3 external ports built (see
+docs/crossdoc_benchmark_port_harness_DESIGN.md verdict summary). Open items:
+- **Kotlin/ASE-2025 Tier-2 FAIL diagnosis**: Δnll_real −0.056 (CI incl 0) on
+  ckpt run_20260724_095209_785799. Disambiguate the three candidate causes:
+  (a) re-run Tier 2 on a stronger/more-trained kotlin cross_doc_link ckpt;
+  (b) restrict targets to import-USING lines (RepoBench cross_file_first scope)
+  instead of arbitrary FIM middle spans; (c) measure aux-dilution / 32k-trunc
+  effect. Only promote Kotlin to a headline benchmark once Tier 2 passes.
+- **TS/CrossCodeEval v2 whole-file aux**: current v1 uses retrieval chunks
+  (fire 0.40, Δnll_real CI barely incl 0, but placebo sep CI EXCLUDES 0 —
+  promising). Re-clone repos from metadata.repository for whole-file aux +
+  runtime relative-import resolution; target fire ~0.67 and a clean Δnll_real
+  pass. Also consider a Tier-1 runtime-resolution mode so the static gate stops
+  under-firing on relative-import langs (advisory-only today).
+- **Go/CoLT-132K unblock**: email aixcoder authors for the external `godata`
+  dependency JSONs (dependency_file_path), OR build Go via the self-built repo-
+  snapshot path (like Kotlin/ASE). Adapter ports/colt_go.py is ready for the
+  former. NOT registered in ports/__init__.py until unblocked.
+- Then wire the passing ports into eval_checkpoints.py as first-class benchmarks
+  (like repobench_cross_doc) so sweeps report them automatically.

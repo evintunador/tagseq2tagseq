@@ -113,10 +113,11 @@ def main() -> None:
                        device=args.device)
         results["tier2"] = _to_jsonable(r2)
         logger.info(
-            "Tier 2 %s: Δnll_real=%.4f CI=%s placebo_sep=%.4f CI=%s fire=%.3f %s",
+            "Tier 2 %s: Δnll_real=%.4f CI=%s placebo_sep=%.4f CI=%s fire=%.3f "
+            "oversized_skipped=%d %s",
             "PASS" if r2.passed else "FAIL", r2.delta_real, r2.delta_real_ci,
             r2.placebo_separation, r2.placebo_separation_ci, r2.fire_rate,
-            r2.failures or "")
+            r2.n_oversized_skipped, r2.failures or "")
 
     out = Path(args.out) if args.out else (
         Path(__file__).parent / "reports" / f"{args.port}.json")

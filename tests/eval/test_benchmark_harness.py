@@ -178,6 +178,30 @@ def test_dedup_hash_normalization_ignores_whitespace():
     assert file_hash("def f():\n    pass\n") == file_hash("def f():   \n\n    pass")
 
 
+def test_tier2_oversized_pack_guard():
+    """A pack longer than the model's rotary cap must be SKIPPED (counted),
+    not scored — whole-file aux (Kotlin/ASE) can exceed 32k where RepoBench's
+    small snippets never do. Regression for the RoPE-assertion crash."""
+    from eval.benchmark_harness.tier2 import _model_max_seq_len
+
+    class _FakeBuf:
+        def __init__(self, n): self._n = n
+        def size(self, _): return self._n
+
+    class _FakeBackbone:
+        def named_buffers(self):
+            yield "layers.0.attn.rotary.cos", _FakeBuf(32768)
+
+    class _FakeModel:
+        backbone = _FakeBackbone()
+
+    assert _model_max_seq_len(_FakeModel()) == 32768
+
+    class _NoBuf:
+        backbone = type("B", (), {"named_buffers": lambda self: iter(())})()
+    assert _model_max_seq_len(_NoBuf(), default=4096) == 4096
+
+
 def test_dedup_example_dropped_when_all_aux_hash_matched():
     aux = (AuxDoc(path="a.py", content="def a(): ...\n"),)
     ex = _mk_example(repo="clean/repo", aux=aux)

@@ -47,12 +47,24 @@ def _bootstrap_ci(deltas: List[float], seed: int = SEED,
     return float(lo), float(hi)
 
 
+def _model_max_seq_len(model, default: int = 32768) -> int:
+    """Rotary cos-table length = the model's hard positional cap. A pack longer
+    than this trips the RoPE assertion in flex_self_attention, so oversized
+    packs must be skipped, not scored (whole-file aux, e.g. Kotlin/ASE, can
+    exceed it where RepoBench's small snippets never do)."""
+    for name, buf in model.backbone.named_buffers():
+        if name.endswith("rotary.cos"):
+            return int(buf.size(0))
+    return default
+
+
 @dataclass
 class Tier2Report:
     port: str
     checkpoint: str
     n_examples: int
     n_fired: int = 0
+    n_oversized_skipped: int = 0
     mean_nll_cross: float = float("nan")
     mean_nll_flat: float = float("nan")
     mean_nll_placebo: float = float("nan")
@@ -96,9 +108,21 @@ def run_tier2(
 
     packed = [encode_example(ex, enc, port.identifier_fn) for ex in examples]
 
+    # A pack = all aux tokens + context + completion. Skip packs over the RoPE
+    # cap (they would abort the whole run on the flex_self_attention assertion).
+    max_len = _model_max_seq_len(model)
+
+    def _pack_len(p) -> int:
+        return (sum(len(t) for t in p["aux_token_lists"])
+                + len(p["context_tokens"]) + len(p["completion_tokens"]))
+
     # ── real cross-doc pass ──────────────────────────────────────────────
     cross_nlls: List[Optional[float]] = []
     for ex, p in zip(examples, packed):
+        if _pack_len(p) > max_len:
+            rep.n_oversized_skipped += 1
+            cross_nlls.append(None)
+            continue
         nll = score_completion_with_context_docs(
             model,
             aux_token_lists=p["aux_token_lists"],
@@ -136,6 +160,11 @@ def run_tier2(
         n_ids = len(own["aux_raw_identifiers"])
         donor_tok = donor["aux_token_lists"]
         swapped = [donor_tok[k % len(donor_tok)] for k in range(n_ids)]
+        # Swapped-in aux may be larger than the original; guard the RoPE cap.
+        if (sum(len(t) for t in swapped) + len(own["context_tokens"])
+                + len(own["completion_tokens"])) > max_len:
+            placebo_nlls.append(None)
+            continue
         nll = score_completion_with_context_docs(
             model,
             aux_token_lists=swapped,

@@ -1,0 +1,33 @@
+{
+  "port": "crosscodeeval_ts",
+  "language": "typescript",
+  "max_examples": 500,
+  "tier2": {
+    "port": "crosscodeeval_ts",
+    "checkpoint": "?",
+    "n_examples": 500,
+    "n_fired": 200,
+    "n_oversized_skipped": 0,
+    "mean_nll_cross": 1.579035083049445,
+    "mean_nll_flat": 1.5924763125816577,
+    "mean_nll_placebo": 1.60204882670175,
+    "delta_real": 0.013441229532212775,
+    "delta_real_ci": [
+      -0.0034700466972317186,
+      0.03129221042098128
+    ],
+    "delta_placebo": -0.009572514120092412,
+    "placebo_separation": 0.023013743652305022,
+    "placebo_separation_ci": [
+      0.007479189896038947,
+      0.039658574026248145
+    ],
+    "failures": [
+      "n_cross_doc 197 < 200 (insufficient power)",
+      "fire-rate 0.400 < 0.5",
+      "\u0394nll_real 0.0134 CI (-0.0034700466972317186, 0.03129221042098128) does not exclude 0"
+    ],
+    "passed": false,
+    "fire_rate": 0.4
+  }
+}
