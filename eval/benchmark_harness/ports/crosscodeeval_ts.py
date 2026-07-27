@@ -127,6 +127,11 @@ def _load_crosscodeeval_ts(max_examples: Optional[int]) -> List[CrossDocExample]
         context = row["prompt"]
         if not (target and target.strip()) or not (context and context.strip()):
             continue
+        # prompt (left ctx) + groundtruth + right_context reconstructs the full
+        # primary file, so scopes.py can re-anchor scoring at aux-symbol use
+        # sites (native scope uses only prompt→groundtruth).
+        right_ctx = row["right_context"] if "right_context" in row else ""
+        full_file = context + target + (right_ctx or "")
 
         # crossfile_context_retrieval is a {'list': ndarray-of-dicts} column.
         cf = row["crossfile_context_retrieval"]
@@ -158,6 +163,7 @@ def _load_crosscodeeval_ts(max_examples: Optional[int]) -> List[CrossDocExample]
                 "task_id": meta.get("task_id"),
                 "groundtruth_start_lineno": meta.get("groundtruth_start_lineno"),
             },
+            full_file=full_file,
         ))
         if max_examples is not None and len(out) >= max_examples:
             break

@@ -3,11 +3,12 @@
 Builder agents author a port module; the orchestrator registers it here. The
 harness code above this package is frozen.
 
-colt_go is intentionally NOT registered: the released CoLT-132K.zip ships empty
+Go (colt_go) was removed 2026-07-25: the released CoLT-132K.zip ships empty
 cross_file_dependency for every Go example (aux docs live in unshipped external
-JSONs), so the adapter produces zero-aux examples. See
-docs/crossdoc_benchmark_port_harness_DESIGN.md §per-port notes (Go). The module
-is kept for when the dependency JSONs are recovered.
+`godata` JSONs), so the adapter only produced zero-aux examples. The removed
+adapter is preserved in git history at commit de5ba34; recover it if the
+dependency JSONs are ever obtained. See
+docs/crossdoc_benchmark_port_harness_DESIGN.md §per-port notes (Go).
 """
 from typing import Dict
 

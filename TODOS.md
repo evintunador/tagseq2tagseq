@@ -64,6 +64,19 @@ extending the Python-only import graph in `model/graph_traversal/link_detector.p
 
 ## Model
 
+### RoPE length extrapolation past the 32k training window (later — consider)
+The rotary cos/sin buffer is sized to max_seq_len=32768 and
+`flex_self_attention` hard-asserts `cos.size(0) >= T`, so any pack over 32k
+aborts (hit during cross-doc benchmark scoring on whole-file Kotlin aux; the
+Tier-2 harness now skips+counts oversized packs as a workaround, and
+`rest_of_doc`-scope benchmark packs are the ones that bump this). Consider
+editing the RoPE code/config to let the model EXTRAPOLATE beyond its training
+length — e.g. NTK-aware / YaRN / linear position-interpolation scaling of the
+rotary frequencies, or just building a longer cos/sin table at inference — so
+long-context eval (and generation) isn't clipped at the training window. Would
+let benchmarks with large whole-file aux score without truncation and is a
+prerequisite for any >32k context experiments.
+
 ### nanochat RL & chat pipeline feasibility
 Check feasibility of integrating `karpathy/nanochat/`'s RL + chat pipeline, and
 how it might be edited to take advantage of this model's graph-aware features.
