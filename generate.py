@@ -154,7 +154,7 @@ def load_inference_model(
         training_bmc = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=link_detector,
-                max_grants=model_cfg.get('max_grants', 64),
+                max_grants=int(model_cfg.get('max_grants') or 256),
                 backend=training_attn_class_backend,
                 whole_doc_grant=(mask_type == "doc_concat_link"),
             )
@@ -257,6 +257,7 @@ def load_inference_model(
         tokenizer=enc,
         mask_type=mask_type,
         link_detector=link_detector,
+        max_grants=int(model_cfg.get('max_grants') or 256),
         training_backend=training_attention_backend,
         inference_backend=inference_attention_backend,
         training_layout_policy=training_layout_policy,

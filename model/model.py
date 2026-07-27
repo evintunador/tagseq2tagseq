@@ -65,6 +65,7 @@ class TS2TSModel:
         vocab_size: int,
         mask_type: str = 'doc_causal',
         link_detector=None,
+        max_grants: int = 256,
         training_backend: str = 'triton',
         inference_backend: str = 'flex',
         training_layout_policy=None,
@@ -82,6 +83,7 @@ class TS2TSModel:
         self.vocab_size = vocab_size
         self.mask_type = mask_type
         self.link_detector = link_detector
+        self.max_grants = max_grants
         self.training_backend = training_backend
         self.inference_backend = inference_backend
         self.training_layout_policy = training_layout_policy or NullLayoutPolicy()
@@ -144,14 +146,19 @@ class TS2TSModel:
                     link_detector=self.link_detector,
                     backend='triton_v12',
                     whole_doc_grant=whole_doc,
+                    max_grants=self.max_grants,
                 )
             )
-            # Flex creator: used for inference and eval
+            # Flex creator: used for inference and eval. max_grants MUST match the
+            # training value (config, default 256) — the CrossDocLinkMaskCreator
+            # default is 64, so omitting it silently caps eval cross-doc grants
+            # below training and understates the cross-doc effect on dense packs.
             creators[f'{self.mask_type}_flex'] = make_mask_creator_callable_from(
                 CrossDocLinkMaskCreator(
                     link_detector=self.link_detector,
                     backend='flex',
                     whole_doc_grant=whole_doc,
+                    max_grants=self.max_grants,
                 )
             )
 
@@ -177,6 +184,7 @@ class TS2TSModel:
         ignore_index: int = -100,
         tokenizer=None,
         link_detector=None,
+        max_grants: int = 256,
         training_layout_policy=None,
         inference_layout_policy=None,
         training_backend: str = 'triton',
@@ -214,6 +222,7 @@ class TS2TSModel:
             vocab_size=vocab_size,
             mask_type=mask_type,
             link_detector=link_detector,
+            max_grants=max_grants,
             training_backend=training_backend,
             inference_backend=inference_backend,
             training_layout_policy=training_layout_policy,
