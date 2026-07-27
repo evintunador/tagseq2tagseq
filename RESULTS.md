@@ -90,6 +90,12 @@ and `/fss-data/.../pipeline_logs/lrsweep_runmap.txt`.
 
 ## CODE CROSS-DOC SWEEP (2026-07-21) — thesis generalizes to code, ~10× weaker than wiki
 
+> ⚠ **max_grants correction (2026-07-27):** the Python `repobench_cross_doc` Δnll in the table
+> below (+0.135) was computed at eval max_grants=64 vs training 256 (bug fixed, commit 8317898).
+> Train-matched re-eval gives Python Δnll **≈+0.09** (bfs +0.093, and cross/flat ppl 5.47/6.00).
+> Other languages unchanged (rarely >64 grants). Conclusions hold; see RESULTS_code_crossdoc.md
+> correction banner + [[eval-max-grants-mismatch]] for the full per-cell table.
+
 Does the wiki cross-doc gain carry to code? 3 languages × 4 masks + a Python traversal
 ablation (18 runs), all 15k steps (~3.9B tok), tuned recipe (muon_lr=0.003/wd=0.1, VE-off,
 8×A100). thestack (Python, 9.29B tok) subset via 15k-step budget like arxiv; go (1.22B) /

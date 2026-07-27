@@ -1,5 +1,26 @@
 # Code cross-doc generalization sweep — results (2026-07-21)
 
+> **⚠ CORRECTION 2026-07-27 (max_grants train/eval mismatch).** All `repobench_cross_doc`
+> and `community_pack` numbers BELOW this banner were computed with the eval mask capped at
+> **max_grants=64**, but training used **256** (bug in `TS2TSModel._build_creators`; fixed
+> commit 8317898 — the cap applies to BOTH flex and triton eval paths since grants are built
+> as bitmasks before the backend split). Re-eval at the correct 256 (`eval_reeval256.json`):
+> most cells unchanged (Java/Go/JS/Kotlin/Rust/etc. rarely exceed 64 grants), **but Python
+> shifted materially** — its packs often exceed 64 links:
+>
+> | Python repobench_cross_doc Δnll | bfs | dfs | rw | random |
+> |---|---|---|---|---|
+> | old (max_grants=64) | +0.135 | +0.100 | +0.069 | +0.151 |
+> | **corrected (256)** | **+0.093** | **+0.095** | **+0.081** | **+0.070** |
+>
+> Python bfs absolute ppl also dropped (cross 6.67→5.47, flat 7.64→6.00) — at 256 the model
+> attends to more cross-file context and predicts better in BOTH conditions, so the 64-cap
+> understated absolute quality while overstating the cross-doc *gap*. Corrected Python Δnll
+> (~+0.09) is close to Java (+0.065). Java re-eval numbers below are already correct (bit-identical
+> at 256 — RepoBench-Java aux is one file, rarely >64 grants). Wiki hotpotqa also re-confirmed
+> (bfs +1.29→+1.25, within noise). **The qualitative conclusions are unchanged; the Python
+> magnitude is now train-matched.** Detail: [[eval-max-grants-mismatch]].
+
 Tests whether wiki's cross-doc-link gains generalize to code. All runs: 1024d/24L
 ~350M model, VE-off, muon_lr=0.003/wd=0.1, 15k steps (~3.9B tok chinchilla), 8×A100.
 18 runs, all completed 15k steps + full eval. Headline cross-doc metric for code =
