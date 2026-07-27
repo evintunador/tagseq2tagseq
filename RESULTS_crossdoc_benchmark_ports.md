@@ -41,18 +41,26 @@ where the dependence concentrates, not just whether it exists.
 Placebo separation > Δnll_real on both: wrong aux actively hurts vs no aux —
 the benchmarks reward the RIGHT cross-file context, not extra tokens.
 
-### Python scope validation (ckpt run_20260720_063128_690228, bfs)
-RepoBench has no post-hole file body (`all_code` is just a license header), so
-its use-scopes collapse to use_line — a built-in check that re-anchoring
-reproduces native:
+RepoBench (python AND java) has no post-hole file body (`all_code` is just a
+license header / the next_line is the last known token), so its use-scopes
+collapse to use_line — a built-in check that re-anchoring reproduces native.
 
+### Python scopes (ckpt run_20260720_063128_690228, bfs)
 | scope | Δnll_real (CI) | placebo sep (CI) | n |
 |---|---|---|---|
 | native | +0.0936 (0.072..0.117) | +0.127 (0.105..0.150) | 500 |
 | use_line = use_block = rest_of_doc | +0.0975 (0.074..0.123) | +0.135 (0.111..0.160) | 424 |
 
-Restricting to the 424 genuine cross-file-use lines SHARPENS the signal
-(+0.0975 > +0.0936). Re-anchoring is sound.
+### Java scopes (ckpt run_20260722_191916_590119)
+| scope | Δnll_real (CI) | placebo sep (CI) | n |
+|---|---|---|---|
+| native | +0.072 (0.053..0.091) | +0.087 (0.068..0.107) | 500 |
+| use_line | +0.085 (0.066..0.106) | +0.099 (0.079..0.119) | 487 |
+| use_block = rest_of_doc | +0.080 (0.062..0.100) | +0.096 (0.077..0.116) | 487 |
+
+Both languages: restricting to genuine cross-file-use lines SHARPENS the signal
+(py +0.0975>+0.0936; java +0.085>+0.072). Re-anchoring is sound and Java PASSES
+every scope with n≈487.
 
 ## Kotlin — ASE-2025 (JetBrains/Mistral), the target-scope proof
 Native scoring (arbitrary FIM `middle`) FAILS; use-site anchoring recovers the
@@ -103,16 +111,25 @@ selection. Unlimited n lives only in the self-built test_community path (TODOS).
 Aux are retrieval CHUNKS (not whole import-resolved files), so signal is
 diluted; still shows a positive placebo separation.
 
-### native + scopes (ckpt run_20260722_003634_268441)
-| scope | Δnll_real (CI) | placebo sep (CI) | n |
-|---|---|---|---|
-| native | +0.013 (−0.003..+0.031) | +0.023 (+0.007..+0.040) | 200 |
-<!-- use-scope rows FILLED when the TS scope run completes (full_file now populated) -->
+### all scopes (ckpt run_20260722_003634_268441, 500-cap)
+| scope | Δnll_real (CI) | placebo sep (CI) | n_fired | n scored |
+|---|---|---|---|---|
+| native | +0.013 (−0.003..+0.031) | **+0.023 (+0.007..+0.040)** | 200 | 197 |
+| use_line | +0.018 (−0.009..+0.045) | **+0.030 (+0.010..+0.055)** | — | 25 |
+| use_block | +0.010 (−0.006..+0.027) | +0.002 (−0.008..+0.012) | — | 25 |
+| rest_of_doc | −0.003 (−0.008..+0.004) | +0.001 (−0.006..+0.008) | — | 25 |
 
-placebo separation CI excludes 0 even on chunk aux → the benchmark is sensitive
-to context correctness. v2 (whole-file re-clone from metadata.repository +
-runtime relative-import resolution) should lift fire-rate (0.40→~0.67) and
-tighten Δnll_real above 0.
+Unlike Kotlin/Java, TS does NOT show a clean use-site gradient — and that is
+itself diagnostic of the CHUNK-based aux. Positive placebo separation (CI
+excludes 0) appears at native and use_line but collapses to ~0 at use_block/
+rest_of_doc, because a retrieved 10-line chunk may carry the symbol's immediate
+use context but not the wider block's dependencies. Only 72/500 examples resolve
+a use site (25 fire) since chunks frequently lack the declared symbol entirely.
+Fire-rate 0.40 (static; runtime relative-import resolution reaches ~0.67).
+**v2 is required for TS to be a clean use-scope benchmark**: re-clone repos from
+`metadata.repository` for WHOLE-FILE aux (not chunks), which should both lift
+fire-rate and restore the use_block/rest_of_doc signal. Report TS at native +
+use_line only until v2, and flag the chunk limitation.
 
 ## Go — CoLT-132K: BLOCKED, port removed
 The released CoLT-132K.zip ships EMPTY `cross_file_dependency` for every Go
@@ -123,10 +140,27 @@ forward: file an issue with the aiXcoder authors for the godata, or self-build
 Go from its test_community split.
 
 ## Cross-benchmark takeaways
-1. Target scope matters as much as checkpoint quality: an arbitrary-span
-   benchmark can show ZERO (or negative) cross-doc signal that use-site
-   anchoring recovers.
-2. placebo separation is the robust primary metric; Δnll_real needs power
-   (n and a link-exploiting ckpt).
-3. Report use_line / use_block / rest_of_doc together — the gradient is itself
-   the finding (signal concentrates at the use site).
+1. **Target scope matters as much as checkpoint quality.** An arbitrary-span
+   benchmark can show ZERO/negative cross-doc signal that use-site anchoring
+   recovers (Kotlin native −0.033 placebo → use_line +0.106..+0.123). And a weak
+   traversal (random) buries signal a strong one (bfs) shows (Kotlin use_line
+   +0.011→+0.094). Both compound.
+2. **Restricting to genuine use lines SHARPENS the signal even on already-good
+   benchmarks** (python +0.0936→+0.0975; java +0.072→+0.085).
+3. **placebo separation is the robust primary metric**; Δnll_real needs power (n
+   + a link-exploiting ckpt). Report both.
+4. **Report use_line / use_block / rest_of_doc together** — the gradient is the
+   finding (signal concentrates at the use site).
+5. **Aux granularity gates the use-scope gradient.** Whole-file/skeleton aux
+   (Kotlin ASE, RepoBench) give a clean monotone gradient; retrieval-CHUNK aux
+   (CCEval TS) only helps the immediate use_line and collapses at wider scopes —
+   evidence for the TS v2 whole-file upgrade.
+
+## Summary table (use_line scope, the headline) — all working ports
+| port | ckpt | Δnll_real (CI) | placebo sep (CI) | n | pass |
+|---|---|---|---|---|---|
+| repobench_python | bfs cdl | +0.098 (0.074..0.123) | +0.135 (0.111..0.160) | 424 | ✓ (n>200) |
+| repobench_java | dfs cdl | +0.085 (0.066..0.106) | +0.099 (0.079..0.119) | 487 | ✓ |
+| ase_kotlin | bfs cdl | +0.094 (0.052..0.140) | +0.123 (0.083..0.166) | 138 | signal ✓, n<200 |
+| crosscodeeval_ts | ts cdl | +0.018 (−0.009..0.045) | +0.030 (0.010..0.055) | 25 | chunk-limited, needs v2 |
+| colt_go | — | — | — | — | BLOCKED (no aux upstream) |
