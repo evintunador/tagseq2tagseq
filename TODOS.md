@@ -336,12 +336,19 @@ Still open:
 ### Cross-doc benchmark ports — follow-ups (filed 2026-07-25)
 Harness in eval/benchmark_harness/ + 3 external ports built (see
 docs/crossdoc_benchmark_port_harness_DESIGN.md verdict summary). Open items:
-- **Kotlin/ASE-2025 Tier-2 FAIL diagnosis**: Δnll_real −0.056 (CI incl 0) on
-  ckpt run_20260724_095209_785799. Disambiguate the three candidate causes:
-  (a) re-run Tier 2 on a stronger/more-trained kotlin cross_doc_link ckpt;
-  (b) restrict targets to import-USING lines (RepoBench cross_file_first scope)
-  instead of arbitrary FIM middle spans; (c) measure aux-dilution / 32k-trunc
-  effect. Only promote Kotlin to a headline benchmark once Tier 2 passes.
+- **Kotlin/ASE-2025 Tier-2 — DIAGNOSED 2026-07-25, needs power**: the scope
+  ablation (scopes.py, `--scope all`) settled cause (b): the native miss was
+  arbitrary FIM spans burying the signal. Use-site anchoring recovers a
+  significant placebo separation that strengthens toward the use line
+  (rest_of_doc +0.051 → use_block +0.058 → use_line +0.106, all CI-exclude-0),
+  while native placebo sep is −0.033. See docs/crossdoc_benchmark_port_harness_
+  DESIGN.md "Kotlin scope-gradient result". REMAINING to make it a headline
+  benchmark: (1) raise n above the 200 floor — build the port over the FULL
+  ASE public+private split instead of the 500-cap subset (only 138/242 survive
+  the use-site filter); (2) re-run on a stronger kotlin cross_doc_link ckpt to
+  lift Δnll_real (cross-vs-flat) CIs above 0 — currently still include 0 even
+  though placebo separation is solid. use_line or use_block is the scope to
+  report.
 - **TS/CrossCodeEval v2 whole-file aux**: current v1 uses retrieval chunks
   (fire 0.40, Δnll_real CI barely incl 0, but placebo sep CI EXCLUDES 0 —
   promising). Re-clone repos from metadata.repository for whole-file aux +

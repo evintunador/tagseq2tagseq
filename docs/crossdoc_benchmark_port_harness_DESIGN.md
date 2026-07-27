@@ -192,11 +192,42 @@ reconstruct the file), so its use-scopes genuinely diverge (~28/60 examples have
 an aux-symbol use site; the rest are arbitrary FIM spans that touch no import —
 the hypothesised cause of the native miss).
 
+## Kotlin scope-gradient result (2026-07-25, ckpt run_20260724_095209_785799)
+
+The scope ablation CONFIRMS the native miss was a target-definition problem, not
+purely a checkpoint problem. Placebo separation (right-vs-wrong aux — the
+base-difficulty-free signal) by scope:
+
+| scope | Δnll_real (CI) | placebo sep (CI) | n |
+|---|---|---|---|
+| native (arbitrary FIM) | −0.056 (−0.134..+0.011) | **−0.033 (−0.099..+0.019)** | 242 |
+| rest_of_doc | −0.010 (−0.023..+0.004) | **+0.051 (+0.034..+0.070)** | 135 |
+| use_block | +0.004 (−0.016..+0.024) | **+0.058 (+0.040..+0.077)** | 138 |
+| use_line | +0.011 (−0.030..+0.055) | **+0.106 (+0.069..+0.148)** | 138 |
+
+Reading: at native scope placebo sep is NEGATIVE (right aux indistinguishable
+from wrong — benchmark measures nothing). Use-site anchoring flips it firmly
+POSITIVE with CIs excluding 0, and it STRENGTHENS monotonically as the span
+narrows toward the use line (0.051→0.058→0.106) — the cross-doc signal
+concentrates exactly at the import-use site, as hypothesised. So ASE-2025 IS a
+usable cross-doc benchmark WHEN scoped to use sites; the arbitrary FIM span
+buried the signal.
+
+Caveat: Δnll_real (cross vs flat) CIs still include 0 at every scope — the
+absolute cross-vs-nothing gain is small + underpowered (n≈138 < 200 floor).
+Drivers: (1) only 138/242 survive the use-site filter (raise n with the full
+public+private ASE split vs the 500-cap subset), (2) this Kotlin ckpt likely
+exploits cross-doc links weakly (re-run on a stronger ckpt). placebo_separation
+is the trustworthy headline here; Δnll_real needs more power.
+
 ## Verdict summary (2026-07-25)
 Harness + calibration COMPLETE and committed. Of the 3 external ports:
-- **Kotlin/ASE-2025**: builds + passes CPU gates, but FAILS Tier 2 — no cross-doc
-  benefit on the current ckpt. Needs cause diagnosis before it can be a headline
-  benchmark (ckpt strength vs target import-dependence vs aux dilution).
+- **Kotlin/ASE-2025**: builds + passes CPU gates. Native Tier 2 FAILS, but the
+  scope ablation (above) DIAGNOSED it: use-site anchoring recovers a significant
+  placebo-separation signal (up to +0.106 at use_line, CI excludes 0) that the
+  arbitrary FIM span buried. Δnll_real still underpowered (n≈138). Path to a
+  clean pass: full ASE split (more n) + a stronger Kotlin cross_doc_link ckpt.
+  USABLE as a cross-doc benchmark at use_line/use_block scope.
 - **TS/CrossCodeEval**: builds + passes CPU gates; Tier 2 near-miss with a
   POSITIVE placebo signal. Promising; needs the v2 whole-file upgrade for a clean
   pass.
