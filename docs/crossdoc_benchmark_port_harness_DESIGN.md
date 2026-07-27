@@ -1,6 +1,6 @@
 # Benchmark-port verification harness — design (2026-07-24)
 
-Goal: when sub-agents build the three external benchmark ports (Go←CoLT-132K,
+Goal: when sub-agents build the external benchmark ports (TS←CrossCodeEval,
 TS←CrossCodeEval, Kotlin←ASE-2025), a FROZEN harness — authored before/independent
 of the ports — judges whether each port is "as legit as" the existing
 python/java `run_repobench_cross_doc`. Same philosophy as `data/graph_harness`:
@@ -129,7 +129,6 @@ New ports (2026-07-25, built by sub-agents against the frozen harness):
 |---|---|---|---|---|---|---|---|
 | ase_kotlin | PASS | 1.000 | 0.996/1.000 | 0.979 | **−0.056 (−0.134..+0.011)** | −0.033 (−0.099..+0.019) | **T2 FAIL** — CI includes 0 |
 | crosscodeeval_ts | PASS | 1.000 | 0.400/0.480 (static, advisory) | 0.400 | +0.013 (−0.003..+0.031) | **+0.023 (+0.007..+0.040)** | T2 near-miss (see below) |
-| colt_go | — | — | — | — | — | — | BLOCKED (empty aux upstream) |
 
 **Kotlin T2 negative (ckpt run_20260724_095209_785799, 242 ex, 237 fired, 4
 oversized-skipped):** aux made next-line prediction slightly WORSE on average
@@ -233,9 +232,11 @@ Harness + calibration COMPLETE and committed. Of the 3 external ports:
 - **TS/CrossCodeEval**: builds + passes CPU gates; Tier 2 near-miss with a
   POSITIVE placebo signal. Promising; needs the v2 whole-file upgrade for a clean
   pass.
-- **Go/CoLT-132K**: BLOCKED upstream (empty aux in released data).
+- **Go**: no usable external cross-file benchmark exists (RepoBench has no Go
+  variant; CoLT-132K's released Go split shipped empty cross-file dependencies).
+  Go cross-doc eval must come from the self-built test_community path (TODOS.md).
 The harness itself is validated: it PASSED the two known-good references and
-correctly withheld a pass from all three unproven ports. Next actions filed in
+correctly withheld a pass from the unproven ports. Next actions filed in
 TODOS.md.
 
 ALL GATES PASS on both reference ports. Notable: placebo separation EXCEEDS
@@ -265,16 +266,10 @@ as graph_harness).
 
 ## Per-port notes (from the 2026-07-24 survey)
 
-- **Go / CoLT-132K — BLOCKED (verified 2026-07-25)**: the released
-  `CoLT-132K.zip` has EMPTY `cross_file_dependency` in all 3,000 Go test rows
-  (Python ~6.8k entries/1k, Java ~128k/1k). The dependency records live in
-  external `godata` JSONs (`dependency_file_path`) NOT shipped in the zip.
-  `prefix` DOES include the import block (929/1000 parseable) — the survey's
-  cropped-prefix risk was NOT the problem; the aux docs themselves are absent.
-  Adapter `ports/colt_go.py` is written correctly and will work IF the
-  dependency JSONs are recovered (email authors), else Go falls to the
-  self-built path (like Kotlin/ASE: mine aux from repo snapshots). NOT
-  registered/committed until unblocked.
+- **Go**: no usable external cross-file benchmark (RepoBench has no Go variant;
+  the one candidate surveyed shipped empty Go cross-file dependencies in its
+  released data). Go must use the self-built test_community path (TODOS.md); no
+  external port exists here.
 - **TS / CrossCodeEval (built 2026-07-25, `ports/crosscodeeval_ts.py`)**: PASS
   Tier 0; precision 1.000; but Tier 1 STATIC fire-rate 0.400 < parity gate
   (0.9×0.480). Root cause (agent-verified, NOT a shaping bug): Tier 1 matches
@@ -319,7 +314,6 @@ Possible future: retrain on Stack v2 (content cutoff ≈2023-09).
 
 | Benchmark | vs v1 (current ckpts) | vs v2 (future retrain) |
 |---|---|---|
-| CoLT-132K (repos created ≥2024-03) | clean BY DATE | clean BY DATE |
 | CrossCodeEval (repos created 2023-03..06) | clean BY DATE | Tier-C gate will bite |
 | ASE-2025 Kotlin (repos can be OLD; only the target commit is recent) | Tier-C gate will bite | Tier-C gate will bite |
 
@@ -328,6 +322,6 @@ Repo-name intersection is a hard criterion (a repo lives in the dataset or the
 benchmark, not both); file-hash matching then removes cross-repo copy-pastes
 (vendored deps / renamed forks). Full substring/MinHash near-dedup remains out
 of scope — date-cutoff + repo-intersection + exact-hash matches the field
-standard (RepoBench, CrossCodeEval, CoLT). Exclusion is applied on the
+standard (RepoBench, CrossCodeEval). Exclusion is applied on the
 BENCHMARK side for now so current ckpts stay valid; the inverse
 (dataset-side blacklist + rebuild + retrain) is filed as a deferred TODO.

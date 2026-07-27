@@ -49,8 +49,10 @@ def main() -> None:
     ap.add_argument("--max-examples", type=int, default=None)
     ap.add_argument("--checkpoint", default=None, help="best_model.pt for Tier 2")
     ap.add_argument("--scope", default="native",
-                    choices=["native", "use_line", "use_block", "rest_of_doc", "all"],
-                    help="Tier-2 target scope; 'all' runs every use-scope + native")
+                    help="Tier-2 target scope: 'all' (every use-scope + native), "
+                         "a single scope, or a comma-separated list "
+                         "(e.g. 'native,use_line'). Valid: native|use_line|"
+                         "use_block|rest_of_doc")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--training-graph", default=None,
                     help="tokenized_graph.jsonl of the training corpus (Tier C)")
@@ -113,7 +115,8 @@ def main() -> None:
         model, _hp = load_inference_model(args.checkpoint, device=args.device)
         model.eval()
         scopes = (["use_line", "use_block", "rest_of_doc", "native"]
-                  if args.scope == "all" else [args.scope])
+                  if args.scope == "all"
+                  else [s.strip() for s in args.scope.split(",") if s.strip()])
         results["tier2"] = {}
         for sc in scopes:
             r2 = run_tier2(port, model, max_examples=args.max_examples,

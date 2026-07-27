@@ -131,13 +131,10 @@ Fire-rate 0.40 (static; runtime relative-import resolution reaches ~0.67).
 fire-rate and restore the use_block/rest_of_doc signal. Report TS at native +
 use_line only until v2, and flag the chunk limitation.
 
-## Go — CoLT-132K: BLOCKED, port removed
-The released CoLT-132K.zip ships EMPTY `cross_file_dependency` for every Go
-example (aux live in unshipped external `godata` JSONs; verified no download /
-no regen code exists). The `colt_go` port produced only zero-aux examples and
-was removed 2026-07-25 (preserved in git history at commit de5ba34). Path
-forward: file an issue with the aiXcoder authors for the godata, or self-build
-Go from its test_community split.
+## Go: no external cross-doc benchmark
+No usable upstream external cross-file benchmark exists for Go (RepoBench has no
+Go variant). Go cross-doc eval must come from the self-built test_community
+path (see TODOS.md); it has no external port here.
 
 ## Cross-benchmark takeaways
 1. **Target scope matters as much as checkpoint quality.** An arbitrary-span
@@ -163,4 +160,3 @@ Go from its test_community split.
 | repobench_java | dfs cdl | +0.085 (0.066..0.106) | +0.099 (0.079..0.119) | 487 | ✓ |
 | ase_kotlin | bfs cdl | +0.094 (0.052..0.140) | +0.123 (0.083..0.166) | 138 | signal ✓, n<200 |
 | crosscodeeval_ts | ts cdl | +0.018 (−0.009..0.045) | +0.030 (0.010..0.055) | 25 | chunk-limited, needs v2 |
-| colt_go | — | — | — | — | BLOCKED (no aux upstream) |
