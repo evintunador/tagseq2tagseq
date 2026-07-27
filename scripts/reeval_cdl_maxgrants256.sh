@@ -12,7 +12,7 @@ set -uo pipefail
 REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
 ART=/fss-data/evin_t/tagseq2tagseq_artifacts
 SHARD=${1:-0}; NSHARDS=${2:-1}
-mapfile -t ROWS < /tmp/cdl_cells.txt
+mapfile -t ROWS < /fss/evin_t/tagseq2tagseq/runs/cdl_cells_reeval256.txt
 
 i=0
 for row in "${ROWS[@]}"; do
