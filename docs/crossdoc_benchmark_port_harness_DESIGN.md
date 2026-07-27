@@ -223,11 +223,13 @@ is the trustworthy headline here; Δnll_real needs more power.
 ## Verdict summary (2026-07-25)
 Harness + calibration COMPLETE and committed. Of the 3 external ports:
 - **Kotlin/ASE-2025**: builds + passes CPU gates. Native Tier 2 FAILS, but the
-  scope ablation (above) DIAGNOSED it: use-site anchoring recovers a significant
-  placebo-separation signal (up to +0.106 at use_line, CI excludes 0) that the
-  arbitrary FIM span buried. Δnll_real still underpowered (n≈138). Path to a
-  clean pass: full ASE split (more n) + a stronger Kotlin cross_doc_link ckpt.
-  USABLE as a cross-doc benchmark at use_line/use_block scope.
+  scope ablation + a stronger ckpt RESOLVED it. On the BFS ckpt
+  (run_20260722_181228_995658), use_line Δnll_real = +0.094 (CI 0.052..0.140,
+  EXCLUDES 0) — in the python/java band — with placebo sep +0.123; use_block
+  +0.047 and rest_of_doc +0.024 also CI-exclude-0. The random-traversal ckpt was
+  the weak link (use_line +0.011); BFS 8×'d it. Only remaining gate failure is
+  n<200 (ASE 242-pool ceiling), not signal. USABLE at use_line/use_block.
+  Report all three use-scopes (RESULTS_crossdoc_benchmark_ports.md).
 - **TS/CrossCodeEval**: builds + passes CPU gates; Tier 2 near-miss with a
   POSITIVE placebo signal. Promising; needs the v2 whole-file upgrade for a clean
   pass.

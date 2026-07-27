@@ -71,17 +71,28 @@ cross-doc benchmark discriminates.
 placebo separation: NEGATIVE at native → POSITIVE and monotonically stronger as
 the span narrows to the use line (0.051→0.058→0.106, all CIs exclude 0).
 
-### bfs-traversal ckpt (run_20260722_181228_995658), full pool
-<!-- FILLED IN when the bfs full-pool run completes -->
-_(pending — bfs is the strongest traversal per the code sweep; random was
-weakest there too, +0.031 vs +0.065..079, so this ckpt should lift Δnll_real.)_
+### bfs-traversal ckpt (run_20260722_181228_995658), full 242 pool
+| scope | Δnll_real (CI) | placebo sep (CI) | n | CIs exclude 0 |
+|---|---|---|---|---|
+| native | +0.012 (−0.033..+0.061) | +0.041 (−0.004..+0.090) | 242 | ✗ both |
+| rest_of_doc | +0.024 (+0.014..+0.036) | +0.048 (+0.036..+0.063) | 135 | ✓ both |
+| use_block | +0.047 (+0.028..+0.068) | +0.069 (+0.049..+0.090) | 138 | ✓ both |
+| use_line | **+0.094 (+0.052..+0.140)** | +0.123 (+0.083..+0.166) | 138 | ✓ both |
 
-**Checkpoint caveat (answers "was Kotlin weaker?"):** the first Kotlin ckpt used
-the **random** traversal — the weakest for cross-doc signal in BOTH the Python
-sweep and the Java RepoBench ablation (random +0.031 vs bfs/dfs/rw +0.065..0.079;
-see RESULTS_code_crossdoc.md). Epoch count was NOT the difference (all Kotlin
-ckpts trained 2 epochs / ~14k steps). Traversal choice was. The bfs re-run above
-isolates that.
+**Both axes matter, and they compound.** vs the random-traversal ckpt above,
+BFS lifts Δnll_real at every scope, and both Δnll_real AND placebo separation
+climb monotonically native→rest_of_doc→use_block→use_line. Only the use-scopes
+get CIs off zero — even the strong BFS ckpt cannot rescue the arbitrary-span
+`native` target (both CIs still cross 0). BFS + use_line = Δnll +0.094, dead in
+the python (+0.094) / java (+0.072) reference band. The ONLY remaining gate
+failure is n<200 (the ASE 242-pool ceiling), not signal.
+
+**Checkpoint answer ("was Kotlin weaker?"): YES, and it was the traversal, not
+epochs.** The first ckpt used the **random** traversal — weakest for cross-doc
+signal in BOTH the Python sweep and Java RepoBench ablation (random +0.031 vs
+bfs/dfs/rw +0.065..0.079; RESULTS_code_crossdoc.md). All Kotlin ckpts trained 2
+epochs / ~14k steps, so epoch count was NOT the difference. Swapping to the BFS
+ckpt (above) roughly 8× the use_line Δnll (+0.011 → +0.094).
 
 **n ceiling:** the ASE-2025 public pool is 242 examples (practice+public; the
 private split has no public ground truth). GPU time cannot raise n past 242 for
