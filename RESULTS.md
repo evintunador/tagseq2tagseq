@@ -168,7 +168,7 @@ doc_causal on the same next-lines, n=500):
 - **Still open**: Go/TS/Rust/Kotlin/Dart/Zig have no upstream RepoBench — survey for analogous
   cross-file datasets or self-build from `test_community` splits (TODOS.md).
 
-## NEW-LANGUAGE SWEEPS (2026-07-24) — TS/Rust/Kotlin/JS/Dart/Zig, ALL 6 SWEEPS COMPLETE
+## NEW-LANGUAGE SWEEPS + ABLATIONS (2026-07-27) — TS/Rust/Kotlin/JS/Dart/Zig, ALL COMPLETE (90/90 cells)
 
 Extended the 4-condition sweep to all built code languages (same tuned recipe:
 muon_lr=0.003/wd=0.1, VE-off, // slash-comment layout — the C-family prefix-bug fix).
@@ -211,10 +211,50 @@ js 0.628 (cdl)/0.707 (concatlink). TS/Kotlin/Dart/Zig not in HumanEvalPack.
 - **The cross-doc thesis test for these 6 langs still awaits a discriminating benchmark** —
   only Python & Java have RepoBench. TS/Rust/Kotlin/JS/Dart/Zig need self-built cross-file
   benchmarks (TODOS.md). Their sweeps establish the base-LM numbers only.
-- **Traversal ablations (dfs/rw/random × dc/cdl) for these 6 langs: IN PROGRESS** — 14 running,
-  the 12 orphaned-eval cells recovered 2026-07-24 (job 48575). Ablation table to follow once complete.
 - Numbers: `runs/<id>/eval_results.json` + `eval_commpack_valcommunity.json` (community_pack was
   re-run on val_community after a --split bug zeroed it in the main file for java/dart/zig).
+
+### Traversal ablations — COMPLETE 2026-07-27 (dfs/rw/random × dc/cdl; bfs = sweep)
+
+The full 90-cell matrix (9 langs × [4 sweep masks + 6 ablation cells]) is now **90/90 DONE**.
+Per-lang traversal ablation, `held_ppl` (perplexity ↓) for doc_causal / cross_doc_link, and
+community_pack experimental Δ for cross_doc_link (cpΔ; dc is ~0 by construction):
+
+| lang | traversal | dc held_ppl | cdl held_ppl | cdl cpΔ |
+|------|-----------|:-----------:|:------------:|:-------:|
+| rust | bfs | 3.777 | 3.814 | 0.013 |
+| rust | dfs | 3.598 | 3.584 | 0.013 |
+| rust | random_walk | 3.613 | 3.513 | 0.013 |
+| rust | random | 3.570 | 3.557 | 0.012 |
+| kotlin | bfs | 4.632 | 4.784 | 0.001 |
+| kotlin | dfs | 3.850 | 3.828 | 0.002 |
+| kotlin | random_walk | 3.871 | 3.868 | 0.002 |
+| kotlin | random | 3.816 | 3.795 | 0.002 |
+| dart | bfs | 3.276 | 3.184 | 0.005 |
+| dart | dfs | 3.459 | 3.385 | 0.005 |
+| dart | random_walk | 3.409 | 3.426 | 0.006 |
+| dart | random | 3.409 | 3.411 | 0.003 |
+| zig⚠ | bfs | 7.374 | 7.323 | 0.001 |
+| zig⚠ | dfs | 16.344 | 17.283 | -0.002 |
+| zig⚠ | random_walk | 16.100 | 16.942 | -0.001 |
+| zig⚠ | random | 15.893 | 13.705 | 0.003 |
+| javascript | bfs | 4.028 | 4.046 | 0.022 |
+| javascript | dfs | 4.275 | 4.302 | 0.022 |
+| javascript | random_walk | 4.259 | 4.264 | 0.020 |
+| javascript | random | 4.337 | 4.229 | 0.013 |
+
+- **community_pack cpΔ is near-noise across every traversal for all 5 langs** (cdl ≤ 0.022, several
+  negative for zig) — same story as the sweeps and Python/Java: without a RepoBench-style benchmark,
+  community_pack can't resolve a cross-doc signal on code. So these ablations characterize base-LM ×
+  traversal behavior, NOT a cross-doc thesis test (that still needs self-built benchmarks — TODOS.md).
+- **held_ppl: dc vs cdl is within noise per traversal** (no consistent winner), as expected for a
+  single-doc metric. bfs held_ppl differs oddly from dfs/rw/random for rust/kotlin/zig because the bfs
+  arm = the *sweep* run (different chinchilla epoch budget in some cases); treat bfs-vs-others held_ppl
+  cross-comparisons cautiously — the within-traversal dc-vs-cdl contrast is the clean one.
+- **zig ⚠**: 59M-token corpus, far below chinchilla; its ablation held_ppl (13–17) sits on an
+  undertrained base LM — directional only, do not over-read.
+- Eval caveat: `eval_checkpoints.py` runs community_pack at max_grants=64 (its default; a handful of
+  packs with >64 links are truncated) — consistent across all code evals, so cross-cell-comparable.
 
 ---
 
