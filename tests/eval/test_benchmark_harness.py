@@ -178,6 +178,54 @@ def test_dedup_hash_normalization_ignores_whitespace():
     assert file_hash("def f():\n    pass\n") == file_hash("def f():   \n\n    pass")
 
 
+def test_scope_carving_python():
+    """Use-site anchoring + the three nested target widths, on a synthetic file
+    whose only aux-symbol use is mid-function."""
+    from eval.benchmark_harness.scopes import scope_example
+
+    aux = (AuxDoc(path="utils/helpers.py",
+                  content="def compute(x):\n    return x*2\n"),)
+    full = ("from utils.helpers import compute\n\n"
+            "def main():\n    a = 1\n    b = compute(a)\n"
+            "    if b > 0:\n        print(b)\n    return b\n")
+    ex = CrossDocExample(repo="r", file_path="main.py",
+                         context="from utils.helpers import compute\n\n"
+                                 "def main():\n    a = 1",
+                         target="\n    b = compute(a)", aux=aux, full_file=full)
+
+    line = scope_example(ex, "python", "use_line")
+    assert line is not None and line.matched_symbols == ("compute",)
+    assert "compute(a)" in line.target and "print(b)" not in line.target
+
+    block = scope_example(ex, "python", "use_block")
+    assert "print(b)" in block.target and "return b" in block.target
+
+    rest = scope_example(ex, "python", "rest_of_doc")
+    assert rest.target.count("\n") >= block.target.count("\n")
+
+    native = scope_example(ex, "python", "native")
+    assert native.target == ex.target and native.use_site_line == -1
+
+
+def test_scope_drops_when_no_use_site():
+    """No line uses any aux-declared symbol → dropped for use-scopes."""
+    from eval.benchmark_harness.scopes import scope_example
+    aux = (AuxDoc(path="a.py", content="def unused_symbol(): ...\n"),)
+    full = "x = 1\ny = 2\nz = x + y\n"
+    ex = CrossDocExample(repo="r", file_path="m.py", context="x = 1",
+                         target="\ny = 2", aux=aux, full_file=full)
+    assert scope_example(ex, "python", "use_line") is None
+    # native always survives
+    assert scope_example(ex, "python", "native") is not None
+
+
+def test_scope_none_without_full_file():
+    from eval.benchmark_harness.scopes import scope_example
+    ex = _mk_example()  # no full_file
+    assert scope_example(ex, "python", "use_line") is None
+    assert scope_example(ex, "python", "native") is not None
+
+
 def test_tier2_oversized_pack_guard():
     """A pack longer than the model's rotary cap must be SKIPPED (counted),
     not scored — whole-file aux (Kotlin/ASE) can exceed 32k where RepoBench's

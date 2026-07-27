@@ -48,6 +48,9 @@ def main() -> None:
                     choices=["0", "1", "2", "C"])
     ap.add_argument("--max-examples", type=int, default=None)
     ap.add_argument("--checkpoint", default=None, help="best_model.pt for Tier 2")
+    ap.add_argument("--scope", default="native",
+                    choices=["native", "use_line", "use_block", "rest_of_doc", "all"],
+                    help="Tier-2 target scope; 'all' runs every use-scope + native")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--training-graph", default=None,
                     help="tokenized_graph.jsonl of the training corpus (Tier C)")
@@ -109,15 +112,20 @@ def main() -> None:
         from eval.benchmark_harness.tier2 import run_tier2
         model, _hp = load_inference_model(args.checkpoint, device=args.device)
         model.eval()
-        r2 = run_tier2(port, model, max_examples=args.max_examples,
-                       device=args.device)
-        results["tier2"] = _to_jsonable(r2)
-        logger.info(
-            "Tier 2 %s: Δnll_real=%.4f CI=%s placebo_sep=%.4f CI=%s fire=%.3f "
-            "oversized_skipped=%d %s",
-            "PASS" if r2.passed else "FAIL", r2.delta_real, r2.delta_real_ci,
-            r2.placebo_separation, r2.placebo_separation_ci, r2.fire_rate,
-            r2.n_oversized_skipped, r2.failures or "")
+        scopes = (["use_line", "use_block", "rest_of_doc", "native"]
+                  if args.scope == "all" else [args.scope])
+        results["tier2"] = {}
+        for sc in scopes:
+            r2 = run_tier2(port, model, max_examples=args.max_examples,
+                           device=args.device, scope=sc)
+            results["tier2"][sc] = _to_jsonable(r2)
+            logger.info(
+                "Tier 2 [%s] %s: Δnll_real=%.4f CI=%s placebo_sep=%.4f CI=%s "
+                "fire=%.3f n=%d dropped_no_use=%d oversized=%d %s",
+                sc, "PASS" if r2.passed else "FAIL", r2.delta_real,
+                r2.delta_real_ci, r2.placebo_separation, r2.placebo_separation_ci,
+                r2.fire_rate, r2.n_examples, r2.n_dropped_no_use_site,
+                r2.n_oversized_skipped, r2.failures or "")
 
     out = Path(args.out) if args.out else (
         Path(__file__).parent / "reports" / f"{args.port}.json")

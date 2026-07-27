@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .schema import CrossDocExample, PortAdapter, encode_example
+from .scopes import SCOPES, scope_example
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class Tier2Report:
     port: str
     checkpoint: str
     n_examples: int
+    scope: str = "native"
+    n_dropped_no_use_site: int = 0   # examples with no aux-symbol use site (non-native scopes)
     n_fired: int = 0
     n_oversized_skipped: int = 0
     mean_nll_cross: float = float("nan")
@@ -90,6 +93,7 @@ def run_tier2(
     max_examples: Optional[int] = None,
     device: str = "cuda",
     seed: int = SEED,
+    scope: str = "native",
 ) -> Tier2Report:
     from eval.scoring import (
         score_completion_with_context_docs,
@@ -97,14 +101,33 @@ def run_tier2(
     )
     from eval.nlp_benchmarks import _make_encoder
 
+    if scope not in SCOPES:
+        raise ValueError(f"unknown scope {scope!r}; valid: {SCOPES}")
+
     enc = _make_encoder(model.tokenizer)
     decode_fn = model.tokenizer.decode
     detector = port.detector_factory(decode_fn)
 
-    examples = port.load(max_examples)
+    raw_examples = port.load(max_examples)
+    # Re-anchor each example's (context, target) to the requested scope. For
+    # 'native' this is a passthrough; for use-scopes it moves scoring to the
+    # first line that uses an aux-declared symbol (see scopes.py). aux is
+    # unchanged, so link firing/grants are identical across scopes.
+    examples: List[CrossDocExample] = []
+    n_dropped = 0
+    for ex in raw_examples:
+        st = scope_example(ex, port.language, scope)
+        if st is None:
+            n_dropped += 1
+            continue
+        examples.append(CrossDocExample(
+            repo=ex.repo, file_path=ex.file_path, context=st.context,
+            target=st.target, aux=ex.aux, meta=ex.meta, full_file=ex.full_file))
+
     rep = Tier2Report(port=port.name,
                       checkpoint=getattr(model, "checkpoint_path", "?"),
-                      n_examples=len(examples))
+                      n_examples=len(examples), scope=scope,
+                      n_dropped_no_use_site=n_dropped)
 
     packed = [encode_example(ex, enc, port.identifier_fn) for ex in examples]
 

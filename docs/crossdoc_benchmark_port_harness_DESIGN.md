@@ -154,6 +154,32 @@ Path to a clean pass: the v2 whole-file re-clone (from metadata.repository) +
 runtime relative-import resolution to lift fire-rate from 0.40 → ~0.67, which
 also raises n and should tighten Δnll_real CI above 0.
 
+## Target-scope ablation (added 2026-07-25, `scopes.py`)
+
+Motivated by the Kotlin miss + user input: the import LINE is uninteresting; the
+signal lives at later USES of imported symbols. Tier 2 takes a `--scope`
+(`native` | `use_line` | `use_block` | `rest_of_doc` | `all`) that re-anchors
+scoring at the first line USING a symbol declared in a granted aux doc. Context
+is rebuilt as the full-file prefix up to that use site and held IDENTICAL across
+the three use-scopes, so only the scored width varies:
+- `use_line` — the single logical statement at the use site (≈ RepoBench next_line).
+- `use_block` — use site → end of enclosing syntactic block (tree-sitter). User's
+  preferred boundary; the likely sweet spot vs single lines being "too small".
+- `rest_of_doc` — use site → EOF (whole-doc-after-use; expect signal dilution).
+
+"Uses an imported symbol" is decided WITHOUT import-syntax parsing: the aux docs
+ARE the resolved imports, so we take the top-level names DECLARED in the aux
+(tree-sitter) and match the first completion-region line referencing any — which
+dissolves the `from x import *` problem (a star import's names = the aux's
+declarations) and needs only a per-language top-level-declaration node set
+(`_DECL_NODE_TYPES` in scopes.py), not an import grammar. RepoBench has no
+post-hole file body (`all_code` is just the license header), so its use-scopes
+collapse to use_line — a built-in validation (use_line should reproduce native
++0.094). The real multi-line ablation runs on ASE-2025/Kotlin (whole files).
+
+Ports without full_file (CCEval ships only left-context+groundtruth) support
+`native` only; scope_example returns None → dropped for use-scopes.
+
 ## Verdict summary (2026-07-25)
 Harness + calibration COMPLETE and committed. Of the 3 external ports:
 - **Kotlin/ASE-2025**: builds + passes CPU gates, but FAILS Tier 2 — no cross-doc

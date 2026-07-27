@@ -32,9 +32,14 @@ class CrossDocExample:
     repo: str
     file_path: str            # repo-relative path of the primary file
     context: str              # primary-file prefix INCLUDING the import block
-    target: str               # completion text to score
+    target: str               # completion text to score (the port's NATIVE target)
     aux: Tuple[AuxDoc, ...]   # cross-file context docs, pack order
     meta: Dict[str, Any] = field(default_factory=dict)
+    # Optional: the FULL primary file text (context + native target + whatever
+    # follows). Required only for re-scoping the target to use-site spans
+    # (scopes.py); ports that can't supply it (e.g. CCEval ships only left
+    # context + groundtruth) leave it None and support the 'native' scope only.
+    full_file: Optional[str] = None
 
 
 @dataclass(frozen=True)

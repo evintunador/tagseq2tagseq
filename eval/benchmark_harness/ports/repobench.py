@@ -35,15 +35,24 @@ def _load_repobench(language: str, max_examples: Optional[int]) -> List[CrossDoc
             for item in ex.get("context", [])
             if item.get("snippet", "").strip()
         )
+        # RepoBench ships context-up-to-hole + the single next_line; there is
+        # NO file content after next_line (`all_code` is just the license
+        # header, not the full file). So the full known extent is context+target
+        # and the use-scopes collapse to use_line here — which is exactly the
+        # validation we want (use_line should reproduce native, since RepoBench's
+        # next_line already IS the first cross-file use line by construction).
+        context = ex.get("import_statement", "") + "\n" + ex.get("cropped_code", "")
+        target = "\n" + next_line
         out.append(CrossDocExample(
             repo=ex.get("repo_name", "repo"),
             file_path=ex.get("file_path", ""),
-            context=ex.get("import_statement", "") + "\n" + ex.get("cropped_code", ""),
-            target="\n" + next_line,
+            context=context,
+            target=target,
             aux=aux,
             meta={"gold_snippet_index": ex.get("gold_snippet_index"),
                   "created_at": ex.get("created_at"),
                   "level": ex.get("level")},
+            full_file=context + target,
         ))
         if max_examples is not None and len(out) >= max_examples:
             break
