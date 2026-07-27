@@ -167,6 +167,7 @@ def _load_examples(max_examples: Optional[int]) -> List[CrossDocExample]:
                 rec = json.loads(line)
                 prefix = rec.get("prefix", "")
                 middle = rec.get("middle", "")
+                suffix = rec.get("suffix", "")
                 path = rec.get("path", "")
                 archive = rec.get("archive", "")
                 if not prefix.strip() or archive not in outer_members:
@@ -174,6 +175,10 @@ def _load_examples(max_examples: Optional[int]) -> List[CrossDocExample]:
                 target = middle.split("\n", 1)[0]
                 if not target.strip():
                     continue
+                # FIM prefix+middle+suffix reconstructs the full primary file,
+                # which scopes.py needs to re-anchor scoring at use sites (the
+                # native scope uses only prefix→first-line-of-middle).
+                full_file = prefix + middle + suffix
                 inner_bytes = outer.read(archive)
                 inner = zipfile.ZipFile(io.BytesIO(inner_bytes))
                 file_index = _build_snapshot_index(inner.namelist())
@@ -191,6 +196,7 @@ def _load_examples(max_examples: Optional[int]) -> List[CrossDocExample]:
                           "revision": rec.get("revision"),
                           "archive": archive,
                           "n_modified": len(modified)},
+                    full_file=full_file,
                 ))
     return out
 

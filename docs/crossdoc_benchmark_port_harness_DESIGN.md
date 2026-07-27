@@ -180,6 +180,18 @@ collapse to use_line — a built-in validation (use_line should reproduce native
 Ports without full_file (CCEval ships only left-context+groundtruth) support
 `native` only; scope_example returns None → dropped for use-scopes.
 
+**Python scope validation (2026-07-25, ckpt run_20260720_063128_690228):**
+use_line/use_block/rest_of_doc all identical (RepoBench collapse) at Δnll_real
++0.0975 (CI 0.074–0.123), placebo sep +0.135 (CI 0.111–0.160), n=424 (76 dropped
+no-use-site) — vs native +0.0936/+0.127/n=500. Restricting to genuine use lines
+SHARPENS the signal (+0.0975 > +0.0936), validating the re-anchoring. RepoBench's
+`full_file` = context+target (no post-hole body; `all_code` is only the license
+header), so use-scopes collapse to use_line there by design.
+ASE-2025 Kotlin port populates full_file = prefix+middle+suffix (the FIM parts
+reconstruct the file), so its use-scopes genuinely diverge (~28/60 examples have
+an aux-symbol use site; the rest are arbitrary FIM spans that touch no import —
+the hypothesised cause of the native miss).
+
 ## Verdict summary (2026-07-25)
 Harness + calibration COMPLETE and committed. Of the 3 external ports:
 - **Kotlin/ASE-2025**: builds + passes CPU gates, but FAILS Tier 2 — no cross-doc
