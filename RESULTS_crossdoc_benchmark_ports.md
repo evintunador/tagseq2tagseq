@@ -41,95 +41,115 @@ where the dependence concentrates, not just whether it exists.
 Placebo separation > Δnll_real on both: wrong aux actively hurts vs no aux —
 the benchmarks reward the RIGHT cross-file context, not extra tokens.
 
+All numbers below are the FULL-SAMPLE matrix (2026-07-28): every port × its 4
+same-language cross_doc_link traversal ckpts (bfs/dfs/random_walk/random) ×
+scopes, at the full split (no example cap). † = CI includes 0. Per-job JSON in
+eval/benchmark_harness/reports/matrix/.
+
 RepoBench (python AND java) has no post-hole file body (`all_code` is just a
-license header / the next_line is the last known token), so its use-scopes
-collapse to use_line — a built-in check that re-anchoring reproduces native.
+license header; next_line is the last known token), so `use_block`/`rest_of_doc`
+are identical to `use_line` — only native + use_line were run there.
 
-### Python scopes (ckpt run_20260720_063128_690228, bfs)
-| scope | Δnll_real (CI) | placebo sep (CI) | n |
-|---|---|---|---|
-| native | +0.0936 (0.072..0.117) | +0.127 (0.105..0.150) | 500 |
-| use_line = use_block = rest_of_doc | +0.0975 (0.074..0.123) | +0.135 (0.111..0.160) | 424 |
-
-### Java scopes (ckpt run_20260722_191916_590119)
-| scope | Δnll_real (CI) | placebo sep (CI) | n |
-|---|---|---|---|
-| native | +0.072 (0.053..0.091) | +0.087 (0.068..0.107) | 500 |
-| use_line | +0.085 (0.066..0.106) | +0.099 (0.079..0.119) | 487 |
-| use_block = rest_of_doc | +0.080 (0.062..0.100) | +0.096 (0.077..0.116) | 487 |
-
-Both languages: restricting to genuine cross-file-use lines SHARPENS the signal
-(py +0.0975>+0.0936; java +0.085>+0.072). Re-anchoring is sound and Java PASSES
-every scope with n≈487.
-
-## Kotlin — ASE-2025 (JetBrains/Mistral), the target-scope proof
-Native scoring (arbitrary FIM `middle`) FAILS; use-site anchoring recovers the
-signal and it strengthens toward the use line. This is the clearest evidence
-that target definition — not just checkpoint strength — governs whether a
-cross-doc benchmark discriminates.
-
-### random-traversal ckpt (run_20260724_095209_785799), 500-cap
-| scope | Δnll_real (CI) | placebo sep (CI) | n |
-|---|---|---|---|
-| native | −0.056 (−0.134..+0.011) | −0.033 (−0.099..+0.019) | 242 |
-| rest_of_doc | −0.010 (−0.023..+0.004) | +0.051 (+0.034..+0.070) | 135 |
-| use_block | +0.004 (−0.016..+0.024) | +0.058 (+0.040..+0.077) | 138 |
-| use_line | +0.011 (−0.030..+0.055) | +0.106 (+0.069..+0.148) | 138 |
-
-placebo separation: NEGATIVE at native → POSITIVE and monotonically stronger as
-the span narrows to the use line (0.051→0.058→0.106, all CIs exclude 0).
-
-### bfs-traversal ckpt (run_20260722_181228_995658), full 242 pool
-| scope | Δnll_real (CI) | placebo sep (CI) | n | CIs exclude 0 |
+### Python — RepoBench (full 8,033 pool; n<8033 after use-site filter + 32k skip)
+| traversal | scope | Δnll_real (CI) | placebo sep (CI) | n |
 |---|---|---|---|---|
-| native | +0.012 (−0.033..+0.061) | +0.041 (−0.004..+0.090) | 242 | ✗ both |
-| rest_of_doc | +0.024 (+0.014..+0.036) | +0.048 (+0.036..+0.063) | 135 | ✓ both |
-| use_block | +0.047 (+0.028..+0.068) | +0.069 (+0.049..+0.090) | 138 | ✓ both |
-| use_line | **+0.094 (+0.052..+0.140)** | +0.123 (+0.083..+0.166) | 138 | ✓ both |
+| bfs | native | +0.092 (0.084,0.100) | +0.137 (0.129,0.145) | 8033 |
+| bfs | use_line | **+0.095 (0.087,0.103)** | +0.139 (0.130,0.147) | 6989 |
+| dfs | native | +0.095 (0.087,0.104) | +0.137 (0.129,0.146) | 8033 |
+| dfs | use_line | **+0.098 (0.090,0.107)** | +0.142 (0.133,0.151) | 6989 |
+| random_walk | native | +0.079 (0.072,0.087) | +0.131 (0.124,0.140) | 8033 |
+| random_walk | use_line | +0.082 (0.074,0.090) | +0.135 (0.127,0.144) | 6989 |
+| random | native | +0.056 (0.048,0.064) | +0.133 (0.124,0.141) | 8033 |
+| random | use_line | +0.059 (0.051,0.068) | +0.137 (0.129,0.146) | 6989 |
 
-**Both axes matter, and they compound.** vs the random-traversal ckpt above,
-BFS lifts Δnll_real at every scope, and both Δnll_real AND placebo separation
-climb monotonically native→rest_of_doc→use_block→use_line. Only the use-scopes
-get CIs off zero — even the strong BFS ckpt cannot rescue the arbitrary-span
-`native` target (both CIs still cross 0). BFS + use_line = Δnll +0.094, dead in
-the python (+0.094) / java (+0.072) reference band. The ONLY remaining gate
-failure is n<200 (the ASE 242-pool ceiling), not signal.
+### Java — RepoBench (full 8,722 pool)
+| traversal | scope | Δnll_real (CI) | placebo sep (CI) | n |
+|---|---|---|---|---|
+| bfs | native | +0.108 (0.099,0.118) | +0.158 (0.148,0.168) | 8722 |
+| bfs | use_line | **+0.112 (0.102,0.122)** | +0.162 (0.152,0.172) | 8585 |
+| dfs | native | +0.105 (0.095,0.114) | +0.155 (0.146,0.166) | 8722 |
+| dfs | use_line | +0.106 (0.096,0.116) | +0.160 (0.150,0.171) | 8585 |
+| random_walk | native | +0.106 (0.097,0.116) | +0.157 (0.148,0.167) | 8722 |
+| random_walk | use_line | +0.110 (0.101,0.120) | +0.160 (0.150,0.170) | 8585 |
+| random | native | +0.033 (0.023,0.043) | +0.176 (0.165,0.187) | 8722 |
+| random | use_line | +0.038 (0.028,0.049) | +0.185 (0.174,0.196) | 8585 |
 
-**Checkpoint answer ("was Kotlin weaker?"): YES, and it was the traversal, not
-epochs.** The first ckpt used the **random** traversal — weakest for cross-doc
-signal in BOTH the Python sweep and Java RepoBench ablation (random +0.031 vs
-bfs/dfs/rw +0.065..0.079; RESULTS_code_crossdoc.md). All Kotlin ckpts trained 2
-epochs / ~14k steps, so epoch count was NOT the difference. Swapping to the BFS
-ckpt (above) roughly 8× the use_line Δnll (+0.011 → +0.094).
+Both PASS every cell (n≫200). Two robust patterns at full power:
+- **use_line sharpens native** on every traversal (small but consistent).
+- **Traversal ordering: bfs≈dfs≈random_walk ≫ random** on Δnll_real (java random
+  +0.038 vs bfs +0.112; python random +0.059 vs bfs +0.095). Matches the code
+  sweep (RESULTS_code_crossdoc.md). Note random's placebo sep is HIGH (java
+  +0.185) — its base LM is worse so it leans MORE on aux, but the flat-vs-cross
+  gain (Δnll_real) is what collapses; the two metrics decouple exactly where the
+  traversal is graph-blind.
 
-**n ceiling:** the ASE-2025 public pool is 242 examples (practice+public; the
-private split has no public ground truth). GPU time cannot raise n past 242 for
-this benchmark — power comes from a stronger ckpt (bigger effect) and use-scope
-selection. Unlimited n lives only in the self-built test_community path (TODOS).
+## Kotlin — ASE-2025 (JetBrains/Mistral): the target-scope proof
+Full 242 pool, all 4 traversals × 4 scopes. Native scoring (arbitrary FIM span)
+FAILS; use-site anchoring recovers the signal and it strengthens toward the use
+line — the clearest evidence that target definition, not just ckpt strength,
+governs whether a cross-doc benchmark discriminates.
+
+| traversal | scope | Δnll_real (CI) | placebo sep (CI) | n |
+|---|---|---|---|---|
+| bfs | native | +0.012 (−0.033,0.061)† | +0.041 (−0.004,0.090)† | 242 |
+| bfs | rest_of_doc | +0.024 (0.014,0.036) | +0.048 (0.036,0.063) | 135 |
+| bfs | use_block | +0.047 (0.028,0.068) | +0.069 (0.049,0.090) | 138 |
+| bfs | use_line | **+0.094 (0.052,0.140)** | +0.123 (0.083,0.166) | 138 |
+| dfs | native | −0.014 (−0.043,0.015)† | +0.011 (−0.022,0.043)† | 242 |
+| dfs | use_block | +0.038 (0.020,0.058) | +0.061 (0.043,0.081) | 138 |
+| dfs | use_line | +0.075 (0.034,0.120) | +0.116 (0.075,0.162) | 138 |
+| random_walk | native | −0.020 (−0.053,0.014)† | −0.013 (−0.057,0.027)† | 242 |
+| random_walk | use_block | +0.034 (0.015,0.054) | +0.056 (0.038,0.076) | 138 |
+| random_walk | use_line | +0.069 (0.030,0.112) | +0.107 (0.068,0.150) | 138 |
+| random | native | −0.056 (−0.134,0.011)† | −0.033 (−0.099,0.019)† | 242 |
+| random | use_block | +0.004 (−0.016,0.024)† | +0.058 (0.040,0.077) | 138 |
+| random | use_line | +0.011 (−0.030,0.055)† | +0.106 (0.069,0.148) | 138 |
+
+(use_block/rest_of_doc rows abbreviated for dfs/rw; full values in matrix JSON.)
+
+**Both axes matter and compound.** Down each traversal, Δnll_real and placebo sep
+climb native→rest_of_doc→use_block→use_line. Across traversals, bfs>dfs>rw>random
+at every scope. bfs+use_line = +0.094, in the python(+0.095)/java(+0.112) band.
+Even the strong bfs ckpt cannot rescue the arbitrary-span `native` target (CI
+crosses 0). The random ckpt only recovers a signal at all via use-site anchoring
+(Δnll_real still 0-crossing, but placebo sep +0.106 is solidly positive).
+
+**Checkpoint answer ("was Kotlin weaker?"): YES — the traversal, not epochs.**
+All Kotlin ckpts trained 2 epochs / ~14k steps; the first one used the **random**
+traversal, weakest here (native −0.056) and in the py sweep + java ablation. bfs
+8× the use_line Δnll (+0.011→+0.094).
+
+**n ceiling:** ASE-2025's public pool is 242 (practice+public; private split has
+no public ground truth). GPU cannot raise n past 242 here — hence use_line's n=138
+stays under the 200 gate despite a clean signal. Unlimited n lives only in the
+self-built test_community path (TODOS).
 
 ## TypeScript — CrossCodeEval (AWS)
-Aux are retrieval CHUNKS (not whole import-resolved files), so signal is
-diluted; still shows a positive placebo separation.
+Full 3,356 pool. Aux are retrieval CHUNKS (not whole import-resolved files), so
+the signal is diluted and the use-site filter is lossy (only ~314/3356 resolve a
+use site → n=314 for use-scopes, below the 200 gate at fire-rate 0.45).
 
-### all scopes (ckpt run_20260722_003634_268441, 500-cap)
-| scope | Δnll_real (CI) | placebo sep (CI) | n_fired | n scored |
+| traversal | scope | Δnll_real (CI) | placebo sep (CI) | n |
 |---|---|---|---|---|
-| native | +0.013 (−0.003..+0.031) | **+0.023 (+0.007..+0.040)** | 200 | 197 |
-| use_line | +0.018 (−0.009..+0.045) | **+0.030 (+0.010..+0.055)** | — | 25 |
-| use_block | +0.010 (−0.006..+0.027) | +0.002 (−0.008..+0.012) | — | 25 |
-| rest_of_doc | −0.003 (−0.008..+0.004) | +0.001 (−0.006..+0.008) | — | 25 |
+| bfs | native | +0.029 (0.020,0.039) | +0.040 (0.031,0.050) | 3356 |
+| bfs | use_line | +0.051 (0.033,0.069) | +0.062 (0.043,0.082) | 314 |
+| bfs | use_block | +0.024 (0.014,0.035) | +0.030 (0.020,0.041) | 314 |
+| bfs | rest_of_doc | +0.006 (0.001,0.011) | +0.011 (0.006,0.015) | 314 |
+| dfs | use_line | +0.048 (0.032,0.065) | +0.056 (0.034,0.077) | 314 |
+| random_walk | use_line | +0.039 (0.024,0.056) | +0.049 (0.032,0.066) | 314 |
+| random | native | +0.017 (0.008,0.027) | +0.042 (0.033,0.052) | 3356 |
+| random | use_line | +0.039 (0.019,0.062) | +0.070 (0.047,0.095) | 314 |
 
-Unlike Kotlin/Java, TS does NOT show a clean use-site gradient — and that is
-itself diagnostic of the CHUNK-based aux. Positive placebo separation (CI
-excludes 0) appears at native and use_line but collapses to ~0 at use_block/
-rest_of_doc, because a retrieved 10-line chunk may carry the symbol's immediate
-use context but not the wider block's dependencies. Only 72/500 examples resolve
-a use site (25 fire) since chunks frequently lack the declared symbol entirely.
-Fire-rate 0.40 (static; runtime relative-import resolution reaches ~0.67).
-**v2 is required for TS to be a clean use-scope benchmark**: re-clone repos from
-`metadata.repository` for WHOLE-FILE aux (not chunks), which should both lift
-fire-rate and restore the use_block/rest_of_doc signal. Report TS at native +
-use_line only until v2, and flag the chunk limitation.
+At FULL sample TS is cleaner than the earlier 500-cap run: use_line shows a
+significant Δnll_real (+0.051 bfs, CI excludes 0) AND positive placebo sep on
+every traversal, and the use_line>use_block>rest_of_doc gradient now holds
+(chunk aux carries the immediate use context best). native n=3356 also passes on
+Δnll_real. Same traversal ordering (bfs/dfs>rw>random on Δnll_real). Remaining
+gate failures are power (use-scope n=314<... no, n=314 fired 136<200) + fire-rate
+0.45<0.5 — both artifacts of chunk aux. **v2 (whole-file re-clone from
+metadata.repository) remains the upgrade** to lift fire-rate and n and confirm
+the gradient; but even v1 at full sample shows a real, significant cross-doc
+signal.
 
 ## Go: no external cross-doc benchmark
 No usable upstream external cross-file benchmark exists for Go (RepoBench has no
@@ -153,10 +173,16 @@ path (see TODOS.md); it has no external port here.
    (CCEval TS) only helps the immediate use_line and collapses at wider scopes —
    evidence for the TS v2 whole-file upgrade.
 
-## Summary table (use_line scope, the headline) — all working ports
-| port | ckpt | Δnll_real (CI) | placebo sep (CI) | n | pass |
-|---|---|---|---|---|---|
-| repobench_python | bfs cdl | +0.098 (0.074..0.123) | +0.135 (0.111..0.160) | 424 | ✓ (n>200) |
-| repobench_java | dfs cdl | +0.085 (0.066..0.106) | +0.099 (0.079..0.119) | 487 | ✓ |
-| ase_kotlin | bfs cdl | +0.094 (0.052..0.140) | +0.123 (0.083..0.166) | 138 | signal ✓, n<200 |
-| crosscodeeval_ts | ts cdl | +0.018 (−0.009..0.045) | +0.030 (0.010..0.055) | 25 | chunk-limited, needs v2 |
+## Summary table (use_line scope, best traversal = bfs, FULL sample)
+| port | Δnll_real (CI) | placebo sep (CI) | n | pass |
+|---|---|---|---|---|
+| repobench_python | +0.095 (0.087,0.103) | +0.139 (0.130,0.147) | 6989 | ✓ |
+| repobench_java | +0.112 (0.102,0.122) | +0.162 (0.152,0.172) | 8585 | ✓ |
+| ase_kotlin | +0.094 (0.052,0.140) | +0.123 (0.083,0.166) | 138 | signal ✓, n<200 (pool ceiling 242) |
+| crosscodeeval_ts | +0.051 (0.033,0.069) | +0.062 (0.043,0.082) | 314 | signal ✓, n<200 fired + chunk aux (v2) |
+
+All four ports show a significant use_line cross-doc signal at full sample.
+RepoBench python/java PASS all gates outright; Kotlin and TS have real signals
+(Δnll_real CI excludes 0) capped only by sample power (ASE 242-example pool; TS
+chunk-aux fires on ~1/3 of examples). Full per-traversal detail above; per-job
+JSON in eval/benchmark_harness/reports/matrix/.

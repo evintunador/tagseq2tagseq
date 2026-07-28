@@ -1,0 +1,120 @@
+{
+  "port": "ase_kotlin",
+  "language": "kotlin",
+  "max_examples": null,
+  "tier2": {
+    "use_line": {
+      "port": "ase_kotlin",
+      "checkpoint": "?",
+      "n_examples": 145,
+      "scope": "use_line",
+      "n_dropped_no_use_site": 97,
+      "n_fired": 141,
+      "n_oversized_skipped": 3,
+      "mean_nll_cross": 1.1405609251148459,
+      "mean_nll_flat": 1.2092568303147953,
+      "mean_nll_placebo": 1.2474057915202086,
+      "delta_real": 0.0686959051999493,
+      "delta_real_ci": [
+        0.02996680328109558,
+        0.11152969755340313
+      ],
+      "delta_placebo": -0.038148961205413334,
+      "placebo_separation": 0.10684486640536267,
+      "placebo_separation_ci": [
+        0.06812651511551678,
+        0.14991811405651378
+      ],
+      "failures": [
+        "n_cross_doc 138 < 200 (insufficient power)"
+      ],
+      "passed": false,
+      "fire_rate": 0.9724137931034482
+    },
+    "use_block": {
+      "port": "ase_kotlin",
+      "checkpoint": "?",
+      "n_examples": 145,
+      "scope": "use_block",
+      "n_dropped_no_use_site": 97,
+      "n_fired": 141,
+      "n_oversized_skipped": 3,
+      "mean_nll_cross": 0.9002933477361997,
+      "mean_nll_flat": 0.9345761274082073,
+      "mean_nll_placebo": 0.9565608311390531,
+      "delta_real": 0.03428277967200763,
+      "delta_real_ci": [
+        0.01541186939601017,
+        0.054499856431199145
+      ],
+      "delta_placebo": -0.021984703730845823,
+      "placebo_separation": 0.056267483402853424,
+      "placebo_separation_ci": [
+        0.03836361961034329,
+        0.07577688470482825
+      ],
+      "failures": [
+        "n_cross_doc 138 < 200 (insufficient power)"
+      ],
+      "passed": false,
+      "fire_rate": 0.9724137931034482
+    },
+    "rest_of_doc": {
+      "port": "ase_kotlin",
+      "checkpoint": "?",
+      "n_examples": 145,
+      "scope": "rest_of_doc",
+      "n_dropped_no_use_site": 97,
+      "n_fired": 140,
+      "n_oversized_skipped": 4,
+      "mean_nll_cross": 0.8999080820216073,
+      "mean_nll_flat": 0.9149937689304352,
+      "mean_nll_placebo": 0.9447987119356791,
+      "delta_real": 0.015085686908827887,
+      "delta_real_ci": [
+        0.0024367478600254766,
+        0.028990415944545354
+      ],
+      "delta_placebo": -0.029804943005243945,
+      "placebo_separation": 0.044890629914071827,
+      "placebo_separation_ci": [
+        0.03134542738397916,
+        0.061286861659200095
+      ],
+      "failures": [
+        "n_cross_doc 135 < 200 (insufficient power)"
+      ],
+      "passed": false,
+      "fire_rate": 0.9655172413793104
+    },
+    "native": {
+      "port": "ase_kotlin",
+      "checkpoint": "?",
+      "n_examples": 242,
+      "scope": "native",
+      "n_dropped_no_use_site": 0,
+      "n_fired": 237,
+      "n_oversized_skipped": 4,
+      "mean_nll_cross": 3.0401669180444384,
+      "mean_nll_flat": 3.0200861702661146,
+      "mean_nll_placebo": 3.0271148505129015,
+      "delta_real": -0.020080747778323586,
+      "delta_real_ci": [
+        -0.05291083753748513,
+        0.013573138594883186
+      ],
+      "delta_placebo": -0.007028680246786934,
+      "placebo_separation": -0.013052067531536577,
+      "placebo_separation_ci": [
+        -0.05668394889186892,
+        0.027061985592985355
+      ],
+      "failures": [
+        "\u0394nll_real -0.0201 CI (-0.05291083753748513, 0.013573138594883186) does not exclude 0",
+        "placebo separation -0.0131 CI (-0.05668394889186892, 0.027061985592985355) does not exclude 0 \u2014 benchmark may reward ANY extra context, not the imported code"
+      ],
+      "passed": false,
+      "fire_rate": 0.9793388429752066
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "port": "repobench_python",
+  "language": "python",
+  "max_examples": null,
+  "tier2": {
+    "native": {
+      "port": "repobench_python",
+      "checkpoint": "?",
+      "n_examples": 8033,
+      "scope": "native",
+      "n_dropped_no_use_site": 0,
+      "n_fired": 4963,
+      "n_oversized_skipped": 2351,
+      "mean_nll_cross": 1.6407703921273047,
+      "mean_nll_flat": 1.6971476073648768,
+      "mean_nll_placebo": 1.7734073722737578,
+      "delta_real": 0.056377215237572165,
+      "delta_real_ci": [
+        0.04848217581491116,
+        0.06425491253199918
+      ],
+      "delta_placebo": -0.07625976490888098,
+      "placebo_separation": 0.13263698014645298,
+      "placebo_separation_ci": [
+        0.12449497493340614,
+        0.14076324668879447
+      ],
+      "failures": [],
+      "passed": true,
+      "fire_rate": 0.6178264658284576
+    },
+    "use_line": {
+      "port": "repobench_python",
+      "checkpoint": "?",
+      "n_examples": 6989,
+      "scope": "use_line",
+      "n_dropped_no_use_site": 1044,
+      "n_fired": 4393,
+      "n_oversized_skipped": 1987,
+      "mean_nll_cross": 1.6412260240970218,
+      "mean_nll_flat": 1.7003318422530986,
+      "mean_nll_placebo": 1.7785083631851843,
+      "delta_real": 0.05910581815607694,
+      "delta_real_ci": [
+        0.05078221274501815,
+        0.06763160036002494
+      ],
+      "delta_placebo": -0.07817652093208571,
+      "placebo_separation": 0.1372823390881626,
+      "placebo_separation_ci": [
+        0.12852130555813865,
+        0.14618796046709223
+      ],
+      "failures": [],
+      "passed": true,
+      "fire_rate": 0.6285591644012019
+    }
+  }
+}
