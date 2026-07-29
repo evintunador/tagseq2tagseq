@@ -11,7 +11,6 @@
 #   LANG=typescript sbatch scripts/build_graph_lang.sbatch
 #SBATCH --job-name=stack_build
 #SBATCH --partition=compute
-#SBATCH --exclude=GPU-954,GPU-495   # known-bad nodes (instant-fail exit 0:53); see project memory
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=12:00:00

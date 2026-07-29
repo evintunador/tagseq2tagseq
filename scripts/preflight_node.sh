@@ -3,8 +3,11 @@
 # Checks BOTH conditions that have silently killed sweep runs:
 #   1. GPU 0 is empty (a foreign co-tenant on rank-0's GPU OOMs the run — see
 #      SLURM_DDP_HANG_HANDOFF.md: the "DDP hang" was really a rank-0 CUDA OOM).
-#   2. The dataset dir on /fss-data is visible (GPU-954 has broken NFS; a run
-#      there dies in ~77s with "Dataset directory not found").
+#   2. The dataset dir on /fss-data is visible (GPU-954 was missing this mount
+#      entirely 2026-07-25 -> 2026-07-25, since fixed with `sudo mkdir -p
+#      /fss-data && sudo mount /fss-data`; a run on an unmounted node dies in
+#      ~77s with "Dataset directory not found"). Kept as a general safeguard
+#      since any node could silently lose this mount, not just GPU-954.
 #
 # Usage:   scripts/preflight_node.sh GPU-1006 [GPU-229 ...]
 # Prints one line per node ending in CLEAN or SKIP:<reason>. Exit 0 if ALL clean.

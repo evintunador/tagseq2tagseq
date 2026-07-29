@@ -258,7 +258,7 @@ prev_had_net=0   # was there unmet net demand on the PREVIOUS poll? (persistence
 while true; do
   now="$(date +%s)"
   snapshot="$(squeue -h -o '%u|%T|%r|%D|%i|%j|%M' 2>/dev/null)"
-  idle_nodes="$(sinfo -h -t idle -o '%n' -p compute 2>/dev/null | grep -vE 'GPU-954|GPU-749' | tr '\n' ' ')"
+  idle_nodes="$(sinfo -h -t idle -o '%n' -p compute 2>/dev/null | grep -vE 'GPU-749' | tr '\n' ' ')"
   idle="$(echo "$idle_nodes" | wc -w)"
 
   # ---- YIELD (kill) logic ----

@@ -3,7 +3,7 @@
 # a training step before launching the next). Args: pairs of "config_path run_dir".
 set -uo pipefail
 REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
-EXCLUDE="GPU-954,GPU-749,GPU-495,GPU-386"
+EXCLUDE="GPU-749,GPU-386"
 while [ $# -ge 2 ]; do
   cfg="$1"; rd="$2"; shift 2
   ckpt="$REPO/runs/$rd/checkpoints/latest.pt"

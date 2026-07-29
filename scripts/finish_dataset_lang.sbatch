@@ -6,7 +6,6 @@
 #   LANG=rust sbatch scripts/finish_dataset_lang.sbatch
 #SBATCH --job-name=stack_finish
 #SBATCH --partition=compute
-#SBATCH --exclude=GPU-954,GPU-495   # known-bad nodes (instant-fail exit 0:53); see project memory
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
 #SBATCH --time=08:00:00

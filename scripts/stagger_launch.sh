@@ -5,7 +5,7 @@
 # Usage: stagger_launch.sh <label_prefix> <config1> [config2 ...]
 set -uo pipefail
 REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
-EXCLUDE="GPU-954,GPU-749"
+EXCLUDE="GPU-749"
 PREFIX="$1"; shift
 for cfg in "$@"; do
   echo "[stagger] launching $cfg"
