@@ -226,3 +226,6 @@ benchmarks/.autotune_cache*.json
 schedules/
 review_artifacts/
 review_artifacts_view
+
+# NFS delete-on-close turds (created when a file is removed while still open)
+.nfs*
