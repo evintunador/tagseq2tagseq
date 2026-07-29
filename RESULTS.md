@@ -223,7 +223,10 @@ js 0.628 (cdl)/0.707 (concatlink). TS/Kotlin/Dart/Zig not in HumanEvalPack.
 ### Traversal ablations — COMPLETE 2026-07-27 (dfs/rw/random × dc/cdl; bfs = sweep)
 
 The full 90-cell matrix (9 langs × [4 sweep masks + 6 ablation cells]) is now **90/90 DONE**.
-Per-lang traversal ablation, `held_ppl` (perplexity ↓) for doc_causal / cross_doc_link, and
+The table below covers 7 languages (rust/kotlin/dart/zig/javascript/go/typescript);
+python + java traversal ablations live in `RESULTS_code_crossdoc.md` (they carry the
+discriminating repobench_cross_doc Δnll metric, not just community_pack). Per-lang
+traversal ablation, `held_ppl` (perplexity ↓) for doc_causal / cross_doc_link, and
 community_pack experimental Δ for cross_doc_link (cpΔ; dc is ~0 by construction):
 
 | lang | traversal | dc held_ppl | cdl held_ppl | cdl cpΔ |
@@ -248,8 +251,22 @@ community_pack experimental Δ for cross_doc_link (cpΔ; dc is ~0 by constructio
 | javascript | dfs | 4.275 | 4.302 | 0.022 |
 | javascript | random_walk | 4.259 | 4.264 | 0.020 |
 | javascript | random | 4.337 | 4.229 | 0.013 |
+| go | bfs | 3.726 | 3.838 | 0.0018 |
+| go | dfs | 3.780 | 3.786 | 0.0016 |
+| go | random_walk | — | 4.022† | 0.0017† |
+| go | random | 3.788 | 3.757 | 0.0009 |
+| typescript | bfs | 4.252 | 4.197 | 0.0097 |
+| typescript | dfs | 4.170 | 4.164 | 0.0097 |
+| typescript | random_walk | 4.165 | 4.138 | 0.0092 |
+| typescript | random | 4.068 | 4.053 | 0.0039 |
 
-- **community_pack cpΔ is near-noise across every traversal for all 5 langs** (cdl ≤ 0.022, several
+† go random_walk cdl: the sweep run (jobid 47233) erred at ~14.5k/15k steps and
+its resume (47518) never checkpointed, so the eval uses `best_model.pt` from the
+interrupted run (held_ppl 4.022 runs a touch high vs go's other cdl cells ~3.8
+for this reason); dc arm for this cell was likewise not separately evaled (—).
+Re-run to full budget if this cell matters; cpΔ 0.0017 is in-band with the rest.
+
+- **community_pack cpΔ is near-noise across every traversal for all 7 langs** (cdl ≤ 0.022, several
   negative for zig) — same story as the sweeps and Python/Java: without a RepoBench-style benchmark,
   community_pack can't resolve a cross-doc signal on code. So these ablations characterize base-LM ×
   traversal behavior, NOT a cross-doc thesis test (that still needs self-built benchmarks — TODOS.md).
