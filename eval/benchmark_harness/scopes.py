@@ -52,6 +52,15 @@ _DECL_NODE_TYPES = {
                    "variable_declaration", "enum_declaration",
                    "type_alias_declaration"},
     "go": {"function_declaration", "method_declaration", "type_declaration"},
+    "rust": {"function_item", "struct_item", "enum_item", "trait_item",
+             "type_item", "mod_item", "const_item", "static_item",
+             "union_item", "macro_definition"},
+    "javascript": {"function_declaration", "generator_function_declaration",
+                   "class_declaration", "lexical_declaration",
+                   "variable_declaration", "method_definition"},
+    "dart": {"class_definition", "function_signature", "enum_declaration",
+             "extension_declaration", "mixin_declaration", "type_alias"},
+    "zig": {"variable_declaration", "function_declaration"},
 }
 
 # Block node types that count as an "enclosing syntactic block" boundary for

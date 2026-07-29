@@ -16,12 +16,14 @@ from ..schema import PortAdapter
 from .repobench import REPOBENCH_PYTHON, REPOBENCH_JAVA
 from .ase_kotlin import ASE_KOTLIN
 from .crosscodeeval_ts import CROSSCODEEVAL_TS
+from .internal_community import INTERNAL_PORTS
 
 PORTS: Dict[str, PortAdapter] = {
     REPOBENCH_PYTHON.name: REPOBENCH_PYTHON,
     REPOBENCH_JAVA.name: REPOBENCH_JAVA,
     ASE_KOTLIN.name: ASE_KOTLIN,
     CROSSCODEEVAL_TS.name: CROSSCODEEVAL_TS,
+    **INTERNAL_PORTS,
 }
 
 
