@@ -3,31 +3,127 @@
   "language": "typescript",
   "max_examples": 500,
   "tier2": {
-    "port": "crosscodeeval_ts",
-    "checkpoint": "?",
-    "n_examples": 500,
-    "n_fired": 200,
-    "n_oversized_skipped": 0,
-    "mean_nll_cross": 1.579035083049445,
-    "mean_nll_flat": 1.5924763125816577,
-    "mean_nll_placebo": 1.60204882670175,
-    "delta_real": 0.013441229532212775,
-    "delta_real_ci": [
-      -0.0034700466972317186,
-      0.03129221042098128
-    ],
-    "delta_placebo": -0.009572514120092412,
-    "placebo_separation": 0.023013743652305022,
-    "placebo_separation_ci": [
-      0.007479189896038947,
-      0.039658574026248145
-    ],
-    "failures": [
-      "n_cross_doc 197 < 200 (insufficient power)",
-      "fire-rate 0.400 < 0.5",
-      "\u0394nll_real 0.0134 CI (-0.0034700466972317186, 0.03129221042098128) does not exclude 0"
-    ],
-    "passed": false,
-    "fire_rate": 0.4
+    "use_line": {
+      "port": "crosscodeeval_ts",
+      "checkpoint": "?",
+      "n_examples": 72,
+      "scope": "use_line",
+      "n_dropped_no_use_site": 428,
+      "n_fired": 25,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 1.2000461292266846,
+      "mean_nll_flat": 1.2183143138885497,
+      "mean_nll_placebo": 1.2302713561058045,
+      "delta_real": 0.018268184661865236,
+      "delta_real_ci": [
+        -0.008556235194206238,
+        0.04480071175098419
+      ],
+      "delta_placebo": -0.011957042217254799,
+      "placebo_separation": 0.03022522687911987,
+      "placebo_separation_ci": [
+        0.009963248252868654,
+        0.054785630047321315
+      ],
+      "failures": [
+        "n_cross_doc 25 < 200 (insufficient power)",
+        "fire-rate 0.347 < 0.5",
+        "\u0394nll_real 0.0183 CI (-0.008556235194206238, 0.04480071175098419) does not exclude 0"
+      ],
+      "passed": false,
+      "fire_rate": 0.3472222222222222
+    },
+    "use_block": {
+      "port": "crosscodeeval_ts",
+      "checkpoint": "?",
+      "n_examples": 72,
+      "scope": "use_block",
+      "n_dropped_no_use_site": 428,
+      "n_fired": 25,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 1.509706416130066,
+      "mean_nll_flat": 1.5192260694503785,
+      "mean_nll_placebo": 1.5112600016593933,
+      "delta_real": 0.0095196533203125,
+      "delta_real_ci": [
+        -0.00637131130695343,
+        0.026657301664352418
+      ],
+      "delta_placebo": 0.007966067790985187,
+      "placebo_separation": 0.0015535855293273926,
+      "placebo_separation_ci": [
+        -0.008420553863048554,
+        0.011946654200553887
+      ],
+      "failures": [
+        "n_cross_doc 25 < 200 (insufficient power)",
+        "fire-rate 0.347 < 0.5",
+        "\u0394nll_real 0.0095 CI (-0.00637131130695343, 0.026657301664352418) does not exclude 0",
+        "placebo separation 0.0016 CI (-0.008420553863048554, 0.011946654200553887) does not exclude 0 \u2014 benchmark may reward ANY extra context, not the imported code"
+      ],
+      "passed": false,
+      "fire_rate": 0.3472222222222222
+    },
+    "rest_of_doc": {
+      "port": "crosscodeeval_ts",
+      "checkpoint": "?",
+      "n_examples": 72,
+      "scope": "rest_of_doc",
+      "n_dropped_no_use_site": 428,
+      "n_fired": 25,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 1.4334539341926575,
+      "mean_nll_flat": 1.4309710907936095,
+      "mean_nll_placebo": 1.4344170522689819,
+      "delta_real": -0.0024828433990478514,
+      "delta_real_ci": [
+        -0.008082412838935852,
+        0.003797420442104337
+      ],
+      "delta_placebo": -0.00344596147537235,
+      "placebo_separation": 0.0009631180763244629,
+      "placebo_separation_ci": [
+        -0.006268929243087769,
+        0.007881836533546443
+      ],
+      "failures": [
+        "n_cross_doc 25 < 200 (insufficient power)",
+        "fire-rate 0.347 < 0.5",
+        "\u0394nll_real -0.0025 CI (-0.008082412838935852, 0.003797420442104337) does not exclude 0",
+        "placebo separation 0.0010 CI (-0.006268929243087769, 0.007881836533546443) does not exclude 0 \u2014 benchmark may reward ANY extra context, not the imported code"
+      ],
+      "passed": false,
+      "fire_rate": 0.3472222222222222
+    },
+    "native": {
+      "port": "crosscodeeval_ts",
+      "checkpoint": "?",
+      "n_examples": 500,
+      "scope": "native",
+      "n_dropped_no_use_site": 0,
+      "n_fired": 200,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 1.579035083049445,
+      "mean_nll_flat": 1.5924763125816577,
+      "mean_nll_placebo": 1.60204882670175,
+      "delta_real": 0.013441229532212775,
+      "delta_real_ci": [
+        -0.0034700466972317186,
+        0.03129221042098128
+      ],
+      "delta_placebo": -0.009572514120092412,
+      "placebo_separation": 0.023013743652305022,
+      "placebo_separation_ci": [
+        0.007479189896038947,
+        0.039658574026248145
+      ],
+      "failures": [
+        "n_cross_doc 197 < 200 (insufficient power)",
+        "fire-rate 0.400 < 0.5",
+        "\u0394nll_real 0.0134 CI (-0.0034700466972317186, 0.03129221042098128) does not exclude 0"
+      ],
+      "passed": false,
+      "fire_rate": 0.4
+    }
   }
 }
