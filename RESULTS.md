@@ -260,11 +260,12 @@ community_pack experimental Δ for cross_doc_link (cpΔ; dc is ~0 by constructio
 | typescript | random_walk | 4.165 | 4.138 | 0.0092 |
 | typescript | random | 4.068 | 4.053 | 0.0039 |
 
-† go random_walk cdl: the sweep run (jobid 47233) erred at ~14.5k/15k steps and
-its resume (47518) never checkpointed, so the eval uses `best_model.pt` from the
-interrupted run (held_ppl 4.022 runs a touch high vs go's other cdl cells ~3.8
-for this reason); dc arm for this cell was likewise not separately evaled (—).
-Re-run to full budget if this cell matters; cpΔ 0.0017 is in-band with the rest.
+† go random_walk cdl: this cell's run (jobid 47233) erred at ~14.5k of its 15k
+step budget (its resume never checkpointed), so the eval uses `best_model.pt`
+from ~14.5k steps — i.e. ~97% of the 15k the sibling go cells (dfs/random,
+total_steps=15000) trained, so held_ppl 4.022 IS comparable, just genuinely the
+highest of go's cdl cells. dc arm for this cell was not separately evaled (—).
+cpΔ 0.0017 is in-band with the rest.
 
 - **community_pack cpΔ is near-noise across every traversal for all 7 langs** (cdl ≤ 0.022, several
   negative for zig) — same story as the sweeps and Python/Java: without a RepoBench-style benchmark,
