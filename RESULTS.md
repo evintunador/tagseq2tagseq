@@ -253,19 +253,23 @@ community_pack experimental Δ for cross_doc_link (cpΔ; dc is ~0 by constructio
 | javascript | random | 4.337 | 4.229 | 0.013 |
 | go | bfs | 3.726 | 3.838 | 0.0018 |
 | go | dfs | 3.780 | 3.786 | 0.0016 |
-| go | random_walk | — | 4.022† | 0.0017† |
+| go | random_walk | —† | 3.926 | 0.0014 |
 | go | random | 3.788 | 3.757 | 0.0009 |
 | typescript | bfs | 4.252 | 4.197 | 0.0097 |
 | typescript | dfs | 4.170 | 4.164 | 0.0097 |
 | typescript | random_walk | 4.165 | 4.138 | 0.0092 |
 | typescript | random | 4.068 | 4.053 | 0.0039 |
 
-† go random_walk cdl: this cell's run (jobid 47233) erred at ~14.5k of its 15k
-step budget (its resume never checkpointed), so the eval uses `best_model.pt`
-from ~14.5k steps — i.e. ~97% of the 15k the sibling go cells (dfs/random,
-total_steps=15000) trained, so held_ppl 4.022 IS comparable, just genuinely the
-highest of go's cdl cells. dc arm for this cell was not separately evaled (—).
-cpΔ 0.0017 is in-band with the rest.
+† go random_walk cdl: the original run (jobid 47233) erred at ~14.5k steps AND,
+after `max_optimizer_steps` was later flipped to `null`, would auto-derive a
+16260/30760-step LR horizon that breaks comparability with the 15000-step
+siblings. Re-run FROM SCRATCH 2026-07-31 with `max_optimizer_steps: 15000`
+pinned (`configs/go_ablation/go_random_walk_cdl_15k.yaml`, run
+run_20260730_202920_283979) — clean 15000-step schedule
+(cooldown_starts_at_step=9000, identical to dfs/random). held_ppl 3.926 / cpΔ
+0.0014 are now full-budget, LR-matched, comparable numbers. The dc arm for this
+one cell was not separately re-run (—); dc held_ppl is single-doc and mask-
+independent, so it tracks the other go dc cells (~3.7–3.8).
 
 - **community_pack cpΔ is near-noise across every traversal for all 7 langs** (cdl ≤ 0.022, several
   negative for zig) — same story as the sweeps and Python/Java: without a RepoBench-style benchmark,
