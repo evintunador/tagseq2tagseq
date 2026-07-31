@@ -23,9 +23,10 @@ The defaults mirror ``configs/arxiv_cross_doc.yaml`` (BFS traversal,
 ``stochastic_latex_comment_prefix`` layout, arxiv link detector) but every knob
 is overridable on the CLI.
 
-Run it (must use the mic2 env + data_registry PYTHONPATH, like training):
+Run it through the synced uv environment (no PYTHONPATH needed — the package is
+installed editable via ``uv sync``):
 
-    python visualize_llm_input.py \\
+    uv run python visualize_llm_input.py \\
         --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random \\
         --num-packs 2 --token-budget 8192
 

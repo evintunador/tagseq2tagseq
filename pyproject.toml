@@ -5,21 +5,99 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tagseq2tagseq"
 version = "0.1.0"
+requires-python = ">=3.10"
 dependencies = [
-    "torch",
+    # cu128 build to match the cluster's CUDA driver — see [tool.uv] torch index
+    # below. Generic PyPI torch resolves to a build that warns "driver too old".
+    "torch==2.10.0",
     "numpy",
+    "tqdm",
+    "pyarrow",
+    "tiktoken",
+    "matplotlib",
+    # Triton fused-linear-CE kernel used by the default training loss
+    # (tunalab-nlp's FusedLinearCELoss, instantiated unconditionally in
+    # model/modules/training_module.py).
+    "liger-kernel",
     "tunalab>=0.1.12",
     "tunalab-common>=0.1.5",
     "tunalab-nlp>=0.5.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# rapidfuzz powers the optional "edit_distance" title-match strategy in
+# eval/title_index.py; the tests exercise it, so it lives in the dev extra.
+dev = ["pytest", "rapidfuzz"]
+# Corpus-building / data-extraction pipeline only (not needed to train or eval).
+# tree-sitter + per-language grammars drive the build-time import/link extractors.
+data = [
+    "datasets",
+    "networkx",
+    "tree-sitter",
+    "tree-sitter-python",
+    "tree-sitter-go",
+    "tree-sitter-java",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-rust",
+    "tree-sitter-kotlin",
+    "tree-sitter-dart",
+    "tree-sitter-zig",
+]
 
+# ---------------------------------------------------------------------------
+# The three tunalab* packages are not published to any index — they live in a
+# sibling checkout of the tunalab repo. Point uv at that checkout as editable
+# path sources so `uv sync` wires them up automatically, with no PYTHONPATH or
+# `sys.path` hacks. Edit these paths if your tunalab checkout lives elsewhere.
+# ---------------------------------------------------------------------------
+[tool.uv.sources]
+tunalab = { path = "../tunalab", editable = true }
+tunalab-common = { path = "../tunalab/catalogs/common", editable = true }
+tunalab-nlp = { path = "../tunalab/catalogs/nlp", editable = true }
+# Pull torch from the CUDA 12.8 wheel index so we get the +cu128 build that
+# matches the cluster driver, not the generic PyPI build.
+torch = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# ---------------------------------------------------------------------------
+# Package discovery. `namespaces = true` is REQUIRED: `tunalab.train_loops`
+# extends the external `tunalab` package (which uses pkgutil.extend_path), so
+# it must stay a namespace package — a local `tunalab/__init__.py` would shadow
+# the real one. The explicit exclude list keeps the data-artifact trees
+# (wiki_articles/, pretokenized_datasets/, test fixtures, generated reports)
+# out of the wheel; without it, setuptools globs hundreds of artifact dirs into
+# the editable import map.
+# ---------------------------------------------------------------------------
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["data", "data.*", "eval", "eval.*", "model", "model.*", "tunalab", "tunalab.*"]
+namespaces = true
+include = [
+    "data*",
+    "model*",
+    "eval*",
+    "kernels*",
+    "optimizers*",
+    "tunalab*",
+]
+exclude = [
+    "data.wiki_articles*",
+    "data.wiki_articles_enwikisource*",
+    "data.pretokenized_datasets*",
+    "data.cache*",
+    "data.graph_harness.fixtures_data*",
+    "eval.benchmark_harness.reports*",
+    "tests*",
+    "*.tests",
+    "*.tests.*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Repo root on the path so tests can import root-level entry-point modules
+# (main.py, generate.py, eval_checkpoints.py, …) that are scripts, not packages.
 pythonpath = ["."]

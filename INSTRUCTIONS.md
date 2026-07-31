@@ -4,6 +4,40 @@ Full instructions for data preparation, training, and generation. See [README.md
 
 ---
 
+## Setup
+
+This repo is a proper [uv](https://docs.astral.sh/uv/) package. **You do not need to
+set `PYTHONPATH` or run from the repo root** — `uv sync` installs `data`, `model`,
+`eval`, `kernels`, `optimizers`, and the `tunalab*` packages editable, so `import
+model`, `import kernels`, etc. resolve from any directory.
+
+```bash
+# One-time setup — creates .venv and installs everything (incl. cu128 torch)
+uv sync
+
+# Data-extraction pipeline (datasets/networkx) — only if building corpora
+uv sync --extra data
+
+# Tests
+uv sync --extra dev
+```
+
+Run anything through the synced environment with `uv run`:
+
+```bash
+uv run python main.py --config configs/baseline.yaml
+uv run pytest tests/ -q
+```
+
+The three `tunalab*` dependencies are not published to an index — they are editable
+path installs pointing at a **sibling `tunalab/` checkout** (`../tunalab`, i.e.
+`/fss/evin_t/tunalab`). If your tunalab checkout lives elsewhere, edit the paths in
+`[tool.uv.sources]` in `pyproject.toml`. `torch` is pinned to the cu128 build via the
+`pytorch-cu128` index (matches the cluster driver); generic PyPI torch warns "driver
+too old".
+
+---
+
 ## Available Checkpoints
 
 > **All checkpoint paths below are broken.** They were trained against the old normalization scheme (identifier hashes derived from the canonical form, not the raw string). New checkpoints must be trained against the re-processed datasets before generation examples here will work.
