@@ -428,7 +428,16 @@ def run_community_pack_perplexity(
             split, len(graph), max_packs,
         )
 
-        token_budget = getattr(model, "max_seq_len", None)
+        # Resolve the pack token budget from the backbone (TS2TSModel has no
+        # top-level .max_seq_len, and the backbone exposes .max_seq_len directly,
+        # NOT a HF-style .config.max_position_embeddings). The old chain fell all
+        # the way through to the 2048 default, silently packing at 2048 tokens
+        # regardless of the trained 32768 — which collapsed long-doc sources
+        # (arxiv: median 14.7k tok/doc) to a handful of scoreable packs (n=5) and
+        # under-packed every other source too. Mirror score_doc's resolution.
+        token_budget = getattr(getattr(model, "backbone", None), "max_seq_len", None)
+        if token_budget is None:
+            token_budget = getattr(model, "max_seq_len", None)
         if token_budget is None:
             try:
                 token_budget = model.backbone.config.max_position_embeddings
