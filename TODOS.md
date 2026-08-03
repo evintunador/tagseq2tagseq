@@ -94,6 +94,24 @@ so root generation attends to fabricated content. If the intent is "resolve
 existing citations, don't fabricate them", prompt-link processing should force
 `corpus_only` semantics. Confirm intended behavior before changing.
 
+### Per-token detector routing within one mixed-syntax document ("Tier 2") — OUT OF SCOPE (future direction)
+Deferred and explicitly **out of scope for this project** — recorded as an interesting
+future direction, not a work item here. `CompositeLinkDetector` (built 2026-08-01,
+`model/graph_traversal/composite_link_detector.py`) dispatches ONE sub-detector *per
+document*, chosen by identifier/content sniff. A single document that genuinely **mixes
+link syntaxes** — e.g. a markdown article embedding a `\cite{}`, a literate-programming
+file interleaving prose links and code imports, or a README with both `[text](url)` and
+fenced code `import`s — is classified by its dominant language and detected with that one
+sub-detector, so the minority syntax's links are missed. A proper fix is **per-token (or
+per-span) detector routing within one sequence**: segment the document by language region
+(fenced code blocks, LaTeX environments, etc.) and run the matching detector on each
+region, merging the results. This is the deferred "Tier 2" from the merged-corpus design
+([[merged-corpus-build]]). No current use case needs it — qualitative single-root
+generation and the single-language benchmark ports are all dominant-language — and it
+would add real complexity (region segmentation, offset bookkeeping across regions,
+cross-firing between adjacent regions). Revisit only if a downstream task requires
+faithful multi-syntax detection inside one document.
+
 ### TheStack (Python) link resolution in generation is unsupported
 `generate.py` / `model/generation_loop.py` resolve a detected link to a corpus doc
 via `corpus.has_document(target)` (exact → detector-key → optional fuzzy cascade).
@@ -108,6 +126,32 @@ so corpus hits never fire on a multi-repo dataset. See the NOTE in
 corpus so identifiers match, or (b) make the import detector emit repo-qualified
 identifiers when a repo context is available. Until then, Python-link generation
 falls back to generate/skip per `link_retrieval_mode` (no corpus fetch).
+
+### Merged-model (composite) link RESOLUTION across all code sources (filed 2026-08-01)
+`CompositeLinkDetector` (built 2026-08-01) closes link *detection* for merged-model
+generation — it routes per-document to the right sub-detector, so links in wiki /
+arxiv / all 9 code languages are all detected (verified: cross-distribution smoke,
+10/11 sources fire in their own syntax). But *resolution* — turning a detected
+`target_str` into an actual corpus fetch via `corpus.has_document(target)` — is a
+SEPARATE, still-open step, and it generalizes the Python-specific note above to every
+code source. The same structural key-format mismatch applies: the code detectors emit
+relative / repo-*un*qualified targets (python `chess/board.py`, ts `src/util/helper`,
+rust `crate::net::tcp`, dart `lib/models/user.dart`, …) while a multi-repo corpus's
+`raw_identifier`s are repo-qualified (`owner/repo:...` / `owner/repo@...`). Wiki and
+arxiv resolve fine (target == identifier); code sources never hit on a multi-repo
+corpus. So merged-model generation today can DETECT a code link but not FETCH its
+target — it falls back to generate/skip per `link_retrieval_mode`.
+Fix options (same shape as the Python note, applied corpus-wide): (a) generate against
+a SINGLE-repo corpus per language (`data/make_repo_corpus.py`) so identifiers match the
+detectors' relative keys; or (b) thread a repo context into `detect_links_for_doc` /
+the composite so it can emit repo-qualified targets; or (c) add a source-aware
+resolution index in `PretokCorpus` that matches on the detector-key form
+(`index_doc_span`) per source rather than the raw identifier. Option (c) is the most
+general and mirrors how the training/eval match already works (`_match_links_to_docs`
+uses `index_doc_span`). Note the composite already implements per-source
+`index_doc_span`, so a resolution index keyed on it is the natural hook. Until done,
+use `--link-retrieval-mode link_but_skip` (detect-only) for merged-model smokes, or a
+single-repo corpus for real code retrieval. Detection is DONE; this is resolution only.
 
 ---
 

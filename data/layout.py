@@ -455,6 +455,13 @@ _DETECTOR_INFERENCE_LAYOUT = {
     "dart":     "slash_comment_prefix_eos",
     "arxiv":    "latex_comment_prefix",
     "null":     "eos",
+    # A merged-model run uses one global inference layout for the ROOT document;
+    # '#' is a valid Python comment AND a markdown heading, so identifier_prefix
+    # is the safe default. Override per run via config ``inference_layout_policy``
+    # to match the root document's own language (e.g. slash_comment for a code
+    # root). Fetched aux docs get their layout from the same policy — acceptable
+    # for qualitative generation; a per-doc layout would be the Tier-2 follow-up.
+    "composite": "identifier_prefix_eos",
 }
 
 
