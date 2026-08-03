@@ -211,12 +211,36 @@ class LimitedDataLoader:
 
     Creates a fresh islice on each call to ``__iter__``, so the underlying
     loader can be iterated more than once (e.g. repeated validation passes).
+
+    ``rewind_each_iter`` (VAL ONLY): a BucketedPackDataset is a *stateful*
+    generator — it mutates ``_bucket_consumed``/``_global_accum_step`` as it
+    yields and does NOT give those packs back. Used as a val loader, each pass
+    (every ``val_interval`` steps) would resume where the previous pass stopped
+    and, once a small val schedule (e.g. zig val = 25 packs) is drained, fall
+    through to the "advance to next epoch" branch and RAISE "All pre-computed
+    epoch dirs exhausted" — the step-500 crash that killed the merged_v2 runs.
+    Rewinding to the captured initial state before every pass fixes that AND
+    makes each pass score the SAME deterministic subset (comparable across
+    checkpoints). Do NOT set this for the training loader: training relies on
+    the persistent state to walk the full epoch across many __iter__ calls and
+    to resume mid-epoch from latest.pt.
     """
-    def __init__(self, loader: DataLoader, max_batches: int) -> None:
+    def __init__(self, loader: DataLoader, max_batches: int,
+                 rewind_each_iter: bool = False) -> None:
         self.loader = loader
         self.max_batches = max_batches
+        self._rewind = rewind_each_iter
+        self._init_state = None
+        if rewind_each_iter:
+            ds = getattr(loader, "dataset", None)
+            if ds is not None and hasattr(ds, "get_state"):
+                self._init_state = ds.get_state()
 
     def __iter__(self):
+        if self._rewind and self._init_state is not None:
+            ds = self.loader.dataset
+            if hasattr(ds, "set_state"):
+                ds.set_state(self._init_state)
         return itertools.islice(iter(self.loader), self.max_batches)
 
     @property
@@ -765,8 +789,12 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             rank=0,
             world_size=1,
         )
+        # rewind_each_iter: BucketedPackDataset is stateful; without a per-pass
+        # rewind, repeated val passes drain it and eventually raise "epoch dirs
+        # exhausted" (the step-500 merged_v2 crash). Reset to initial state each
+        # pass → no exhaustion + identical deterministic subset every checkpoint.
         return LimitedDataLoader(DataLoader(_ds, batch_size=None, num_workers=0),
-                                 max_batches=val_steps)
+                                 max_batches=val_steps, rewind_each_iter=True)
 
     cfg_val_dirs       = cfg.get('data', {}).get('val_dirs', {})       # {name: path}
     cfg_val_epoch_dirs = cfg.get('data', {}).get('val_epoch_dirs', {}) # {name: [dir,...]}
@@ -1289,6 +1317,13 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     atomic_feature_kwargs['save_latest_interval'] = int(
         cfg['train_loop'].get('save_latest_interval') or 0
     )
+    # Absolute base step (resumed_steps on --resume-from, 0 fresh) so the loop records
+    # ABSOLUTE step in checkpoint metadata. Without it a resumed run saves its local
+    # step count and a resume-of-that (yield-watcher relaunch) rewinds to ~0. This is a
+    # DECLARED kwonly arg of the multi_val_bucketed feature (so it passes smart_train's
+    # allowlist AND is part of that feature's kwarg-set — selected only when provided,
+    # which we always do here).
+    atomic_feature_kwargs['start_step'] = int(resumed_steps)
     # Profiling: inject profile_* knobs into the shared kwargs so profile_training
     # is selected and composed alongside the other atomic features (grad_accum,
     # val, checkpointing, etc.) by the LLM compiler.  profile_run=False is the

@@ -821,12 +821,56 @@ def score_completion_with_context_docs(
     return nll
 
 
+def link_to_target_from_graph_edges(doc_spans) -> Dict[int, List[int]]:
+    """Build a ``link_to_target`` grant map from the pack's KNOWN graph edges
+    (Option B), rather than re-detecting links from text.
+
+    For a merged multi-source model there is no single text detector that fires
+    across all sources (a markdown detector finds nothing in code, etc.), so the
+    correct cross-doc signal for held-out community/test packs comes from the
+    ground-truth edges the graph already carries: each span's
+    ``outgoing_identifiers`` names the docs it links to. We grant WHOLE-DOC
+    attention from a source doc to every linked target that appears earlier in
+    the pack (DAG rule), keyed at the source doc's start so
+    ``whole_doc_grant=True`` lights the whole source region.
+
+    This is also the hook for the planned edge-dropout ablation: subsample the
+    entries of the returned dict (0/25/75% of links kept) to trace how graph
+    density extrapolates to model quality — dropping from the KNOWN edge set,
+    not from detected text.
+
+    Returns ``{source_span.start: [target_doc_id, ...]}`` (pack-local doc ids),
+    matching CrossDocLinkMaskCreator's link_to_target contract.
+    """
+    id_to_span = {s.normed_identifier: s for s in doc_spans}
+    link_to_target: Dict[int, List[int]] = {}
+    for span in doc_spans:
+        # Key the grant just INSIDE the source doc, not at span.start. The mask
+        # grants attention to the target for queries in [link_pos, source.end)
+        # (whole_doc_grant=False, as trained). Keyed at span.start the grant region
+        # begins at the doc boundary and, under causality, the scored BODY tokens
+        # (later in the doc) do NOT gain the grant — empirically max|grant-dc|=0.
+        # Keying one past the start lets the whole body attend to the target
+        # (max|grant-dc| becomes large, i.e. the grant actually fires). This mirrors
+        # a real import near the top of the file granting the rest of the doc.
+        link_pos = min(span.start + 1, max(span.start, span.end - 1))
+        for oid in getattr(span, "outgoing_identifiers", ()):  # graph edges
+            tgt = id_to_span.get(oid)
+            if tgt is None:
+                continue                      # target not co-packed
+            if tgt.start >= link_pos:
+                continue                      # DAG: target must precede the grant
+            link_to_target.setdefault(link_pos, []).append(tgt.doc_id)
+    return link_to_target
+
+
 def score_doc_with_context(
     model,
     batch: Dict[str, Any],
     layout_policy: Optional[DocLayoutPolicy] = None,
     device: str = "cuda",
     mask_type: Optional[str] = None,
+    grants_from_graph_edges: bool = False,
 ) -> Dict[str, float]:
     """Score body tokens of docs that have incoming cross-doc edges within the pack.
 
@@ -898,8 +942,16 @@ def score_doc_with_context(
     if not doc_spans:
         return {"mean_nll": 0.0, "num_tokens": 0}
 
-    # Single forward pass over the full packed sequence.
-    logits = model.forward_inference(tokens_tensor, doc_spans, mask_type=mask_type)  # [1, T, V]
+    # Single forward pass over the full packed sequence. For a merged multi-source
+    # model, resolve cross-doc grants from the pack's KNOWN graph edges (Option B)
+    # instead of re-detecting text with the model's single (wrong-for-most-sources)
+    # detector. Passing link_to_target makes CrossDocLinkMaskCreator use it verbatim
+    # (it only re-detects when link_to_target is None). doc_causal ignores it.
+    fwd_kwargs = {}
+    if grants_from_graph_edges and mask_type != "doc_causal":
+        fwd_kwargs["link_to_target"] = link_to_target_from_graph_edges(doc_spans)
+    logits = model.forward_inference(tokens_tensor, doc_spans, mask_type=mask_type,
+                                     **fwd_kwargs)  # [1, T, V]
     log_probs = F.log_softmax(logits[0].float(), dim=-1)  # [T, V]
 
     nll_list: List[float] = []

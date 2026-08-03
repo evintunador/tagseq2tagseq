@@ -469,8 +469,12 @@ def run_community_pack_perplexity(
         skipped = 0
 
         for batch in itertools.islice(dataset, max_packs):
+            # Option B: resolve cross-doc grants from the pack's KNOWN graph edges,
+            # not by re-detecting text (a merged model's single detector fires on
+            # only one source → Δ=0 on all others). doc_causal baseline ignores it.
             result_cross = score_doc_with_context(
                 model, batch, layout_policy, device, mask_type=None,
+                grants_from_graph_edges=True,
             )
             result_base = score_doc_with_context(
                 model, batch, layout_policy, device, mask_type="doc_causal",
