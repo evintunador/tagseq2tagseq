@@ -19,7 +19,7 @@
 
 set -euo pipefail
 : "${DS:?dataset}"; : "${DET:?link-detector}"; : "${LAYOUT:?layout-policy}"; : "${KEEP:?keep-frac}"
-: "${SEED:=0}"; : "${STRAT:=bfs}"
+: "${SEED:=0}"; : "${STRAT:=bfs}"; : "${NEPOCHS:=1}"
 
 REPO=/fss/evin_t/tagseq2tagseq-sparsity   # worktree has the keep_frac precompute knob
 ART=/fss-data/evin_t/tagseq2tagseq_artifacts
@@ -30,11 +30,11 @@ OUT=$ART/sparsity_scaling/schedules/${DS}_bfs_${KTAG}
 cd "$REPO"
 source /fss/evin_t/tagseq2tagseq/.venv/bin/activate
 
-echo "[$(date)] sparsity precompute $DS keep=$KEEP (det=$DET layout=$LAYOUT) -> $OUT"
+echo "[$(date)] sparsity precompute $DS keep=$KEEP nepochs=$NEPOCHS (det=$DET layout=$LAYOUT) -> $OUT"
 python precompute_epochs.py \
     --dataset-dir "$TRAIN" \
     --output-dir  "$OUT" \
-    --n-epochs 1 \
+    --n-epochs "$NEPOCHS" \
     --strategy "$STRAT" \
     --local-seq-len 32768 \
     --n-buckets 32 \
