@@ -50,23 +50,48 @@ def _group_color(ds):
     return C_CODE if ds in CODE else C_TEXT
 
 
-def load_sweep(sweep_dir):
-    """dataset -> {keep_frac: {mean_delta, ci_low, ci_high, n_packs}} (edge mode)."""
+def load_sweep(sweep_dir, extra_seed_dirs=None):
+    """dataset -> per-keep aggregate over seeds (edge mode).
+
+    Reads sweep_dir (the primary, usually seed 0) and optionally extra_seed_dirs
+    (additional seeds for the interior keeps). Per (dataset, keep_frac) collects
+    every seed's mean_delta and reports the across-seed mean + min/max spread, so
+    the density line carries a subsample-noise band. When only one seed exists for
+    a keep, the band collapses to the point (and falls back to that seed's bootstrap
+    CI if present).
+    """
+    dirs = [sweep_dir] + list(extra_seed_dirs or [])
+    # dataset -> keep_frac -> list of (mean_delta, ci_lo, ci_hi, n)
+    acc = {}
+    for sd in dirs:
+        for f in sorted(glob.glob(os.path.join(sd, "*.json"))):
+            d = json.load(open(f))
+            ds = d["dataset"]
+            for r in d["rows"]:
+                if r.get("keep_mode") != "edge":
+                    continue
+                acc.setdefault(ds, {}).setdefault(r["keep_frac"], []).append(
+                    (r["mean_delta"], r.get("delta_ci_low", r["mean_delta"]),
+                     r.get("delta_ci_high", r["mean_delta"]), r.get("n_packs")))
     out = {}
-    for f in sorted(glob.glob(os.path.join(sweep_dir, "*.json"))):
-        d = json.load(open(f))
-        ds = d["dataset"]
-        edge = sorted([r for r in d["rows"] if r.get("keep_mode") == "edge"],
-                      key=lambda r: r["keep_frac"])
-        if not edge:
-            continue
+    for ds, byk in acc.items():
+        keeps = sorted(byk)
+        delta, lo, hi, nseed = [], [], [], []
+        for k in keeps:
+            ds_vals = [x[0] for x in byk[k]]
+            m = float(np.mean(ds_vals))
+            delta.append(m)
+            nseed.append(len(ds_vals))
+            if len(ds_vals) > 1:
+                # across-seed spread (min/max of the seed means)
+                lo.append(min(ds_vals)); hi.append(max(ds_vals))
+            else:
+                # single seed → use its bootstrap CI
+                lo.append(byk[k][0][1]); hi.append(byk[k][0][2])
         out[ds] = {
-            "keeps": [r["keep_frac"] for r in edge],
-            "delta": [r["mean_delta"] for r in edge],
-            "lo": [r.get("delta_ci_low", r["mean_delta"]) for r in edge],
-            "hi": [r.get("delta_ci_high", r["mean_delta"]) for r in edge],
-            "delta1": next((r["mean_delta"] for r in edge if r["keep_frac"] == 1.0), None),
-            "n": edge[-1].get("n_packs"),
+            "keeps": keeps, "delta": delta, "lo": lo, "hi": hi, "nseed": nseed,
+            "delta1": next((delta[i] for i, k in enumerate(keeps) if k == 1.0), None),
+            "n": byk[keeps[-1]][0][3] if keeps else None,
         }
     return out
 
@@ -140,14 +165,17 @@ def panel_cross_dataset(ax, solo, merged, eff):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sweep-dir", required=True, help="Solo sweep dir ({ds}.json).")
+    ap.add_argument("--sweep-dir", required=True, help="Solo sweep dir ({ds}.json), primary seed.")
+    ap.add_argument("--seedband-dir", default=None, action="append",
+                    help="Extra seed sweep dir(s) to aggregate into a subsample-noise band "
+                         "(repeatable). Interior keeps get min/max spread across seeds.")
     ap.add_argument("--merged-dir", default=None, help="Optional merged-model sweep dir.")
     ap.add_argument("--effective", required=True, help="effective_density.json.")
     ap.add_argument("--out", required=True, help="Output path stem (writes .png and .svg).")
     ap.add_argument("--title", default="Graph-sparsity scaling law (Phase 1, eval-time)")
     a = ap.parse_args()
 
-    solo = load_sweep(a.sweep_dir)
+    solo = load_sweep(a.sweep_dir, extra_seed_dirs=a.seedband_dir)
     merged = load_sweep(a.merged_dir) if a.merged_dir else None
     eff = json.load(open(a.effective))
     if not solo:
