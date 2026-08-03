@@ -247,6 +247,16 @@ class BucketedPackDataset(IterableDataset):
         """Reconstruct a full batch dict from a PackRecord."""
         placements = _record_to_placements(pack)
         layout = self._get_layout(getattr(pack, "layout_name", ""))
+        # Per-pack epoch for the stochastic prefix coin-flip. A pack budgeted under
+        # source-epoch K (merge_packs stamps layout_epoch=K when unioning multiple
+        # epochs) MUST materialize under K's coin-flip, else different docs get
+        # prefixes than were budgeted and T != token_budget. -1 (single-epoch, or
+        # pre-field parquet) → use the loader's current epoch (they coincide).
+        # Always set explicitly (not just when _le>=0): the cached policy is shared,
+        # so a prior pack's per-pack epoch could otherwise leak into a -1 pack.
+        _le = getattr(pack, "layout_epoch", -1)
+        if hasattr(layout, "set_epoch"):
+            layout.set_epoch(_le if _le >= 0 else self._epoch_idx)
         batch = build_packed_batch(self.graph, self.backend, layout, placements)
         T = batch["tokens"].shape[-1]
         budget = getattr(self, '_token_budget', None)
