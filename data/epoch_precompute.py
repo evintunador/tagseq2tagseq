@@ -362,6 +362,15 @@ class _WorkerConfig:
     worker_idx:       int
     epoch_idx:        int = 0        # propagated to stochastic layout policies
     use_analytical:   bool = True    # compute kv_block_count in worker (CPU, ~1ms/pack)
+    # Graph-sparsity ablation (train-time edge dropout). When keep_frac < 1.0 the
+    # resolved link_to_target is seeded-subsampled BEFORE recording links AND
+    # computing kv_block_count, so both the baked grants and the density buckets
+    # reflect the reduced density (honest DDP load-balance per keep-fraction).
+    # keep_frac == 0.0 → no grants baked → the epoch trains as doc_causal.
+    # See eval.scoring.subsample_link_to_target + memory [[graph-sparsity-scaling-law]].
+    keep_frac:        float = 1.0
+    keep_seed:        int = 0
+    keep_mode:        str = "edge"
 
 
 def _worker_fn(
@@ -445,6 +454,15 @@ def _worker_fn(
         else:
             links = detector.detect_links(tokens[0])
         link_to_target = creator._match_links_to_docs(links, doc_spans)
+
+        # Graph-sparsity edge dropout: subsample the resolved grants BEFORE they
+        # are baked + before kv_block_count, so density buckets match the grants.
+        if config.keep_frac < 1.0:
+            from eval.scoring import subsample_link_to_target
+            link_to_target = subsample_link_to_target(
+                link_to_target, config.keep_frac,
+                seed=config.keep_seed, mode=config.keep_mode,
+            )
 
         link_end_positions = list(link_to_target.keys())
         link_target_doc_ids = [link_to_target[k] for k in link_end_positions]
@@ -600,6 +618,9 @@ class EpochPrecomputer:
         order_mode: str = "prefer_targets_first",
         device: Optional[torch.device] = None,
         use_analytical: bool = True,
+        keep_frac: float = 1.0,
+        keep_seed: int = 0,
+        keep_mode: str = "edge",
     ) -> None:
         self.dataset_dir = dataset_dir
         self.token_budget = token_budget
@@ -611,6 +632,9 @@ class EpochPrecomputer:
         self.max_grants = max_grants
         self.order_mode = order_mode
         self.use_analytical = use_analytical
+        self.keep_frac = keep_frac
+        self.keep_seed = keep_seed
+        self.keep_mode = keep_mode
         self.device = device or (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
@@ -654,6 +678,9 @@ class EpochPrecomputer:
                 worker_idx=i,
                 epoch_idx=epoch_idx,
                 use_analytical=self.use_analytical,
+                keep_frac=self.keep_frac,
+                keep_seed=self.keep_seed,
+                keep_mode=self.keep_mode,
             )
             for i in range(self.n_workers)
         ]
@@ -707,6 +734,9 @@ class EpochPrecomputer:
             "link_detector": self.link_detector,
             "layout_policy": self.layout_policy_name,
             "max_grants":    self.max_grants,
+            "keep_frac":     self.keep_frac,
+            "keep_seed":     self.keep_seed,
+            "keep_mode":     self.keep_mode,
         }
         with open(out_path / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)

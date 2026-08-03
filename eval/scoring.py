@@ -821,12 +821,170 @@ def score_completion_with_context_docs(
     return nll
 
 
+def link_to_target_from_graph_edges(doc_spans) -> Dict[int, List[int]]:
+    """Build a ``link_to_target`` grant map from the pack's KNOWN graph edges
+    (Option B), rather than re-detecting links from text.
+
+    For a merged multi-source model there is no single text detector that fires
+    across all sources (a markdown detector finds nothing in code, etc.), so the
+    correct cross-doc signal for held-out community/test packs comes from the
+    ground-truth edges the graph already carries: each span's
+    ``outgoing_identifiers`` names the docs it links to. We grant WHOLE-DOC
+    attention from a source doc to every linked target that appears earlier in
+    the pack (DAG rule), keyed at the source doc's start so
+    ``whole_doc_grant=True`` lights the whole source region.
+
+    This is also the hook for the planned edge-dropout ablation: subsample the
+    entries of the returned dict (0/25/75% of links kept) to trace how graph
+    density extrapolates to model quality — dropping from the KNOWN edge set,
+    not from detected text.
+
+    Returns ``{source_span.start: [target_doc_id, ...]}`` (pack-local doc ids),
+    matching CrossDocLinkMaskCreator's link_to_target contract.
+    """
+    id_to_span = {s.normed_identifier: s for s in doc_spans}
+    link_to_target: Dict[int, List[int]] = {}
+    for span in doc_spans:
+        # Key the grant just INSIDE the source doc, not at span.start. The mask
+        # grants attention to the target for queries in [link_pos, source.end)
+        # (whole_doc_grant=False, as trained). Keyed at span.start the grant region
+        # begins at the doc boundary and, under causality, the scored BODY tokens
+        # (later in the doc) do NOT gain the grant — empirically max|grant-dc|=0.
+        # Keying one past the start lets the whole body attend to the target
+        # (max|grant-dc| becomes large, i.e. the grant actually fires). This mirrors
+        # a real import near the top of the file granting the rest of the doc.
+        link_pos = min(span.start + 1, max(span.start, span.end - 1))
+        for oid in getattr(span, "outgoing_identifiers", ()):  # graph edges
+            tgt = id_to_span.get(oid)
+            if tgt is None:
+                continue                      # target not co-packed
+            if tgt.start >= link_pos:
+                continue                      # DAG: target must precede the grant
+            link_to_target.setdefault(link_pos, []).append(tgt.doc_id)
+    return link_to_target
+
+
+def subsample_link_to_target(
+    link_to_target: Dict[int, List[int]],
+    keep_frac: float,
+    seed: int = 0,
+    mode: str = "edge",
+) -> Dict[int, List[int]]:
+    """Seeded subsample of a cross-doc grant map — the graph-sparsity instrument.
+
+    Interpolates graph density by keeping only ``keep_frac`` of the resolved
+    cross-doc links, holding the packing (docs, tokens, order) COMPLETELY fixed.
+    Applied at mask-build time, so:
+      * keep_frac == 1.0  → identical to the input (the ``cross_doc_link`` arm).
+      * keep_frac == 0.0  → empty map → the mask degenerates to ``doc_causal``
+                            EXACTLY (same-doc attention only, no grants).
+    The line "cross-doc Δ vs kept fraction" (and, pooled across datasets of
+    differing inherent density, "Δ vs measured density") extrapolates the payoff
+    of a denser corpus than the ones we can build. See memory
+    [[graph-sparsity-scaling-law]].
+
+    Determinism: a single global RNG seeded by ``(seed, pack fingerprint)`` picks
+    which edges survive. The fingerprint is derived from the grant map's own
+    contents (sorted edges), so (a) the same pack + same seed always drops the
+    same edges (reproducible), while (b) different packs drop different edges (no
+    systematic "always drop the first-listed target" bias). Two eval runs at the
+    same seed are bit-identical; changing the seed reshuffles which edges survive.
+
+    Args:
+        link_to_target: Grant map {link_pos -> [target_doc_id, ...]} (e.g. from
+            link_to_target_from_graph_edges, or a pack's baked link_to_target).
+        keep_frac: Fraction of links to KEEP, in [0.0, 1.0].
+        seed: Global experiment seed; combined with the pack fingerprint.
+        mode: Subsample unit.
+            "edge" (default, the density-law backbone): flatten to individual
+                (link_pos, target_doc) edges and keep round(keep_frac * n_edges)
+                of them, chosen uniformly. Uniform thinning — preserves graph
+                shape, scales every node's degree down. The clean density knob.
+            "node": drop whole TARGET docs (percolation-style). Keep
+                round(keep_frac * n_targets) of the distinct target_doc_ids;
+                every edge into a dropped target vanishes at once. A robustness
+                check for structure-sensitivity (do hubs matter more than raw
+                edge count?), NOT the primary density line. Run eval-only.
+
+    Returns:
+        A NEW grant map with the surviving edges (input is not mutated). Keys with
+        no surviving targets are omitted. Order within each value list is
+        preserved from the input.
+    """
+    if mode not in ("edge", "node"):
+        raise ValueError(f"mode must be 'edge' or 'node', got {mode!r}")
+    if not (0.0 <= keep_frac <= 1.0):
+        raise ValueError(f"keep_frac must be in [0, 1], got {keep_frac}")
+
+    # Fast paths — also make the endpoints exact (no RNG rounding drift).
+    if keep_frac >= 1.0:
+        return {k: list(v) for k, v in link_to_target.items()}
+    if keep_frac <= 0.0:
+        return {}
+
+    # Flatten to a canonical, sorted edge list so the fingerprint + selection are
+    # order-independent of dict insertion order.
+    edges: List[tuple] = []
+    for link_pos in sorted(link_to_target):
+        for tgt in link_to_target[link_pos]:
+            edges.append((link_pos, tgt))
+    edges.sort()
+    if not edges:
+        return {}
+
+    # Per-pack deterministic seed: mix the global seed with a stable fingerprint
+    # of the edge set (Python's hash() is salted per-process, so use a fixed
+    # hash over the sorted edges instead).
+    fp = hash_of_edges(edges)
+    rng = np.random.RandomState((int(seed) * 2654435761 + fp) & 0xFFFFFFFF)
+
+    out: Dict[int, List[int]] = {}
+    if mode == "edge":
+        n_keep = int(round(keep_frac * len(edges)))
+        if n_keep <= 0:
+            return {}
+        keep_idx = rng.choice(len(edges), size=n_keep, replace=False)
+        for i in sorted(keep_idx):
+            lp, tgt = edges[i]
+            out.setdefault(lp, []).append(tgt)
+    else:  # node
+        targets = sorted({tgt for _, tgt in edges})
+        n_keep = int(round(keep_frac * len(targets)))
+        if n_keep <= 0:
+            return {}
+        keep_idx = rng.choice(len(targets), size=n_keep, replace=False)
+        kept_targets = {targets[i] for i in keep_idx}
+        for lp, tgt in edges:
+            if tgt in kept_targets:
+                out.setdefault(lp, []).append(tgt)
+    return out
+
+
+def hash_of_edges(edges: List[tuple]) -> int:
+    """Stable 32-bit fingerprint of a sorted edge list (order-sensitive).
+
+    Deterministic across processes (unlike the salted builtin ``hash``), so the
+    per-pack subsample seed in ``subsample_link_to_target`` is reproducible run
+    to run. FNV-1a over the (link_pos, target) integer pairs.
+    """
+    h = 0x811C9DC5
+    for lp, tgt in edges:
+        for val in (int(lp), int(tgt)):
+            h ^= (val & 0xFFFFFFFF)
+            h = (h * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
 def score_doc_with_context(
     model,
     batch: Dict[str, Any],
     layout_policy: Optional[DocLayoutPolicy] = None,
     device: str = "cuda",
     mask_type: Optional[str] = None,
+    grants_from_graph_edges: bool = False,
+    keep_frac: float = 1.0,
+    keep_seed: int = 0,
+    keep_mode: str = "edge",
 ) -> Dict[str, float]:
     """Score body tokens of docs that have incoming cross-doc edges within the pack.
 
@@ -846,6 +1004,15 @@ def score_doc_with_context(
         mask_type: Optional mask type override passed to forward_inference.
             None uses the model's default. Pass 'doc_causal' for the
             baseline condition in contrastive evaluation.
+        grants_from_graph_edges: resolve cross-doc grants from the pack's KNOWN
+            graph edges (Option B) instead of re-detecting text.
+        keep_frac: graph-sparsity ablation — keep only this fraction of the
+            resolved grants (seeded, per-pack deterministic). 1.0 = full density
+            (default), 0.0 ≡ doc_causal. Only applied when grants_from_graph_edges
+            and mask_type != 'doc_causal'. See subsample_link_to_target.
+        keep_seed: global seed for the keep_frac subsample.
+        keep_mode: 'edge' (per-edge thinning, the density line) or 'node'
+            (per-target-doc dropout, robustness check).
 
     Returns:
         {"mean_nll": float, "num_tokens": int}
@@ -898,8 +1065,23 @@ def score_doc_with_context(
     if not doc_spans:
         return {"mean_nll": 0.0, "num_tokens": 0}
 
-    # Single forward pass over the full packed sequence.
-    logits = model.forward_inference(tokens_tensor, doc_spans, mask_type=mask_type)  # [1, T, V]
+    # Single forward pass over the full packed sequence. For a merged multi-source
+    # model, resolve cross-doc grants from the pack's KNOWN graph edges (Option B)
+    # instead of re-detecting text with the model's single (wrong-for-most-sources)
+    # detector. Passing link_to_target makes CrossDocLinkMaskCreator use it verbatim
+    # (it only re-detects when link_to_target is None). doc_causal ignores it.
+    fwd_kwargs = {}
+    if grants_from_graph_edges and mask_type != "doc_causal":
+        l2t = link_to_target_from_graph_edges(doc_spans)
+        if keep_frac < 1.0:
+            # Graph-sparsity ablation: keep only keep_frac of the resolved grants.
+            # keep_frac == 0.0 → empty map → mask degenerates to doc_causal exactly.
+            l2t = subsample_link_to_target(
+                l2t, keep_frac, seed=keep_seed, mode=keep_mode,
+            )
+        fwd_kwargs["link_to_target"] = l2t
+    logits = model.forward_inference(tokens_tensor, doc_spans, mask_type=mask_type,
+                                     **fwd_kwargs)  # [1, T, V]
     log_probs = F.log_softmax(logits[0].float(), dim=-1)  # [T, V]
 
     nll_list: List[float] = []

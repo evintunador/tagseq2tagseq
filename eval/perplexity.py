@@ -372,6 +372,9 @@ def run_community_pack_perplexity(
     split: str = "val_community",
     max_packs: int = 500,
     device: str = "cuda",
+    keep_frac: float = 1.0,
+    keep_seed: int = 0,
+    keep_mode: str = "edge",
 ) -> Dict[str, Any]:
     """Score cross-doc attention on live-packed held-out community nodes.
 
@@ -392,13 +395,22 @@ def run_community_pack_perplexity(
             subgraph whose internal link structure is intact.
         max_packs: Maximum number of packs to score.
         device: Device for token tensors.
+        keep_frac: graph-sparsity ablation — fraction of resolved cross-doc
+            grants to keep on the cross_doc arm (seeded, per-pack deterministic).
+            1.0 = full density (default); 0.0 makes the cross arm ≡ doc_causal.
+            The doc_causal baseline is unaffected. See
+            eval.scoring.subsample_link_to_target and memory
+            [[graph-sparsity-scaling-law]].
+        keep_seed: global seed for the keep_frac subsample.
+        keep_mode: 'edge' (per-edge density line) or 'node' (per-target-doc
+            robustness check).
 
     Returns:
         Dict with the same keys as ``run_pack_contrastive_perplexity``:
         strategy, n_packs, mean_nll_cross_doc, mean_nll_baseline,
         mean_delta, delta_ci_low, delta_ci_high, cross_doc_ci_low,
         cross_doc_ci_high, baseline_ci_low, baseline_ci_high.
-        Also includes ``split`` key.
+        Also includes ``split``, ``keep_frac``, ``keep_mode`` keys.
     """
     dataset_dir = Path(dataset_dir)
     split_dir = dataset_dir / "splits" / split
@@ -428,7 +440,16 @@ def run_community_pack_perplexity(
             split, len(graph), max_packs,
         )
 
-        token_budget = getattr(model, "max_seq_len", None)
+        # Resolve the pack token budget from the backbone (TS2TSModel has no
+        # top-level .max_seq_len, and the backbone exposes .max_seq_len directly,
+        # NOT a HF-style .config.max_position_embeddings). The old chain fell all
+        # the way through to the 2048 default, silently packing at 2048 tokens
+        # regardless of the trained 32768 — which collapsed long-doc sources
+        # (arxiv: median 14.7k tok/doc) to a handful of scoreable packs (n=5) and
+        # under-packed every other source too. Mirror score_doc's resolution.
+        token_budget = getattr(getattr(model, "backbone", None), "max_seq_len", None)
+        if token_budget is None:
+            token_budget = getattr(model, "max_seq_len", None)
         if token_budget is None:
             try:
                 token_budget = model.backbone.config.max_position_embeddings
@@ -460,8 +481,13 @@ def run_community_pack_perplexity(
         skipped = 0
 
         for batch in itertools.islice(dataset, max_packs):
+            # Option B: resolve cross-doc grants from the pack's KNOWN graph edges,
+            # not by re-detecting text (a merged model's single detector fires on
+            # only one source → Δ=0 on all others). doc_causal baseline ignores it.
             result_cross = score_doc_with_context(
                 model, batch, layout_policy, device, mask_type=None,
+                grants_from_graph_edges=True,
+                keep_frac=keep_frac, keep_seed=keep_seed, keep_mode=keep_mode,
             )
             result_base = score_doc_with_context(
                 model, batch, layout_policy, device, mask_type="doc_causal",
@@ -494,12 +520,15 @@ def run_community_pack_perplexity(
         base_ci  = calculate_bootstrap_ci(base_nlls)
 
         logger.info(
-            "split=%r  n=%d  delta=%.4f [%.4f, %.4f]  cross=%.4f  base=%.4f",
-            split, n, mean_delta, delta_ci[0], delta_ci[1], mean_cross, mean_base,
+            "split=%r  keep=%.2f(%s)  n=%d  delta=%.4f [%.4f, %.4f]  cross=%.4f  base=%.4f",
+            split, keep_frac, keep_mode, n, mean_delta, delta_ci[0], delta_ci[1],
+            mean_cross, mean_base,
         )
 
         return {
             "split":               split,
+            "keep_frac":           float(keep_frac),
+            "keep_mode":           keep_mode,
             "n_packs":             n,
             "mean_nll_cross_doc":  mean_cross,
             "mean_nll_baseline":   mean_base,

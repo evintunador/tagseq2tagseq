@@ -74,6 +74,18 @@ def main() -> None:
                              "sequential) instead of the default CPU analytical method "
                              "(Method C, ~1ms/pack parallel-in-workers). Only useful for "
                              "post-hoc verification that C==B on a real dataset.")
+    parser.add_argument("--keep-frac",      type=float, default=1.0,
+                        help="Graph-sparsity edge dropout: fraction of resolved cross-doc "
+                             "grants to KEEP, seeded per-pack (1.0=full, 0.0=doc_causal). "
+                             "Subsampled before recording links AND kv_block_count, so "
+                             "density buckets reflect the reduced density. See memory "
+                             "[[graph-sparsity-scaling-law]].")
+    parser.add_argument("--keep-seed",      type=int, default=0,
+                        help="Global seed for the keep-frac subsample.")
+    parser.add_argument("--keep-mode",      type=str, default="edge",
+                        choices=["edge", "node"],
+                        help="Subsample unit: 'edge' (per-grant, the density line) or "
+                             "'node' (per-target-doc, robustness).")
     parser.add_argument("--log-level",      type=str, default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
@@ -102,6 +114,9 @@ def main() -> None:
         order_mode=args.order_mode,
         device=device,
         use_analytical=not args.gpu_kv_pass,
+        keep_frac=args.keep_frac,
+        keep_seed=args.keep_seed,
+        keep_mode=args.keep_mode,
     )
 
     for i in range(args.n_epochs):
