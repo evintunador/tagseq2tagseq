@@ -87,6 +87,7 @@ class BucketedPackDataset(IterableDataset):
         world_size: int,
         start_state: Optional[BucketState] = None,
         encode_fn=None,
+        shuffle_within_bucket_seed: Optional[int] = None,
     ) -> None:
         super().__init__()
         self.epoch_dirs = epoch_dirs
@@ -95,6 +96,16 @@ class BucketedPackDataset(IterableDataset):
         self.layout = layout
         self.rank = rank
         self.world_size = world_size
+        # VAL sampling: packs are stored bucket-sorted then pack_id-sorted, and
+        # pack_id is SOURCE-SEQUENTIAL in a merged corpus (wiki 0..N, stack next,
+        # …). So the first pack drawn from each density bucket is always the same
+        # earliest-source pack, and a capped val (val_steps << |packs|) always
+        # scores that same source-biased head. Shuffling each bucket's pack list
+        # by a FIXED seed makes the capped sample source-unbiased AND stable
+        # across checkpoints (same seed → same subset). None = keep pack_id order
+        # (training path — order there is irrelevant since it consumes the whole
+        # epoch). Set for val loaders.
+        self._shuffle_within_bucket_seed = shuffle_within_bucket_seed
 
         # Per-pack layout support (mixed-source corpora): packs may carry a
         # layout_name naming the DocLayoutPolicy they were budgeted under.
@@ -182,6 +193,13 @@ class BucketedPackDataset(IterableDataset):
                 bucket_lists[r.bucket_id].append(r)
             for b in bucket_lists:
                 bucket_lists[b].sort(key=lambda r: r.pack_id)
+            if self._shuffle_within_bucket_seed is not None:
+                # Source-unbiased, deterministic (seeded) shuffle within each
+                # bucket so a capped val samples a density-stratified, source-mixed
+                # subset rather than the earliest-source head. Per-bucket seed
+                # offset so buckets don't shuffle in lockstep.
+                for b in bucket_lists:
+                    random.Random(self._shuffle_within_bucket_seed + b).shuffle(bucket_lists[b])
 
             bucket_seq = _make_bucket_sequence(n_buckets, seed=self._epoch_idx)
 

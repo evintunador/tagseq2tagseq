@@ -117,9 +117,9 @@ train_loop:
   warmup_steps: 300
   cooldown_frac: 0.4
   min_lr_ratio: 0.1
-  val_steps: 20
-  val_interval: 250
-  save_latest_interval: 250
+  val_steps: 400
+  val_interval: 1000
+  save_latest_interval: 1000
   atomic_feature_kwargs:
     norm_clip_value: 1.0
     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)

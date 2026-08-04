@@ -788,11 +788,18 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             layout=layout_policy,
             rank=0,
             world_size=1,
+            # Source-unbiased, deterministic within-bucket shuffle: packs are
+            # pack_id-sorted = source-sequential, so a capped val otherwise always
+            # scores the earliest-source head. Fixed seed → density-stratified,
+            # source-mixed, and identical across checkpoints.
+            shuffle_within_bucket_seed=1234,
         )
         # rewind_each_iter: BucketedPackDataset is stateful; without a per-pass
-        # rewind, repeated val passes drain it and eventually raise "epoch dirs
-        # exhausted" (the step-500 merged_v2 crash). Reset to initial state each
-        # pass → no exhaustion + identical deterministic subset every checkpoint.
+        # rewind, repeated val passes advance through DIFFERENT packs each pass
+        # (drift misread as overfitting) and eventually raise "epoch dirs
+        # exhausted". Reset to initial state each pass → same deterministic subset
+        # every checkpoint. Together with the shuffle + a larger val_steps this
+        # gives an unbiased, stable, representative val sample.
         return LimitedDataLoader(DataLoader(_ds, batch_size=None, num_workers=0),
                                  max_batches=val_steps, rewind_each_iter=True)
 
