@@ -232,6 +232,31 @@ job_to_rundir_config() {
   printf '%s\t%s\n' "$rundir" "$cfg"
 }
 
+# Extract the ORIGINAL run's main.py args to REPLAY on resume, EXCLUDING the
+# launcher-managed ones (--config, --resume-from) which are supplied separately.
+# Without this, ad-hoc CLI overrides (e.g. --data.epoch_dirs pointing at a
+# subsampled graph-sparsity schedule) are silently dropped on auto-resume, so the
+# job reloads its checkpoint but trains on the CONFIG's baked (wrong) data — a
+# corrupted hybrid. See memory [[sparsity-watcher-resume-bug]]. Backward-compatible:
+# a run launched with only --config yields no extra args (identical old behavior).
+extra_main_args() {
+  local rundir="$1"
+  local inv; inv="$(find "$rundir/reproducibility" -name run_invocation.json 2>/dev/null | head -1)"
+  [ -z "$inv" ] && return 0
+  python3 - "$inv" <<'PYEOF' 2>/dev/null
+import json, sys, shlex
+argv = json.load(open(sys.argv[1]))["argv"]
+# argv[0] is "main"; drop it. Strip --config VALUE and --resume-from VALUE.
+out, i = [], 1
+while i < len(argv):
+    a = argv[i]
+    if a in ("--config", "--resume-from"):
+        i += 2; continue
+    out.append(a); i += 1
+print(" ".join(shlex.quote(x) for x in out))
+PYEOF
+}
+
 # Relaunch one yielded job on a given clean node, resuming if a checkpoint exists.
 relaunch_yielded() {
   local rundir="$1" cfg="$2" node="$3"
@@ -239,11 +264,14 @@ relaunch_yielded() {
   local ck="$rundir/checkpoints/latest.pt"
   local resume_args=""
   if [ -f "$ck" ]; then resume_args="--resume-from $ck"; fi
+  # Replay the original invocation's extra overrides (e.g. --data.epoch_dirs) so
+  # resume trains on the SAME data the run was launched with, not the config default.
+  local extra; extra="$(extra_main_args "$rundir")"
   local tag; tag="$(basename "$cfg" .yaml)"
-  note "  RELAUNCH $tag on $node $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")"
+  note "  RELAUNCH $tag on $node $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
   TS2TS_SHARED_COMPILE_CACHE="/tmp/ts2ts_relaunch_$(basename "$rundir")" \
     "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node 8 \
-    --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args \
+    --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args $extra \
     >> "$STATE_DIR/relaunch.log" 2>&1
 }
 
