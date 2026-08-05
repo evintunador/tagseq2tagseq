@@ -1,0 +1,33 @@
+{
+  "port": "repobench_java",
+  "language": "java",
+  "max_examples": 500,
+  "tier2": {
+    "native": {
+      "port": "repobench_java",
+      "checkpoint": "?",
+      "n_examples": 500,
+      "scope": "native",
+      "n_dropped_no_use_site": 0,
+      "n_fired": 470,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 1.5650703046838612,
+      "mean_nll_flat": 1.7924758124249176,
+      "mean_nll_placebo": 1.83300165250066,
+      "delta_real": 0.22740550774105628,
+      "delta_real_ci": [
+        0.19495362633671373,
+        0.2614247942623151
+      ],
+      "delta_placebo": -0.04052584007574245,
+      "placebo_separation": 0.26793134781679884,
+      "placebo_separation_ci": [
+        0.23709293196033768,
+        0.3003781072651496
+      ],
+      "failures": [],
+      "passed": true,
+      "fire_rate": 0.94
+    }
+  }
+}
