@@ -793,6 +793,11 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             # scores the earliest-source head. Fixed seed → density-stratified,
             # source-mixed, and identical across checkpoints.
             shuffle_within_bucket_seed=1234,
+            # Val: exhausting the (single) epoch = "scored the whole val set", a
+            # clean stop — NOT an error. val_steps can exceed a small val schedule's
+            # pack count (e.g. zig val = 25 < 400), which otherwise raised mid-val
+            # and killed the run.
+            raise_on_exhaustion=False,
         )
         # rewind_each_iter: BucketedPackDataset is stateful; without a per-pass
         # rewind, repeated val passes advance through DIFFERENT packs each pass

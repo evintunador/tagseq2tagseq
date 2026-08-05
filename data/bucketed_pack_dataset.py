@@ -88,6 +88,7 @@ class BucketedPackDataset(IterableDataset):
         start_state: Optional[BucketState] = None,
         encode_fn=None,
         shuffle_within_bucket_seed: Optional[int] = None,
+        raise_on_exhaustion: bool = True,
     ) -> None:
         super().__init__()
         self.epoch_dirs = epoch_dirs
@@ -106,6 +107,10 @@ class BucketedPackDataset(IterableDataset):
         # (training path — order there is irrelevant since it consumes the whole
         # epoch). Set for val loaders.
         self._shuffle_within_bucket_seed = shuffle_within_bucket_seed
+        # Training: raise when packs run out before the step budget (fail loud).
+        # Val: stop cleanly on exhaustion (scored the whole val set) — val_steps may
+        # exceed a small val schedule's pack count.
+        self._raise_on_exhaustion = raise_on_exhaustion
 
         # Per-pack layout support (mixed-source corpora): packs may carry a
         # layout_name naming the DocLayoutPolicy they were budgeted under.
@@ -235,6 +240,13 @@ class BucketedPackDataset(IterableDataset):
             self._global_accum_step = 0
             self._bucket_consumed = {}
 
+        if not self._raise_on_exhaustion:
+            # VAL loaders: exhausting the (single) epoch just means "scored the whole
+            # val set" — a normal stop, not an error. Return so the DataLoader ends
+            # cleanly. (Training keeps raising to fail loud when packs run out before
+            # the step budget.) Needed because val_steps can exceed a small val
+            # schedule's pack count (e.g. zig val = 25 packs < val_steps).
+            return
         raise RuntimeError(
             f"All pre-computed epoch dirs exhausted after {len(self.epoch_dirs)} epochs. "
             "Re-run precompute_epochs.py to generate more."
