@@ -44,6 +44,26 @@ specialization, at far less per-domain data.
 Native-scope (no tree-sitter) cross-check on the same ckpt agreed: py +0.153, java
 +0.227 (vs specialist native ~+0.092/~+0.108). use_line sharpens as expected.
 
+### Scaling 3.9B → 8B: the cross-doc Δ is FLAT (already saturated at 355M tok/dom)
+use_line Δnll_real, same ports, 3.9B (355M/dom) vs 8B (727M/dom):
+
+| port | 3.9B | 8B |
+|---|---|---|
+| repobench_python | +0.172 | +0.162 |
+| repobench_java | +0.228 | +0.247 |
+| internal_kotlin | +0.256 | +0.265 |
+| internal_typescript | +0.620 | +0.564 |
+| internal_go | +0.373 | +0.426 |
+| internal_rust | +0.097 | +0.105 |
+| internal_javascript | +0.121 | +0.129 |
+
+Differences are within noise, no consistent direction — the cross-doc benefit is
+**already present at full strength at 355M tok/domain and does NOT grow 3.9B→8B.**
+Honest framing: the diversity advantage over specialists is NOT a "keeps scaling"
+effect; it's a fixed, large effect present from the smallest rung. (16B point pending
+to confirm it stays flat vs eventually moves.) NOTE: rungs are independent samples,
+not nested, so small wiggles could be resampling; the flatness is the signal.
+
 ### Why this is the interesting result
 The naive expectation is that mixing data distributions mainly buys *base-LM* quality
 (more varied text → better general modeling). Here the effect on the **cross-doc
