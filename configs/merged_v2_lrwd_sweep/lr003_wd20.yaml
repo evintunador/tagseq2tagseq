@@ -1,3 +1,5 @@
+# LR/WD SWEEP probe (full 3.9B schedule = 14790 steps, real cooldown; ranks vs
+# the base 3.9B run at 0.003/0.1). Merged corpus. muon_lr=0.003 muon_wd=0.2.
 # merged_all_v2 — 11 LINKED sources (NO fineweb), 3.9B COMPUTE-MATCHED control point.
 # Diversity-scaling experiment (see TODOS.md "Merge all datasets → diversity-scaling
 # experiment" + memory [[merged-corpus-build]]). This is the cross_doc_link ARM; its
@@ -16,7 +18,7 @@ data:
   order_mode: 'prefer_targets_first'
   doc_budget: null
   train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all_v2/splits/train
-  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all_v2/epoch_8b
+  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all_v2/epoch_3p9b
 
   # Per-source val: kept SEPARATE (not merged) for a per-link-type signal. Precomputed
   # (not live) so packs carry baked per-source links + layout_name — correct regardless
@@ -100,7 +102,7 @@ model:
 
 optimizer:
   type: 'muon'
-  muon_wd: 0.1           # small-run recipe
+  muon_wd: 0.2           # small-run recipe
   adamw_wd: 0.005
   momentum: 0.95
   muon_beta2: 0.95
@@ -113,7 +115,7 @@ optimizer:
 
 train_loop:
   epochs: 1
-  max_optimizer_steps: 30340   # ~8B tok @ world=8 (30518 steps × 262144)
+  max_optimizer_steps: 14790   # ~3.9B tok @ world=8 × 262144 tok/step — COMPUTE-MATCH to small runs
   warmup_steps: 300
   cooldown_frac: 0.4
   min_lr_ratio: 0.1

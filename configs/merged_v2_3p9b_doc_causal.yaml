@@ -117,8 +117,8 @@ train_loop:
   warmup_steps: 300
   cooldown_frac: 0.4
   min_lr_ratio: 0.1
-  val_steps: 400
-  val_interval: 1000
+  val_steps: 200
+  val_interval: 2000
   save_latest_interval: 1000
   atomic_feature_kwargs:
     norm_clip_value: 1.0
