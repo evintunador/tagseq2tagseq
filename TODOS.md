@@ -528,3 +528,21 @@ docs/crossdoc_benchmark_port_harness_DESIGN.md verdict summary). Open items:
   former. NOT registered in ports/__init__.py until unblocked.
 - Then wire the passing ports into eval_checkpoints.py as first-class benchmarks
   (like repobench_cross_doc) so sweeps report them automatically.
+
+### Resume latent bugs (found 2026-08-07 by resume-corruption audit; NOT the 16B-degradation cause)
+Two real latent resume bugs surfaced while diagnosing the 16B degradation (which was
+actually LR-too-hot-at-length, not resume). Neither affected the merged_v2 runs
+(explicit max_optimizer_steps + 0 skipped), but both are footguns:
+1. **NULL-path cooldown never engages.** `main.py:1195` `total_steps_original =
+   max_steps_for_cooldown + resumed_steps`. On `max_optimizer_steps: null` (auto-derive
+   from n_packs) resume, the 552-560 `remaining = _max - resumed_steps` adjustment is
+   skipped (it needs an explicit `_max`), so the auto-derive re-computes FULL and +R
+   inflates total to FULL+R → cooldown_start pushed past run end → LR pinned at PEAK for
+   the whole post-resume segment, compounding per resume. Untie can also never fire.
+   Fix: apply `remaining = derived - resumed_steps` after auto-derive too, OR decouple
+   the schedule-total (always FULL) from the loader-cap (FULL - resumed_steps).
+2. **Silent optimizer partial-restore + bf16 mantissa truncation.** `main.py:1100`
+   `load_state_dict_full` leaves name/shape-mismatched params cold and only logs at
+   INFO; a skipped Muon bf16 param also gets its mantissa low-bits zeroed
+   (`optimizers/muon.py:154-156`), truncating fp32-effective → bf16 that resume. Add a
+   hard `assert skipped == []` on resume (currently only INFO-logged).
