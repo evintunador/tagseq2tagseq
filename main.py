@@ -730,11 +730,28 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 break
         if _ok and _total_packs > 0:
             _derived = _total_packs // (max(1, dist.world_size) * max(1, _accum))
-            cfg.setdefault('train_loop', {})['max_optimizer_steps'] = _derived
+            # Resume semantics: _derived is the FULL run length (absolute optimizer
+            # steps counting from step 0). We must store REMAINING (full − resumed_steps)
+            # in max_optimizer_steps, exactly as the explicit-max path does in §1b. That
+            # way the LimitedDataLoader cap (~L742) is "batches left to load this run",
+            # and total_steps_original (= max_steps_for_cooldown + resumed_steps, ~L1195)
+            # reconstructs the full length for the WSD schedule. Storing the full length
+            # here instead would double-count resumed_steps at ~L1195, inflating the
+            # cooldown target so a resumed run holds peak LR too long. On a fresh run
+            # resumed_steps=0, so remaining == _derived (unchanged behavior).
+            _remaining = _derived - resumed_steps
+            if _remaining <= 0:
+                raise ValueError(
+                    f"Checkpoint step ({resumed_steps}) >= auto-derived run length "
+                    f"({_derived}); nothing left to train."
+                )
+            cfg.setdefault('train_loop', {})['max_optimizer_steps'] = _remaining
             logger.info(
-                "Auto-derived max_optimizer_steps=%d from %d epoch_dir(s) "
-                "(%d total packs / world_size=%d / accum=%d). Enables LR cooldown + untie.",
+                "Auto-derived full run length=%d from %d epoch_dir(s) "
+                "(%d total packs / world_size=%d / accum=%d); max_optimizer_steps set to "
+                "%d remaining (resumed_steps=%d). Enables LR cooldown + untie.",
                 _derived, len(epoch_dirs), _total_packs, dist.world_size, _accum,
+                _remaining, resumed_steps,
             )
     max_optimizer_steps = cfg.get('train_loop', {}).get('max_optimizer_steps')
     if max_optimizer_steps is not None:
@@ -1105,7 +1122,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             len(restored), len(skipped),
         )
         if skipped:
-            logger.info("Resume: optimizer state NOT restored for: %s", sorted(skipped)[:20])
+            # A partial optimizer restore leaves the skipped params with COLD
+            # state (zero momentum/variance) while the rest resume warm — a
+            # silent, corrupting mismatch. Abort loudly rather than continue.
+            raise RuntimeError(
+                f"Optimizer resume incomplete: {len(skipped)} param(s) had no "
+                f"saved state (absent or shape-mismatched) and were left cold: "
+                f"{sorted(skipped)}. Refusing to continue with a partial "
+                f"optimizer restore — resume from a matching checkpoint."
+            )
 
         del resume_ckpt   # free ~1.8 GB
         resume_ckpt = None
