@@ -1,0 +1,35 @@
+# Deep-dive shortlist: direct comparators + artifacts we use. One agent per paper.
+# TIER 1 — closest methodological antecedents (train-on-structure / cross-doc attention / identifier-gen)
+caciularu2021cdlm        # CDLM: cross-document pretraining w/ cross-doc attention — sharpest overall
+yasunaga2022linkbert     # LinkBERT: pretrain on hyperlinked doc pairs
+shi2024incontext         # In-Context Pretraining: pack related docs, no cross-doc attn
+staniszewski2025structured # SPLiCe: repo/dir-structured packing, no attn along links
+zhao2024analysing        # sequence composition: cross-doc attention is HARMFUL finding
+yasunaga2022dragon       # DRAGON: joint LM+KG self-supervised pretraining
+liu2020kbert             # K-BERT: KG triples via attention-mask injection
+decao2021genre           # GENRE: autoregressive entity title w/ trie-constrained decode
+borgeaud2022retro        # RETRO: chunked cross-attention to retrieved neighbors (train-time)
+khandelwal2020knnlm      # kNN-LM: cache-as-datastore exemplar
+wu2022memorizing         # Memorizing Transformers: frozen kNN KV memory (the "mystery paper")
+dejong2022tome           # TOME/Mention Memory: precomputed corpus memory attention
+wu2022emat               # EMAT: frozen precomputed corpus KV memory via MIPS
+# TIER 2 — code-model poles (the central axis) + kernels/sparsity rivals
+guo2024deepseekcoder     # DeepSeek-Coder: import-topological file ordering (closest code prior art)
+guo2021graphcodebert     # GraphCodeBERT: dataflow edges as graph-guided attention (same mechanism)
+zhang2023repocoder       # RepoCoder: iterative inference-time repo retrieval
+cheng2024draco           # DraCo: dataflow-guided retrieval (closest inference-time import-graph analog)
+wu2024repoformer         # Repoformer / CrossCodeLongEval: selective retrieval
+yuan2025nsa              # DeepSeek Native Sparse Attention: natively-trained block sparsity
+lu2025moba               # Kimi MoBA: mixture of block attention (trained sparsity)
+wang2024flashmask        # FlashMask: column-wise sparse mask (can't express our A->B rects)
+pagliardini2023sparseflash # runtime sparse flash (content-driven vs graph-driven)
+# TIER 3 — headline benchmarks + training corpora WE USE + key eval/long-ctx contrasts
+liu2024repobench         # RepoBench: our headline code benchmark
+yang2018hotpotqa         # HotpotQA: our headline multi-hop benchmark source
+kocetkov2022stack        # The Stack: our code corpus
+saier2023unarxive        # unarXive 2022: our arXiv citation-graph corpus
+consonni2019wikilinkgraphs # WikiLinkGraphs: our wiki hyperlink-edge source
+taylor2022galactica      # Galactica: citation-prediction generation (closest "generated link fetches target")
+gutierrez2024hipporag    # HippoRAG: graph-as-memory (PPR) multi-hop, external at inference
+liu2024lostmiddle        # Lost in the Middle: positional utilization (motivates direct edge)
+xu2024retrievalmeetslong # retrieval-vs-long-context (central contrast)
