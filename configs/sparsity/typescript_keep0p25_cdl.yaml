@@ -59,7 +59,7 @@ optimizer:
 
 train_loop:
   epochs: 1
-  max_optimizer_steps: null  # auto-derive from epoch_dirs (was 15000; schedule capacity varies, hard cap could exceed it)
+  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
   warmup_steps: 300
   cooldown_frac: 0.4
   min_lr_ratio: 0.1
