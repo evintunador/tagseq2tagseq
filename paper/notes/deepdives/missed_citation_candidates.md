@@ -1,3 +1,13 @@
+# Missed-citation candidates from the deep-dive round
+
+Works cited by our comparator papers that are NOT in refs.bib, proposed by the deep-dive
+agents as potentially worth adding. **9 high-consensus / arXiv-verified entries have
+already been added to refs.bib** (abbas2023semdedup, chan2022datadistributional, feng2020codebert, geva2021ffnkeyvalue, lee2022deduplicating, min2019necessitate, muennighoff2023scaling, press2022alibi, xiong2020wklm). The rest below are unverified
+candidates — grep refs.bib and confirm the arXiv id before adding any. Priority tags (HIGH/MED/
+LOW) and the source paper are as proposed by the agents. Grouped by source paper.
+
+---
+
 ## from yasunaga2022linkbert (LinkBERT) — LOW priority (biomed/QA infra, only if we add those tracks)
 gu2021pubmedbert  2007.15779  BLURB benchmark / domain-specific pretraining
 jin2021medqa      2009.13081  MedQA-USMLE
@@ -66,3 +76,43 @@ du2022glm                 2103.10360  LOW — GLM blank-infilling attention mask
 lewis2021paq              2102.07033  MED — PAQ (65M QA pairs), the frozen-KV memory corpus; same RAG author lineage
 chen2022qamat             ?           LOW — QAMAT, concurrent QA-KV transformer
 geva2021ffnkeyvalue       2012.14913  MED — Transformer FFN layers are key-value memories (foundational for KV-memory framing)
+## from liu2024repobench (RepoBench)
+feng2020codebert          2002.08155  *** HIGH (2nd proposal: GraphCodeBERT + RepoBench) — foundational code-LM
+zhou2023docprompting      2207.05987  LOW — DocPrompting (retrieval from docs for code gen)
+## from yang2018hotpotqa (HotpotQA)
+min2019necessitate        1906.02900  MED — canonical "compositional questions solvable single-hop" shortcut paper (our multi-hop validity + placebo motivation)
+jiang2019avoiding         1906.07132  LOW — avoiding reasoning shortcuts in multi-hop
+chen2019understanding     1904.12106  LOW — understanding dataset design for multi-hop
+clark2018simple           1710.10723  LOW — BiDAF++ baseline architecture
+## from wang2024flashmask (FlashMask): no high-value adds (kernel slice already thorough)
+## from yuan2025nsa (NSA)  [NOTE: refs.bib dup yuan2025nsa removed; canonical key = yuan2025nativesparse]
+tang2024quest             2406.10774  MED — Quest (query-aware KV block selection); note NOT the data-selection "Quest"
+xiao2023streamingllm      2309.17453  MED — StreamingLLM attention sinks (always-keep initial blocks; ties to our sentinel-LSE guard)
+wu2024retrievalhead       2404.15574  LOW — retrieval heads
+## from kocetkov2022stack (The Stack)
+lee2022deduplicating      2107.06499  *** HIGH (4th proposal) — near-dedup improves LMs; = our known dedup gap
+kandpal2022deduplicating  2202.06539  MED — dedup mitigates memorization (contamination story)
+carlini2023quantifying    2202.07646  MED — quantifying memorization (leakage-protocol support)
+broder1997resemblance     -           LOW — MinHash origin (book/journal)
+## from liu2024lostmiddle (Lost in the Middle)
+press2022alibi            2108.12409  MED — ALiBi positional encoding; relevant to positions-across-packed-docs + used by a model here
+## from cheng2024draco: no confidently-missing refs
+## from wu2024repoformer (Repoformer)
+mallen2023whennottotrust  2212.10511  MED — when-not-to-retrieve (selective retrieval decision, mirrors our firing gate)
+kadavath2022knowwhattheyknow 2207.05221 LOW — models know what they know (self-eval)
+wang2023skr               2310.05002  LOW — self-knowledge-guided retrieval
+zhou2023docprompting      2207.05987  (dup w/ RepoBench proposal) — DocPrompting
+## from taylor2022galactica (Galactica)
+muennighoff2023scaling    2305.16264  *** HIGH — Scaling Data-Constrained LMs; formalizes repeated-tokens/multi-epoch (we train multi-epoch); directly shapes our budget claims
+aribandi2021ext5          2111.10952  LOW — ExT5 (prompt/task mixing)
+## from pagliardini2023sparseflash (SCFA)
+kitaev2020reformer        2001.04451  CHECK — appears inside SCFA note text; grep refs.bib (likely already present from A2 slice)
+andoni2015lsh             -           LOW — LSH theory
+## from xu2024retrievalmeetslong
+jiang2022retrievalasattention 2212.02027  MED — "Retrieval as Attention" (retrieval as computation inside one transformer — conceptually close)
+ratner2023parallelcontextwindows 2212.10947  LOW — Parallel Context Windows
+press2022alibi            2108.12409  (2nd proposal, w/ LostInMiddle) — ALiBi
+## from gutierrez2024hipporag
+sarthi2024raptor          2401.18059  MED — RAPTOR recursive tree summarization retrieval
+chen2024densex            2312.06648  LOW — Dense X / proposition retrieval
+press2023selfask          2210.03350  CHECK — Self-Ask; note refs has press2023bamboogle (same paper?) — verify before add
