@@ -1,0 +1,218 @@
+\section{Dataset construction and graph extraction}
+\label{app:datasets}
+
+Every corpus in this paper is reduced to the same intermediate object: a
+\emph{typed attributed graph} in which each node is a document (an article, a
+source file, or a paper) carrying its full text, and each directed edge is an
+in-corpus reference recovered from that text (a wikilink, an \texttt{import}, or
+a \texttt{\textbackslash cite}). The masks of \Cref{sec:method} consume this
+graph, so the fidelity of edge extraction bounds what the model can learn. The
+pipeline is uniform across modalities:
+\[
+\text{extract} \;\to\; \texttt{graph.jsonl}\;(+\text{content}) \;\to\;
+\text{pretokenize} \;\to\; \texttt{tokenized\_graph.jsonl}+\texttt{shard\_*.bin}
+\;\to\; \text{split}.
+\]
+Only extraction is modality-specific; normalization, pretokenization, and
+splitting are shared. A load-bearing invariant throughout is that
+\textbf{link positions are never stored}: the graph records only that an edge
+exists, and the token span realizing a link is re-detected at runtime by the
+online detectors (\Cref{app:linkdet}). Extraction and detection must therefore
+agree on what constitutes a link.
+
+\subsection{Per-modality edge extraction}
+
+\paragraph{Wikipedia (and Wikisource).}
+Extraction is two-stage and text-mediated. A dump extractor consumes the
+CirrusSearch JSON export, keeps namespace-0 articles, and writes one Markdown
+file per article, rewriting wikitext links \texttt{[[target|label]]} to Markdown
+\texttt{[label](target)} with the \emph{target left as the raw article title}
+(spaces preserved, no hashing). A second pass re-parses each file, extracts and
+URL-unquotes link targets, normalizes them (\Cref{app:datasets:norm}), and emits
+an edge \emph{iff} the normalized target is in the node set. Outgoing edges
+retain \emph{all} targets (unresolved ones survive as latent cross-source
+danglers), whereas incoming adjacency is restricted to in-set sources. The
+fraction of wikilinks that resolve to an in-corpus node is \emph{not logged}
+(\Cref{app:datasets:attack}).
+
+\paragraph{The Stack / Python.}
+Edges are \texttt{import} dependencies. A \texttt{tree-sitter} pass extracts
+\texttt{import} and \texttt{from~\ldots~import} statements from each file in The
+Stack \citep{kocetkov2022stack}; a hardcoded denylist (roughly three dozen names:
+the standard library plus ubiquitous third-party packages such as \texttt{numpy},
+\texttt{pandas}, \texttt{torch}, \texttt{django}) drops non-local modules. Each
+surviving reference is resolved to a file \emph{within the same repository} by
+walking dotted module paths (mapping \texttt{\_\_init\_\_} to its parent
+package), preferring an exact \texttt{.py} match, then an exact module match,
+then a prefix match. When several candidates remain the tie is broken by an
+\emph{unseeded} \texttt{random.choice}, so import resolution is \textbf{not
+deterministic across runs}. Only intra-repository edges are produced (node id
+\texttt{repo:path}), and repositories are hash-partitioned into 256 buckets so a
+repo is never split across shards. Files with fewer than two intra-repo links are
+then discarded.
+
+\paragraph{arXiv / unarXive.}
+Edges are citations, extracted from unarXive \citep{saier2020unarxive,
+saier2023unarxive}. Each \texttt{\textbackslash cite} is resolved by two
+mechanisms: unarXive's own arXiv-id annotations resolve a direct minority
+($\approx 14.5\%$), and an OpenAlex identifier map \citep{priem2022openalex}
+lifts total coverage to $\approx 66\%$. An edge is emitted only when the cited
+work resolves to an id \emph{present in the corpus}; citations that resolve
+outside the corpus are \emph{deleted from the text entirely} (no dangling marker,
+no edge), so the model never sees a citation it cannot follow, while in-corpus
+citations are rewritten to \texttt{\textbackslash cite\{title\}}. Title
+collisions are disambiguated by appending \texttt{ (arxiv:id)} and affect
+$\approx 0.13\%$ of citations.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{Per-corpus graph scale for the specific samples used here, after
+  extraction and filtering; these are as-built figures, not intrinsic corpus
+  properties. Wikipedia figures are post-resolution; the Stack figure is the
+  100M-file working set after the two-intra-repo-link filter, which retains
+  $28.7\%$ of files (this fraction grows with sample size---$5.3\%$/$25.1\%$/
+  $28.7\%$ at the 1M/10M/100M scales).}
+  \label{tab:datasets:scale}
+  \begin{tabular}{llrrr}
+    \toprule
+    Corpus & Edge type & Nodes & Edges & Mean out-deg. \\
+    \midrule
+    \texttt{enwiki}       & wikilink & 275{,}199 & 2{,}321{,}731 & 8.44 \\
+    \texttt{enwikisource} & wikilink & 662{,}058 &   114{,}523 & 0.17 \\
+    The Stack (Python)    & import   & 3{,}560{,}799 & 6{,}335{,}322 & 1.78 \\
+    arXiv / unarXive      & citation & \multicolumn{3}{c}{$\approx 66\%$ of \texttt{\textbackslash cite} resolved in-corpus} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The enwiki graph is dense (mean out-degree $8.44$) and enwikisource very sparse
+(mean $0.17$), consistent with the reference topology of WikiLinkGraphs
+\citep{consonni2019wikilinkgraphs}. On the 100M Stack sample, $\approx 34\%$ of
+nodes have zero in-degree and $\approx 25\%$ zero out-degree.
+
+\subsection{Identifier normalization}
+\label{app:datasets:norm}
+
+All modalities share one normalization scheme (\texttt{normalization.py}), the
+single source of truth for node identity. A normalized identifier is the
+concatenation
+\[
+\texttt{normed\_id} \;=\; \text{normalized\_body}\;\Vert\;\text{``\_''}\;\Vert\;\text{md5(raw)[:6]},
+\]
+where the body lowercases the string, maps spaces to underscores, replaces any
+character outside \texttt{[a-z0-9\_-]} with an underscore, collapses runs of
+underscores, and preserves existing hyphens. Per-flavor front-ends specialize the
+body (titles are capped at 193 characters; repository and package names split on
+\texttt{/} and \texttt{.} first). The trailing 6-character MD5 disambiguates
+strings that collide under the body rule---e.g.\ \texttt{"A+B"} and
+\texttt{"A-B"}, both bodies \texttt{a\_b}. One asymmetry matters: arXiv ids are
+\emph{version-stripped} to a canonical form \emph{before} hashing, so the hash is
+taken over the canonical id (not the raw string); this guarantees a paper node
+and every citation pointing at it produce the same identifier.
+
+The consequential subtlety is a \textbf{raw-vs-canonical asymmetry}. The hashed
+identifier is an \emph{internal} graph key, but the link targets that appear in
+document \emph{text}---a wikilink to \texttt{[[Alan Turing]]}, or a Stack node
+whose id embeds a raw file path---are the \emph{raw}, human-readable strings.
+The runtime detectors accordingly match on the raw surface form (the Markdown
+detector matches the raw title with spaces, not the hashed key), so node identity
+and link surface form live in two spaces reconciled only through normalization.
+If the normalization used at build time diverges by even one rule from that used
+at comparison or merge time, targets stop matching node ids, every edge is
+silently dropped, and the dataset comes out \emph{empty with no error raised}.
+This is why the normalization module is centralized and treated as immutable
+rather than forked per corpus.
+
+\subsection{Pretokenization}
+\label{app:datasets:pretok}
+
+Node text is tokenized with \texttt{tiktoken}'s GPT-2 BPE (vocabulary 50{,}257,
+stored as \texttt{uint16}). A pool of worker processes feeds a single writer over
+a multiprocessing queue---a deliberate single-writer design that avoids the
+interleaving deadlocks of a naive multi-writer scheme. Tokens are packed into
+binary shards with a 2\,GB default target, each prefixed by a 1024-byte header
+($256{\times}$\texttt{int32}) carrying a magic number, version, token count, and
+element size. The tokenized graph merges each node's metadata with the shard
+index, byte offset, and token length of its tokens. Consistent with the pipeline
+invariant, link positions are not stored; the span realizing each edge is
+re-detected at runtime (\Cref{app:linkdet}). This keeps the on-disk format
+compact and modality-agnostic, at the cost of requiring the detectors to
+reproduce exactly the link surface forms extraction assumed.
+
+\subsection{Graph splitting}
+\label{app:datasets:split}
+
+Splitting (\texttt{split\_graph.py}) partitions nodes into \texttt{train},
+\texttt{val\_random}, \texttt{val\_community}, \texttt{test\_random}, and
+\texttt{test\_community} (default 2.5\% per held-out split). Each split is written
+as a \emph{self-contained} directory with its own tokenized graph; crucially the
+token shards are \emph{shared} by absolute-path reference and never copied, so the
+five directories are cheap views over one set of shard bytes.
+
+The two held-out kinds differ in structure. The \texttt{*\_random} splits are a
+uniform sample of non-community nodes and carry no relational structure. The
+\texttt{*\_community} splits are ``community packs'': held-out connected subgraphs
+grown by \emph{bidirectional} BFS (following both out- and in-adjacency) from
+seed nodes drawn in \emph{randomized} order, with each community constrained to
+between 50 and 5{,}000 nodes; the pooled communities are shuffled and split 50/50
+into \texttt{val\_community} and \texttt{test\_community}. Because a community
+retains its intact intra-community link structure, validation loss on it reflects
+genuine cross-document traversal rather than isolated-document perplexity, which
+is the axis this paper cares about.
+
+In every split, edges are filtered to endpoints \emph{within the same split};
+any edge crossing a split boundary is severed. Membership is enforced at the node
+level (each node belongs to exactly one split), so although all splits share the
+same shard bytes, no held-out node's tokens are ever a training target and there
+is no token-level leakage through the shared shards. Source stratification is
+available as an option.
+
+\subsection{Points a reviewer should weigh}
+\label{app:datasets:attack}
+
+The construction choices most open to challenge:
+
+\begin{itemize}
+  \item \textbf{Non-deterministic import resolution.} The unseeded tie-break
+  means the Python graph is not reproducible run-to-run: two builds of the same
+  repositories can yield different edge sets. A seeded or lexicographic tie-break
+  would remove this.
+
+  \item \textbf{Weak, sampling-only deduplication.} We rely on the upstream
+  \texttt{the-stack-dedup} for code and perform \emph{no} additional dedup for
+  Wikipedia or arXiv. The only in-house measurement is a whitespace-normalized
+  prefix hash over a $\approx 1\%$ sample of Stack files, which is
+  \emph{reported, not filtered}. There is no cross-split near-duplicate check, so
+  a near-duplicate of a held-out document could remain in \texttt{train}; we do
+  not quantify this, and robust decontamination against paraphrased
+  near-duplicates \citep{yang2023rephrased} remains future work.
+
+  \item \textbf{Selection bias from the two-link filter.} Discarding files with
+  fewer than two intra-repo links removes the majority of Python files and
+  over-represents package-heavy repositories; the highest-degree nodes tend to be
+  \texttt{\_\_init\_\_.py} files and generated SDK code, which shapes what
+  ``following an import'' means in aggregate.
+
+  \item \textbf{Unmeasured Wikipedia resolution rate.} The wikilink resolution
+  fraction is never logged, so we cannot state how many links became edges.
+  Worse, a legacy fallback path invents link ids using a \emph{second}, different
+  \texttt{md5[:6]} scheme (hashing a differently-cleaned string) that does not
+  agree with the shared normalizer; any target routed through it is
+  \emph{guaranteed} to dangle. The topology in \Cref{tab:datasets:scale} is thus
+  a lower bound on the true reference density.
+
+  \item \textbf{Incomplete import denylist and external arXiv coverage.} The
+  denylist is not exhaustive: an unlisted third-party package (e.g.\
+  \texttt{scipy}, \texttt{pydantic}) is treated as an intra-repo target and can
+  produce spurious unresolved references. Separately, arXiv coverage climbs from
+  $\approx 14.5\%$ to $\approx 66\%$ only via the external OpenAlex map
+  \citep{priem2022openalex}, and therefore inherits that map's completeness and
+  versioning.
+\end{itemize}
+
+The multi-source merge used for the diversity experiment (11 corpora unified by
+normalized identifier with per-node source provenance and collision-safe id
+remapping) reuses exactly the extraction, normalization, and pretokenization
+machinery above; its treatment belongs with that experiment and is deferred to
+\Cref{app:recipe} rather than repeated here.

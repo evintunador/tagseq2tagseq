@@ -1,0 +1,78 @@
+\section{Inherited architecture and training recipe}
+\label{app:recipe}
+
+The backbone architecture and optimization recipe are \emph{not} contributions of
+this work: they are adopted, largely unchanged, from the open ``NanoGPT speedrun''
+lineage \citep{jordan2024moddednanogpt,karpathy2022nanogpt}, and held fixed across
+all mask conditions so that any measured difference is attributable to the
+cross-document attention structure (\Cref{sec:method}) rather than to the backbone.
+We document the inherited components here for reproducibility and to make explicit
+which parts of the system are prior art.
+
+\paragraph{Architecture.}
+The reported models are decoder-only transformers of width $1024$, $24$ layers,
+$8$ attention heads (head dimension $128$), a $32{,}768$-token context, and the
+byte-level GPT-2 vocabulary padded to $50{,}304$. Blocks are pre-norm with the
+following speedrun-derived components: rotary position embeddings over global packed
+positions \citep{su2021roformer}, applied half-truncated (only the lower half of each
+head's dimensions is rotated) with an unusually small base frequency of $1024$;
+parameter-free RMSNorm \citep{zhang2019rmsnorm}; query--key normalization before RoPE
+and the attention dot product \citep{henry2020qknorm}; a squared-ReLU (``Primer'')
+feed-forward block \citep{so2021primer}; U-Net-style skip connections between the
+first and second halves of the layer stack \citep{ronneberger2015unet}; an embedding
+``highway'' that re-injects the raw token embedding at each layer; per-sublayer
+learnable residual scaling in the manner of ReZero/Fixup
+\citep{bachlechner2020rezero,zhang2019fixup}; zero-initialized output projections and
+$\mu$P-style initialization \citep{yang2022tensorprogramsv}; weight tying between the
+input embedding and the output head, released by a deferred untie at two-thirds of
+training; and logit soft-capping at $30$ \citep{gemmateam2024gemma2}.
+
+The backbone additionally carries three optional prior-art components that do not
+enter the reported comparisons: per-token \emph{value-embedding banks} in the
+value-residual sense \citep{zhou2024valueresidual}, an \emph{n}-gram/bigram hash
+embedding \citep{roy2022ngrammer,svenstrup2017hashembeddings}, and a multi-token
+prediction (MTP) auxiliary loss \citep{gloeckle2024mtp}. The hash embedding is
+disabled in all runs. The value-embedding banks are disabled in every headline and
+merged-corpus run: they add a large parameter count (roughly a third of the base
+model) and, at the token-per-parameter ratios studied here, do not lower loss, so
+turning them off is a data-gated empirical choice rather than a limitation of the
+code. MTP, when active, contributes small fixed-weight next-token-plus-$k$ terms
+during training only and is excluded at evaluation, so it does not affect the
+reported perplexities.
+
+\paragraph{Optimizer.}
+Two-dimensional backbone weight matrices are optimized with Muon
+\citep{jordan2024muon,liu2025muonscalable}; token embeddings, the output head,
+RMSNorm and residual scalars, and the optional lookup tables use AdamW
+\citep{loshchilov2019adamw} with the AdamW learning rate coupled at exactly
+$0.01\times$ the Muon rate. Muon's orthogonalization of the (momentum) update is
+computed with the Polar Express iteration \citep{amsel2025polarexpress} rather than
+the reference fixed-coefficient Newton--Schulz iteration, and augmented with
+NorMuon-style per-axis variance reduction \citep{li2025normuon,shazeer2018adafactor}
+and cautious, sign-aligned weight decay \citep{liang2024cautious,chen2025cautiouswd};
+the norm-based framing follows \citet{bernstein2024oldoptimizer}. Under data-parallel
+training the Muon work is sharded round-robin across ranks and the resulting update
+slices are all-gathered, with a name-keyed optimizer state that resumes correctly
+across a changed world size.
+
+\paragraph{Schedule and precision.}
+Learning rate follows a warmup--stable--decay schedule
+\citep{hu2024minicpm,hagele2024wsd}: a $300$-step linear warmup, a stable phase at
+peak, then a linear cooldown over the final $40\%$ of steps to a floor of $0.1\times$
+peak, with Muon momentum warmed to $0.95$ over the same initial window. The total
+step budget is fixed per run to a chosen compute-optimal token target (about $20$
+tokens per parameter) rather than computed online \citep{hoffmann2022chinchilla}.
+Training is bfloat16 mixed precision \citep{micikevicius2018mixed}; the
+language-model head and cross-entropy are fused in a single Triton kernel
+\citep{hsu2024liger} so full-vocabulary logits are never materialized at $32$k
+context. Multi-node training uses PyTorch DDP \citep{li2020pytorchddp} with
+\texttt{torch.compile}/TorchInductor \citep{ansel2024pytorch2} and SLURM/submitit
+\citep{submitit}.
+
+\paragraph{What is ours.}
+Relative to this inherited stack, the contributions of this paper are the
+cross-document attention masks and their compute controls (\Cref{sec:method}), the
+graph-traversal packing (\Cref{app:traversal}), the online link detectors
+(\Cref{app:linkdet}), the custom block-sparse attention kernels
+(\Cref{app:kernels}), the density-aware batch scheduler (\Cref{app:density}), and the
+link-following inference procedure. The backbone above is deliberately off-the-shelf.

@@ -1,0 +1,180 @@
+\section{Graph-traversal packing}
+\label{app:traversal}
+
+This appendix specifies how documents are ordered and packed into a fixed-length
+training sequence by traversing the inter-document link graph: the exact traversal
+algorithms, the seed/budget bookkeeping, and --- most importantly --- the coupling
+between \emph{traversal order} and the causal DAG gate of the cross-document mask.
+The mask semantics themselves are given in \Cref{sec:method,app:kernels}; density
+bucketing and the DDP scheduler that consume these packs are in \Cref{app:density}.
+
+\subsection{Graph storage}
+\label{app:traversal:graph}
+
+The link graph is built once from the tokenized corpus. Each document is keyed by a
+normalized identifier and assigned an integer id equal to its enumeration index in
+JSONL insertion order; this order is a determinism dependency
+(\Cref{app:traversal:det}). The graph is \textbf{directed}: for every node an
+\emph{outgoing} neighbor list (documents it links to) and an \emph{incoming} list
+(documents linking to it) are stored redundantly rather than derived, so no symmetry
+is assumed. Adjacency is not deduplicated, so a repeated edge raises a random walk's
+transition probability toward that neighbor (edge multiplicity acts as a weight). A
+neighbor whose identifier is absent from the index is \textbf{silently dropped} at
+construction time; consequently the \emph{realized} link density during training is
+strictly below the raw graph density (\Cref{app:density}).
+
+\subsection{Traversal strategies}
+\label{app:traversal:strategies}
+
+A strategy exposes two operations: reset (begin a fresh traversal from a seed) and
+propose-next (return the next candidate document id, or signal frontier exhaustion).
+Strategies produce only an \emph{order}; the token budget, per-pack deduplication, and
+the stopping rule are enforced by the sampler (\Cref{app:traversal:budget}). The
+default edge mode is \emph{outgoing}. Four strategies are wired into the training and
+precompute paths; a fifth (a composite mixture) is present but unused in any reported
+run.
+
+\paragraph{BFS (deterministic).}
+Breadth-first expansion from the seed using a FIFO frontier and a visited set.
+\begin{enumerate}
+  \item On reset, enqueue the seed and mark it visited.
+  \item Propose-next pops the front node $u$; each not-yet-visited outgoing neighbor
+    of $u$, taken \emph{in stored file order}, is marked visited on enqueue and
+    appended to the frontier. Return $u$.
+  \item On an empty frontier, restart from a uniformly random unvisited node (a bounded
+    retry loop), which may jump to a disconnected component.
+\end{enumerate}
+Because neighbors are enqueued in a fixed file order, BFS consumes no randomness and is
+fully deterministic given the seed.
+
+\paragraph{DFS (stochastic).}
+Depth-first expansion using a LIFO stack and a visited set. On reset the seed is pushed;
+propose-next pops $u$, collects its unvisited neighbors, \emph{shuffles them with the
+shared RNG} (for a canonical depth-first feel), pushes them marking visited, and returns
+$u$. Empty-stack restart is as in BFS. Unlike BFS, DFS \emph{consumes the shared RNG} on
+every expansion; this asymmetry shifts the shared random stream and matters for
+reproducibility (\Cref{app:traversal:det}).
+
+\paragraph{RandomWalk (first-order Markov).}
+A single current node with no visited set, so revisits are allowed. Each step teleports
+with probability $p_\text{restart}$ to a \textbf{uniformly random node over the whole
+graph}; otherwise it follows an edge. Under edge mode \emph{both}, a direction is first
+drawn with probability proportional to weights $(w_\text{in}, w_\text{out})$ and then a
+neighbor uniformly within that side; edge modes \emph{in}/\emph{out} use only the
+corresponding side. A dead end (no eligible neighbor) forces a teleport. The chain is
+first-order Markov with stationary distribution proportional to out-degree, carrying no
+PageRank damping or normalization. \textbf{Because the restart teleports to a uniform
+node rather than back to the seed, this is not Random Walk with Restart or personalized
+PageRank} \citep{page1999pagerank,tong2006rwr}; those restart to a fixed seed or
+personalization vector and sample a different distribution.
+
+\paragraph{Random (structure-free control).}
+Ignores the graph: every proposal draws a document id uniformly over all ids. A
+``Random'' pack is $N$ uniformly sampled documents and serves as the no-structure
+baseline.
+
+\subsection{Seed selection, token budget, and pack assembly}
+\label{app:traversal:budget}
+
+\paragraph{Uniform seeding, independent of strategy.}
+A pack is grown from one or more \emph{subwalks}, and every subwalk seed is drawn by
+\textbf{uniform rejection sampling over all documents regardless of the traversal
+strategy}; the strategy governs only how the neighborhood grows from that seed. A
+``BFS packing'' run is therefore a set of uniform-seeded local BFS neighborhoods, not a
+single global sweep, and likewise for DFS and RandomWalk --- a deliberate control (every
+document is equally likely to anchor a pack) that nonetheless shapes what each condition
+measures.
+
+\paragraph{Token budget and per-document cap.}
+The budget of a pack is $\texttt{batch\_size}\times\texttt{seq\_len}$ (the maximum
+sequence length), charged against the \emph{full} per-document layout: prefix
+identifier-card $+$ body $+$ EOS suffix (\Cref{app:density}). A per-document body cap
+bounds how many body tokens any one document contributes; an over-cap document is either
+body-truncated or skipped, per the overflow policy.
+
+\paragraph{Subwalks per pack.}
+A \emph{fresh} strategy object is instantiated per subwalk and grown until the budget is
+(nearly) reached or no valid seed remains, then another subwalk begins, so one pack can
+hold several disconnected neighborhoods. Reset is thus invoked per \emph{subwalk}, not
+per pack.
+
+\paragraph{Exact-length truncation.}
+Assembly may overshoot the budget by at most one document; the pack is then trimmed to
+\emph{exactly} the target length. Exactness is not cosmetic: the Triton attention
+kernels take the sequence length as a compile-time constant, so a variable length would
+trigger a full re-autotune (order $140$\,s as-measured) and desynchronize the DDP ranks.
+Trimming removes \emph{body} tokens only, never prefix/EOS decoration, walking documents
+from the head by default and carrying any residual forward. Under the default
+targets-first ordering below, head trimming sheds tokens from the earliest documents,
+which are exactly the link targets.
+
+\subsection{Order mode and the traversal--DAG-gate coupling}
+\label{app:traversal:order}
+
+The layout order of the collected documents is set by one of two modes:
+\emph{as-traversed} (proposal order) or \emph{prefer-targets-first}, the
+\textbf{default}. This choice is the single most important non-obvious design point in
+the pipeline, because it is forced by the cross-document mask.
+
+\paragraph{Why targets must precede linkers.}
+The mask is causal at its base (a query at position $q$ attends only to keys at
+$k\le q$), and a detected link $A\!\to\!B$ opens a grant letting linker $A$ attend into
+target $B$ only if $B$ begins before the link position; otherwise a DAG gate silently
+drops the grant, never relaxing causality (\Cref{app:kernels}). With outgoing traversal
+the natural proposal order places linker $A$ before target $B$, so under as-traversed the
+target lands \emph{after} the linker, the gate fires, and the edge is never realized.
+Hence:
+\begin{center}
+\emph{with outgoing traversal, a targets-before-linkers reordering is required for the
+causal cross-document mask to realize any link edge at all.}
+\end{center}
+
+\paragraph{Prefer-targets-first: per-component topological sort.}
+The default runs Kahn's algorithm \emph{within each connected component}, emitting every
+link's target before its linker, and lays each component down as a \textbf{contiguous
+block}. Contiguity is a hard requirement of the concatenation kernel, which merges a
+component only if its positions form a single interval (\Cref{app:kernels}), and it is
+what makes the analytic density proxy of \Cref{app:density} exact, since every target
+then ends before its link position. Components are \emph{structural}: undirected
+union-find components over the graph edges, deliberately decoupled from traversal order
+so that a frontier-exhaustion restart pulling in an unrelated document does not merge two
+unrelated repositories into one attention block. Within a component containing a
+\emph{cycle}, Kahn's algorithm cannot fully order the nodes and falls back to insertion
+order for the offending ones; links then ordered against the gate are dropped, so cyclic
+link structure is realized only partially.
+
+\subsection{Determinism and a documented inconsistency}
+\label{app:traversal:det}
+
+A single shared pseudo-random generator, seeded per rank as $\texttt{base\_seed}+
+\texttt{rank}$, drives \emph{both} seed selection and every proposal. Because the stream
+is shared, any strategy that consumes randomness (DFS shuffling, RandomWalk teleports)
+shifts all subsequent draws, making a run \emph{stream-order fragile}: two configurations
+differing only in a strategy's RNG consumption diverge everywhere downstream. Determinism
+holds only with synchronous single-stream data loading (zero worker processes) and
+depends on the JSONL insertion order defining the document ids.
+
+The live training path and the offline epoch-precompute path use different RandomWalk
+restart probabilities --- $p_\text{restart}=0.05$ live versus $0.0$ in precompute --- so
+they sample subtly different walk distributions, and any comparison mixing live and
+precomputed RandomWalk packs inherits this discrepancy.
+
+\subsection{Relation to node-sampling and random-walk literature}
+\label{app:traversal:related}
+
+Traversal-ordered packing is closest in spirit to node-sampling in graph representation
+learning, but the objective differs: we order documents so a causal attention mask can
+realize link edges, not to learn node embeddings. The RandomWalk strategy is a plain
+first-order walk, like the context-generating walks of DeepWalk
+\citep{perozzi2014deepwalk}, but without the second-order $p,q$ in/out bias of node2vec
+\citep{grover2016node2vec}; the edge-mode weights give only a first-order directional
+preference. BFS and DFS mirror the breadth- and depth-oriented neighborhood samplers
+that node2vec interpolates between, and the uniform-seeded, budget-capped local
+neighborhoods resemble the fixed-size neighbor sampling of GraphSAGE
+\citep{hamilton2017graphsage}. Against the PageRank family, the uniform-teleport restart
+means the walk implements neither personalized PageRank nor Random Walk with Restart
+\citep{page1999pagerank,tong2006rwr}. The novel element is not the walk but the
+coordinated targets-first topological reordering that lets a \emph{causal} cross-document
+mask realize link edges (\Cref{app:traversal:order}), together with structural union-find
+components robust to frontier restarts and the exact-length packing forced by the
+kernel's compile-time sequence length.

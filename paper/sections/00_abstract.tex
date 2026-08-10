@@ -1,0 +1,17 @@
+% ABSTRACT
+Most text corpora carry an implicit graph structure that standard language-model
+pretraining discards: Wikipedia articles hyperlink to related articles, source
+files import one another, and papers cite prior work. \method treats such a corpus
+as a \emph{text-attributed graph}---documents are nodes, links are edges---and makes
+that structure a first-class part of both pretraining and inference.
+% TODO: tighten once numbers are final.
+Two ingredients: (i) a graph traversal (BFS/DFS/random-walk) packs
+topologically-close documents into each long training sequence, and (ii) a custom
+sparse attention mask grants a linking document read-access, from the link position
+onward, into the document it links to, while causally isolating unrelated documents.
+The same link machinery runs at inference: a generated link that resolves to a
+corpus document pulls that document into the attention context.
+\todo{headline results sentence: cross-doc attention $>$ flat concatenation of the
+same linked content on multi-hop QA (+1.29 $\Delta$nll on HotpotQA-cross-doc) and
+cross-file code completion; effect isolated from compute via concat controls; a
+merged multi-source model strengthens the effect.}
