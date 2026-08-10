@@ -372,6 +372,9 @@ def run_community_pack_perplexity(
     split: str = "val_community",
     max_packs: int = 500,
     device: str = "cuda",
+    keep_frac: float = 1.0,
+    keep_seed: int = 0,
+    keep_mode: str = "edge",
 ) -> Dict[str, Any]:
     """Score cross-doc attention on live-packed held-out community nodes.
 
@@ -392,13 +395,22 @@ def run_community_pack_perplexity(
             subgraph whose internal link structure is intact.
         max_packs: Maximum number of packs to score.
         device: Device for token tensors.
+        keep_frac: graph-sparsity ablation — fraction of resolved cross-doc
+            grants to keep on the cross_doc arm (seeded, per-pack deterministic).
+            1.0 = full density (default); 0.0 makes the cross arm ≡ doc_causal.
+            The doc_causal baseline is unaffected. See
+            eval.scoring.subsample_link_to_target and memory
+            [[graph-sparsity-scaling-law]].
+        keep_seed: global seed for the keep_frac subsample.
+        keep_mode: 'edge' (per-edge density line) or 'node' (per-target-doc
+            robustness check).
 
     Returns:
         Dict with the same keys as ``run_pack_contrastive_perplexity``:
         strategy, n_packs, mean_nll_cross_doc, mean_nll_baseline,
         mean_delta, delta_ci_low, delta_ci_high, cross_doc_ci_low,
         cross_doc_ci_high, baseline_ci_low, baseline_ci_high.
-        Also includes ``split`` key.
+        Also includes ``split``, ``keep_frac``, ``keep_mode`` keys.
     """
     dataset_dir = Path(dataset_dir)
     split_dir = dataset_dir / "splits" / split
@@ -475,6 +487,7 @@ def run_community_pack_perplexity(
             result_cross = score_doc_with_context(
                 model, batch, layout_policy, device, mask_type=None,
                 grants_from_graph_edges=True,
+                keep_frac=keep_frac, keep_seed=keep_seed, keep_mode=keep_mode,
             )
             result_base = score_doc_with_context(
                 model, batch, layout_policy, device, mask_type="doc_causal",
@@ -507,12 +520,15 @@ def run_community_pack_perplexity(
         base_ci  = calculate_bootstrap_ci(base_nlls)
 
         logger.info(
-            "split=%r  n=%d  delta=%.4f [%.4f, %.4f]  cross=%.4f  base=%.4f",
-            split, n, mean_delta, delta_ci[0], delta_ci[1], mean_cross, mean_base,
+            "split=%r  keep=%.2f(%s)  n=%d  delta=%.4f [%.4f, %.4f]  cross=%.4f  base=%.4f",
+            split, keep_frac, keep_mode, n, mean_delta, delta_ci[0], delta_ci[1],
+            mean_cross, mean_base,
         )
 
         return {
             "split":               split,
+            "keep_frac":           float(keep_frac),
+            "keep_mode":           keep_mode,
             "n_packs":             n,
             "mean_nll_cross_doc":  mean_cross,
             "mean_nll_baseline":   mean_base,
