@@ -1,0 +1,28 @@
+\section{Results}
+\label{sec:results}
+
+\subsection{Cross-document attention beats flat concatenation}
+\todo{Wiki HotpotQA-cross-doc: cross-doc NLL 5.63 vs flat-linked 6.92,
+$\Delta$nll +1.29 (~19\% lower NLL, 3.6$\times$ lower ppl), n=738. Code
+RepoBench-cross-doc: Python +0.09, Java +0.03..+0.08 across traversals. Table.}
+
+\subsection{Single-document benchmarks are unaffected}
+\todo{All four masks statistically indistinguishable on hellaswag/arc/piqa/etc ---
+cross-doc attention has nothing to attend to on isolated docs, as predicted.}
+
+\subsection{Compute controls}
+\todo{\concat/\concatlink grant more attention but do not beat \crossdoc (e.g. code
+repobench\_ppl: cdl 7.25 vs concat 10.4 vs dc 8.94) --- the gain is the linking
+inductive bias, not FLOPs.}
+
+\subsection{Traversal ablation}
+\todo{Graph packing $\gg$ random for base LM (val 2.42 bfs/dfs vs 3.00 random);
+incremental cross-doc benefit is traversal-robust --- two decoupled axes.}
+
+\subsection{Diversity scaling (merged multi-source model)}
+\todo{11-source merge's cross-doc $\Delta$ is 1.7--11$\times$ larger than
+single-domain specialists despite far less per-domain data; flat 3.9B$\to$8B; joint
+training over many link types strengthens the cross-doc machinery itself.}
+
+\subsection{Density-aware scheduling efficiency}
+\todo{1.45$\times$ mean / 1.14$\times$ max step speedup; CoV collapse within buckets.}

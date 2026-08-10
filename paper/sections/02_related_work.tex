@@ -1,0 +1,152 @@
+\section{Related Work}
+\label{sec:related}
+
+% Organizing principle: every neighbouring line either (a) uses links only at
+% inference/retrieval time, or (b) trains on structure but not as a cross-document
+% attention edge in a decoder-only LM. \method is the intersection nobody occupies.
+% Per-paper notes: paper/bib/raw*/  (round 1) and paper/bib/raw2/ (round 2, code-grounded).
+
+\paragraph{Retrieval-augmented language models.}
+A large body of work injects external documents at inference time: RAG
+\citep{lewis2020rag}, Fusion-in-Decoder \citep{izacard2021fid}, Atlas
+\citep{izacard2023atlas}, REPLUG \citep{shi2024replug}, in-context RALM
+\citep{ram2023incontextralm}, and DSP \citep{khattab2023dsp}. A smaller set trains
+retrieval into pretraining---REALM \citep{guu2020realm}, RETRO \citep{borgeaud2022retro}
+and the from-scratch study of \citet{wang2023shallwepretrain}, RAVEN
+\citep{huang2023raven}, EMDR$^2$ \citep{sachan2021emdr2}, TRIME \citep{zhong2022trime},
+and self-retrieval RPT \citep{rubin2023retrievalpretrained}---but every one either
+learns a retriever over embedding similarity or fuses retrieved content through a
+\emph{separate} cross-attention module with its own key/value cache. Iterative and
+active variants (FLARE \citep{jiang2023flare}, IRCoT \citep{trivedi2023ircot},
+ITER-RETGEN \citep{shao2023iterretgen}, Self-RAG \citep{asai2024selfrag}) interleave
+retrieval with generation, closest to our recursive link-following loop but with a
+learned retriever and no training-time analogue. \method uses no learned retriever and
+no fusion module: the \emph{actually-linked} document is packed in-sequence and reached
+through ordinary self-attention along a known edge.
+
+\paragraph{Cached-KV, external-memory, and precomputed-corpus attention.}
+The closest inference-time analogues store key/value states rather than text.
+Memorizing Transformers \citep{wu2022memorizing} attach a frozen $k$NN memory of past
+$(k,v)$ pairs; $k$NN-LM \citep{khandelwal2020knnlm} and its successors
+\citep{yogatama2021spalm,he2021efficientknnlm,alon2022retomaton,xu2023whyknnlm}
+interpolate a frozen datastore, and \citet{wang2023knnlmgeneration} show this fails for
+open-ended generation---motivating our attention-based rather than
+distribution-interpolation use of neighbours. EMAT \citep{wu2022emat} precomputes a
+frozen corpus key/value memory read by MIPS; Google's Mention Memory / TOME
+\citep{dejong2022tome}, LUMEN \citep{dejong2023lumen}, and ReadTwice
+\citep{zemlyanskiy2021readtwice} precompute a \emph{corpus-wide} memory attended into
+the model without training on it. Recurrent-memory transformers
+\citep{dai2019transformerxl,rae2020compressive,bulatov2022rmt,hutchins2022blockrecurrent}
+carry compressed summaries rather than verbatim linked documents.
+\method differs on two axes: the reachable content is a whole document keyed by an
+explicit link, and the cross-document attention is a first-class \emph{pretraining}
+objective active identically at inference---not a frozen store queried at test time.
+Serving-side KV-cache reuse for RAG (PagedAttention \citep{kwon2023pagedattention},
+RadixAttention/SGLang \citep{zheng2024sglang}, RAGCache \citep{jin2024ragcache},
+Prompt Cache \citep{gim2024promptcache}, CacheBlend \citep{yao2025cacheblend},
+Block-Attention \citep{ma2025blockattention}, position-independent EPIC
+\citep{hu2024epic}) precompute per-document KV and splice it in; \method deliberately
+does \emph{no} KV reuse at inference (full recompute), because inserting a fetched
+document shifts RoPE positions and would invalidate a naive cache---the exact problem
+EPIC's position-independent caching targets.
+
+\paragraph{Graph-aware and link-aware pretraining.}
+LinkBERT \citep{yasunaga2022linkbert} co-places hyperlinked documents with a
+document-relation objective, and CDLM \citep{caciularu2021cdlm} pretrains a Longformer
+over clusters of related documents with cross-document global attention---the two
+closest antecedents to our core idea, but both are encoder MLMs with symmetric
+(non-link-gated, non-causal) attention over document \emph{pairs}/clusters rather than a
+directed, link-position-gated grant in a decoder. DRAGON \citep{yasunaga2022dragon}
+jointly pretrains an LM and a knowledge graph self-supervised, and text-attributed-graph
+methods \citep{yang2021graphformers,jin2023patton,zhao2023glem,he2024tape,chien2021giant,zou2023thlm}
+encode structure through GNN message passing to produce node embeddings; graph
+transformers \citep{ying2021graphormer,rampasek2022graphgps,kim2022tokengt,dwivedi2021graphtransformer,shirzad2023exphormer}
+inject structure as soft attention biases over small graphs whose nodes are tokens.
+Knowledge-graph-enhanced LMs \citep{peters2019knowbert,zhang2019ernie,wang2021kepler,liu2020kbert,zhang2022greaselm}
+fuse KB triples, and markup/anchor pretraining
+\citep{aghajanyan2021htlm,li2022markuplm,wang2022webformer,chang2020pretrainingretrieval,ma2021harp,zhou2022hlp}
+uses links as a relevance-pair signal or intra-page DOM structure. \method keeps a
+vanilla decoder-only LM, moves all graph structure into traversal packing plus a hard
+block-sparse attention mask over a 32k \emph{token} sequence, and targets autoregressive
+generation. Our graph traversal builds on classical node-sampling
+\citep{perozzi2014deepwalk,grover2016node2vec,hamilton2017graphsage} and random-walk
+theory \citep{page1999pagerank,tong2006rwr} (our restart teleports to uniform, unlike
+personalized-PageRank/RWR).
+
+\paragraph{Sequence packing, composition, and boundary masking.}
+In-Context Pretraining \citep{shi2024incontext} and SPLiCe
+\citep{staniszewski2025structured} pack related documents by retrieval similarity but
+apply standard causal attention; \citet{zhao2024analysing} and cross-contamination-free
+packing \citep{krell2021packing} show unrestricted cross-document attention is harmful
+and advocate block-diagonal isolation. \method starts from that isolation and
+selectively \emph{re-enables} attention along explicit link edges. Because RoPE
+positions are not reset per document, we relate to work on positional generalization in
+packed/long sequences \citep{kazemnejad2023positional,ruoss2023randomized,chen2023positioninterpolation}.
+
+\paragraph{Long-context, sparse, and kernel-level attention.}
+Our masks are tractable at 32k via FlexAttention
+\citep{flexattention_blog2024,flexattention_paper2024} over FlashAttention
+\citep{dao2022flashattention,dao2023flashattention2,shah2024flashattention3}; the custom
+Triton \citep{tillet2019triton} block-interaction-mask kernels descend from online
+softmax \citep{milakov2018onlinesoftmax}, memory-efficient attention
+\citep{rabe2021selfattention}, and block-sparse GPU kernels \citep{gray2017blocksparse}.
+Fixed-pattern \citep{child2019sparsetransformers,beltagy2020longformer,zaheer2020bigbird}
+and learned \citep{kitaev2020reformer,roy2021routing} sparse attention use
+content-agnostic templates; natively-trained block sparsity
+\citep{yuan2025nativesparse,lu2025moba} and mask-aware flash variants
+\citep{pagliardini2023sparseflash,wang2024flashmask} are the closest machinery, but none
+key sparsity to an inter-document link graph. State-space and linear models
+\citep{gu2023mamba,peng2023rwkv} compress history into a state that forecloses the
+content-addressed cross-document read our method needs.
+
+\paragraph{Optimizer, schedule, and training systems.}
+The backbone is a standard modern decoder; our contribution is orthogonal to its
+component choices, so we cite prior art for the recipe we adopt and do not claim it.
+Training uses the Muon optimizer \citep{jordan2024muon,liu2025muonscalable}, whose
+orthogonalization step is computed with the Polar Express iteration
+\citep{amsel2025polarexpress} and per-axis variance reduction in the style of NorMuon
+\citep{li2025normuon} and Adafactor \citep{shazeer2018adafactor}, with cautious weight
+decay \citep{liang2024cautious,chen2025cautiouswd} and the norm-based view of
+\citet{bernstein2024oldoptimizer}; a warmup-stable-decay schedule
+\citep{hu2024minicpm,hagele2024wsd}; and a fused Triton cross-entropy
+\citep{hsu2024liger}. The one training-systems element we foreground is the
+\emph{density-bucketed DDP scheduler} (\Cref{sec:method}), which addresses the same
+attention-cost straggler problem as Striped Attention \citep{brandon2023striped} and
+DistFlashAttn \citep{li2023distflashattn}, but at the data-parallel granularity of whole
+packs rather than by splitting one sequence across devices.
+
+\paragraph{Repository-level code modeling.}
+DeepSeek-Coder \citep{guo2024deepseekcoder,zhu2024deepseekcoderv2} topologically orders
+files by imports and StarCoder2 \citep{lozhkov2024starcoder2} concatenates same-repo
+files, both under full attention with no edge-keyed grant; GraphCodeBERT
+\citep{guo2021graphcodebert} injects intra-file data-flow edges into encoder attention.
+A parallel line supplies cross-file context by inference-time retrieval
+\citep{zhang2023repocoder,ding2023crosscodeeval,lu2022reacc,cheng2024draco,wu2024repoformer,ouyang2024repograph}.
+We evaluate on RepoBench \citep{liu2024repobench} over The Stack
+\citep{kocetkov2022stack}, with the project's self-built cross-file ports drawing on
+CoLT/aiXcoder \citep{li2025aixcoder} and the ASE-2025 Kotlin challenge
+\citep{ustalov2025contextcollection}, and single-file controls
+\citep{chen2021humaneval,austin2021mbpp,muennighoff2024octopack}.
+
+\paragraph{Multi-hop QA, text-attributed-graph corpora, and evaluation.}
+Our headline capability test derives from HotpotQA \citep{yang2018hotpotqa}; related
+multi-hop benchmarks and graph readers include
+\citet{welbl2018wikihop,ho2020twowiki,trivedi2022musique,ding2019cognitivegraph,decao2019entitygcn}
+and graph-structured RAG \citep{edge2024graphrag,gutierrez2024hipporag}. Training
+corpora are text-attributed graphs: Wikipedia hyperlink networks
+\citep{consonni2019wikilinkgraphs,petroni2021kilt} and arXiv citation graphs
+\citep{saier2020unarxive,saier2023unarxive,lo2020s2orc,hu2020ogb}, with the classic
+citation-network TAG paradigm \citep{sen2008collective} and citation-informed
+embeddings \citep{cohan2020specter,ostendorff2022scincl}; Galactica
+\citep{taylor2022galactica} models citation prediction but memorizes references rather
+than attending into cited documents. Our link-target resolution and trie-constrained
+title generation relate to autoregressive entity/identifier retrieval
+\citep{decao2021genre,bevilacqua2022seal,tay2022dsi}. Evaluation methodology follows the
+lm-evaluation-harness lineage \citep{gao2021lmeval,biderman2024lessons} with continuous
+$\Delta$nll rather than accuracy \citep{schaeffer2023mirage}, bootstrap significance
+\citep{koehn2004statsig}, and contamination controls
+\citep{sainz2023contamination,oren2024contamination}; single-document commonsense
+benchmarks \citep{zellers2019hellaswag,clark2018arc,bisk2020piqa} serve as controls
+where cross-document attention has no effect. Long-context utilization studies
+\citep{liu2024lostmiddle,hsieh2024ruler,vodrahalli2024michelangelo,xu2024retrievalmeetslong}
+motivate a direct link edge over hoping a relevant neighbour is used from a flat window.

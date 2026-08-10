@@ -1,0 +1,44 @@
+\section{Method}
+\label{sec:method}
+
+\subsection{Text-attributed graphs}
+\todo{Formalize: corpus as directed graph $G=(V,E)$, node = document with a token
+sequence, edge $(A,B)$ = a detected link from $A$ to $B$. Link detectors run online.}
+
+\subsection{Graph-traversal packing}
+\todo{BFS/DFS/random-walk/random; token budget + per-doc token cap; why order matters
+for causal cross-doc attention (a doc can only attend to earlier docs in the pack).}
+
+\subsection{Link-aware attention masks}
+The four mask conditions, ordered by attention permitted
+($\doccausal < \crossdoc \le \concatlink \le \concat$):
+\begin{description}
+  \item[\doccausal] block-diagonal causal; documents fully isolated (baseline).
+  \item[\crossdoc] when $A$ links to $B$ and both are packed, tokens in $A$ from the
+        link position onward attend to all of $B$; asymmetric, causal order kept.
+  \item[\concatlink] compute control: grant from the \emph{entire} source document,
+        not just the link position (same connectivity, more attention).
+  \item[\concat] compute control: connected components merged into one causal
+        super-document (most attention, no inference-time linking).
+\end{description}
+\todo{Figure: the four masks on one 16k batch (reuse docs/images/mask_*.png).}
+\todo{Formal mask definition (indicator over token pairs).}
+The mask is compiled to a block-sparse form so that fully-masked $128\times128$ blocks
+are skipped: we build on PyTorch FlexAttention
+\citep{flexattention_blog2024,flexattention_paper2024} for the reference path and
+implement custom Triton block-sparse attention kernels that make 32k-context
+sparse-masked training tractable; the kernel design is detailed in \Cref{app:kernels}.
+
+\subsection{Density-aware batch scheduling}
+\todo{Mask sparsity varies $6\times$ across packs $\to$ DDP rank imbalance. Offline
+epoch precompute + kv\_block\_count quantile buckets; ranks draw from the same bucket.
+$1.45\times$ mean step speedup. Reuse docs/images/density_aware_*.png.}
+
+\subsection{Inference: link-following generation}
+\todo{generate.py: after each token, run link detection; resolved links fetch the
+target doc into the attention context (retrieval mirroring training);
+--allow-generation-fallback synthesizes unresolved targets.}
+
+\subsection{Model and training recipe}
+\todo{Decoder-only transformer, RoPE, bf16, Muon (2D) + AdamW (embeddings/norms),
+weight tying + mid-training untie, squared-ReLU MLP, logit soft-cap; Chinchilla-derived token budgets; DDP via SLURM/submitit.}
