@@ -26,8 +26,6 @@ Two-round review complete, grounded in a 12-agent code-exploration pass
 (`notes/code_briefs/*.md`, line-referenced per subsystem):
 - `bib/refs.bib` — **531 verified entries** (118 round-1 broad + 413 round-2 deep),
   no duplicate keys, brace-balanced.
-- `bib/raw/` — round-1 per-slice returns (7 slices).
-- `bib/raw2/` — round-2 per-slice returns (38 narrow slices) with per-paper relationship notes.
 - `notes/LITREVIEW_PLAN.md`, `notes/REVIEWER_SHARED_BRIEF.md`, `notes/ROUND1_KEYS.txt` — review scaffolding.
 - `sections/02_related_work.tex` — 9 paragraphs, ~168 citations, all keys resolve.
 Every note draws the train-on-structure vs retrieve-at-inference contrast. Some entries
@@ -48,3 +46,8 @@ result-number dependencies, all \cite keys resolve:
 - Z `Z_additional_results` — TODO placeholder for final tables.
 refs.bib now 533 entries. VE banks + modded-nanoGPT provenance removed from main text
 (main claims scoped to contributions); the lineage is documented only in Appendix A.
+
+## Notes layout
+- `bib/refs.bib` — bibliography, source of truth (533 entries).
+- `notes/related_work_notes.md` — annotated bibliography (per-work relationship notes, 6 themes).
+- `notes/code_briefs/` — 12 subsystem briefs, each pinned to a commit with a drift-check (see its README).

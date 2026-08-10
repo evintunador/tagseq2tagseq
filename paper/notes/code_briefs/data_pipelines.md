@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- data/wiki_graph_extractor/ data/github_graph_extractor/ data/pretokenize.py data/pretokenize_stack.py data/normalization.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: data/wiki_graph_extractor/ data/github_graph_extractor/ data/pretokenize.py data/pretokenize_stack.py data/normalization.py
+-->
+
 # CODE BRIEF: data extraction pipelines (agent a0f6bc81)
 Pipeline: extract→graph.jsonl(+content)→pretokenize→tokenized_graph.jsonl+shard_*.bin→split_graph. LINK POSITIONS NEVER STORED (re-detected from tokens at runtime).
 

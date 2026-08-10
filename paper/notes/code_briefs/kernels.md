@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- kernels/
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: kernels/
+-->
+
 # CODE BRIEF: Triton attention kernels (agent a0332a4a)
 KERNELS.md STALE (says v12 prod); ground truth = triton_v18 (cross-doc), varlen_bim_v2 (doc-causal) per CLAUDE.md + attention.py:199-229. Both wrap v10 core.
 

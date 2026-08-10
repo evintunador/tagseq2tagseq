@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- data/packed_dataset.py data/bucketed_pack_dataset.py data/epoch_precompute.py data/pack_sampler.py data/collate.py data/layout.py precompute_epochs.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: data/packed_dataset.py data/bucketed_pack_dataset.py data/epoch_precompute.py data/pack_sampler.py data/collate.py data/layout.py precompute_epochs.py
+-->
+
 # CODE BRIEF: packing / epoch precompute / density bucketing (agent a20eee62)
 
 ## kv_block_count density metric

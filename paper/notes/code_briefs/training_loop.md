@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- main.py launch_slurm.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: main.py launch_slurm.py
+-->
+
 # CODE BRIEF: training loop & distributed infra (agent ac90664e)
 main.py = 1633 LINES (80764 BYTES, not 80k lines). Training STEP not in main.py — hands to LLM-composed loop.
 

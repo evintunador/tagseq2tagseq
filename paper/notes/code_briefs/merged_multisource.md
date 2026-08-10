@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- data/merge_datasets.py data/merge_packs.py model/graph_traversal/composite_link_detector.py configs/
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: data/merge_datasets.py data/merge_packs.py model/graph_traversal/composite_link_detector.py configs/
+-->
+
 # CODE BRIEF: merged_v2 multi-source path (agent a7f3021d)
 One ~350M model (1024d/24L VE-off 32k muon_lr0.003/wd0.1 max_grants256) trained JOINTLY on 11 linked sources (wiki, arxiv, 9 code langs). Only variable vs specialist = corpus diversity. 3 rungs (3.9B/8B/16B), each cross_doc_link vs doc_causal FLOP-matched pair.
 

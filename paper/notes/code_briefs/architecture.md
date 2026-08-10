@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- model/modules/backbone.py model/modules/layer.py model/modules/attention.py model/modules/training_module.py model/model.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: model/modules/backbone.py model/modules/layer.py model/modules/attention.py model/modules/training_module.py model/model.py
+-->
+
 # CODE BRIEF: model architecture (agent ada964f9)
 modded-nanoGPT-derived GPT decoder (YouJiacheng/Grad62304977/KellerJordan speedrun lineage), batch=1 packed, doc-graph attention. tunalab installed editable from /fss/evin_t/tunalab/.
 

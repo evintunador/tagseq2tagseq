@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- model/graph_traversal/block_mask_creator.py model/graph_traversal/cross_doc_mask.py model/graph_traversal/link_detector.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: model/graph_traversal/block_mask_creator.py model/graph_traversal/cross_doc_mask.py model/graph_traversal/link_detector.py
+-->
+
 # CODE BRIEF: cross-doc attention masks (agent ab9b73b9)
 Files: block_mask_creator.py, cross_doc_mask.py, link_detector.py, model.py, attention.py. B==1 asserted (attention.py:149) → "batch"=1 packed seq of T tokens.
 

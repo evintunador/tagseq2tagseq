@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- model/graph_traversal/link_detector.py model/graph_traversal/markdown_link_detector.py model/graph_traversal/python_import_detector.py model/graph_traversal/arxiv_cite_detector.py model/graph_traversal/composite_link_detector.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: model/graph_traversal/link_detector.py model/graph_traversal/markdown_link_detector.py model/graph_traversal/python_import_detector.py model/graph_traversal/arxiv_cite_detector.py model/graph_traversal/composite_link_detector.py
+-->
+
 # CODE BRIEF: link detectors (agent ae8d37e9)
 Root: model/graph_traversal/. LinkInfo(link_end_pos EXCLUSIVE, target_str DECODED string). Design: detector does ALL decoding, returns STRINGS not token spans → mask creator tokenizer-independent (link_detector.py:41-43).
 

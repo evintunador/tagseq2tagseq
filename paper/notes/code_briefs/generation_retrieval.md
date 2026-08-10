@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- model/generation_loop.py model/document_context.py model/document_corpus.py generate.py model/model.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: model/generation_loop.py model/document_context.py model/document_corpus.py generate.py model/model.py
+-->
+
 # CODE BRIEF: link-following generation / inference retrieval (agent a4aa95d5)
 Files: generation_loop.py, document_context.py, document_corpus.py, generate.py, model.py.
 

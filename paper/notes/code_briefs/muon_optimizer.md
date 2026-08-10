@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- optimizers/muon.py kernels/polar_express.py main.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: optimizers/muon.py kernels/polar_express.py main.py
+-->
+
 # CODE BRIEF: Muon optimizer (agent abb68cda)
 
 Files: optimizers/muon.py, kernels/polar_express.py, main.py. **NorMuon variant** (self-described muon.py:1-2) = Muon + 4 enhancements + aux AdamW, distributed via round-robin param shard.

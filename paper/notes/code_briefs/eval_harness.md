@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- eval/scoring.py eval/perplexity.py eval/nlp_benchmarks.py eval/title_index.py eval/link_annotator.py eval/benchmark_harness/ eval_checkpoints.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: eval/scoring.py eval/perplexity.py eval/nlp_benchmarks.py eval/title_index.py eval/link_annotator.py eval/benchmark_harness/ eval_checkpoints.py
+-->
+
 # CODE BRIEF: eval harness & cross-doc benchmarks (agent a4ae4e54)
 Files: eval/scoring.py, perplexity.py, nlp_benchmarks.py, title_index.py, link_annotator.py, benchmark_harness/*, eval_checkpoints.py. All = teacher-forced mean-NLL over designated region from log_softmax(forward_inference logits), logit@t predicts token@t+1.
 

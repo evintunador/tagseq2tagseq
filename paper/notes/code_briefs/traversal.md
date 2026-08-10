@@ -1,3 +1,12 @@
+<!-- PROVENANCE
+Written against commit 6134163 (main @ 2026-08-07). This brief describes the code as of
+that commit; it is NOT authoritative if the source has changed since. Before trusting it,
+check whether the covered sources have drifted:
+    git diff --stat 6134163..HEAD -- data/traversal.py data/dataset.py data/pack_sampler.py
+Empty output = brief still current. Non-empty = re-verify the changed parts against source.
+Covered sources: data/traversal.py data/dataset.py data/pack_sampler.py
+-->
+
 # CODE BRIEF: graph traversal (agent aa492d3c)
 Files: traversal.py, dataset.py (GraphIndex), pack_sampler.py, cross_doc_mask.py.
 
