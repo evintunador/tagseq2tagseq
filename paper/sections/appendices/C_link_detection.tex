@@ -56,11 +56,15 @@ takes a fast path that batch-decodes token bytes in one call (roughly $2\times$
 faster on large files). This pipeline is a cheap approximation of a real parse:
 offset-preserving blanking with per-language hand-written lexers handles nested
 block comments, raw and byte strings, lifetimes-vs-char literals, and
-template/multiline string bodies without a full grammar. The \emph{shipped} graph is
-instead extracted offline with tree-sitter grammars, and an independent tree-sitter
-oracle grades the runtime detector for agreement, giving a three-way check of the
-token-space approximation against two grammar-based references
-\citep{brunsfeld2018treesitter}.
+template/multiline string bodies without a full grammar. Every runtime link
+detector---for all languages and all three regimes below---uses this regex/token
+pipeline; \emph{no} link detector calls a parser. Tree-sitter grammars
+\citep{brunsfeld2018treesitter} are used elsewhere in the system: to extract the
+\emph{shipped} graph offline, as an independent oracle that grades the runtime
+detector for agreement, and---at benchmark-evaluation time only---to re-anchor the
+scored span to the first use site of an imported symbol
+(\Cref{app:linkdet:regimes}). Link \emph{detection} itself is grammar-free
+throughout.
 
 \subsection{Per-modality detectors}
 
@@ -153,15 +157,30 @@ for prose. The safety argument is soft: a mis-sniff usually produces a target th
 matches no real key and therefore no-ops. Mixed-syntax single documents, which would
 need per-token routing, are explicitly deferred.
 
-\subsection{Training-time shortcut vs.\ generation-time detection}
+\subsection{Three regimes: training, benchmark evaluation, generation}
+\label{app:linkdet:regimes}
 
-At training time the packer can bypass detection entirely: the resolved graph edge
-is baked directly into the packed example, so the online detector is a fallback
-rather than the primary path. Text detection is therefore really a
-\emph{generation-time and grader-time} concern: at inference there are no baked
-edges, so the detectors run over the model's own output (see the link-following
-inference procedure), and the grader runs them to score whether a generated link
-resolves.
+Which detection path is exercised, and whether a parser is involved at all, differs
+across the three settings in which links are resolved.
+
+\begin{itemize}
+  \item \textbf{Training.} The packer bypasses text detection entirely: the resolved
+        graph edge is baked into the precomputed example, so grants come from the
+        known edge list rather than from re-scanning tokens. The online regex detector
+        is only a fallback for the live (non-precomputed) path. No parser runs.
+  \item \textbf{Benchmark evaluation.} Grants are produced by the language's regex
+        detector (the same token-space pipeline as training), but tree-sitter is used
+        \emph{separately} to decide \emph{where} the completion is scored: the
+        \texttt{use\_line} scope re-anchors scoring to the first line that references
+        a symbol declared in a granted cross-file document, located with a per-language
+        top-level-declaration query. This sidesteps import syntax and \texttt{import~*}
+        (\Cref{app:results}). Detection is still regex; only the scoring \emph{scope}
+        uses a grammar.
+  \item \textbf{Generation.} There are no baked edges, so the regex detector (the
+        composite, for a merged model) runs over the model's own output on a rolling
+        window and fires when a link closes at the just-emitted token; a resolved link
+        then triggers the link-following retrieval step. No parser runs.
+\end{itemize}
 
 \subsection{Limitations}
 \label{app:linkdet:fail}
