@@ -21,7 +21,7 @@ The four mask conditions, ordered by attention permitted
   \item[\concat] compute control: connected components merged into one causal
         super-document (most attention, no inference-time linking).
 \end{description}
-\todo{Figure: the four masks on one 16k batch (reuse docs/images/mask_*.png).}
+\todo{Figure: the four masks on one 16k batch (reuse docs/images/mask\_*.png).}
 \todo{Formal mask definition (indicator over token pairs).}
 The mask is compiled to a block-sparse form so that fully-masked $128\times128$ blocks
 are skipped: we build on PyTorch FlexAttention
@@ -32,7 +32,7 @@ sparse-masked training tractable; the kernel design is detailed in \Cref{app:ker
 \subsection{Density-aware batch scheduling}
 \todo{Mask sparsity varies $6\times$ across packs $\to$ DDP rank imbalance. Offline
 epoch precompute + kv\_block\_count quantile buckets; ranks draw from the same bucket.
-$1.45\times$ mean step speedup. Reuse docs/images/density_aware_*.png.}
+$1.45\times$ mean step speedup. Reuse docs/images/density\_aware\_*.png.}
 
 \subsection{Inference: link-following generation}
 \todo{generate.py: after each token, run link detection; resolved links fetch the
