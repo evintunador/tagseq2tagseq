@@ -226,9 +226,9 @@ job_to_rundir_config() {
   [ -z "$name" ] && return 1
   local rundir="$REPO/runs/${name#${PREFIX}}"
   [ -d "$rundir" ] || return 1
-  local inv; inv="$(find "$rundir/reproducibility" -name run_invocation.json 2>/dev/null | head -1)"
-  local cfg=""
-  [ -n "$inv" ] && cfg="$(python3 -c "import json,sys; a=json.load(open('$inv'))['argv']; print(a[a.index('--config')+1] if '--config' in a else '')" 2>/dev/null)"
+  # Config comes from run_invocation.json (reliable), via the shared helper so the
+  # yield-time record and the relaunch-time self-heal use identical logic.
+  local cfg; cfg="$(config_from_rundir "$rundir")"
   printf '%s\t%s\n' "$rundir" "$cfg"
 }
 
@@ -257,10 +257,24 @@ print(" ".join(shlex.quote(x) for x in out))
 PYEOF
 }
 
+# Recover a run's --config from its run_invocation.json (source of truth, unlike
+# squeue which forgets a job once it exits). Used to self-heal ledger lines whose
+# config field is empty (job died before job_to_rundir_config could read squeue).
+config_from_rundir() {
+  local rundir="$1"
+  local inv; inv="$(find "$rundir/reproducibility" -name run_invocation.json 2>/dev/null | head -1)"
+  [ -z "$inv" ] && return 0
+  python3 -c "import json,sys; a=json.load(open('$inv'))['argv']; print(a[a.index('--config')+1] if '--config' in a else '')" 2>/dev/null
+}
+
 # Relaunch one yielded job on a given clean node, resuming if a checkpoint exists.
+# Returns: 0 = relaunched; 1 = transient failure (retry later); 2 = UNRESOLVABLE
+# (no config anywhere) — caller should mark the ledger line so it stops jamming.
 relaunch_yielded() {
   local rundir="$1" cfg="$2" node="$3"
-  [ -z "$cfg" ] && { note "  relaunch SKIP ($rundir): no config recorded"; return 1; }
+  # Self-heal: if the ledger recorded no config, recover it from run_invocation.json.
+  if [ -z "$cfg" ]; then cfg="$(config_from_rundir "$rundir")"; fi
+  [ -z "$cfg" ] && { note "  relaunch UNRESOLVABLE ($rundir): no config in ledger or run_invocation.json — marking skipped"; return 2; }
   local ck="$rundir/checkpoints/latest.pt"
   local resume_args=""
   if [ -f "$ck" ]; then resume_args="--resume-from $ck"; fi
@@ -333,12 +347,20 @@ while true; do
         rundir="$(echo "$line" | cut -f1)"; cfg="$(echo "$line" | cut -f2)"
         # preflight the node (GPU0 empty + NFS) before using it
         if "$REPO/scripts/preflight_node.sh" "$node" >/dev/null 2>&1; then
-          if relaunch_yielded "$rundir" "$cfg" "$node"; then
+          relaunch_yielded "$rundir" "$cfg" "$node"; rc_status=$?
+          if [ "$rc_status" -eq 0 ]; then
             # mark this ledger line relaunched (first match only)
             awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="relaunched"; done=1} {print $1"\t"$2"\t"$3"\t"$4}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
             # reset that node's idle clock so we don't reuse it next poll
             grep -v "^${node}	" "$IDLE_SINCE" > "$IDLE_SINCE.tmp" 2>/dev/null; mv "$IDLE_SINCE.tmp" "$IDLE_SINCE"
+          elif [ "$rc_status" -eq 2 ]; then
+            # UNRESOLVABLE (no config anywhere): mark 'skipped' so this entry stops
+            # jamming the head of the yield queue. Without this, the loop re-picks
+            # the same broken oldest entry every poll and NOTHING else resumes.
+            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="skipped"; done=1} {print $1"\t"$2"\t"$3"\t"$4}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
+            # do NOT consume the node — let the next loop iteration use it for a real entry
           fi
+          # rc_status==1 (transient): leave 'yielded', retry next poll (node not consumed)
         else
           note "  relaunch SKIP: $node failed preflight (GPU0 busy or NFS)"
         fi

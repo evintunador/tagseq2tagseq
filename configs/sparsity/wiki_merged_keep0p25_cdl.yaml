@@ -62,7 +62,7 @@ optimizer:
 
 train_loop:
   epochs: 1
-  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
+  max_optimizer_steps: 14507  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
   warmup_steps: 300
   cooldown_frac: 0.4
   min_lr_ratio: 0.1
