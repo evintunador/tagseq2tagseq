@@ -13,6 +13,7 @@
 # decorates arxiv with the latex card and the rest with identifier/slash-comment cards.
 data:
   dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all_v2
+  train_shuffle_within_bucket_seed: 42   # interleave sources within density buckets (fixes wiki/arxiv forgetting); fixed seed = resume-consistent
   strategy: 'bfs'
   layout_policy: 'stochastic_identifier_prefix'   # default/fallback; per-pack layout_name overrides
   inference_layout_policy: 'identifier_prefix_eos'
@@ -107,14 +108,14 @@ optimizer:
   beta1: 0.9
   beta2: 0.95
   muon_lr: 0.003         # small-run recipe (fixed across scaling rungs)
-  adamw_lr: 3e-05
-  muon_momentum_warmup_steps: 300
+  adamw_lr: 3.0e-05   # 100:1 muon:adamw (re-pinned); 3.0e-05 form so YAML parses as float
+  muon_momentum_warmup_percent: 0.02   # 2% of full run (validated at 3.9B; 300 abs steps silently drifted to 0.5% at 16B)
   adamw_embed_beta1: 0.5
 
 train_loop:
   epochs: 1
   max_optimizer_steps: 60600   # ~16B tok @ world=8 (61035 steps × 262144 tok/step)
-  warmup_steps: 300
+  warmup_percent: 0.02   # 2% of full run (validated at 3.9B; 300 abs steps silently drifted to 0.5% at 16B)
   cooldown_frac: 0.4
   min_lr_ratio: 0.1
   val_steps: 200

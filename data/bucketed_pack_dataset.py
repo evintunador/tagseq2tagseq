@@ -103,9 +103,15 @@ class BucketedPackDataset(IterableDataset):
         # earliest-source pack, and a capped val (val_steps << |packs|) always
         # scores that same source-biased head. Shuffling each bucket's pack list
         # by a FIXED seed makes the capped sample source-unbiased AND stable
-        # across checkpoints (same seed → same subset). None = keep pack_id order
-        # (training path — order there is irrelevant since it consumes the whole
-        # epoch). Set for val loaders.
+        # across checkpoints (same seed → same subset). Set for val loaders.
+        #
+        # TRAINING also benefits (and the old "order is irrelevant since it consumes
+        # the whole epoch" assumption was WRONG for a finite WSD run): consuming a
+        # bucket's packs in source-sequential pack_id order presents sources in phases
+        # across the run, so the model forgets early-seen sources by the end (measured
+        # on merged_all_v2: wiki/arxiv nll degraded mid-run while code improved). A
+        # fixed-seed shuffle interleaves sources uniformly and stays resume-consistent.
+        # None = keep legacy pack_id order.
         self._shuffle_within_bucket_seed = shuffle_within_bucket_seed
         # Training: raise when packs run out before the step budget (fail loud).
         # Val: stop cleanly on exhaustion (scored the whole val set) — val_steps may

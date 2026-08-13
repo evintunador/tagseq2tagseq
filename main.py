@@ -691,6 +691,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             rank=dist.rank,
             world_size=dist.world_size,
             start_state=start_state,
+            # Within-bucket shuffle for TRAINING. Packs are written source-clustered
+            # (merge_packs stamps sources in blocks) and stored pack_id-sorted within
+            # each bucket, so consuming them in pack_id order presents sources in
+            # phases across a finite WSD run -> the model forgets early-seen sources
+            # (measured: wiki +1.6 / arxiv +0.5 nll degradation on merged_all_v2 while
+            # code improved). A deterministic (seeded) shuffle interleaves sources
+            # uniformly; the fixed seed keeps resume position consistent. Default None
+            # preserves legacy order for configs that don't opt in.
+            shuffle_within_bucket_seed=cfg.get('data', {}).get('train_shuffle_within_bucket_seed'),
         )
     else:
         dataset = PackedSequenceDataset(
@@ -1142,9 +1151,18 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # -------------------------------------------------------------------------
     cooldown_frac = cfg.get('train_loop', {}).get('cooldown_frac', 0.0)
     min_lr_ratio = cfg.get('train_loop', {}).get('min_lr_ratio', 0.1)
-    warmup_steps = int(cfg.get('train_loop', {}).get('warmup_steps', 0))
-    muon_momentum_warmup_steps = int(cfg.get('optimizer', {}).get('muon_momentum_warmup_steps', 0))
     max_steps_for_cooldown = cfg.get('train_loop', {}).get('max_optimizer_steps')
+    # Warmup: prefer warmup_percent (scales with run length so warmup is CONSTANT in
+    # fraction-of-run across scaling rungs) over absolute warmup_steps. Absolute steps
+    # silently drift — 300 steps was 2.0% at 3.9B but only 0.5% at 16B. Applied to the
+    # FULL schedule length (absolute step numbers), so a resumed run skips elapsed warmup.
+    _warmup_pct = cfg.get('train_loop', {}).get('warmup_percent')
+    if _warmup_pct is not None:
+        _full_len = (max_steps_for_cooldown or 0) + resumed_steps
+        warmup_steps = round(float(_warmup_pct) * _full_len)
+    else:
+        warmup_steps = int(cfg.get('train_loop', {}).get('warmup_steps', 0))
+    muon_momentum_warmup_steps = int(cfg.get('optimizer', {}).get('muon_momentum_warmup_steps', 0))
 
     if cooldown_frac > 0.0 and max_steps_for_cooldown is None:
         logger.warning(
