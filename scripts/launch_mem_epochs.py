@@ -89,7 +89,7 @@ def arm_label(corpus, mask, mode, n):
     return f"{corpus}.{mask}.{mode}.e{n}"
 
 
-def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limit):
+def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limit, no_eval=False):
     cfg = CONFIGS[corpus][mask]
     epoch_csv = ",".join(str(d) for d in dirs)
     cmd = [
@@ -101,6 +101,10 @@ def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limi
         "--train_loop.max_optimizer_steps", str(max_steps),
         "--model.mask_type", MASK_TYPE[mask],
     ]
+    if no_eval:
+        # Skip the config's run_on_completion benchmark suite (e.g. tiny pilot
+        # arms, or a config whose annotator_corpus doesn't match this corpus).
+        cmd += ["--eval.run_on_completion", "false"]
     # simplewiki reuses wiki base configs but must point at simplewiki splits.
     if corpus == "simplewiki":
         base = str(ART / "pretokenized_datasets/simplewiki")
@@ -127,6 +131,7 @@ def main():
     ap.add_argument("--gpus", type=int, default=8)
     ap.add_argument("--accum", type=int, default=1)
     ap.add_argument("--time", default="24:00:00")
+    ap.add_argument("--no-eval", action="store_true", help="append --eval.run_on_completion false to each arm")
     ap.add_argument("--launch", action="store_true", help="actually submit (staggered); default dry-run")
     ap.add_argument("--first-step-timeout", type=int, default=1800,
                     help="seconds to wait for an arm to reach step 1 before launching the next")
@@ -162,7 +167,7 @@ def main():
         note = "dc: fresh≡repeat (repeat=sanity only)" if (a["mask"] == "dc" and a["mode"] == "repeat") else ""
         print(f"{a['label']:<34} {cfg:<40} {a['total']:>8} {a['steps']:>7} {btok:>6.2f}  {note}")
         cmd = build_command(a["corpus"], a["mask"], a["mode"], a["n"], a["dirs"],
-                            a["steps"], args.nodes, args.gpus, args.time)
+                            a["steps"], args.nodes, args.gpus, args.time, args.no_eval)
         cmds.append(f"# {a['label']}  ({a['total']} packs, {a['steps']} steps)")
         cmds.append(" ".join(cmd))
         cmds.append("")
@@ -184,7 +189,7 @@ def main():
           f"{args.first_step_timeout}s each)...")
     for a in arms:
         cmd = build_command(a["corpus"], a["mask"], a["mode"], a["n"], a["dirs"],
-                            a["steps"], args.nodes, args.gpus, args.time) + ["--no-tail"]
+                            a["steps"], args.nodes, args.gpus, args.time, args.no_eval) + ["--no-tail"]
         print(f"\n>>> submitting {a['label']}")
         subprocess.run(cmd, cwd=str(REPO), check=True)
         _wait_for_first_step(a["label"], args.first_step_timeout)
