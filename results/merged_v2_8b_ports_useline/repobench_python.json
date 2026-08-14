@@ -1,0 +1,33 @@
+{
+  "port": "repobench_python",
+  "language": "python",
+  "max_examples": 500,
+  "tier2": {
+    "use_line": {
+      "port": "repobench_python",
+      "checkpoint": "?",
+      "n_examples": 424,
+      "scope": "use_line",
+      "n_dropped_no_use_site": 76,
+      "n_fired": 369,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 2.142798293972276,
+      "mean_nll_flat": 2.3051880664838467,
+      "mean_nll_placebo": 2.309932684149247,
+      "delta_real": 0.16238977251157083,
+      "delta_real_ci": [
+        0.12858769358670127,
+        0.19928828589414638
+      ],
+      "delta_placebo": -0.0047446176654002414,
+      "placebo_separation": 0.1671343901769711,
+      "placebo_separation_ci": [
+        0.13544905690547548,
+        0.20131343232233667
+      ],
+      "failures": [],
+      "passed": true,
+      "fire_rate": 0.8702830188679245
+    }
+  }
+}

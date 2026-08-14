@@ -72,7 +72,7 @@ class LinkDetector(Protocol):
 
 # Valid names accepted by ``make_link_detector`` (and the ``model.link_detector``
 # config key), kept here as the single source of truth for error messages.
-LINK_DETECTOR_NAMES = ("markdown", "python", "go", "java", "typescript", "javascript", "kotlin", "rust", "zig", "dart", "arxiv", "null")
+LINK_DETECTOR_NAMES = ("markdown", "python", "go", "java", "typescript", "javascript", "kotlin", "rust", "zig", "dart", "arxiv", "null", "composite")
 
 
 def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "LinkDetector":
@@ -129,9 +129,16 @@ def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "Lin
     if name == "null":
         from .null_link_detector import NullLinkDetector
         return NullLinkDetector(decode_fn=decode_fn)
+    if name == "composite":
+        # Per-document dispatch across all merged-corpus sub-detectors, for
+        # inference/generation on a merged model where links must be detected
+        # from raw multi-source text (no single syntax fires everywhere).
+        from .composite_link_detector import CompositeLinkDetector
+        return CompositeLinkDetector(decode_fn=decode_fn)
     raise ValueError(
         f"Unknown model.link_detector '{name}'. "
         f"Valid options: {', '.join(LINK_DETECTOR_NAMES)} "
         "('markdown'=Wikipedia, 'python'=TheStack, 'go'=TheStack Go, "
-        "'arxiv'=unarXive, 'null'=edgeless/FineWeb)."
+        "'arxiv'=unarXive, 'null'=edgeless/FineWeb, "
+        "'composite'=merged multi-source model)."
     )

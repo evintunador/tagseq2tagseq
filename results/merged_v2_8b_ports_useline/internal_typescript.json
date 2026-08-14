@@ -1,0 +1,33 @@
+{
+  "port": "internal_typescript",
+  "language": "typescript",
+  "max_examples": 500,
+  "tier2": {
+    "use_line": {
+      "port": "internal_typescript",
+      "checkpoint": "?",
+      "n_examples": 396,
+      "scope": "use_line",
+      "n_dropped_no_use_site": 104,
+      "n_fired": 300,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 1.86616969948647,
+      "mean_nll_flat": 2.429708641247461,
+      "mean_nll_placebo": 2.331565235285151,
+      "delta_real": 0.5635389417609913,
+      "delta_real_ci": [
+        0.5090281281845281,
+        0.6205167961600643
+      ],
+      "delta_placebo": 0.0981434059623103,
+      "placebo_separation": 0.46539553579868087,
+      "placebo_separation_ci": [
+        0.4108436464463304,
+        0.5221040728608234
+      ],
+      "failures": [],
+      "passed": true,
+      "fire_rate": 0.7575757575757576
+    }
+  }
+}

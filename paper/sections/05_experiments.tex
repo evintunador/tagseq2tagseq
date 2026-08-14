@@ -1,0 +1,14 @@
+\section{Experimental Setup}
+\label{sec:experiments}
+
+\todo{Model sizes (350M--1B, 1024d/24L default), 32k context, tuned recipe
+(muon\_lr=0.003, muon\_wd=0.1), max\_grants=256.}
+
+\todo{Benchmarks: HotpotQA-cross-doc (multi-hop, the headline wiki metric);
+RepoBench-cross-doc (Python/Java, headline code metric); community\_pack held-out
+cross-doc perplexity; single-doc controls (HellaSwag, ARC, PIQA, WinoGrande,
+OpenBookQA, BoolQ, HumanEval). Define the cross-doc-vs-flat-concat contrast and the
+placebo control.}
+
+\todo{The 4-mask ablation and the traversal ablation (bfs/dfs/rw/random $\times$
+dc/cdl) design.}

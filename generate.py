@@ -106,6 +106,20 @@ def load_inference_model(
             (e.g. 32768) than the checkpoint was trained at (e.g. 8192). The
             returned hp dict reflects the override so downstream context sizing
             uses it. Shrinking below the training length is also allowed.
+        mask_type_override: If set, build the model with this mask_type instead of
+            the trained one. mask_type does not parameterize the model (masking is
+            external via the mask creator), so e.g. a doc_causal checkpoint's weights
+            load strictly into a cross_doc_link-configured model — used for the
+            graph-sparsity true train-keep=0 point (eval a doc_causal model under a
+            real cross-doc mask). Pair with link_detector_override when promoting
+            doc_causal→cross_doc_link (the doc_causal config has no detector).
+        link_detector_override: If set, use this link-detector name instead of the
+            one stored in hyperparameters.json. The intended use is running a
+            MERGED multi-source model (whose config stores a single placeholder
+            detector, e.g. 'markdown') with 'composite', so links in every
+            source's syntax are detected during generation. Detection is a pure
+            inference-time concern — the loaded weights are identical — so this
+            only changes which LinkDetector the returned model carries.
     """
     checkpoint_path = Path(checkpoint_path)
     run_dir = checkpoint_path.parent.parent   # .../runs/YYYYMMDD/checkpoints/best.pt
@@ -124,12 +138,10 @@ def load_inference_model(
     # the mask creator), so a doc_causal-trained checkpoint's weights load strictly
     # into a cross_doc_link-configured model. Used for the graph-sparsity true
     # train-keep=0 point: eval a doc_causal model under a real cross-doc mask.
-    # cross_doc_link needs a link_detector (grants come from graph edges at eval via
-    # Option B, but the creator is still constructed with one), so pass it too.
+    # (cross_doc_link needs a link_detector; pass it via link_detector_override,
+    # which is applied below alongside its merged-model generation use.)
     if mask_type_override is not None:
         model_cfg["mask_type"] = mask_type_override
-    if link_detector_override is not None:
-        model_cfg["link_detector"] = link_detector_override
 
     # Optionally run at a longer (or shorter) context than training. Pure RoPE
     # position encoding means only the rotary buffer size depends on max_seq_len;
@@ -144,6 +156,13 @@ def load_inference_model(
     # Mask type and link detector
     mask_type          = model_cfg.get("mask_type", "doc_causal")
     link_detector_name = model_cfg.get("link_detector")
+    if link_detector_override is not None:
+        # Merged-model generation: swap the stored placeholder (e.g. 'markdown')
+        # for 'composite' (or any explicit detector). Inference-only; weights
+        # are unchanged. Reflect it in model_cfg so the model the code rebuilds
+        # below carries the override, not the stored name.
+        link_detector_name = link_detector_override
+        model_cfg["link_detector"] = link_detector_override
     link_detector      = None
 
     if mask_type in ("cross_doc_link", "doc_concat_link"):
@@ -641,6 +660,15 @@ def main():
     parser.add_argument("--no-color", action="store_true",
                         help="Disable ANSI color output.")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--link-detector", default=None,
+        help="Override the checkpoint's stored link detector. Use 'composite' to "
+             "generate from a MERGED multi-source model (whose config stores a "
+             "single placeholder detector like 'markdown'): 'composite' dispatches "
+             "per document to the right source-specific detector, so links in "
+             "wiki / arxiv / all code languages are all detected. Inference-only; "
+             "weights are unchanged. Default: use the stored detector.",
+    )
     args = parser.parse_args()
 
     use_color = not args.no_color and sys.stdout.isatty()
@@ -650,6 +678,7 @@ def main():
     model, hp = load_inference_model(
         args.checkpoint, device=args.device,
         max_seq_len_override=args.max_seq_len,
+        link_detector_override=args.link_detector,
     )
     enc        = model.tokenizer
 

@@ -85,25 +85,71 @@ def _read_normed_ids(graph_dir: Path) -> List[str]:
     return ids
 
 
-def _build_remap(source_train_dir: Path, merged_nid_to_id: Dict[str, int]) -> Dict[int, int]:
-    """source_train_doc_id -> merged_train_doc_id, via normed_identifier."""
+def _read_ids_and_sources(graph_dir: Path) -> Tuple[List[str], List[str]]:
+    """Return (normed_identifiers, sources) in doc_id order. ``source`` is the
+    provenance tag merge_datasets stamps on each merged node (empty string if a
+    graph predates the field). Used to detect collision HIJACKS — an id whose
+    winning merged node belongs to a DIFFERENT source than the one being
+    remapped (e.g. kotlin & java both emit bare FQN class names, java wins)."""
+    path = graph_dir / "tokenized_graph.jsonl"
+    if not path.exists():
+        raise FileNotFoundError(f"tokenized_graph.jsonl not found in {graph_dir}")
+    ids: List[str] = []
+    sources: List[str] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                d = json.loads(line)
+                ids.append(d["normed_identifier"])
+                sources.append(d.get("source", ""))
+    return ids, sources
+
+
+def _build_remap(source_train_dir: Path, tag: str,
+                 merged_nid_to_id: Dict[str, int],
+                 merged_id_to_source: Dict[int, str]) -> Tuple[Dict[int, int], int]:
+    """source_train_doc_id -> merged_train_doc_id, via normed_identifier.
+
+    Returns ``(remap, n_missing)``. A source-train node is UNMAPPABLE if either:
+      (a) its normed_identifier is absent from the merged train graph, OR
+      (b) it is a collision HIJACK — the id IS present but the winning merged
+          node belongs to a DIFFERENT source (``merged_id_to_source[mid] != tag``).
+    Case (b) is the dangerous one: two sources emit the same normed_identifier
+    (kotlin & java both use bare fully-qualified class names with no repo prefix),
+    merge_datasets keeps the higher-priority source's node, so a naive id lookup
+    would silently resolve this source's doc to the OTHER source's tokens —
+    corrupting the cross-doc signal. Both cases get NO remap entry; the caller
+    drops any pack whose core docs reference them and prunes dead cross-doc
+    grants. Tolerate + log rather than raise: disjoint-namespace sources
+    (wiki/arxiv/…) map 100% while FQN-colliding code langs lose ~0.06%."""
     source_ids = _read_normed_ids(source_train_dir)
     remap: Dict[int, int] = {}
     missing = 0
     for src_doc_id, nid in enumerate(source_ids):
         merged_id = merged_nid_to_id.get(nid)
-        if merged_id is None:
+        if merged_id is None or merged_id_to_source.get(merged_id, tag) != tag:
             missing += 1
             continue
         remap[src_doc_id] = merged_id
-    if missing:
-        # A source-train node absent from the merged-train graph means the merge
-        # dropped it (id collision) — every pack referencing it would orphan.
-        raise ValueError(
-            f"{missing} nodes in {source_train_dir} are absent from the merged "
-            f"train graph (collision drop?). Packs cannot be safely remapped."
-        )
-    return remap
+    return remap, missing
+
+
+def _remap_pack(r: PackRecord, remap: Dict[int, int]) -> bool:
+    """Remap a pack's doc_ids + link targets in place, source->merged.
+
+    Returns True if the pack survives, False if it must be DROPPED because one of
+    its core ``doc_ids`` was a collision-dropped node (its tokens have no merged
+    doc_id, so BucketedPackDataset can't materialize it). Dead cross-doc grants
+    (targets that were dropped, or already point out-of-split) are silently
+    pruned — a grant that can't resolve simply doesn't fire, same as val/OOC
+    targets. Grant list structure (per-doc inner lists) is preserved."""
+    if any(d not in remap for d in r.doc_ids):
+        return False
+    r.doc_ids = [remap[d] for d in r.doc_ids]
+    r.link_target_doc_ids = [[remap[d] for d in tgts if d in remap]
+                             for tgts in r.link_target_doc_ids]
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -160,15 +206,20 @@ def _select_balanced(records: List[PackRecord], target: int, seed: int) -> List[
 # Source spec parsing: tag=train_dir=schedule_dir=target
 # ---------------------------------------------------------------------------
 
-def _parse_source(spec: str) -> Tuple[str, Path, Path, str]:
+def _parse_source(spec: str) -> Tuple[str, Path, List[Path], str]:
     parts = spec.split("=")
     if len(parts) != 4:
         raise ValueError(
-            f"--source {spec!r} must be tag=train_dir=schedule_epoch_dir=target "
-            f"(target is an int or 'all')"
+            f"--source {spec!r} must be tag=train_dir=schedule_epoch_dir(s)=target "
+            f"(schedule field may be a COMMA-SEPARATED list of epoch dirs to union "
+            f"for multi-epoch balancing; target is an int or 'all')"
         )
-    tag, train_dir, sched_dir, target = parts
-    return tag.strip(), Path(train_dir.strip()), Path(sched_dir.strip()), target.strip()
+    tag, train_dir, sched_field, target = parts
+    # Multi-epoch: comma-separated distinct-seed epoch dirs are UNIONED (each epoch
+    # is a different packing of the same graph → new co-occurrence structure, not a
+    # replay). Balancing then selects `target` across the union.
+    sched_dirs = [Path(p.strip()) for p in sched_field.split(",") if p.strip()]
+    return tag.strip(), Path(train_dir.strip()), sched_dirs, target.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -177,64 +228,102 @@ def _parse_source(spec: str) -> Tuple[str, Path, Path, str]:
 
 def merge_packs(
     merged_train_dir: Path,
-    sources: List[Tuple[str, Path, Path, str]],
+    sources: List[Tuple[str, Path, List[Path], str]],
     output_dir: Path,
     n_buckets: int,
     seed: int,
     token_budget: int,
 ) -> dict:
     logger.info("Reading merged train graph node ids from %s", merged_train_dir)
-    merged_ids = _read_normed_ids(merged_train_dir)
+    merged_ids, merged_srcs = _read_ids_and_sources(merged_train_dir)
     merged_nid_to_id = {nid: i for i, nid in enumerate(merged_ids)}
+    merged_id_to_source = {i: s for i, s in enumerate(merged_srcs)}
     logger.info("Merged train graph: %d nodes", len(merged_ids))
 
     all_records: List[PackRecord] = []
     manifest_sources = []
     pack_id_base = 0
 
-    for tag, train_dir, sched_dir, target in sources:
-        parquet = sched_dir / "packs.parquet"
-        table = pq.read_table(str(parquet))
-        recs = _table_to_records(table)
-
-        # Auto-read the layout this source's packs were budgeted under. The
-        # schedule metadata is the source of truth: build_packed_batch re-applies
-        # the layout's prefix/suffix at materialization, and the sampler budgeted
-        # each pack to token_budget INCLUDING that prefix, so a mismatched layout
-        # yields T != token_budget and crashes _materialize. Stamping the actual
-        # per-source layout lets one BucketedPackDataset materialize a mixed corpus.
-        sched_meta = json.loads((sched_dir / "metadata.json").read_text())
+    for tag, train_dir, sched_dirs, target in sources:
+        # Union packs across one-or-more (distinct-seed) epoch dirs. Each epoch is
+        # a different packing of the same graph (new neighborhoods co-packed), so
+        # unioning multiplies the available packs for multi-epoch balancing. All
+        # epochs of a source share the same layout_policy (read from the first).
+        recs = []
+        for sd in sched_dirs:
+            ep_recs = _table_to_records(pq.read_table(str(sd / "packs.parquet")))
+            # Stamp the epoch index this pack was BUDGETED under so the loader
+            # replays the SAME stochastic prefix coin-flip (which is salted by
+            # epoch: _include_prefix hashes id:epoch). Prefer the schedule's own
+            # epoch_idx from metadata; fall back to parsing epoch_N from the dir
+            # name. Without this, a unioned epoch_1 pack materialized under the
+            # merged loader's epoch 0 flips different docs' prefixes → T!=budget.
+            _sm = json.loads((sd / "metadata.json").read_text())
+            _ep = _sm.get("epoch_idx")
+            if _ep is None:
+                _name = sd.name  # e.g. "epoch_3"
+                _ep = int(_name.split("_")[-1]) if _name.startswith("epoch_") else 0
+            for r in ep_recs:
+                r.layout_epoch = int(_ep)
+            recs.extend(ep_recs)
+        sched_meta = json.loads((sched_dirs[0] / "metadata.json").read_text())
         source_layout = sched_meta.get("layout_policy", "")
-        logger.info("%s: loaded %d packs from %s (layout=%r)",
-                    tag, len(recs), parquet, source_layout)
+        if len(sched_dirs) > 1:
+            logger.info("%s: unioned %d packs across %d epochs (%s) (layout=%r)",
+                        tag, len(recs), len(sched_dirs),
+                        ",".join(p.name for p in sched_dirs), source_layout)
+        else:
+            logger.info("%s: loaded %d packs from %s (layout=%r)",
+                        tag, len(recs), sched_dirs[0].name, source_layout)
 
-        # Balance
+        # Balance across the union. NOTE: bucket_id is a per-epoch density quantile
+        # with the same n_buckets, so pooling epochs into one bucket_id space keeps
+        # the density-stratified selection meaningful; pack_id collides across
+        # epochs but is reassigned uniquely below, so the collision is harmless.
         if target == "all":
             chosen = recs
         else:
             chosen = _select_balanced(recs, int(target), seed)
         logger.info("%s: selected %d / %d packs", tag, len(chosen), len(recs))
 
-        # Remap doc_ids source-train -> merged-train
-        remap = _build_remap(train_dir, merged_nid_to_id)
+        # Remap doc_ids source-train -> merged-train (tolerant of collision drops
+        # AND collision HIJACKS: an id owned by another source in the merged graph)
+        remap, n_missing = _build_remap(train_dir, tag, merged_nid_to_id,
+                                        merged_id_to_source)
+        if n_missing:
+            logger.warning("%s: %d source-train nodes absent from merged graph "
+                           "(id-collision losers) — packs referencing them as "
+                           "CORE docs will be dropped; dead grants pruned.",
+                           tag, n_missing)
+        kept: List[PackRecord] = []
+        dropped_packs = 0
         for r in chosen:
-            r.doc_ids = [remap[d] for d in r.doc_ids]
-            r.link_target_doc_ids = [[remap[d] for d in tgts]
-                                     for tgts in r.link_target_doc_ids]
+            if not _remap_pack(r, remap):
+                dropped_packs += 1
+                continue
             r.pack_id = pack_id_base
             r.layout_name = source_layout
             pack_id_base += 1
-        all_records.extend(chosen)
+            kept.append(r)
+        if dropped_packs:
+            logger.warning("%s: dropped %d / %d selected packs (core doc was a "
+                           "collision loser); kept %d.",
+                           tag, dropped_packs, len(chosen), len(kept))
+        all_records.extend(kept)
 
         manifest_sources.append({
             "tag": tag,
             "train_dir": str(train_dir),
-            "schedule_dir": str(sched_dir),
+            "schedule_dirs": [str(p) for p in sched_dirs],
+            "n_epochs_unioned": len(sched_dirs),
             "layout_policy": source_layout,
             "packs_available": len(recs),
             "packs_selected": len(chosen),
+            "packs_kept": len(kept),
+            "packs_dropped_collision": dropped_packs,
+            "nodes_missing_collision": n_missing,
             "target": target,
-            "tokens_est": len(chosen) * token_budget,
+            "tokens_est": len(kept) * token_budget,
         })
 
     logger.info("Union: %d packs across %d sources", len(all_records), len(sources))
@@ -279,8 +368,10 @@ def main() -> None:
                    help="Merged train graph (produced by merge_datasets over each "
                         "source's splits/train). Output doc_ids index into this.")
     p.add_argument("--source", action="append", required=True, dest="sources",
-                   metavar="TAG=TRAIN_DIR=SCHED_EPOCH_DIR=TARGET",
-                   help="Repeatable. TARGET is an int (#packs) or 'all'.")
+                   metavar="TAG=TRAIN_DIR=SCHED_EPOCH_DIR(S)=TARGET",
+                   help="Repeatable. SCHED_EPOCH_DIR(S) may be a comma-separated "
+                        "list of distinct-seed epoch dirs to UNION (multi-epoch "
+                        "balancing). TARGET is an int (#packs) or 'all'.")
     p.add_argument("--output", required=True, type=Path,
                    help="Output epoch dir (writes packs.parquet + metadata.json).")
     p.add_argument("--n-buckets", type=int, default=32)

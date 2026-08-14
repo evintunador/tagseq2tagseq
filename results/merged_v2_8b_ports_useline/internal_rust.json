@@ -1,0 +1,33 @@
+{
+  "port": "internal_rust",
+  "language": "rust",
+  "max_examples": 500,
+  "tier2": {
+    "use_line": {
+      "port": "internal_rust",
+      "checkpoint": "?",
+      "n_examples": 420,
+      "scope": "use_line",
+      "n_dropped_no_use_site": 80,
+      "n_fired": 250,
+      "n_oversized_skipped": 43,
+      "mean_nll_cross": 1.9661364670449155,
+      "mean_nll_flat": 2.071170324353668,
+      "mean_nll_placebo": 2.109437146322514,
+      "delta_real": 0.10503385730875217,
+      "delta_real_ci": [
+        0.06236225576480714,
+        0.15048627222214286
+      ],
+      "delta_placebo": -0.03826682196884601,
+      "placebo_separation": 0.14330067927759838,
+      "placebo_separation_ci": [
+        0.09710543055420486,
+        0.19275850354110804
+      ],
+      "failures": [],
+      "passed": true,
+      "fire_rate": 0.5952380952380952
+    }
+  }
+}

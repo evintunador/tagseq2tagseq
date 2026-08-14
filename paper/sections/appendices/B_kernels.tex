@@ -1,0 +1,155 @@
+\section{Custom block-sparse attention kernels}
+\label{app:kernels}
+
+The main text states only that we implement a custom efficient attention kernel;
+this appendix documents its mechanism for a systems reviewer. Our cross-document
+masks (\Cref{sec:method}) are highly structured but match none of the fixed sparsity
+patterns supported by off-the-shelf kernels, so we implement a block-sparse
+attention kernel in Triton \citep{tillet2019triton}. The design builds on
+FlexAttention \citep{flexattention_blog2024,flexattention_paper2024} and the
+FlashAttention line of tiled, IO-aware attention kernels
+\citep{dao2022flashattention,dao2023flashattention2}, on the online-softmax
+recurrence \citep{milakov2018onlinesoftmax} and memory-efficient attention
+\citep{rabe2021selfattention} that underlie them, and on block-sparse GPU matmul
+techniques \citep{gray2017blocksparse}. The distinguishing feature relative to
+FlexAttention is that the sparse block schedule is precomputed \emph{once per batch}
+and shared across all heads and layers, and the inner loop is specialized per block
+class, rather than re-evaluating a mask predicate at every block during the kernel.
+The cross-document-link mask uses the block-sparse kernel described below; the pure
+document-causal mask uses a specialized variant of it (\S\ref{par:varlen}), and both
+are selected automatically by mask type.
+
+\paragraph{Block Interaction Mask (BIM).}
+The central data structure is a precomputed, block-level compressed-sparse-row (CSR)
+table recording, for each (query-block, key/value-block) pair, whether the two blocks
+interact at all. It is analogous to FlexAttention's block mask but carries \emph{no
+batch or head dimensions}: the attention mask is a pure function of the packed
+sequence layout (document boundaries and cross-document grants), identical across all
+heads and all layers. It is therefore built once per batch on the CPU (\char`~1--2\,ms
+of vectorized NumPy) and reused by every head of every layer. The launch grid is
+(\#blocks, $H$); each CTA walks only its own CSR row, so block pairs that never
+interact are never launched and no per-block mask predicate is re-evaluated inside the
+kernel. The table records the fraction of causal block pairs it is able to skip.
+
+\paragraph{Bit-packed grant encoding.}
+Cross-document grants (the rectangles of allowed cross-document attention induced by
+detected links) are represented as bit-packed masks rather than as a dense $T\times T$
+predicate. Grant $k$ is stored in bit $k \bmod 64$ of chunk $\lfloor k/64\rfloor$ of an
+\texttt{int64} (bit 63 is written as \texttt{INT64\_MIN}, whose bit pattern is
+correct under the \texttt{!=0} test); we maintain per-chunk query and key/value
+bitmask tensors of shape $[\texttt{n\_chunks}, T]$, with
+$\texttt{n\_chunks}=\lceil \texttt{max\_grants}/64\rceil$. Grant membership is then a
+pointwise test with no reduction over the sequence: a query--key pair $(i,j)$ lies in
+some grant iff
+\[
+\texttt{in\_grant}(i,j) \;=\; \bigvee_{c}\;\bigl(\texttt{q\_bm}[c,i]\ \texttt{\&}\ \texttt{kv\_bm}[c,j]\bigr)\neq 0,
+\]
+an AND per chunk followed by an OR across chunks (emitted as an unrolled loop). This
+costs $O(T\cdot\texttt{n\_chunks})$ rather than $O(T^2)$: at $T=32\text{k}$ with the
+production cap of $256$ grants ($\texttt{n\_chunks}=4$) the encoding is $2$\,MB, versus
+roughly a gigabyte for a dense membership map. The same bitmasks are OR-reduced to
+block granularity when building the BIM, letting the CSR construction prune whole block
+pairs by the block-level union.
+
+\paragraph{Block-class taxonomy and inner-loop specialization.}
+Interacting block pairs differ in how much per-element masking they require, so the CSR
+is partitioned into four classes, each with a specialized inner loop, in increasing
+order of masking cost:
+\begin{itemize}
+  \item \textbf{Full} --- an off-diagonal pair of single-document blocks in the same
+  document: no per-element mask, a dense tile matmul.
+  \item \textbf{Pure-cross} --- single-document blocks in \emph{different} documents
+  interacting only through a grant: same-document is false for every position pair by
+  construction, so only the bitmask membership test is applied and the document-id
+  tensor is never loaded.
+  \item \textbf{Boundary} --- a block straddling a document boundary: the full
+  per-element predicate $(\texttt{same\_doc}\lor\texttt{in\_grant})$ is evaluated.
+  \item \textbf{Diagonal} --- an on-diagonal block: the full predicate plus the causal
+  (lower-triangular) mask.
+\end{itemize}
+The CSR row is emitted as \texttt{[full, pure\_cross, boundary, diagonal]} so each CTA
+processes progressively more expensive blocks in contiguous runs, keeping the branch
+predictable; the transposed key/value$\to$query orientation used by the $dK/dV$
+backward leads with the diagonal instead. The diagonal entry is forced to interact
+even when a block's only valid positions are layout-gap tokens, since a query block
+with no interactions would otherwise trigger an out-of-bounds CSR read in the backward.
+
+\paragraph{Numerical correctness (two invariants).}
+The block-level \texttt{same\_doc} test is an interval-overlap check on per-position
+document labels, which is exact only when those labels are monotonic; because
+graph-traversal packing makes the raw document ids non-monotonic, positions are
+relabeled by an ordinal \emph{run index} $r(i)=\sum_{j\le i}\mathbb{1}[d_j\neq d_{j-1}]$
+(the cumulative count of document-id changes), which is monotonic by construction and
+equal for two positions iff they lie in the same contiguous run --- without it a
+straddling query block silently drops its same-document keys, collapsing the softmax
+support and diverging training (observed NaN loss with $dQ\approx 5.7\times 10^{4}$ on
+document-linked code training). Separately, a query row with zero valid key/value
+entries keeps the flash recurrence's initial sentinel maximum ($M=-10^{6}$), so the
+backward $\exp_2(\text{score}-\text{LSE})$ overflows bf16 to $\infty$ and the ensuing
+$\infty\times 0$ poisons the gradient; since the correct output of an empty row is
+zero, a post-kernel \texttt{nan\_to\_num} maps such rows back to zero. Both are genuine
+correctness fixes, not performance tweaks, and the second is a reusable
+numerical-stability point for flash-style attention under full row masking.
+
+\paragraph{Asymmetric forward/backward block sizes and low-level layout.}
+The forward pass uses $128$-token blocks and the backward pass uses $64$-token blocks:
+at head dimension $D_h=128$ a $128$-token backward tile exceeds the A100's
+shared-memory and register budget, and the smaller backward tile is what keeps the
+$D_h=128$ backward within budget. Two further choices reduce memory traffic. The
+matmuls run natively in bfloat16 on the tensor cores with no up-cast to fp32 on load
+and the softmax scale applied \emph{after} the product, halving the register and
+shared-memory footprint of the operand tiles and raising occupancy. And the kernel
+loads directly from the packed token--head--dimension layout using its native strides,
+avoiding the permute/contiguous copies a $[B,H,T,D]$ layout would require; this saves
+on the order of $200$\,MB of HBM traffic per step at $T=32\text{k}$ and brings peak
+activation memory to FlexAttention parity.
+
+\paragraph{Varlen document-causal specialization.}\label{par:varlen}
+For the pure document-causal mask (no cross-document grants) a dedicated variant reuses
+the same BIM CSR machinery. With no grants, all grant bitmasks are identically zero, so
+the inner kernels skip \emph{all} bitmask loads and check only \texttt{same\_doc} and
+causality: off-diagonal same-document blocks take the full fast path and only the
+diagonal blocks are masked. The BIM is cached across steps, and a separate entry point
+builds it directly from a per-position document-id vector, handling non-contiguous
+document spans and layout-gap positions ($\texttt{doc\_id}=-1$). This gives the
+throughput of a fused varlen self-attention forward while retaining reliable gradients
+on real packed data.
+
+\paragraph{Speed (as measured on A100).}
+\Cref{tab:kernel-speed} reports throughput exactly as recorded in the repository's
+kernel benchmark; all figures are measured on a single A100 80GB in bfloat16 against
+compiled FlexAttention (\texttt{torch.compile(flex\_attention, dynamic=True)}) on a
+representative $16$-head, $D_h=64$, document-length-$512$ configuration, and we
+reproduce rather than re-benchmark them here. The forward pass is about $2\times$
+faster ($1.14$ vs $2.38$\,ms at $T=32\text{k}$) and the backward about $12\%$ faster
+($5.52$ vs $6.30$\,ms), for roughly $0.77\times$ total runtime at $T=32\text{k}$ (and
+$0.91\times$ at $T=4\text{k}$). The most dramatic difference appears at head dimension
+$D_h=128$, where FlexAttention's backward collapses to $\sim 177$\,ms while ours stays
+at $\sim 16.85$\,ms --- a $9$--$10\times$ speedup, and the regime that motivates the
+$64$-token backward tile above. Because the deployed cross-document kernel differs from
+the benchmarked configuration only by the numerical guards described here (which do not
+change the matmul work), these figures are representative of the deployed kernel but
+were not separately re-measured for it. The tie-in to the density-aware batch scheduler
+(the per-batch non-empty-block count) is described in \Cref{app:density} and not
+repeated here.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}llrrr@{}}
+    \toprule
+    Config & Pass & Ours & FlexAttention & Ratio \\
+    \midrule
+    $D_h{=}64$, $T{=}32\text{k}$ & forward  & $1.14$\,ms  & $2.38$\,ms  & $\sim2\times$ \\
+    $D_h{=}64$, $T{=}32\text{k}$ & backward & $5.52$\,ms  & $6.30$\,ms  & $\sim1.12\times$ \\
+    $D_h{=}64$, $T{=}32\text{k}$ & total    & ---         & ---         & $0.77\times$ \\
+    $D_h{=}64$, $T{=}4\text{k}$  & total    & ---         & ---         & $0.91\times$ \\
+    $D_h{=}128$                  & backward & $16.85$\,ms & $177$\,ms   & $\sim9$--$10\times$ \\
+    \bottomrule
+  \end{tabular}
+  \caption{Kernel throughput, reproduced as-measured from the repository's benchmark
+  (not re-run for this paper). All measurements are on a single A100 80GB in bfloat16;
+  ratios are ours relative to compiled FlexAttention (lower total ratio is faster).
+  ``total'' ratios are reported directly by the benchmark without per-pass timings.}
+  \label{tab:kernel-speed}
+\end{table}

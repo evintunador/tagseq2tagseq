@@ -1,0 +1,171 @@
+\section{Density-aware batch scheduling}
+\label{app:density}
+
+The main text (\Cref{sec:method}) reports the wall-clock efficiency of the
+cross-document training pipeline as a single measured number. This appendix
+documents the mechanism behind it: a data-scheduling scheme that equalizes
+attention cost \emph{across data-parallel ranks at every optimizer step}, so the
+block-sparse backward pass does not stall the gradient all-reduce. It is a
+data-parallel analogue of the intra-sequence load balancing done by
+sequence-parallel kernels such as Striped Attention \citep{brandon2023striped}
+and DistFlashAttn \citep{li2023distflashattn}: those rebalance the causal
+triangle \emph{within} one sequence spread over many devices, whereas we
+rebalance the cost of \emph{whole packed sequences} across the ranks of a
+data-parallel group. The bucketing borrows the machinery of cost- and
+difficulty-ordered curricula
+\citep{pouransari2024datasetdecomposition,bengio2009curriculum,kocmi2017curriculum},
+but the ordering objective is compute balance, not a learning schedule.
+
+\subsection{The problem: mask sparsity varies across packs}
+
+Under cross-document linking each training example is one packed sequence of $T$
+tokens whose attention mask is block-sparse: a query block attends to a key
+block only if the two lie in the same document or are joined by a granted link
+(\Cref{app:kernels}). The number of live blocks is not constant --- a pack of
+many short unlinked documents is nearly block-diagonal, while a pack dominated by
+a few long, cross-linked documents is much denser --- and spans roughly a
+$6\times$ range across the packed corpus. Because the backward pass runs only
+over live blocks, its cost is approximately proportional to that count. Under DDP
+with gradient accumulation, every rank must reach the all-reduce together, so the
+step is gated by the densest pack in the group; ranks holding lighter packs idle
+at the collective. This is the straggler pathology sequence-parallel schemes
+solve inside a sequence, resurfacing at the granularity of the data-parallel
+batch.
+
+\subsection{The \texttt{kv\_block\_count} metric and its analytic proxy}
+
+Pack density is quantified by \texttt{kv\_block\_count}: the number of non-empty
+$(q_\text{block}, k_\text{block})$ pairs in the block-sparse mask on a $128$-token
+block grid, a direct proxy for backward cost. It admits two estimators
+(\Cref{tab:density-methods}). \emph{Method~B} materializes the actual
+\texttt{BlockMask} on the GPU and sums its partial- and full-block counts; this
+is the ground truth the kernel sees but runs sequentially, and is used only for
+verification behind a GPU-pass flag. \emph{Method~C}, the default, computes the
+live-block set analytically from link positions on CPU inside the parallel epoch
+precompute workers. The two per-pack costs quoted for the estimators are
+$\sim 36$\,ms (Method~B) versus $\sim 1$\,ms (Method~C, at $T=32$k), a
+$\sim 36\times$ reduction; these are the estimators' stated costs, not benchmarked
+here on fixed hardware.
+
+Method~C accumulates a set of live block pairs in $O(\#\text{blocks})$: for each
+document span it adds the lower-triangular block pairs within the span's block
+range (intra-document causal), and for each detected link it adds the rectangle
+of block pairs formed by the granting query range --- from the link position, or
+from the source-span start under a whole-document grant --- against the target
+span's block range (cross-document grants). It returns the set's cardinality; the
+kernel-level meaning of these block pairs is given in \Cref{app:kernels}.
+
+\paragraph{Conditional exactness.}
+Method~C is \emph{exact} with respect to Method~B whenever every grant target ends
+before its link, i.e.\ all granted links point backward in packed order. This is
+exactly what the packer produces: the target-first packing order
+(\Cref{app:traversal}) topologically sorts each connected component so linked-to
+documents precede their linkers and emits every component contiguously. Under
+that order the analytic and materialized counts agree, and the GPU-pass flag
+confirms the equality empirically. The argument covers only acyclic grants; for
+cyclic link structures the insertion-order fallback can order some edges forward
+and the two counts may diverge, an effect we do not quantify.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lllll}
+\toprule
+Method & Source & Cost/pack & Parallelism & Role \\
+\midrule
+B & Materialized \texttt{BlockMask} (GPU) & $\sim 36$\,ms & sequential & verification \\
+C & Analytic, from link positions (CPU) & $\sim 1$\,ms & per-worker parallel & \textbf{default} \\
+\bottomrule
+\end{tabular}
+\caption{Two estimators for \texttt{kv\_block\_count}. Method~C is the default and
+is exact relative to Method~B when every target ends before its link, which the
+target-first packing order guarantees. The per-pack costs are the estimators'
+stated figures, not benchmarked here.}
+\label{tab:density-methods}
+\end{table}
+
+\subsection{Quantile bucketing and the bucket-shuffle schedule}
+
+Given a \texttt{kv\_block\_count} for every pack in an epoch, the packs are sorted
+by density and the $i$-th of $N$ is assigned bucket
+$\lfloor i \cdot n_\text{buckets} / N \rfloor$. These are \emph{equal-count}
+quantile buckets, not equal-width density bins, so each bucket holds the same
+number of packs regardless of the density distribution's shape; the default is
+$n_\text{buckets}=32$. Ties are split by sort position. When corpora are merged,
+buckets are re-assigned over the union, since bucket $B$ in one source is not the
+same density as bucket $B$ in another.
+
+Buckets are visited in an order balancing two goals: each bucket should be
+visited equally often (no density regime over-sampled), yet consecutive steps
+should see \emph{different} densities (gradient not correlated with density over
+short windows). The visit sequence is built by seeding an RNG with the epoch
+index, shuffling the list of buckets, and concatenating $1000$ such shuffles.
+Over the full sequence each bucket appears exactly once per shuffle (balance);
+within any single shuffle no bucket repeats, so adjacent steps almost always draw
+distinct buckets (diversity). Seeding by epoch index alone makes the schedule
+deterministic and identical across ranks and restarts.
+
+\subsection{The key invariant: per-step density match across ranks}
+
+The central contribution is what happens at each accumulation step. At global
+accumulation step $s$ every rank selects the \emph{same} bucket
+\[
+  B \;=\; \texttt{bucket\_seq}\big[\, s \bmod \lvert \texttt{bucket\_seq}\rvert \,\big],
+\]
+because \texttt{bucket\_seq} is seeded by the epoch index and \emph{not} by rank.
+Within that bucket, rank $r$ takes the pack at index
+$\texttt{consumed}[B] + r$, and the counter is then advanced by
+\texttt{world\_size}. Thus at every step all ranks draw packs from one density
+bucket, and --- because the bucket is equal-count and density is nearly constant
+within a quantile --- their per-rank backward costs are matched. The straggler
+gap at the all-reduce closes with no run-time cost measurement at all.
+
+A consequence is that \texttt{world\_size} is \emph{not} baked into the
+precompute: the metric, the buckets, and the shuffle sequence are all
+rank-count-independent, and only the per-step index arithmetic
+($\texttt{consumed}+r$, then $\texttt{consumed}\mathrel{+}=\texttt{world\_size}$)
+references it. A run therefore resumes at a different world size from a saved
+schedule position --- epoch index, global accumulation step, and per-bucket
+consumed counts --- without recomputing anything, the same portability exploited
+for the optimizer state. When a bucket lacks \texttt{world\_size} remaining packs
+mid-epoch, the schedule scans outward to the nearest bucket that does, in
+deterministic order of $\lvert b-B\rvert$; the epoch tail is handled with
+\texttt{drop\_last}.
+
+\subsection{Live versus precomputed paths}
+
+Density-aware scheduling is available only on the precomputed data path. The
+\emph{live} path builds every pack's block mask on the GPU at each step: it
+traverses the document graph, detects links, and constructs the mask online. The
+\emph{precomputed} path does link detection once, offline, in parallel workers,
+caches the link positions and target ids per pack, and reattaches them at load
+time as the baked-grant input to the mask builder (\Cref{app:kernels}). Because
+detection, traversal, and density scheduling have all moved offline, the loader
+runs synchronously with sub-millisecond load latency; the online cost eliminated
+is exactly the per-step link detection, mask build, and graph traversal.
+
+\subsection{Caveats and threats to validity}
+
+None of the following affects correctness --- the mask the kernel executes is
+unchanged --- only the tightness of the cost balance, which is consistent with
+the measured speedup being close to, but below, the theoretical ceiling in the
+main text.
+
+\begin{itemize}
+  \item \textbf{Block-size mismatch.} The proxy and the \texttt{BlockMask} count
+  blocks on a $128$-token grid, but the production Triton backward kernel runs at
+  a $64$-token block size. The metric is therefore \emph{rank-preserving} (denser
+  packs stay denser) rather than a literal count of the blocks the executed
+  kernel touches.
+  \item \textbf{\texttt{max\_grants}.} The analytic count ignores the runtime
+  \texttt{max\_grants} cap (default $64$), which drops the lowest-priority links
+  at execution time. For packs with more grants than the cap the proxy
+  \emph{overcounts} density relative to what the kernel runs; during
+  \texttt{max\_grants} warmup the frozen bucket densities also reflect the final
+  cap, not the smaller cap in force early in training.
+  \item \textbf{Epoch-tail degradation.} The equal-density guarantee holds in the
+  epoch interior. Once a bucket can no longer supply \texttt{world\_size} packs,
+  the outward scan draws from a neighbouring, differently dense bucket, and
+  \texttt{drop\_last} discards up to $\texttt{world\_size}-1$ packs per bucket, so
+  balance loosens over the last few steps.
+\end{itemize}

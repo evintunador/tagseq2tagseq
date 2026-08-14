@@ -42,11 +42,121 @@ and drop redirect stub nodes entirely. Downstream benefit: `HashNormTitleIndex`
 hits these titles directly, fixing the class of eval misses where the model generates
 a redirect title that isn't a first-class node.
 
-### Merge all datasets into one combined corpus
-Merge wiki + thestack + arxiv + fineweb into a single corpus for one bigger
-model training run. Reuse `data/merge_datasets.py` + source-stratified splitting
-(`split_graph.py --stratify-by-source`) so each source is proportionally
-represented in train/val/test.
+### Merge all datasets → diversity-scaling experiment (REDESIGNED 2026-07-29)
+**Supersedes the old wiki+stack+arxiv+fineweb merge.** First-principles rethink:
+the claim is "cross-doc attention helps graph-structured text, and the benefit
+survives/strengthens when many link types are learned jointly (diversity) and as
+data scales." Fineweb is DROPPED everywhere — it is edgeless, so (a) a fineweb-only
+run has no cross-doc A/B (it's just a different corpus, uninterpretable vs the
+merge) and (b) inside the merge its tokens are seen identically by both masks, so
+they only DILUTE the measurable Δ. "General intelligence" was never the claim.
+
+**Design:** 11 linked sources (wiki, arxiv, python/thestack, typescript, javascript,
+kotlin, rust, go, java, dart, zig), NO fineweb. Equal-ish token split (the balance
+IS the variable under test; every source now has an internal cross-doc benchmark
+that match/exceed the external ports, so no signal-weighting needed). Each rung is
+a cross_doc_link vs doc_causal PAIR (within-model Δ = the interpretable metric,
+robust to LR/batch since both arms share them). Fixed recipe carried from the small
+runs (muon_lr=0.003, muon_wd=0.1, adamw_lr=3e-5, 262144 tok/step) — only the step
+budget changes across rungs.
+
+**Rungs (token-scaling line):**
+- 3.9B — exact COMPUTE-match to the small single-source runs (15k steps × 262k tok);
+  the clean diversity control. Equal split ≈ 11809 packs/source (zig gives all 921).
+  No extra precompute (every source has ≥1 epoch at this size).
+- 8B — scaling point. ~27256 packs for the 7 big sources; go/java/dart/zig give all.
+  No extra precompute.
+- 16B ×2 — (a) perfectly-balanced multi-epoch and (b) take-what-it's-got (big
+  sources absorb the remainder, small give 1 epoch). Bonus ablation: isolates
+  whether BALANCE per se matters at fixed total tokens.
+
+**Multi-epoch = DISTINCT-SEED epochs, NOT epoch_0 replay (confirmed 2026-07-30).**
+precompute_epochs.py writes epoch_i with seed=base+i; the seed drives worker
+partition + BFS re-seed + traversal order, so each epoch is a genuinely different
+packing over the full graph (verified: zig epoch_0/1/2 = seeds 42/43/44, different
+pack counts + doc_id fingerprints). So repeating epochs adds new co-occurrence
+structure — real signal, not duplication. Multi-epoch schedules ALREADY EXIST on
+disk from the traversal-ablation work: zig 16ep, dart 9, java 7, go 6, wiki/rust 4,
+kotlin 2; thestack/arxiv/typescript/javascript have only epoch_0 (fine — they're
+capped, never repeated).
+
+**16B perfectly-balanced allocation (SAFE=4 epoch-repeat cap; NO top-up precompute
+needed — all reachable from on-disk epochs):** equal-ish share, but zig can't reach
+1/11 (would need ~48 epochs of a 59M-tok corpus) so it's capped at 4 epochs = 3,618
+packs = 0.12B; its shortfall redistributes to the other 10 → 48,466 packs = 1.59B
+each. Total 488,278 packs = 16.00B. Epochs used per source: arxiv/stack/ts/js 0.1-0.3
+(capped, epoch_0 only), kotlin 0.6, rust 1.3, wiki 1.7, go 2.2, java 2.9, dart 3.5
+(tightest, <4), zig 4 (capped). SAFE=4 per Muennighoff-style 2-4-epochs-near-lossless.
+
+**Rungs are INDEPENDENT, NOT nested (decided 2026-07-30).** Each rung
+balance-samples its own target (like the 3.9B build). Dropped strict nesting
+(3.9B⊄8B⊄16B) — it would need a prefix-stable selector (deterministic per-bucket
+order + proportional prefixes) and a 3.9B rebuild. ACCEPTED CONFOUND: a Δ-vs-budget
+change across rungs could partly reflect pack RESAMPLING, not pure scale. Note this
+in the paper. The 3.9B rung (epoch_3p9b, already built + training as jobs 50016/50017)
+is NOT rebuilt.
+
+**merge_packs.py still needs a small change for 16B:** accept MULTIPLE epoch dirs per
+--source (comma-sep), union them (each epoch's packs are distinct; keep all, reassign
+pack_id across the union), then _select_balanced the target across the union. Current
+code takes one dir/source. Not needed for 3.9B/8B (single epoch each), only the
+perfectly-balanced 16B. take-what-it's-got 16B also single-epoch (epoch_0 + caps).
+
+Build: merge_datasets over 11 sources' splits/train → merged_all_v2/splits/*;
+merge_packs.py (already source-generic: tag=train_dir=schedule_dir=target, auto-reads
+per-source layout+detector from schedule metadata) with per-source targets → one
+epoch dir per rung. Per-source val schedules for the 8 new langs via
+scripts/precompute_merged_v2_val.sh. Eval per-source on 11 internal benchmarks +
+5 external ports. See memory [[merged-corpus-build]].
+
+### Epochs-to-degradation: does cross-doc tolerate MORE epochs than doc-causal? (filed 2026-07-30)
+Hypothesis: doc_causal repetition replays near-identical 32k windows (same doc, same
+accidental neighbors) → memorizes fast (Muennighoff ~2-4 epochs then degrade). But
+cross_doc_link re-samples the DAG TRAVERSAL each epoch (distinct precompute seed →
+each epoch packs a doc with a DIFFERENT subset/order of its linked neighbors), so the
+CONDITIONING CONTEXT for the same tokens changes every epoch — combinatorially many
+"views" scaling with graph connectivity, not 1. Prediction: cdl's val-loss upturn
+(overfit onset) happens at a HIGHER epoch count than dc's on the identical corpus =
+a shifted/shallower degradation curve (NOT infinite epochs — finite tokens still
+memorize eventually). Experiment: one dense-graph single-source corpus (kotlin or go
+— dense import graph, go already has 6 epochs on disk), {cdl, dc} × {1,2,4,8,16}
+epochs, SAME schedule seeds so ONLY the mask differs (fair — the seed reshuffles dc
+packs too). Plot held-out val loss + a memorization probe (train-val gap or train
+verbatim recall) vs epochs per mask; the divergence point IS the result. Distinct
+from the diversity ladder + edge-dropout line. Uses on-disk multi-epoch schedules.
+
+### Edge-dropout density line (cross-doc Δ vs graph connectivity) — filed 2026-07-29
+The principled version of "how much better could this get with a denser corpus?"
+Hold the corpus COMPLETELY fixed (same docs/tokens/order) and vary ONLY the fraction
+of resolved links the mask may use: keep 100/75/50/25/0% of grants, seeded. At 0% it
+degenerates to doc_causal (sanity: the line should hit the doc_causal baseline). This
+is the clean instrument — NOT interpolating %fineweb, which confounds density with
+content/quality/distribution (fineweb is different, higher-quality text; adding it
+changes content, not just connectivity, and %-fineweb isn't even monotone in density).
+The resulting line "cross-doc Δ vs connectivity" extrapolates the payoff of a denser,
+better-connected corpus than the ones we have. Impl: subsample each pack's
+`link_to_target` grants with a seeded RNG.
+- EVAL-TIME dropping (cheap: 1 trained cross_doc_link ckpt, N evals) answers "how much
+  does the model USE density."
+- TRAIN-TIME dropping (N runs) answers "how much does density HELP LEARNING" — the
+  stronger paper claim, N× cost.
+Cheapest at mask-build time (subsample grants before the backend split), not graph
+build. Do after the merged run lands.
+
+### Short LR check at the 16B rung (before cross-rung Δ claims) — filed 2026-07-29
+Within a rung the cross_doc-vs-doc_causal Δ is LR-robust (both arms share LR). But
+comparing Δ ACROSS rungs (3.9B vs 16B) could be biased if a longer schedule wants a
+different peak LR. Model size is FIXED across rungs (no μP/width-transfer issue), so
+sensitivity is mild — plan is fixed muon_lr=0.003 + extend schedule. Insurance: a
+quick 2–3 value muon_lr check (~{0.002,0.003,0.004}) at 16B, pick by subset val_loss,
+before trusting cross-rung Δ comparisons.
+
+### Batch-size sweep (absolute efficiency, NOT the diversity experiment) — filed 2026-07-29
+262144 tok/step (8×32k×accum1) was inherited from ../moddednanogpt (tuned for a 124M
+GPT-2 on FineWeb), never tuned for the ~350M model here. It does NOT bias the
+within-model cross-doc Δ (both arms share it) and re-tuning would break the 3.9B
+compute-match to the small runs, so it stays fixed for the scaling experiment. File a
+SEPARATE batch-size sweep only if absolute token-efficiency becomes a goal.
 
 ### Preprocess code data to make imports lazy
 Rewrite The Stack code so imports are lazy, saving compute (fewer/later-resolved
@@ -94,6 +204,24 @@ so root generation attends to fabricated content. If the intent is "resolve
 existing citations, don't fabricate them", prompt-link processing should force
 `corpus_only` semantics. Confirm intended behavior before changing.
 
+### Per-token detector routing within one mixed-syntax document ("Tier 2") — OUT OF SCOPE (future direction)
+Deferred and explicitly **out of scope for this project** — recorded as an interesting
+future direction, not a work item here. `CompositeLinkDetector` (built 2026-08-01,
+`model/graph_traversal/composite_link_detector.py`) dispatches ONE sub-detector *per
+document*, chosen by identifier/content sniff. A single document that genuinely **mixes
+link syntaxes** — e.g. a markdown article embedding a `\cite{}`, a literate-programming
+file interleaving prose links and code imports, or a README with both `[text](url)` and
+fenced code `import`s — is classified by its dominant language and detected with that one
+sub-detector, so the minority syntax's links are missed. A proper fix is **per-token (or
+per-span) detector routing within one sequence**: segment the document by language region
+(fenced code blocks, LaTeX environments, etc.) and run the matching detector on each
+region, merging the results. This is the deferred "Tier 2" from the merged-corpus design
+([[merged-corpus-build]]). No current use case needs it — qualitative single-root
+generation and the single-language benchmark ports are all dominant-language — and it
+would add real complexity (region segmentation, offset bookkeeping across regions,
+cross-firing between adjacent regions). Revisit only if a downstream task requires
+faithful multi-syntax detection inside one document.
+
 ### TheStack (Python) link resolution in generation is unsupported
 `generate.py` / `model/generation_loop.py` resolve a detected link to a corpus doc
 via `corpus.has_document(target)` (exact → detector-key → optional fuzzy cascade).
@@ -108,6 +236,32 @@ so corpus hits never fire on a multi-repo dataset. See the NOTE in
 corpus so identifiers match, or (b) make the import detector emit repo-qualified
 identifiers when a repo context is available. Until then, Python-link generation
 falls back to generate/skip per `link_retrieval_mode` (no corpus fetch).
+
+### Merged-model (composite) link RESOLUTION across all code sources (filed 2026-08-01)
+`CompositeLinkDetector` (built 2026-08-01) closes link *detection* for merged-model
+generation — it routes per-document to the right sub-detector, so links in wiki /
+arxiv / all 9 code languages are all detected (verified: cross-distribution smoke,
+10/11 sources fire in their own syntax). But *resolution* — turning a detected
+`target_str` into an actual corpus fetch via `corpus.has_document(target)` — is a
+SEPARATE, still-open step, and it generalizes the Python-specific note above to every
+code source. The same structural key-format mismatch applies: the code detectors emit
+relative / repo-*un*qualified targets (python `chess/board.py`, ts `src/util/helper`,
+rust `crate::net::tcp`, dart `lib/models/user.dart`, …) while a multi-repo corpus's
+`raw_identifier`s are repo-qualified (`owner/repo:...` / `owner/repo@...`). Wiki and
+arxiv resolve fine (target == identifier); code sources never hit on a multi-repo
+corpus. So merged-model generation today can DETECT a code link but not FETCH its
+target — it falls back to generate/skip per `link_retrieval_mode`.
+Fix options (same shape as the Python note, applied corpus-wide): (a) generate against
+a SINGLE-repo corpus per language (`data/make_repo_corpus.py`) so identifiers match the
+detectors' relative keys; or (b) thread a repo context into `detect_links_for_doc` /
+the composite so it can emit repo-qualified targets; or (c) add a source-aware
+resolution index in `PretokCorpus` that matches on the detector-key form
+(`index_doc_span`) per source rather than the raw identifier. Option (c) is the most
+general and mirrors how the training/eval match already works (`_match_links_to_docs`
+uses `index_doc_span`). Note the composite already implements per-source
+`index_doc_span`, so a resolution index keyed on it is the natural hook. Until done,
+use `--link-retrieval-mode link_but_skip` (detect-only) for merged-model smokes, or a
+single-repo corpus for real code retrieval. Detection is DONE; this is resolution only.
 
 ---
 
@@ -374,3 +528,21 @@ docs/crossdoc_benchmark_port_harness_DESIGN.md verdict summary). Open items:
   former. NOT registered in ports/__init__.py until unblocked.
 - Then wire the passing ports into eval_checkpoints.py as first-class benchmarks
   (like repobench_cross_doc) so sweeps report them automatically.
+
+### Resume latent bugs (found 2026-08-07 by resume-corruption audit; NOT the 16B-degradation cause)
+Two real latent resume bugs surfaced while diagnosing the 16B degradation (which was
+actually LR-too-hot-at-length, not resume). Neither affected the merged_v2 runs
+(explicit max_optimizer_steps + 0 skipped), but both are footguns:
+1. **NULL-path cooldown never engages.** `main.py:1195` `total_steps_original =
+   max_steps_for_cooldown + resumed_steps`. On `max_optimizer_steps: null` (auto-derive
+   from n_packs) resume, the 552-560 `remaining = _max - resumed_steps` adjustment is
+   skipped (it needs an explicit `_max`), so the auto-derive re-computes FULL and +R
+   inflates total to FULL+R → cooldown_start pushed past run end → LR pinned at PEAK for
+   the whole post-resume segment, compounding per resume. Untie can also never fire.
+   Fix: apply `remaining = derived - resumed_steps` after auto-derive too, OR decouple
+   the schedule-total (always FULL) from the loader-cap (FULL - resumed_steps).
+2. **Silent optimizer partial-restore + bf16 mantissa truncation.** `main.py:1100`
+   `load_state_dict_full` leaves name/shape-mismatched params cold and only logs at
+   INFO; a skipped Muon bf16 param also gets its mantissa low-bits zeroed
+   (`optimizers/muon.py:154-156`), truncating fp32-effective → bf16 that resume. Add a
+   hard `assert skipped == []` on resume (currently only INFO-logged).

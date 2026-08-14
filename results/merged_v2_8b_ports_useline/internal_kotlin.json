@@ -1,0 +1,36 @@
+{
+  "port": "internal_kotlin",
+  "language": "kotlin",
+  "max_examples": 500,
+  "tier2": {
+    "use_line": {
+      "port": "internal_kotlin",
+      "checkpoint": "?",
+      "n_examples": 494,
+      "scope": "use_line",
+      "n_dropped_no_use_site": 6,
+      "n_fired": 189,
+      "n_oversized_skipped": 304,
+      "mean_nll_cross": 2.0896037536062253,
+      "mean_nll_flat": 2.3550414997301283,
+      "mean_nll_placebo": 2.296906221824087,
+      "delta_real": 0.26543774612390314,
+      "delta_real_ci": [
+        0.21081906912053466,
+        0.32169491320278987
+      ],
+      "delta_placebo": 0.05813527790604134,
+      "placebo_separation": 0.20730246821786188,
+      "placebo_separation_ci": [
+        0.13757596355714616,
+        0.2776609986071374
+      ],
+      "failures": [
+        "n_cross_doc 157 < 200 (insufficient power)",
+        "fire-rate 0.383 < 0.5"
+      ],
+      "passed": false,
+      "fire_rate": 0.3825910931174089
+    }
+  }
+}

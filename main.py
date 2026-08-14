@@ -211,12 +211,36 @@ class LimitedDataLoader:
 
     Creates a fresh islice on each call to ``__iter__``, so the underlying
     loader can be iterated more than once (e.g. repeated validation passes).
+
+    ``rewind_each_iter`` (VAL ONLY): a BucketedPackDataset is a *stateful*
+    generator — it mutates ``_bucket_consumed``/``_global_accum_step`` as it
+    yields and does NOT give those packs back. Used as a val loader, each pass
+    (every ``val_interval`` steps) would resume where the previous pass stopped
+    and, once a small val schedule (e.g. zig val = 25 packs) is drained, fall
+    through to the "advance to next epoch" branch and RAISE "All pre-computed
+    epoch dirs exhausted" — the step-500 crash that killed the merged_v2 runs.
+    Rewinding to the captured initial state before every pass fixes that AND
+    makes each pass score the SAME deterministic subset (comparable across
+    checkpoints). Do NOT set this for the training loader: training relies on
+    the persistent state to walk the full epoch across many __iter__ calls and
+    to resume mid-epoch from latest.pt.
     """
-    def __init__(self, loader: DataLoader, max_batches: int) -> None:
+    def __init__(self, loader: DataLoader, max_batches: int,
+                 rewind_each_iter: bool = False) -> None:
         self.loader = loader
         self.max_batches = max_batches
+        self._rewind = rewind_each_iter
+        self._init_state = None
+        if rewind_each_iter:
+            ds = getattr(loader, "dataset", None)
+            if ds is not None and hasattr(ds, "get_state"):
+                self._init_state = ds.get_state()
 
     def __iter__(self):
+        if self._rewind and self._init_state is not None:
+            ds = self.loader.dataset
+            if hasattr(ds, "set_state"):
+                ds.set_state(self._init_state)
         return itertools.islice(iter(self.loader), self.max_batches)
 
     @property
@@ -667,6 +691,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             rank=dist.rank,
             world_size=dist.world_size,
             start_state=start_state,
+            # Within-bucket shuffle for TRAINING. Packs are written source-clustered
+            # (merge_packs stamps sources in blocks) and stored pack_id-sorted within
+            # each bucket, so consuming them in pack_id order presents sources in
+            # phases across a finite WSD run -> the model forgets early-seen sources
+            # (measured: wiki +1.6 / arxiv +0.5 nll degradation on merged_all_v2 while
+            # code improved). A deterministic (seeded) shuffle interleaves sources
+            # uniformly; the fixed seed keeps resume position consistent. Default None
+            # preserves legacy order for configs that don't opt in.
+            shuffle_within_bucket_seed=cfg.get('data', {}).get('train_shuffle_within_bucket_seed'),
         )
     else:
         dataset = PackedSequenceDataset(
@@ -706,11 +739,28 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
                 break
         if _ok and _total_packs > 0:
             _derived = _total_packs // (max(1, dist.world_size) * max(1, _accum))
-            cfg.setdefault('train_loop', {})['max_optimizer_steps'] = _derived
+            # Resume semantics: _derived is the FULL run length (absolute optimizer
+            # steps counting from step 0). We must store REMAINING (full − resumed_steps)
+            # in max_optimizer_steps, exactly as the explicit-max path does in §1b. That
+            # way the LimitedDataLoader cap (~L742) is "batches left to load this run",
+            # and total_steps_original (= max_steps_for_cooldown + resumed_steps, ~L1195)
+            # reconstructs the full length for the WSD schedule. Storing the full length
+            # here instead would double-count resumed_steps at ~L1195, inflating the
+            # cooldown target so a resumed run holds peak LR too long. On a fresh run
+            # resumed_steps=0, so remaining == _derived (unchanged behavior).
+            _remaining = _derived - resumed_steps
+            if _remaining <= 0:
+                raise ValueError(
+                    f"Checkpoint step ({resumed_steps}) >= auto-derived run length "
+                    f"({_derived}); nothing left to train."
+                )
+            cfg.setdefault('train_loop', {})['max_optimizer_steps'] = _remaining
             logger.info(
-                "Auto-derived max_optimizer_steps=%d from %d epoch_dir(s) "
-                "(%d total packs / world_size=%d / accum=%d). Enables LR cooldown + untie.",
+                "Auto-derived full run length=%d from %d epoch_dir(s) "
+                "(%d total packs / world_size=%d / accum=%d); max_optimizer_steps set to "
+                "%d remaining (resumed_steps=%d). Enables LR cooldown + untie.",
                 _derived, len(epoch_dirs), _total_packs, dist.world_size, _accum,
+                _remaining, resumed_steps,
             )
     max_optimizer_steps = cfg.get('train_loop', {}).get('max_optimizer_steps')
     if max_optimizer_steps is not None:
@@ -764,9 +814,25 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             layout=layout_policy,
             rank=0,
             world_size=1,
+            # Source-unbiased, deterministic within-bucket shuffle: packs are
+            # pack_id-sorted = source-sequential, so a capped val otherwise always
+            # scores the earliest-source head. Fixed seed → density-stratified,
+            # source-mixed, and identical across checkpoints.
+            shuffle_within_bucket_seed=1234,
+            # Val: exhausting the (single) epoch = "scored the whole val set", a
+            # clean stop — NOT an error. val_steps can exceed a small val schedule's
+            # pack count (e.g. zig val = 25 < 400), which otherwise raised mid-val
+            # and killed the run.
+            raise_on_exhaustion=False,
         )
+        # rewind_each_iter: BucketedPackDataset is stateful; without a per-pass
+        # rewind, repeated val passes advance through DIFFERENT packs each pass
+        # (drift misread as overfitting) and eventually raise "epoch dirs
+        # exhausted". Reset to initial state each pass → same deterministic subset
+        # every checkpoint. Together with the shuffle + a larger val_steps this
+        # gives an unbiased, stable, representative val sample.
         return LimitedDataLoader(DataLoader(_ds, batch_size=None, num_workers=0),
-                                 max_batches=val_steps)
+                                 max_batches=val_steps, rewind_each_iter=True)
 
     cfg_val_dirs       = cfg.get('data', {}).get('val_dirs', {})       # {name: path}
     cfg_val_epoch_dirs = cfg.get('data', {}).get('val_epoch_dirs', {}) # {name: [dir,...]}
@@ -1065,7 +1131,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             len(restored), len(skipped),
         )
         if skipped:
-            logger.info("Resume: optimizer state NOT restored for: %s", sorted(skipped)[:20])
+            # A partial optimizer restore leaves the skipped params with COLD
+            # state (zero momentum/variance) while the rest resume warm — a
+            # silent, corrupting mismatch. Abort loudly rather than continue.
+            raise RuntimeError(
+                f"Optimizer resume incomplete: {len(skipped)} param(s) had no "
+                f"saved state (absent or shape-mismatched) and were left cold: "
+                f"{sorted(skipped)}. Refusing to continue with a partial "
+                f"optimizer restore — resume from a matching checkpoint."
+            )
 
         del resume_ckpt   # free ~1.8 GB
         resume_ckpt = None
@@ -1077,9 +1151,18 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     # -------------------------------------------------------------------------
     cooldown_frac = cfg.get('train_loop', {}).get('cooldown_frac', 0.0)
     min_lr_ratio = cfg.get('train_loop', {}).get('min_lr_ratio', 0.1)
-    warmup_steps = int(cfg.get('train_loop', {}).get('warmup_steps', 0))
-    muon_momentum_warmup_steps = int(cfg.get('optimizer', {}).get('muon_momentum_warmup_steps', 0))
     max_steps_for_cooldown = cfg.get('train_loop', {}).get('max_optimizer_steps')
+    # Warmup: prefer warmup_percent (scales with run length so warmup is CONSTANT in
+    # fraction-of-run across scaling rungs) over absolute warmup_steps. Absolute steps
+    # silently drift — 300 steps was 2.0% at 3.9B but only 0.5% at 16B. Applied to the
+    # FULL schedule length (absolute step numbers), so a resumed run skips elapsed warmup.
+    _warmup_pct = cfg.get('train_loop', {}).get('warmup_percent')
+    if _warmup_pct is not None:
+        _full_len = (max_steps_for_cooldown or 0) + resumed_steps
+        warmup_steps = round(float(_warmup_pct) * _full_len)
+    else:
+        warmup_steps = int(cfg.get('train_loop', {}).get('warmup_steps', 0))
+    muon_momentum_warmup_steps = int(cfg.get('optimizer', {}).get('muon_momentum_warmup_steps', 0))
 
     if cooldown_frac > 0.0 and max_steps_for_cooldown is None:
         logger.warning(
@@ -1289,6 +1372,13 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     atomic_feature_kwargs['save_latest_interval'] = int(
         cfg['train_loop'].get('save_latest_interval') or 0
     )
+    # Absolute base step (resumed_steps on --resume-from, 0 fresh) so the loop records
+    # ABSOLUTE step in checkpoint metadata. Without it a resumed run saves its local
+    # step count and a resume-of-that (yield-watcher relaunch) rewinds to ~0. This is a
+    # DECLARED kwonly arg of the multi_val_bucketed feature (so it passes smart_train's
+    # allowlist AND is part of that feature's kwarg-set — selected only when provided,
+    # which we always do here).
+    atomic_feature_kwargs['start_step'] = int(resumed_steps)
     # Profiling: inject profile_* knobs into the shared kwargs so profile_training
     # is selected and composed alongside the other atomic features (grad_accum,
     # val, checkpointing, etc.) by the LLM compiler.  profile_run=False is the

@@ -1,0 +1,59 @@
+% TAGSeq2TAGSeq
+% Top-level LaTeX document. Preamble targets a generic single-column ML-conference
+% style; replace the documentclass/style with the target venue's when chosen.
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{subcaption}
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}
+\usepackage{natbib}
+
+\graphicspath{{figures/}}
+
+% --- editorial macros -------------------------------------------------------
+\newcommand{\method}{\textsc{TAGSeq2TAGSeq}\xspace}
+\usepackage{xspace}
+\newcommand{\doccausal}{\texttt{doc\_causal}\xspace}
+\newcommand{\crossdoc}{\texttt{cross\_doc\_link}\xspace}
+\newcommand{\concatlink}{\texttt{doc\_concat\_link}\xspace}
+\newcommand{\concat}{\texttt{doc\_concatenated}\xspace}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+% ---------------------------------------------------------------------------
+
+\title{\method: Training Language Models on Text-Attributed Graphs\\
+       with Link-Aware Cross-Document Attention}
+\author{\todo{authors}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\input{sections/00_abstract}
+\end{abstract}
+
+\input{sections/01_introduction}
+\input{sections/02_related_work}
+\input{sections/03_method}
+\input{sections/04_datasets}
+\input{sections/05_experiments}
+\input{sections/06_results}
+\input{sections/07_analysis}
+\input{sections/08_conclusion}
+
+\bibliographystyle{plainnat}
+\bibliography{bib/refs}
+
+\appendix
+\input{sections/A_appendix}
+
+\end{document}

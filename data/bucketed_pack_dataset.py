@@ -87,6 +87,8 @@ class BucketedPackDataset(IterableDataset):
         world_size: int,
         start_state: Optional[BucketState] = None,
         encode_fn=None,
+        shuffle_within_bucket_seed: Optional[int] = None,
+        raise_on_exhaustion: bool = True,
     ) -> None:
         super().__init__()
         self.epoch_dirs = epoch_dirs
@@ -95,6 +97,26 @@ class BucketedPackDataset(IterableDataset):
         self.layout = layout
         self.rank = rank
         self.world_size = world_size
+        # VAL sampling: packs are stored bucket-sorted then pack_id-sorted, and
+        # pack_id is SOURCE-SEQUENTIAL in a merged corpus (wiki 0..N, stack next,
+        # …). So the first pack drawn from each density bucket is always the same
+        # earliest-source pack, and a capped val (val_steps << |packs|) always
+        # scores that same source-biased head. Shuffling each bucket's pack list
+        # by a FIXED seed makes the capped sample source-unbiased AND stable
+        # across checkpoints (same seed → same subset). Set for val loaders.
+        #
+        # TRAINING also benefits (and the old "order is irrelevant since it consumes
+        # the whole epoch" assumption was WRONG for a finite WSD run): consuming a
+        # bucket's packs in source-sequential pack_id order presents sources in phases
+        # across the run, so the model forgets early-seen sources by the end (measured
+        # on merged_all_v2: wiki/arxiv nll degraded mid-run while code improved). A
+        # fixed-seed shuffle interleaves sources uniformly and stays resume-consistent.
+        # None = keep legacy pack_id order.
+        self._shuffle_within_bucket_seed = shuffle_within_bucket_seed
+        # Training: raise when packs run out before the step budget (fail loud).
+        # Val: stop cleanly on exhaustion (scored the whole val set) — val_steps may
+        # exceed a small val schedule's pack count.
+        self._raise_on_exhaustion = raise_on_exhaustion
 
         # Per-pack layout support (mixed-source corpora): packs may carry a
         # layout_name naming the DocLayoutPolicy they were budgeted under.
@@ -182,6 +204,13 @@ class BucketedPackDataset(IterableDataset):
                 bucket_lists[r.bucket_id].append(r)
             for b in bucket_lists:
                 bucket_lists[b].sort(key=lambda r: r.pack_id)
+            if self._shuffle_within_bucket_seed is not None:
+                # Source-unbiased, deterministic (seeded) shuffle within each
+                # bucket so a capped val samples a density-stratified, source-mixed
+                # subset rather than the earliest-source head. Per-bucket seed
+                # offset so buckets don't shuffle in lockstep.
+                for b in bucket_lists:
+                    random.Random(self._shuffle_within_bucket_seed + b).shuffle(bucket_lists[b])
 
             bucket_seq = _make_bucket_sequence(n_buckets, seed=self._epoch_idx)
 
@@ -217,6 +246,13 @@ class BucketedPackDataset(IterableDataset):
             self._global_accum_step = 0
             self._bucket_consumed = {}
 
+        if not self._raise_on_exhaustion:
+            # VAL loaders: exhausting the (single) epoch just means "scored the whole
+            # val set" — a normal stop, not an error. Return so the DataLoader ends
+            # cleanly. (Training keeps raising to fail loud when packs run out before
+            # the step budget.) Needed because val_steps can exceed a small val
+            # schedule's pack count (e.g. zig val = 25 packs < val_steps).
+            return
         raise RuntimeError(
             f"All pre-computed epoch dirs exhausted after {len(self.epoch_dirs)} epochs. "
             "Re-run precompute_epochs.py to generate more."
@@ -247,6 +283,16 @@ class BucketedPackDataset(IterableDataset):
         """Reconstruct a full batch dict from a PackRecord."""
         placements = _record_to_placements(pack)
         layout = self._get_layout(getattr(pack, "layout_name", ""))
+        # Per-pack epoch for the stochastic prefix coin-flip. A pack budgeted under
+        # source-epoch K (merge_packs stamps layout_epoch=K when unioning multiple
+        # epochs) MUST materialize under K's coin-flip, else different docs get
+        # prefixes than were budgeted and T != token_budget. -1 (single-epoch, or
+        # pre-field parquet) → use the loader's current epoch (they coincide).
+        # Always set explicitly (not just when _le>=0): the cached policy is shared,
+        # so a prior pack's per-pack epoch could otherwise leak into a -1 pack.
+        _le = getattr(pack, "layout_epoch", -1)
+        if hasattr(layout, "set_epoch"):
+            layout.set_epoch(_le if _le >= 0 else self._epoch_idx)
         batch = build_packed_batch(self.graph, self.backend, layout, placements)
         T = batch["tokens"].shape[-1]
         budget = getattr(self, '_token_budget', None)

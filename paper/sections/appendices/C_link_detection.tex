@@ -1,0 +1,214 @@
+\section{Online link detection}
+\label{app:linkdet}
+
+Cross-document attention masks (\Cref{sec:method}) need to know, for each
+generated or packed document, \emph{where} a link ends and \emph{what} it points
+at. This appendix documents the online link detectors that supply that
+information. The design goal is a detector that runs cheaply in the training hot
+path and inside the generation loop, and that decouples link recognition from the
+tokenizer so the mask machinery never has to know how text is encoded.
+
+\subsection{The \texttt{LinkDetector} protocol}
+
+A detector exposes up to three entry points. \texttt{detect\_links} scans a whole
+one-dimensional token sequence and returns a list of \texttt{LinkInfo} records; it
+runs at generation time over a rolling window (a link fires when its end position
+coincides with the end of the window) and as the training fallback when no
+per-document method exists. \texttt{detect\_links\_for\_doc} is the preferred
+training path: it operates on a single document slice, with span-local positions
+re-based by the caller, and because it receives the owning document's identifier it
+can resolve \emph{relative} imports. It is not part of the base protocol --- the
+caller probes for it with \texttt{hasattr} --- and is implemented only by the
+detectors whose targets are relative (Python, TS/JS, Rust, Zig, Dart) and by the
+composite detector. \texttt{index\_doc\_span} returns the \emph{lookup key} for a
+document on the target side of an edge; the default is the raw identifier.
+Detection matches a source-side target string against these keys by exact
+dictionary lookup, so both sides must land in the same string space
+(\Cref{app:linkdet:norm}). The traversal DAG additionally requires the target
+document to start strictly before the link position (\Cref{app:traversal}).
+
+The load-bearing design choice is that a \texttt{LinkInfo} carries a
+\emph{decoded} target string and an \textbf{exclusive} end position
+\texttt{link\_end\_pos} --- the token index just past the link's closing delimiter,
+from which attention to the target is granted. The detector performs all decoding
+and hands the mask creator plain strings plus integer offsets; because the offset
+is an integer rather than a token identifier, the mask machinery has no tokenizer
+dependency at all.
+
+\subsection{Two detection strategies}
+
+\paragraph{Token-id matching (markdown).}
+Markdown links are detected \emph{without} a full decode. The detector searches for
+the \texttt{](} bigram, which the GPT-2 BPE tokenizer emits as a single token
+(id~$16151$), backtracks at most $100$ tokens for the opening \texttt{[} (ids $58$
+or $685$), then grows a forward window (up to $50$ tokens), re-decoding the
+accumulated chunk each step until a \texttt{)} appears. The target is the text
+before the first \texttt{)} and \texttt{link\_end\_pos} is one past that token. This
+is fast but tokenizer-specific (\Cref{app:linkdet:fail}).
+
+\paragraph{Decode-once + blank + regex + remap (everything else).}
+Every other detector decodes the span once, then blanks out comments and string
+bodies by overwriting them with an equal-length run of spaces so that all remaining
+character offsets are preserved. It then runs language-specific compiled regexes
+over the blanked text and maps the matched character offsets back to token positions
+via a cumulative per-token character-length array and \texttt{bisect\_left}. Python
+takes a fast path that batch-decodes token bytes in one call (roughly $2\times$
+faster on large files). This pipeline is a cheap approximation of a real parse:
+offset-preserving blanking with per-language hand-written lexers handles nested
+block comments, raw and byte strings, lifetimes-vs-char literals, and
+template/multiline string bodies without a full grammar. Every runtime link
+detector---for all languages and all three regimes below---uses this regex/token
+pipeline; \emph{no} link detector calls a parser. Tree-sitter grammars
+\citep{brunsfeld2018treesitter} are used elsewhere in the system: to extract the
+\emph{shipped} graph offline, as an independent oracle that grades the runtime
+detector for agreement, and---at benchmark-evaluation time only---to re-anchor the
+scored span to the first use site of an imported symbol
+(\Cref{app:linkdet:regimes}). Link \emph{detection} itself is grammar-free
+throughout.
+
+\subsection{Per-modality detectors}
+
+\begin{itemize}
+  \item \textbf{Markdown wikilinks:} token-id matching as above; target is the
+        link title (spaces preserved).
+  \item \textbf{Python:} three regexes (\texttt{import}, \texttt{from}-import, and a
+        parenthesized multi-line form) with alias stripping, over
+        comment/string/docstring-blanked text. It emits \emph{candidate file paths}
+        rather than module names.
+  \item \textbf{LaTeX \texttt{\textbackslash cite}:} a purely syntactic regex
+        \texttt{\textbackslash cite[a-zA-Z]*(\lbrack...\rbrack)*\{...\}}; the bibkey is
+        resolved to a title at extraction time, so detection returns the brace
+        contents verbatim. Empty \texttt{\textbackslash cite\{\}} is skipped, and
+        there is \emph{no} comment blanking.
+  \item \textbf{Compiled-regex code detectors:} Go, Java, Kotlin, TS/JS, Zig, Dart,
+        and Rust, all sharing the decode-blank-regex-remap pipeline. Their import
+        syntax, key transforms, and blanking rules are summarized in
+        \Cref{tab:linkdet}.
+\end{itemize}
+
+\subsection{Identifier normalization and key matching}
+\label{app:linkdet:norm}
+
+Matching is exact dictionary lookup, so a detector's target string and the graph's
+\texttt{index\_doc\_span} key must be normalized into a common space. Some
+modalities use \emph{identity} keys (the target string already equals the node
+identifier); others transform the identifier. \Cref{tab:linkdet} lists the
+per-language transform. A recurring subtlety is dual-mode resolution: for TS/JS the
+flat scan produces specifier-space keys usable only by the detection grader, while
+the per-document path produces resolved repository-relative keys that training
+matches --- so the flat scan alone yields \emph{empty} masks for those languages.
+Rust and Python similarly resolve \texttt{self}/\texttt{super} and relative imports
+only in the per-document path.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}llll@{}}
+    \toprule
+    Language & Import syntax detected & Key transform & Comment blanking \\
+    \midrule
+    Markdown   & \texttt{[title](...)} bigram & identity (title w/ spaces) & none \\
+    arXiv/\texttt{\textbackslash cite} & \texttt{\textbackslash cite\{key\}} & identity (byte-identical title) & none \\
+    Python     & \texttt{import}/\texttt{from} & bare-path $\to$ file candidates & \texttt{\#}, strings, docstrings \\
+    Go         & single + grouped import & identity (full import path) & \texttt{//}, \texttt{/*\,*/}, strings/runes \\
+    Java       & \texttt{import [static] a.b.C[.*];} & FQN dotification (drop \texttt{.java}) & none \\
+    Kotlin     & \texttt{import a.b.C [as X]} & FQN (node id = symbol FQN) & \texttt{//}, \texttt{/*\,*/}, char, triple-quote \\
+    Rust       & \texttt{use}/\texttt{mod} tree & strip \texttt{owner/repo@} $\to$ \texttt{crate::} path & comments, strings, char (not lifetimes) \\
+    TS/JS      & \texttt{from}, dynamic \texttt{import()}, \texttt{require()} & extension-less path & comments + template bodies \\
+    Zig        & \texttt{@import("...")} & keep \texttt{.zig} & \texttt{//} only, char, \texttt{\textbackslash\textbackslash} multiline \\
+    Dart       & first \texttt{import}/\texttt{export} URI & keep \texttt{.dart} & anchored \texttt{(?m)(?:\^{}|;)} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Per-modality detector, import syntax, target$\leftrightarrow$key
+  transform, and blanking. ``Identity'' keys require no transform; the others
+  rewrite the detected string into the graph's node-id space. Rust node ids are
+  \texttt{owner/repo@crate::a::b}, using \texttt{@} as the crate/path separator
+  because module paths already contain \texttt{::}; the key is the \texttt{crate::}
+  module path after the \texttt{@}. Java drops the repository prefix and
+  \texttt{.java} and replaces \texttt{/} with \texttt{.}, but the source root is
+  unknown (\Cref{app:linkdet:fail}).}
+  \label{tab:linkdet}
+\end{table}
+
+Two target-side subtleties matter for correctness. Python's bare-path key is
+expanded by \texttt{module\_path\_to\_file\_paths} into \texttt{foo/bar/baz.py} plus
+\texttt{\_\_init\_\_.py} candidates, and where a name could be a submodule or a
+symbol both candidates are emitted; resolution keeps whichever is a real node. Rust
+performs the analogous submodule-vs-symbol expansion and use-tree flattening
+(\texttt{use a::\{b, c::D\}} yields one key per leaf). Java \texttt{import static}
+resolves to the enclosing type and \texttt{.*} wildcards resolve to nothing; Kotlin
+drops wildcards; Go stores the verbatim import path with no expansion.
+
+\subsection{The composite detector}
+
+The merged multi-source model uses a composite detector over eleven members. Its
+rule is to pick \emph{exactly one} sub-detector per document and never merge
+results, which avoids cross-firing between languages. On the target side,
+\texttt{index\_doc\_span} sniffs by identifier (\texttt{::}~$\to$ Rust; strip
+repository prefix and map the extension; a hostname heuristic for Go), falling back
+to identity for ambiguous title-like identifiers (wiki, arXiv). The per-document
+path sniffs by identifier and then by content; the flat \texttt{detect\_links}
+(generation, no identifier available) sniffs by content only. The content sniff
+scores each candidate as a weighted sum of signature matches (\texttt{\textbackslash
+cite\{}~$3.0$, \texttt{@import(}~$3.0$, \texttt{use::}~$2.0$, markdown~$1.0$, so a
+stray \texttt{](} never outvotes a real code signature), distinguishes TS from JS by
+marker tokens, breaks ties by a fixed priority (markdown last), and returns nothing
+for prose. The safety argument is soft: a mis-sniff usually produces a target that
+matches no real key and therefore no-ops. Mixed-syntax single documents, which would
+need per-token routing, are explicitly deferred.
+
+\subsection{Three regimes: training, benchmark evaluation, generation}
+\label{app:linkdet:regimes}
+
+Which detection path is exercised, and whether a parser is involved at all, differs
+across the three settings in which links are resolved.
+
+\begin{itemize}
+  \item \textbf{Training.} The packer bypasses text detection entirely: the resolved
+        graph edge is baked into the precomputed example, so grants come from the
+        known edge list rather than from re-scanning tokens. The online regex detector
+        is only a fallback for the live (non-precomputed) path. No parser runs.
+  \item \textbf{Benchmark evaluation.} Grants are produced by the language's regex
+        detector (the same token-space pipeline as training), but tree-sitter is used
+        \emph{separately} to decide \emph{where} the completion is scored: the
+        \texttt{use\_line} scope re-anchors scoring to the first line that references
+        a symbol declared in a granted cross-file document, located with a per-language
+        top-level-declaration query. This sidesteps import syntax and \texttt{import~*}
+        (\Cref{app:results}). Detection is still regex; only the scoring \emph{scope}
+        uses a grammar.
+  \item \textbf{Generation.} There are no baked edges, so the regex detector (the
+        composite, for a merged model) runs over the model's own output on a rolling
+        window and fires when a link closes at the just-emitted token; a resolved link
+        then triggers the link-following retrieval step. No parser runs.
+\end{itemize}
+
+\subsection{Limitations}
+\label{app:linkdet:fail}
+
+The detectors trade grammar-completeness for hot-path speed, and several of the
+resulting approximations are worth stating plainly.
+\begin{itemize}
+  \item \textbf{Tokenizer coupling of the markdown path.} The \texttt{](} detector
+        is bound to a specific GPT-2 token id; under a different tokenizer it detects
+        nothing. Any \texttt{](} in prose or code fires (there is no comment
+        blanking), and the $50$-token forward window truncates unusually long links.
+  \item \textbf{arXiv title brittleness.} Matching requires the cited title to be
+        byte-identical to the extracted title; whitespace, Unicode, or BPE drift
+        breaks it silently, and \texttt{\textbackslash cite} inside a \texttt{\%}
+        comment is still detected (no blanking).
+  \item \textbf{Char-to-token remap.} The \texttt{bisect} remap is exact for ASCII
+        source but may be off by one token on a rare multibyte token; the resulting
+        \texttt{link\_end\_pos} error is at most one position.
+  \item \textbf{Python resolution gaps.} Candidate file-path generation can
+        over-produce; the repository-root${=}$path-root assumption fails for
+        site-packages and \texttt{sys.path} manipulation; dynamic and
+        \texttt{TYPE\_CHECKING} imports go undetected.
+  \item \textbf{Java source-root ambiguity.} The FQN key cannot be verified against
+        the builder's source root, and there is no comment blanking (detection relies
+        on the \texttt{;} terminator and a line anchor).
+  \item \textbf{Composite dispatch.} The no-op-on-mismatch safety is soft rather than
+        guaranteed, and single-language-per-document dispatch does not handle a
+        document that mixes link syntaxes.
+  \item \textbf{Grant cap.} A per-example cap on cross-document grants (default $64$)
+        silently drops the excess after sorting by link position.
+\end{itemize}

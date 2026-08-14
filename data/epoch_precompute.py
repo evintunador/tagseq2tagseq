@@ -86,6 +86,17 @@ class PackRecord:
                                             # default layout (single-source epochs).
                                             # Set by merge_packs.py for mixed corpora
                                             # where each source has its own layout.
+    layout_epoch:        int = -1           # epoch index whose stochastic coin-flip
+                                            # this pack was BUDGETED under (the
+                                            # prefix on/off decision is epoch-salted:
+                                            # _include_prefix hashes id:epoch). When a
+                                            # pack from source-epoch K is unioned into
+                                            # a merged file, materializing it under the
+                                            # loader's epoch (0) flips DIFFERENT docs'
+                                            # prefixes → T != token_budget. -1 = fall
+                                            # back to the loader's current epoch (safe
+                                            # for single-epoch, where they coincide).
+                                            # Set by merge_packs.py per source-epoch.
 
 
 def _record_to_placements(record: PackRecord) -> List[DocPlacement]:
@@ -630,6 +641,7 @@ def _records_to_table(records: List[PackRecord]) -> pa.Table:
         ),
         "component_ids":       pa.array([r.component_ids       for r in records], pa.list_(pa.int32())),
         "layout_name":         pa.array([r.layout_name         for r in records], pa.string()),
+        "layout_epoch":        pa.array([r.layout_epoch        for r in records], pa.int32()),
     })
 
 
@@ -644,6 +656,9 @@ def _table_to_records(table: pa.Table) -> List[PackRecord]:
     # default to "" so BucketedPackDataset uses its single default layout (the
     # correct behaviour for every single-source epoch).
     has_layout = "layout_name" in cols
+    # Back-compat: layout_epoch added for multi-epoch merged corpora; -1 = fall
+    # back to the loader's current epoch (correct for single-epoch schedules).
+    has_layout_epoch = "layout_epoch" in cols
     return [
         PackRecord(
             pack_id=int(cols["pack_id"][i]),
@@ -659,6 +674,7 @@ def _table_to_records(table: pa.Table) -> List[PackRecord]:
             component_ids=([int(x) for x in cols["component_ids"][i]]
                            if has_components else []),
             layout_name=(str(cols["layout_name"][i]) if has_layout else ""),
+            layout_epoch=(int(cols["layout_epoch"][i]) if has_layout_epoch else -1),
         )
         for i in range(n)
     ]

@@ -104,6 +104,17 @@ def _save_ckpt_full(raw_model, optimizer, metadata, filepath, bucket_state_fn=No
             # Lazy: checkpointer resolves the dataset position at save time.
             md["bucket_state"] = lambda: bucket_state_fn().__dict__
         checkpointer.save_checkpoint(filepath=filepath, metadata=md, model=raw_model)
+        del md
+    else:
+        # Non-rank-0 ranks gathered full_state only to satisfy the collective;
+        # they never use it. Holding it (~model-size of host RAM per rank) across
+        # the save + barrier wait multiplies the node-wide memory spike by
+        # world_size at exactly the moment rank-0 is also serializing to disk —
+        # on a SHARED node (ExclusiveUser=NO) low on free RAM this host-OOMs and
+        # SIGKILLs rank-0, collapsing every peer on cpu_barrier() with a gloo
+        # "connection closed by peer" (observed: 5/6 merged_v2 runs died this way,
+        # rank-0 "Killed", node FreeMem ~15GB). Free it before the barrier wait.
+        del full_state
     # All ranks wait for rank 0 to finish writing before proceeding.
     cpu_barrier()
 
@@ -140,6 +151,7 @@ def run_training(
     output_dir: Optional[str] = None,
     bucket_state_fn: Optional[Any] = None,
     save_latest_interval: Optional[int] = None,
+    start_step: int = 0,
     **kwargs,
 ) -> Dict[str, Any]:
     """multi_val training loop that also persists BucketedPackDataset position.
@@ -191,7 +203,13 @@ def run_training(
             _save_best(raw_model, optimizer, mean_loss, step, output_dir,
                        bucket_state_fn, config)
 
-    step_count = 0
+    # start_step: absolute step this run BEGINS at (resumed_steps on a --resume-from,
+    # 0 fresh). The checkpoint metadata MUST record the ABSOLUTE step, not the
+    # per-process count — otherwise a resumed run saves step=500 (local) instead of
+    # 17250 (absolute), and a resume-OF-that (e.g. the yield-watcher's auto-relaunch)
+    # reads 500 and throws away ~16750 steps. This silently reset progress to near-0
+    # on every yield→relaunch cycle. See [[merged-corpus-build]] step-accounting bug.
+    step_count = int(start_step)
     for batch in train_loader:
         loss = model(batch)
         optimizer.zero_grad(set_to_none=True)

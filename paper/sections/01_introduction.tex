@@ -1,0 +1,31 @@
+\section{Introduction}
+\label{sec:intro}
+
+% Motivation: corpora are graphs, standard LM training flattens them.
+\todo{Open with the graph-structure-is-ignored motivation (Wikipedia links, Python
+imports, arXiv citations as three concrete edge types).}
+
+% The gap: retrieval/RAG uses links at inference; packing work orders docs but adds
+% no cross-doc attention; GNN/graph-LM work message-passes but doesn't train a
+% decoder-only LM's attention along edges.
+\todo{State the gap precisely against the three neighbouring literatures
+(retrieval-augmented LMs, sequence packing, graph-aware pretraining) --- pull from
+related work once the lit-review returns.}
+
+% Contribution list.
+\paragraph{Contributions.}
+\begin{itemize}
+  \item A pretraining framework that packs documents by graph traversal and grants
+        \emph{link-position-gated} cross-document attention along explicit edges
+        (\Cref{sec:method}).
+  \item Compute-controlled ablations (\concatlink, \concat) that attribute the gain
+        to the linking inductive bias rather than to extra attention FLOPs.
+  \item Evidence across three edge modalities---Wikipedia hyperlinks, code imports,
+        arXiv citations---that cross-document attention beats flat concatenation of
+        the same linked content on benchmarks built to require it, while remaining
+        neutral on single-document benchmarks.
+  \item A density-aware batch scheduler that removes the DDP rank imbalance caused
+        by variable mask sparsity, for a $1.45\times$ mean step speedup.
+  \item An inference/generation loop that resolves generated links against the
+        corpus and injects the target document, mirroring training.
+\end{itemize}

@@ -67,13 +67,26 @@ def test_select_balanced_deterministic():
 # ---------------------------------------------------------------------------
 
 def test_parse_source_valid():
-    tag, train_dir, sched_dir, target = _parse_source(
+    # sched field parses to a LIST of epoch dirs (multi-epoch union support);
+    # a single dir yields a 1-element list.
+    tag, train_dir, sched_dirs, target = _parse_source(
         "arxiv=/data/arxiv/splits/train=/sched/arxiv_bfs/epoch_0=152600"
     )
     assert tag == "arxiv"
     assert str(train_dir) == "/data/arxiv/splits/train"
-    assert str(sched_dir) == "/sched/arxiv_bfs/epoch_0"
+    assert [str(p) for p in sched_dirs] == ["/sched/arxiv_bfs/epoch_0"]
     assert target == "152600"
+
+
+def test_parse_source_multi_epoch():
+    # comma-separated epoch dirs are unioned for multi-epoch balancing
+    _, _, sched_dirs, target = _parse_source(
+        "dart=/d=/sched/dart_bfs/epoch_0,/sched/dart_bfs/epoch_1,/sched/dart_bfs/epoch_2=48466"
+    )
+    assert [str(p) for p in sched_dirs] == [
+        "/sched/dart_bfs/epoch_0", "/sched/dart_bfs/epoch_1", "/sched/dart_bfs/epoch_2",
+    ]
+    assert target == "48466"
 
 
 def test_parse_source_all_target():
