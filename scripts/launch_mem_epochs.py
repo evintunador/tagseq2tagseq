@@ -62,9 +62,30 @@ def epoch_dir(corpus: str, i: int) -> Path:
     return SCHED / f"{corpus}_bfs" / f"epoch_{i}"
 
 
+def _epoch_meta(corpus: str, i: int) -> dict:
+    return json.loads((epoch_dir(corpus, i) / "metadata.json").read_text())
+
+
 def n_packs(corpus: str, i: int) -> int:
-    meta = epoch_dir(corpus, i) / "metadata.json"
-    return json.loads(meta.read_text())["n_packs"]
+    return _epoch_meta(corpus, i)["n_packs"]
+
+
+def _achievable_steps(corpus: str, i: int, world_size: int, accum: int) -> int:
+    """Optimizer steps actually yielded by one epoch dir under BucketedPackDataset.
+
+    The loader consumes each of the n_buckets quantile buckets in world_size*accum
+    chunks and DROPS each bucket's partial tail every epoch, so usable steps =
+    n_buckets * floor(n_packs / (n_buckets * world_size * accum)), NOT
+    n_packs // (world_size*accum). Pinning to the latter overshoots and the run
+    dies "epoch dirs exhausted" a few %% early (benign for long runs, but exit-1
+    -> the yield-watcher may resume into a re-exhaustion loop). Pinning to the
+    achievable count -> clean exit at the last real step. Quantile buckets are
+    equal-count so floor-per-bucket is exact-to-slightly-under = safe.
+    """
+    m = _epoch_meta(corpus, i)
+    nb = int(m.get("n_buckets", 1)) or 1
+    per_batch = nb * world_size * accum
+    return nb * (m["n_packs"] // per_batch)
 
 
 def resolve_arm(corpus, mask, mode, n, world_size, accum):
@@ -81,7 +102,7 @@ def resolve_arm(corpus, mask, mode, n, world_size, accum):
         if not (d / "packs.parquet").exists():
             raise FileNotFoundError(f"missing {d}/packs.parquet (corpus={corpus} epoch_{i})")
     total = sum(n_packs(corpus, i) for i in idxs)
-    max_steps = total // (world_size * accum)
+    max_steps = sum(_achievable_steps(corpus, i, world_size, accum) for i in idxs)
     return dirs, total, max_steps
 
 
