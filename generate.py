@@ -80,6 +80,8 @@ def load_inference_model(
     device: str = "cuda",
     inference_attention_backend: str = "flex",
     max_seq_len_override: Optional[int] = None,
+    mask_type_override: Optional[str] = None,
+    link_detector_override: Optional[str] = None,
 ):
     """
     Load a trained checkpoint and return (inference_model, hyperparams_dict).
@@ -116,6 +118,18 @@ def load_inference_model(
 
     model_cfg = hp["model"]
     data_cfg  = hp.get("data", {})
+
+    # Optionally evaluate a checkpoint under a DIFFERENT mask than it trained with.
+    # mask_type does NOT parameterize the model (attention masking is external, via
+    # the mask creator), so a doc_causal-trained checkpoint's weights load strictly
+    # into a cross_doc_link-configured model. Used for the graph-sparsity true
+    # train-keep=0 point: eval a doc_causal model under a real cross-doc mask.
+    # cross_doc_link needs a link_detector (grants come from graph edges at eval via
+    # Option B, but the creator is still constructed with one), so pass it too.
+    if mask_type_override is not None:
+        model_cfg["mask_type"] = mask_type_override
+    if link_detector_override is not None:
+        model_cfg["link_detector"] = link_detector_override
 
     # Optionally run at a longer (or shorter) context than training. Pure RoPE
     # position encoding means only the rotary buffer size depends on max_seq_len;

@@ -249,6 +249,68 @@ def _partition_documents(
 # Shard + epoch view of GraphIndex
 # ---------------------------------------------------------------------------
 
+def _edge_kept(src: int, dst: int, keep_frac: float, seed: int) -> bool:
+    """Deterministic per-directed-edge keep decision for traversal-time dropping.
+
+    FNV-1a over (src, dst, seed) → uniform bucket in [0, 1e6); keep iff below
+    keep_frac. Directed edge src→dst gets the SAME decision whether reached via
+    ``neighbors_out(src)`` or ``neighbors_in(dst)``, so the reduced graph is
+    internally consistent. keep_frac>=1 keeps all; <=0 drops all.
+    """
+    if keep_frac >= 1.0:
+        return True
+    if keep_frac <= 0.0:
+        return False
+    h = 0xcbf29ce484222325
+    for v in (src, dst, seed):
+        # mix each 64-bit int byte-by-byte (little-endian, 8 bytes)
+        x = v & 0xFFFFFFFFFFFFFFFF
+        for _ in range(8):
+            h ^= x & 0xFF
+            h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+            x >>= 8
+    return (h % 1_000_000) < int(keep_frac * 1_000_000)
+
+
+class _TraversalSubsampledGraph:
+    """Wraps a GraphIndex so BFS/DFS traversal sees a genuinely sparser corpus:
+    each directed edge is dropped with prob (1-keep_frac), deterministically.
+
+    This is the TRAVERSAL-TIME edge-dropout instrument (distinct from the
+    mask-time ``keep_frac`` that only subsamples the resolved grants on identical
+    packs). Because grants are formed only between docs the traversal co-packs
+    (``_match_links_to_docs`` matches text links against in-batch doc_spans, not
+    graph edges), thinning the adjacency here reduces BOTH co-packing AND grants
+    — the faithful "the corpus had fewer links" analog. Packs will NOT be
+    byte-identical to the full run (that's the point / the confound the mask-time
+    method avoids). See memory [[graph-sparsity-scaling-law]] §traversal-time.
+    """
+
+    def __init__(self, graph: GraphIndex, keep_frac: float, seed: int) -> None:
+        self._graph = graph
+        self._keep = keep_frac
+        self._seed = seed
+
+    # delegate everything except the edge accessors
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._graph, name)
+
+    def __len__(self) -> int:
+        return len(self._graph)
+
+    def __contains__(self, normed_identifier: str) -> bool:
+        return normed_identifier in self._graph
+
+    def neighbors_out(self, doc_id: int) -> List[int]:
+        return [n for n in self._graph.neighbors_out(doc_id)
+                if _edge_kept(doc_id, n, self._keep, self._seed)]
+
+    def neighbors_in(self, doc_id: int) -> List[int]:
+        # edge is src=n -> dst=doc_id; keep decision on that directed edge
+        return [n for n in self._graph.neighbors_in(doc_id)
+                if _edge_kept(n, doc_id, self._keep, self._seed)]
+
+
 class _ShardedEpochView:
     """Wraps GraphIndex to restrict traversal to one repo shard and exclude
     epoch-visited docs.  Out-of-shard / visited docs appear to have tok_len=0
@@ -371,6 +433,13 @@ class _WorkerConfig:
     keep_frac:        float = 1.0
     keep_seed:        int = 0
     keep_mode:        str = "edge"
+    # Graph-sparsity TRAVERSAL-time edge dropout (distinct from mask-time keep_frac
+    # above). When < 1.0 the graph adjacency itself is subsampled BEFORE traversal,
+    # so BFS co-packs a genuinely sparser neighborhood (packs NOT byte-identical to
+    # the full run). Grants drop naturally since fewer link targets get co-packed.
+    # Use EITHER traversal_keep_frac OR keep_frac, not both. See _TraversalSubsampledGraph.
+    traversal_keep_frac: float = 1.0
+    traversal_keep_seed: int = 0
 
 
 def _worker_fn(
@@ -395,6 +464,13 @@ def _worker_fn(
     logging.basicConfig(level=logging.WARNING)
 
     graph = GraphIndex(config.dataset_dir)
+    # Traversal-time edge dropout: wrap the graph so BFS/DFS sees a sparser
+    # adjacency (genuinely different co-packing). backend still reads the full
+    # graph's tokens/shards (we only thin edges, never remove nodes).
+    if config.traversal_keep_frac < 1.0:
+        graph = _TraversalSubsampledGraph(
+            graph, config.traversal_keep_frac, config.traversal_keep_seed,
+        )
     backend = PretokShardedBackend(graph)
     enc = tiktoken.get_encoding(graph.metadata.get("tokenizer", "gpt2"))
     layout = make_layout_policy(config.layout_policy, encode_fn=enc.encode_ordinary)
@@ -621,6 +697,8 @@ class EpochPrecomputer:
         keep_frac: float = 1.0,
         keep_seed: int = 0,
         keep_mode: str = "edge",
+        traversal_keep_frac: float = 1.0,
+        traversal_keep_seed: int = 0,
     ) -> None:
         self.dataset_dir = dataset_dir
         self.token_budget = token_budget
@@ -635,6 +713,8 @@ class EpochPrecomputer:
         self.keep_frac = keep_frac
         self.keep_seed = keep_seed
         self.keep_mode = keep_mode
+        self.traversal_keep_frac = traversal_keep_frac
+        self.traversal_keep_seed = traversal_keep_seed
         self.device = device or (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
@@ -681,6 +761,8 @@ class EpochPrecomputer:
                 keep_frac=self.keep_frac,
                 keep_seed=self.keep_seed,
                 keep_mode=self.keep_mode,
+                traversal_keep_frac=self.traversal_keep_frac,
+                traversal_keep_seed=self.traversal_keep_seed,
             )
             for i in range(self.n_workers)
         ]
@@ -737,6 +819,8 @@ class EpochPrecomputer:
             "keep_frac":     self.keep_frac,
             "keep_seed":     self.keep_seed,
             "keep_mode":     self.keep_mode,
+            "traversal_keep_frac": self.traversal_keep_frac,
+            "traversal_keep_seed": self.traversal_keep_seed,
         }
         with open(out_path / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)

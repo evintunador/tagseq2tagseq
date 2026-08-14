@@ -71,6 +71,15 @@ def main() -> None:
     p.add_argument("--dataset-tag", default=None,
                    help="Label for this dataset in the output (defaults to dataset dir name).")
     p.add_argument("--inference-attention-backend", default="flex")
+    p.add_argument("--cross-mask-type", default=None,
+                   help="Force the cross arm's mask type (default: model's trained "
+                        "mask). Pass 'cross_doc_link' to evaluate a DOC_CAUSAL-trained "
+                        "checkpoint under a real cross-doc mask — the true train-keep=0 "
+                        "point. Leave unset for cross_doc-trained checkpoints.")
+    p.add_argument("--link-detector", default=None,
+                   help="Link detector to build the cross-doc creator with when "
+                        "--cross-mask-type promotes a doc_causal ckpt to cross_doc_link "
+                        "(the doc_causal config has none). e.g. typescript, python, markdown.")
     args = p.parse_args()
 
     logging.basicConfig(
@@ -88,14 +97,24 @@ def main() -> None:
     from eval.perplexity import run_community_pack_perplexity
 
     logger.info("Loading checkpoint: %s", args.checkpoint)
+    # When forcing the cross arm to cross_doc_link on a doc_causal-trained ckpt,
+    # build the model AS cross_doc_link so it registers a cross-doc creator (and
+    # still a doc_causal one for the baseline arm). Weights load strictly — mask
+    # type does not parameterize the model.
+    load_kwargs = {}
+    if args.cross_mask_type in ("cross_doc_link", "doc_concat_link"):
+        load_kwargs["mask_type_override"] = args.cross_mask_type
+        if args.link_detector:
+            load_kwargs["link_detector_override"] = args.link_detector
     model, hp = load_inference_model(
         args.checkpoint, device=args.device,
         inference_attention_backend=args.inference_attention_backend,
+        **load_kwargs,
     )
     model.eval()
 
     mask_type = hp.get("model", {}).get("mask_type", "?")
-    if mask_type not in ("cross_doc_link", "doc_concat_link"):
+    if mask_type not in ("cross_doc_link", "doc_concat_link") and not args.cross_mask_type:
         logger.warning(
             "Checkpoint mask_type=%r has no cross-doc grants; the keep_frac grid "
             "will be flat. This sweep is intended for a cross_doc_link ckpt.",
@@ -127,6 +146,7 @@ def main() -> None:
                     keep_frac=keep,
                     keep_seed=seed,
                     keep_mode=mode,
+                    cross_mask_type=args.cross_mask_type,
                 )
                 res.update({
                     "dataset": dataset_tag,

@@ -375,6 +375,7 @@ def run_community_pack_perplexity(
     keep_frac: float = 1.0,
     keep_seed: int = 0,
     keep_mode: str = "edge",
+    cross_mask_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Score cross-doc attention on live-packed held-out community nodes.
 
@@ -484,8 +485,14 @@ def run_community_pack_perplexity(
             # Option B: resolve cross-doc grants from the pack's KNOWN graph edges,
             # not by re-detecting text (a merged model's single detector fires on
             # only one source → Δ=0 on all others). doc_causal baseline ignores it.
+            # cross_mask_type=None → use the model's trained mask (cross_doc_link
+            # for a cross-trained ckpt). Force "cross_doc_link" to evaluate a
+            # DOC_CAUSAL-trained model under a real cross-doc mask — the true
+            # train-keep=0 point (does cross-doc attention at inference help a
+            # model that never trained with it?). Without the override, a
+            # doc_causal ckpt's cross arm falls back to doc_causal → delta≡0.
             result_cross = score_doc_with_context(
-                model, batch, layout_policy, device, mask_type=None,
+                model, batch, layout_policy, device, mask_type=cross_mask_type,
                 grants_from_graph_edges=True,
                 keep_frac=keep_frac, keep_seed=keep_seed, keep_mode=keep_mode,
             )

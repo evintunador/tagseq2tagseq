@@ -86,6 +86,14 @@ def main() -> None:
                         choices=["edge", "node"],
                         help="Subsample unit: 'edge' (per-grant, the density line) or "
                              "'node' (per-target-doc, robustness).")
+    parser.add_argument("--traversal-keep-frac", type=float, default=1.0,
+                        help="TRAVERSAL-time edge dropout (distinct from --keep-frac): "
+                             "subsample the graph adjacency BEFORE traversal so BFS "
+                             "co-packs a genuinely sparser neighborhood (packs NOT "
+                             "byte-identical to the full run). Grants drop naturally. "
+                             "Use EITHER --keep-frac OR --traversal-keep-frac, not both.")
+    parser.add_argument("--traversal-keep-seed", type=int, default=0,
+                        help="Global seed for the traversal-keep edge subsample.")
     parser.add_argument("--log-level",      type=str, default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
@@ -117,6 +125,8 @@ def main() -> None:
         keep_frac=args.keep_frac,
         keep_seed=args.keep_seed,
         keep_mode=args.keep_mode,
+        traversal_keep_frac=args.traversal_keep_frac,
+        traversal_keep_seed=args.traversal_keep_seed,
     )
 
     for i in range(args.n_epochs):
