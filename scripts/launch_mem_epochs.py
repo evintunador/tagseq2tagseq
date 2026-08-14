@@ -226,21 +226,22 @@ def _wait_for_first_step(label, timeout):
     """
     runs = REPO / "runs"
     deadline = time.time() + timeout
-    marker_seen = False
+    # submitit writes the INFO stream to runs/<ts>/logs/stderr.txt (and mirrors
+    # to .slurm/*_log.err). The first-step markers are the compiled-loop
+    # "Training step" line and the tqdm "Epoch 1/1:" progress line.
+    markers = ("Training step", "Epoch 1/1:", "Starting Training")
     while time.time() < deadline:
         time.sleep(30)
-        logs = sorted(runs.glob("*/logs/*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for lp in logs[:3]:
+        logs = sorted(runs.glob("*/logs/stderr.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
+        logs += sorted(runs.glob("*/.slurm/*_log.err"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for lp in logs[:4]:
             try:
                 txt = lp.read_text(errors="ignore")
             except OSError:
                 continue
-            if "Training:" in txt or "step 1" in txt or "step=1" in txt:
-                marker_seen = True
-                break
-        if marker_seen:
-            print(f"    {label}: reached first step; launching next.")
-            return
+            if any(m in txt for m in markers):
+                print(f"    {label}: reached first step; launching next.")
+                return
     print(f"    {label}: first-step marker not seen within timeout; proceeding "
           f"(check the run manually — yield-watcher will resume if preempted).")
 
