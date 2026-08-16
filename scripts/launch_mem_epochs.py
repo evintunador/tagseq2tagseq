@@ -126,6 +126,12 @@ def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limi
         # Skip the config's run_on_completion benchmark suite (e.g. tiny pilot
         # arms, or a config whose annotator_corpus doesn't match this corpus).
         cmd += ["--eval.run_on_completion", "false"]
+    # Memorization experiment uses a COMMON muon_wd across masks so the cross-mask
+    # onset comparison isn't confounded by regularization strength. The wiki
+    # cross-doc base configs are tuned to wd 0.3 (val-loss optimum); pin them to
+    # 0.1 to match doc_causal. go configs are already all 0.1 (no-op there, but
+    # set explicitly for a self-documenting run record).
+    cmd += ["--optimizer.muon_wd", "0.1"]
     # simplewiki reuses wiki base configs but must point at simplewiki splits.
     if corpus == "simplewiki":
         base = str(ART / "pretokenized_datasets/simplewiki")
