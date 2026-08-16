@@ -218,29 +218,41 @@ def main():
         cmd = build_command(a["corpus"], a["mask"], a["mode"], a["n"], a["dirs"],
                             a["steps"], args.nodes, args.gpus, args.time, args.no_eval) + ["--no-tail"]
         print(f"\n>>> submitting {a['label']}")
-        subprocess.run(cmd, cwd=str(REPO), check=True)
-        _wait_for_first_step(a["label"], args.first_step_timeout)
+        res = subprocess.run(cmd, cwd=str(REPO), check=True, capture_output=True, text=True)
+        if res.stdout:
+            print(res.stdout, end="")
+        run_dir = _parse_run_dir(res.stdout)
+        _wait_for_first_step(a["label"], run_dir, args.first_step_timeout)
     print("\nAll arms submitted.")
 
 
-def _wait_for_first_step(label, timeout):
-    """Poll for the newest run dir to reach a training step before returning.
+def _parse_run_dir(stdout):
+    """Extract this arm's run dir from launch_slurm.py's banner ('Run dir : ...')."""
+    for line in (stdout or "").splitlines():
+        if "Run dir" in line and "runs/" in line:
+            return Path(line.split(":", 1)[1].strip())
+    return None
 
-    Best-effort: scans runs/ for the most recently modified log and greps for a
-    training-step marker. Falls back to a fixed wait on timeout so the sweep does
-    not stall indefinitely (the yield-watcher handles resumes independently).
+
+def _wait_for_first_step(label, run_dir, timeout):
+    """Poll THIS arm's run dir for a training-step marker before returning.
+
+    Polls run_dir/logs/stderr.txt (+ .slurm/*_log.err) for this arm ONLY, so a
+    concurrently-running earlier arm can't trigger a false positive (the old
+    global-newest glob did, firing the next arm while this one was still PD /
+    cold-compiling — a concurrent-compile hazard on cold caches). Falls back to a
+    fixed timeout so the sweep never stalls; the yield-watcher resumes preempted
+    arms independently. If run_dir is unknown, degrades to a short fixed wait.
     """
-    runs = REPO / "runs"
-    deadline = time.time() + timeout
-    # submitit writes the INFO stream to runs/<ts>/logs/stderr.txt (and mirrors
-    # to .slurm/*_log.err). The first-step markers are the compiled-loop
-    # "Training step" line and the tqdm "Epoch 1/1:" progress line.
     markers = ("Training step", "Epoch 1/1:", "Starting Training")
+    if run_dir is None:
+        print(f"    {label}: run dir not parsed; waiting {min(180, timeout)}s before next.")
+        time.sleep(min(180, timeout))
+        return
+    deadline = time.time() + timeout
     while time.time() < deadline:
-        time.sleep(30)
-        logs = sorted(runs.glob("*/logs/stderr.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
-        logs += sorted(runs.glob("*/.slurm/*_log.err"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for lp in logs[:4]:
+        time.sleep(20)
+        for lp in list(run_dir.glob("logs/stderr.txt")) + list(run_dir.glob(".slurm/*_log.err")):
             try:
                 txt = lp.read_text(errors="ignore")
             except OSError:
