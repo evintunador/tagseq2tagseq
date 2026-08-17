@@ -187,9 +187,25 @@ long-context eval (and generation) isn't clipped at the training window. Would
 let benchmarks with large whole-file aux score without truncation and is a
 prerequisite for any >32k context experiments.
 
-### nanochat RL & chat pipeline feasibility
-Check feasibility of integrating `karpathy/nanochat/`'s RL + chat pipeline, and
-how it might be edited to take advantage of this model's graph-aware features.
+### Link-utilization vs. packing-distance diagnostic (RoPE-offset concern — filed 2026-08-10)
+We use global RoPE positions [0,T) with no per-doc reset, so a granted target sits at
+a packing-order-dependent relative offset. zhao2024analysing resets RoPE per document,
+but only because its IntraDoc *bans* cross-doc attention — a clean reset is ill-defined
+once grants cross boundaries (one key, one absolute position, read by linkers at many
+distances). So assess the concern empirically instead of ablating a reset. On existing
+checkpoints (no retrain): measure attention mass on the granted target (link
+utilization) as a function of link->target packing distance, per source. If utilization
+is flat across distance, the concern is empirically dead and it becomes one appendix
+sentence. If it decays, that motivates the per-grant embedding arm below. Appendix
+result. See `paper/notes/synthesis_framing_notes.md` (RoPE section) for the framing.
+
+### Per-grant additive position embedding (only if the diagnostic shows decay — filed 2026-08-10)
+Larger follow-up to the utilization diagnostic above, gated on it showing distance
+decay. Vanilla RoPE can't re-base a granted key to a canonical offset per querying edge.
+A second, additive embedding tagging "this is a granted cross-doc token" (NoPE-style /
+learned per-grant tag) sidesteps RoPE entirely. This is a real research arm (new
+embedding, retrain), not a quick ablation — only pursue if the cheap diagnostic
+justifies it. Appendix result.
 
 ---
 
@@ -316,6 +332,44 @@ bottleneck.
 ---
 
 ## Eval
+
+### Leakage-stratified cross-doc Δnll (RETRO bpb(α) protocol — filed 2026-08-10)
+Our grant makes verbatim copying from the target more direct than retrieval baselines,
+and dedup is sampling-only, so raw perplexity gains risk being re-exposure of
+memorized/duplicated text (HotpotQA's 2017 Wikipedia and The Stack both overlap
+training data). Measure FIRST on the already-completed sweep (pure eval, no retrain):
+stratify the cross-doc Δnll by target<->context n-gram overlap α and show the effect
+survives at low overlap. Only if the low-overlap effect is weak do we go back to the
+datasets, filter, and re-run training — a HARD BLOCKER on final numbers *conditional*
+on the measurement demanding it, NOT a pre-committed retrain. Expect a steeper leakage
+slope than RETRO. (Related but distinct from the deferred dataset-side dedup blacklist
+item below, which is graph-construction dedup, not eval-side α-stratification.)
+
+### Placebo/derangement on the headline arms + fired-subset Δnll (filed 2026-08-10)
+Tier-2 ports already have the derangement placebo (`eval/benchmark_harness/tier2.py`,
+`placebo_separation` + bootstrap CI). The headline HotpotQA-cross-doc and
+RepoBench-cross-doc arms do NOT — they report only cross-vs-flat, where the cross arm
+sees strictly more tokens, so "is it the right doc or just more context?" is unanswered
+(acute given HotpotQA single-hop solvability). Extend the existing derangement machinery
+to the headline arms, or caveat prominently. Also report Δnll over the *fired* subset
+honestly (Repoformer's ~20/60/20 help/neutral/hurt split makes averaging over non-fired
+items misleading).
+
+### Eval-time max_seq_len extension (long-context generalization probe — filed 2026-08-10)
+Cheap probe, no retrain: eval a 32k-trained checkpoint at larger max_seq_len (64k+) and
+check whether grants keep helping as context grows past the training window. Direct
+long-context-generalization signal for cross-doc attention. NOTE: blocked by the same
+`cos.size(0) >= T` RoPE-buffer assert as the "RoPE length extrapolation" Model item —
+either build a longer cos/sin table at inference or land the extrapolation work first.
+
+### Finish the concat controls across non-bfs traversal (filed 2026-08-10)
+The traversal ablation grid is `{bfs, dfs, random_walk, random} x {dc, cdl}`, but the
+concat controls (`doc_concatenated`, `doc_concat_link`) exist ONLY at bfs (every concat
+config pins `strategy: 'bfs'`). `doc_concatenated` has no links, so traversal strategy
+still legitimately varies *which docs co-pack* — running concat across dfs/random_walk/
+random is a real control ("does co-packing selection matter independent of the mask?").
+Either finish those cells or document why bfs-only concat is sufficient. Folds into the
+"Train the ablation matrix" item under Training.
 
 ### `annotated` (link-injection) eval speed — PARTIALLY DONE, remaining levers
 The `annotated` condition (inject `[text](Title)` / `\cite{Title}` links into
