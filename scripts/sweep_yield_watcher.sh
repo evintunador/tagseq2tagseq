@@ -36,6 +36,11 @@ MAX_KILL="${MAX_KILL:-8}"
 IDLE_RELAUNCH_MIN="${IDLE_RELAUNCH_MIN:-30}"
 AUTO_RELAUNCH="${AUTO_RELAUNCH:-1}"
 REPO="/fss/evin_t/tagseq2tagseq"
+# Run dirs may live in the new default location (/fss-data, off-repo, survives worktree
+# deletion) OR the legacy <repo>/runs. Job name (ts2ts_<basename>) is root-agnostic, so
+# we resolve a basename against BOTH roots. Order = new first, then legacy. Extend via
+# TS2TS_RUNS_DIR (checked first).
+RUNS_DIRS=(${TS2TS_RUNS_DIR:+"$TS2TS_RUNS_DIR"} "/fss-data/evin_t/tagseq2tagseq_artifacts/runs" "$REPO/runs")
 NOTIFY="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/SWEEP_YIELD_NOTIFY.log"
 STATE_DIR="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/watcher_state"
 YIELD_LEDGER="$STATE_DIR/yielded_jobs.tsv"        # run_dir<TAB>config<TAB>killed_epoch<TAB>status
@@ -218,14 +223,23 @@ GPU-C${TAB}1000"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 note() { echo "[$(ts)] $*"; echo "[$(ts)] $*" >> "$NOTIFY"; }
 
+# Resolve a run-dir basename to a full path, trying each root in RUNS_DIRS (new
+# /fss-data location first, then legacy <repo>/runs). Prints the first that exists.
+resolve_rundir() {
+  local base="$1" d
+  for d in "${RUNS_DIRS[@]}"; do
+    [ -d "$d/$base" ] && { printf '%s\n' "$d/$base"; return 0; }
+  done
+  return 1
+}
+
 # Map a running job id -> "run_dir<TAB>config". Job name is ts2ts_<rundirbase>;
 # config comes from that run's reproducibility/run_invocation.json (argv --config).
 job_to_rundir_config() {
   local jid="$1"
   local name; name="$(squeue -h -j "$jid" -o '%j' 2>/dev/null)"
   [ -z "$name" ] && return 1
-  local rundir="$REPO/runs/${name#${PREFIX}}"
-  [ -d "$rundir" ] || return 1
+  local rundir; rundir="$(resolve_rundir "${name#${PREFIX}}")" || return 1
   # Config comes from run_invocation.json (reliable), via the shared helper so the
   # yield-time record and the relaunch-time self-heal use identical logic.
   local cfg; cfg="$(config_from_rundir "$rundir")"

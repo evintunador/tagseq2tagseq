@@ -184,10 +184,15 @@ def launch(
     if "--config" not in main_argv:
         main_argv = ["--config", config] + main_argv
 
-    # Build a timestamped run directory on the shared filesystem.
+    # Build a timestamped run directory. Default location is OUTSIDE the repo, on
+    # /fss-data — so runs survive worktree deletion and don't put multi-GB
+    # checkpoints on /fss. Override with TS2TS_RUNS_DIR. (The yield-watcher scans
+    # both this location and the legacy <repo>/runs.)
     project_root = Path(__file__).parent
     run_id  = datetime.datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
-    run_dir = project_root / "runs" / run_id
+    runs_root = os.environ.get(
+        "TS2TS_RUNS_DIR", "/fss-data/evin_t/tagseq2tagseq_artifacts/runs")
+    run_dir = Path(runs_root) / run_id
     (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
     (run_dir / "logs").mkdir(exist_ok=True)
 
