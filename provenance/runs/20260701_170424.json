@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "run_id": "20260701_170424",
+  "naming_convention": "bare",
+  "source_run_dirs": [
+    "/fss/evin_t/tagseq2tagseq/runs/20260701_170424"
+  ],
+  "run_dir_exists": true,
+  "warnings": [],
+  "reproduce": {
+    "commit_hash": "4bf207fd6b84ef6904fb854fd9336af1599a2107",
+    "branch": "main",
+    "remote_url": "https://github.com/evintunador/tagseq2tagseq.git",
+    "github_url": "https://github.com/evintunador/tagseq2tagseq/commit/4bf207fd6b84ef6904fb854fd9336af1599a2107",
+    "git_is_dirty": true,
+    "patch": {
+      "hash": "5966cd64cffe0ef55797c50496f0aa274f924f16fe2e6f95fc0fcaaffaeab725",
+      "path": "provenance/patches/5966cd64cffe0ef55797c50496f0aa274f924f16fe2e6f95fc0fcaaffaeab725.patch",
+      "bytes": 52628
+    },
+    "config_path": "configs/arxiv_cross_doc.yaml",
+    "cli_overrides": {
+      "train_loop.max_optimizer_steps": "84472",
+      "train_loop.atomic_feature_kwargs.accum_steps": "4"
+    },
+    "python_version": "3.13.2",
+    "torch_version": "2.10.0",
+    "torch_cuda_version": "12.8",
+    "cudnn_version": 91900,
+    "nvidia_driver_version": "560.35.03",
+    "slurm_job_id": null
+  },
+  "environment": {
+    "gpu_model": "NVIDIA A100-SXM4-80GB",
+    "gpu_count": 2,
+    "world_size": 2,
+    "os_release": "5.15.0-122-generic"
+  },
+  "hyperparameters": {
+    "data": {
+      "dataset_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv",
+      "strategy": "bfs",
+      "layout_policy": "stochastic_latex_comment_prefix",
+      "inference_layout_policy": "latex_comment_prefix",
+      "order_mode": "prefer_targets_first",
+      "doc_budget": null,
+      "train_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train",
+      "epoch_dirs": "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0",
+      "val_dirs": {
+        "val_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community",
+        "val_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random"
+      },
+      "test_dirs": {
+        "test_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community",
+        "test_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random"
+      }
+    },
+    "model": {
+      "compile": true,
+      "compile_mode": "default",
+      "attention_backend": "triton",
+      "inference_attention_backend": "flex",
+      "mask_type": "cross_doc_link",
+      "link_detector": "arxiv",
+      "max_grants": 256,
+      "activation_checkpointing": false,
+      "model_dim": 1024,
+      "num_layers": 24,
+      "num_heads": 8,
+      "max_seq_len": 32768,
+      "drop_path_rate": 0.0,
+      "fp8": false,
+      "weight_tying": true,
+      "untie_at_frac": 0.667,
+      "ignore_index": -100,
+      "dtype": "bfloat16",
+      "logit_softcap": 30.0,
+      "mtp_extra_weights": [
+        0.5,
+        0.25
+      ],
+      "mtp_decay_steps": 0,
+      "ve_layers": [
+        1,
+        2,
+        21,
+        22,
+        23
+      ],
+      "shared_ve_bank": false
+    },
+    "optimizer": {
+      "type": "muon",
+      "muon_wd": 1.2,
+      "adamw_wd": 0.005,
+      "momentum": 0.95,
+      "muon_beta2": 0.95,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "muon_lr": 0.001,
+      "adamw_lr": 1e-05,
+      "muon_momentum_warmup_steps": 300,
+      "adamw_embed_beta1": 0.5
+    },
+    "train_loop": {
+      "epochs": 1,
+      "max_optimizer_steps": 84472,
+      "warmup_steps": 300,
+      "cooldown_frac": 0.4,
+      "min_lr_ratio": 0.1,
+      "val_steps": 20,
+      "val_interval": 100,
+      "atomic_feature_kwargs": {
+        "norm_clip_value": 1.0,
+        "accum_steps": 4
+      }
+    },
+    "seed": 42,
+    "eval": {
+      "run_on_completion": true,
+      "benchmarks": [
+        {
+          "name": "held_out_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "community_pack_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "hellaswag",
+          "conditions": [
+            "doceval",
+            "annotated"
+          ]
+        },
+        {
+          "name": "boolq",
+          "conditions": [
+            "doceval",
+            "annotated"
+          ]
+        },
+        {
+          "name": "openbookqa",
+          "conditions": [
+            "doceval",
+            "annotated"
+          ]
+        }
+      ],
+      "max_docs": 500,
+      "annotator_corpus": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv",
+      "annotator_mode": "corpus_only",
+      "annotator_strategies": [
+        "exact",
+        "norm",
+        "word_overlap_ordered",
+        "edit_distance"
+      ]
+    }
+  },
+  "hyperparameters_sha256": "ebbfee5500179838d4cd9fb6435d5d393ea0ec6d863d112b064af79b89441632",
+  "timestamps": {
+    "run_started": "2026-07-01T17:04:24",
+    "slurm_start_time": null,
+    "slurm_end_time": null
+  },
+  "eval": {
+    "present": true,
+    "eval_results_sha256": "dd4d90757017540a3622627f022628530568db3884f5a8ce4e8b5841e1424440",
+    "metrics": {
+      "hellaswag/doceval": {
+        "accuracy": 0.28,
+        "accuracy_ci": [
+          0.2615,
+          0.301
+        ],
+        "total_examples": 2000
+      },
+      "boolq/doceval": {
+        "accuracy": 0.3775,
+        "accuracy_ci": [
+          0.357,
+          0.4
+        ],
+        "total_examples": 2000
+      },
+      "openbookqa/doceval": {
+        "accuracy": 0.266,
+        "accuracy_ci": [
+          0.228,
+          0.306
+        ],
+        "total_examples": 500
+      },
+      "held_out_perplexity/doceval": {
+        "split": "all",
+        "num_docs": 2000,
+        "mean_nll": 3.7874868326187134,
+        "perplexity": 44.145316179328105,
+        "nll_ci_low": 3.713963618631661,
+        "nll_ci_high": 3.8669267226859927,
+        "perplexity_ci_low": 41.016056772346424,
+        "perplexity_ci_high": 47.79527201025693
+      },
+      "community_pack_perplexity/experimental": {
+        "split": "val_community",
+        "n_packs": 5,
+        "mean_nll_cross_doc": 5.394337699228236,
+        "mean_nll_baseline": 5.394337699228236,
+        "mean_delta": 0.0,
+        "delta_ci_low": 0.0,
+        "delta_ci_high": 0.0,
+        "cross_doc_ci_low": 4.298439608385998,
+        "cross_doc_ci_high": 6.489108267231541,
+        "baseline_ci_low": 4.344668044782326,
+        "baseline_ci_high": 6.489108267231542
+      }
+    }
+  },
+  "distilled_at": "2026-08-18T15:33:20Z"
+}

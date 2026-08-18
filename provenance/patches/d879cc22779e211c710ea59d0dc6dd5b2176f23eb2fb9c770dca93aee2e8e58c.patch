@@ -1,0 +1,174 @@
+diff --git a/launch_slurm.py b/launch_slurm.py
+index cbdde49..6536dcb 100644
+--- a/launch_slurm.py
++++ b/launch_slurm.py
+@@ -10,7 +10,7 @@ Launcher options (all optional):
+     --config PATH        Config YAML              (default: configs/baseline.yaml)
+     --partition NAME     SLURM partition          (default: compute)
+     --time HH:MM:SS      Wall-clock time limit    (default: 24:00:00)
+-    --mem-per-gpu GB     CPU RAM per GPU in GB    (default: 64)
++    --mem-per-gpu GB     CPU RAM per GPU in GB    (default: 192)
+     --cpus-per-task N    CPU cores per task/GPU   (default: 8)
+     --exclude NODES      Comma-separated node list to exclude
+     --no-tail            Don't follow logs interactively
+@@ -169,7 +169,7 @@ def launch(
+     config:        str   = "configs/baseline.yaml",
+     partition:     str   = "compute",
+     time_limit:    str   = "168:00:00",
+-    mem_per_gpu:   int   = 128,
++    mem_per_gpu:   int   = 192,
+     cpus_per_task: int   = 8,
+     exclude:       str   = None,
+     nodelist:      str   = None,
+@@ -279,7 +279,7 @@ def main():
+                         help="SLURM partition")
+     parser.add_argument("--time",          type=str, default="168:00:00",
+                         help="Wall-clock limit HH:MM:SS")
+-    parser.add_argument("--mem-per-gpu",   type=int, default=64,
++    parser.add_argument("--mem-per-gpu",   type=int, default=192,
+                         help="CPU RAM (GB) per GPU")
+     parser.add_argument("--cpus-per-task", type=int, default=8,
+                         help="CPU cores per task/GPU")
+diff --git a/scripts/launch_mem_epochs.py b/scripts/launch_mem_epochs.py
+index 6ff9f60..b93592f 100644
+--- a/scripts/launch_mem_epochs.py
++++ b/scripts/launch_mem_epochs.py
+@@ -89,7 +89,7 @@ def arm_label(corpus, mask, mode, n):
+     return f"{corpus}.{mask}.{mode}.e{n}"
+ 
+ 
+-def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limit):
++def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limit, no_eval=False):
+     cfg = CONFIGS[corpus][mask]
+     epoch_csv = ",".join(str(d) for d in dirs)
+     cmd = [
+@@ -101,6 +101,10 @@ def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limi
+         "--train_loop.max_optimizer_steps", str(max_steps),
+         "--model.mask_type", MASK_TYPE[mask],
+     ]
++    if no_eval:
++        # Skip the config's run_on_completion benchmark suite (e.g. tiny pilot
++        # arms, or a config whose annotator_corpus doesn't match this corpus).
++        cmd += ["--eval.run_on_completion", "false"]
+     # simplewiki reuses wiki base configs but must point at simplewiki splits.
+     if corpus == "simplewiki":
+         base = str(ART / "pretokenized_datasets/simplewiki")
+@@ -127,6 +131,7 @@ def main():
+     ap.add_argument("--gpus", type=int, default=8)
+     ap.add_argument("--accum", type=int, default=1)
+     ap.add_argument("--time", default="24:00:00")
++    ap.add_argument("--no-eval", action="store_true", help="append --eval.run_on_completion false to each arm")
+     ap.add_argument("--launch", action="store_true", help="actually submit (staggered); default dry-run")
+     ap.add_argument("--first-step-timeout", type=int, default=1800,
+                     help="seconds to wait for an arm to reach step 1 before launching the next")
+@@ -162,7 +167,7 @@ def main():
+         note = "dc: fresh≡repeat (repeat=sanity only)" if (a["mask"] == "dc" and a["mode"] == "repeat") else ""
+         print(f"{a['label']:<34} {cfg:<40} {a['total']:>8} {a['steps']:>7} {btok:>6.2f}  {note}")
+         cmd = build_command(a["corpus"], a["mask"], a["mode"], a["n"], a["dirs"],
+-                            a["steps"], args.nodes, args.gpus, args.time)
++                            a["steps"], args.nodes, args.gpus, args.time, args.no_eval)
+         cmds.append(f"# {a['label']}  ({a['total']} packs, {a['steps']} steps)")
+         cmds.append(" ".join(cmd))
+         cmds.append("")
+@@ -184,7 +189,7 @@ def main():
+           f"{args.first_step_timeout}s each)...")
+     for a in arms:
+         cmd = build_command(a["corpus"], a["mask"], a["mode"], a["n"], a["dirs"],
+-                            a["steps"], args.nodes, args.gpus, args.time) + ["--no-tail"]
++                            a["steps"], args.nodes, args.gpus, args.time, args.no_eval) + ["--no-tail"]
+         print(f"\n>>> submitting {a['label']}")
+         subprocess.run(cmd, cwd=str(REPO), check=True)
+         _wait_for_first_step(a["label"], args.first_step_timeout)
+
+diff --git a/scripts/eval_sparsity_500.sbatch b/scripts/eval_sparsity_500.sbatch
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/eval_sparsity_500.sbatch
+@@ -0,0 +1,39 @@
++#!/bin/bash
++# Full-fidelity (max-packs=500) community_pack eval for graph-sparsity keep-arms,
++# on ONE 8-GPU SLURM node. Reads an eval-list file (lines: ds|keeptag|ckpt_path),
++# runs 8 evals concurrently (one per local GPU), waves until the list is done.
++# Each eval = eval/sparsity_sweep at keep=1.0 (full-density test) -> {ds}_keep{K}.json.
++#
++# Submit: LIST=/path/eval_list.txt sbatch scripts/eval_sparsity_500.sbatch
++#SBATCH --job-name=sparseval
++#SBATCH --partition=compute
++#SBATCH --gpus-per-node=8
++#SBATCH --cpus-per-task=64
++#SBATCH --mem=512G
++#SBATCH --time=8:00:00
++#SBATCH --output=/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/phase2_traintime/logs/sbatch_%j.out
++set -uo pipefail
++: "${LIST:?eval list file}"; : "${MAXP:=500}"
++REPO=/fss/evin_t/tagseq2tagseq-sparsity; cd "$REPO"
++source /fss/evin_t/tagseq2tagseq/.venv/bin/activate 2>/dev/null || true
++ART=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets
++OUT=/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/phase2_traintime
++mkdir -p "$OUT/logs"
++mapfile -t SPECS < "$LIST"
++NG=8; i=0
++while [ $i -lt ${#SPECS[@]} ]; do
++  pids=()
++  for ((g=0; g<NG && i<${#SPECS[@]}; g++, i++)); do
++    IFS='|' read -r ds keep ckpt <<< "${SPECS[$i]}"
++    out="$OUT/${ds}_keep${keep}.json"
++    echo "[$(date +%H:%M:%S)] $ds keep$keep -> local gpu $g (maxpacks=$MAXP)"
++    CUDA_VISIBLE_DEVICES=$g python -m eval.sparsity_sweep \
++      --checkpoint "$ckpt" --dataset "$ART/$ds" --split val_community \
++      --max-packs "$MAXP" --keep-fracs 1.0 --modes edge --seeds 0 \
++      --dataset-tag "$ds" --output "$out" > "$OUT/logs/${ds}_keep${keep}_500.log" 2>&1 &
++    pids+=($!); sleep 5
++  done
++  for p in "${pids[@]}"; do wait "$p"; done
++done
++echo "[$(date +%H:%M:%S)] ALL EVALS DONE"
++
+
+diff --git a/scripts/eval_sparsity_grid.sbatch b/scripts/eval_sparsity_grid.sbatch
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/eval_sparsity_grid.sbatch
+@@ -0,0 +1,40 @@
++#!/bin/bash
++# 2D grid eval: for each checkpoint in LIST (ds|trainkeep|ckpt), eval across the
++# FULL eval-keep axis (KEEPS) -> Δnll(train_keep, eval_keep) surface. One 8-GPU
++# node, 8 checkpoints concurrent (one per GPU), each doing all eval-keeps in one
++# checkpoint-load. Writes {OUT}/{ds}_train{trainkeep}.json (rows = eval-keep points).
++#
++# Submit: LIST=grid_list_0.txt sbatch scripts/eval_sparsity_grid.sbatch
++#SBATCH --job-name=sparsegrid
++#SBATCH --partition=compute
++#SBATCH --gpus-per-node=8
++#SBATCH --cpus-per-task=64
++#SBATCH --mem=512G
++#SBATCH --time=12:00:00
++#SBATCH --output=/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/grid2d/logs/sbatch_%j.out
++set -uo pipefail
++: "${LIST:?eval list}"; : "${KEEPS:=0,0.25,0.5,0.75,1.0}"; : "${MAXP:=500}"
++REPO=/fss/evin_t/tagseq2tagseq-sparsity; cd "$REPO"
++source /fss/evin_t/tagseq2tagseq/.venv/bin/activate 2>/dev/null || true
++ART=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets
++OUT=/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/grid2d
++mkdir -p "$OUT/logs"
++mapfile -t SPECS < "$LIST"
++NG=8; i=0
++while [ $i -lt ${#SPECS[@]} ]; do
++  pids=()
++  for ((g=0; g<NG && i<${#SPECS[@]}; g++, i++)); do
++    IFS='|' read -r ds tk ckpt <<< "${SPECS[$i]}"
++    out="$OUT/${ds}_train${tk}.json"
++    [ -f "$out" ] && { echo "skip $ds train$tk (done)"; continue; }
++    echo "[$(date +%H:%M:%S)] $ds train$tk -> gpu $g (eval-keeps=$KEEPS, packs=$MAXP)"
++    CUDA_VISIBLE_DEVICES=$g python -m eval.sparsity_sweep \
++      --checkpoint "$ckpt" --dataset "$ART/$ds" --split val_community \
++      --max-packs "$MAXP" --keep-fracs "$KEEPS" --modes edge --seeds 0 \
++      --dataset-tag "$ds" --output "$out" > "$OUT/logs/${ds}_train${tk}.log" 2>&1 &
++    pids+=($!); sleep 5
++  done
++  for p in "${pids[@]}"; do wait "$p"; done
++done
++echo "[$(date +%H:%M:%S)] GRID SLICE DONE ($LIST)"
++

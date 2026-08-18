@@ -1,0 +1,2817 @@
+diff --git a/INSTRUCTIONS.md b/INSTRUCTIONS.md
+index cd18349..0925b1b 100644
+--- a/INSTRUCTIONS.md
++++ b/INSTRUCTIONS.md
+@@ -27,8 +27,9 @@ Pretokenized datasets live outside all worktrees at `<to/be/generated>/`:
+ |---------|-------------|-------|--------|-----------------------|
+ | **SimpleWiki** | Markdown hyperlinks | 275k | 1 | `<to/be/generated>/pretokenized_datasets/simplewiki/` |
+ | **TheStack** | Python imports | 3.56M | 9 | `<to/be/generated>/pretokenized_datasets/thestack/` |
++| **arXiv** | `\cite{}` citations | 2.20M | — | `/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/` |
+ 
+-SimpleWiki uses `--model.link_detector markdown`; TheStack uses `--model.link_detector python`.
++SimpleWiki uses `--model.link_detector markdown`; TheStack uses `--model.link_detector python`; arXiv uses `--model.link_detector arxiv` (config: `configs/arxiv_cross_doc.yaml`).
+ 
+ Both datasets have been split into train/val/test subdirectories (see [Graph Splitting](#graph-splitting) below).
+ 
+@@ -132,6 +133,52 @@ Produces 9 binary shards, `tokenized_graph.jsonl`, and `metadata.json`.
+ 
+ ---
+ 
++### arXiv (unarXive 2024)
++
++All steps run on SLURM (CPU) and read/write `/fss-data` (not `/fss`) — heavy I/O.
++Launchers live in `data/arxiv_graph_extractor/`.
++
++**1. Download + extract unarXive 2024** (105 GB tarball → 371 GB JSONL shards)
++
++```bash
++sbatch data/download_unarxive.sh
++```
++
++Downloads `ines-besrour/unarxive_2024` (HF token from `~/.secrets`) and stream-extracts to
++`/fss-data/evin_t/tagseq2tagseq_artifacts/raw/unarxive_2024/extracted/`.
++
++**2. Build the arXiv↔OpenAlex map** (for enriched citation resolution)
++
++```bash
++sbatch data/arxiv_graph_extractor/build_openalex_map.sh
++```
++
++Streams the OpenAlex works snapshot (~639 GB) over HTTPS — no bulk download — and writes
++`graphs/arxiv_openalex_map.jsonl` (~3M arxiv↔OpenAlex pairs). `aws` CLI is **not** on
++compute nodes; the script uses the public S3 HTTPS endpoint + urllib.
++
++**3. Extract graph + rehydrated content**
++
++```bash
++sbatch data/arxiv_graph_extractor/extract.sh
++```
++
++Two passes + merge: resolves citations (direct arXiv id, then OpenAlex map) to in-corpus
++titles, rewrites `{{cite:...}}` → `\cite{Title}`, rehydrates bodies to faithful LaTeX, and
++writes `graphs/arxiv/{graph.jsonl, content.jsonl}` (~2.20M nodes, mean out-degree 4.3).
++Optional: run `measure_density.sh` first to inspect graph connectivity.
++
++**4. Pretokenize**
++
++```bash
++sbatch data/arxiv_graph_extractor/pretokenize.sh
++```
++
++Uses `ArxivUnarxiveSource` (content JSONL) → binary shards + `tokenized_graph.jsonl` under
++`pretokenized_datasets/arxiv/`. Then split as in [Graph Splitting](#graph-splitting).
++
++---
++
+ ## Visualisation
+ 
+ ### Inspect packed batches (text)
+diff --git a/README.md b/README.md
+index 58e4813..c577308 100644
+--- a/README.md
++++ b/README.md
+@@ -97,12 +97,15 @@ The framework currently supports four pretokenized datasets and has several more
+ | **EnWikiSource** | Markdown hyperlinks | 662k | ~612M |
+ | **The Stack (10M)** | Python `import` statements | 2.38M | ~7B |
+ | **The Stack (100M)** | Python `import` statements | 3.56M | ~8.7B |
++| **arXiv (unarXive 2024)** | `\cite{}` citations | 2.20M | ~10B |
++
++The arXiv graph is built from [unarXive 2024](https://huggingface.co/datasets/ines-besrour/unarxive_2024): papers are nodes and an in-text citation is an edge **when the cited paper is also in the corpus**. The link target the model learns to emit is the cited paper's **title** (`\cite{Some Paper Title}`), not an opaque id — so it is predictable at inference. Citations resolve to an in-corpus arXiv id via the unarXive bibliography (direct arXiv ids, ~14.5%) plus an OpenAlex-id→arXiv-id map built from the OpenAlex snapshot (recovering ~52% more, non-hub lateral edges); bodies are rehydrated to faithful LaTeX (display math inlined as `$…$`). Mean out-degree 4.3, one ~1.3M-node connected component. See `data/arxiv_graph_extractor/`.
+ 
+ ### Planned
+ 
+ **Combined Wikipedia** — multiple language or thematic wiki dumps merged into a single graph. Cross-dump links and redirect edges give the graph richer connectivity than any single dump alone.
+ 
+-**arXiv (LaTeX source)** — papers as nodes; edges from `\cite{}` bibliography references and `\input{}`/`\include{}` file inclusions. Gives the model exposure to structured scientific writing where citations are semantically meaningful dependencies, not just footnotes.
++**Obsidian vault** — a personal note-taking graph where `[[wikilink]]` syntax connects notes. Edges reflect the author's own associative structure rather than an editorial or codebase convention, making this a qualitatively different kind of graph: sparse, idiosyncratic, and highly personal.
+ 
+ **Obsidian vault** — a personal note-taking graph where `[[wikilink]]` syntax connects notes. Edges reflect the author's own associative structure rather than an editorial or codebase convention, making this a qualitatively different kind of graph: sparse, idiosyncratic, and highly personal.
+ 
+@@ -220,6 +223,8 @@ model/
+     cross_doc_mask.py            CrossDocLinkMaskCreator (flex + triton backends)
+     markdown_link_detector.py    Detects [[WikiLinks]] in token streams
+     python_import_detector.py    Detects `import` statements in token streams
++    arxiv_cite_detector.py       Detects \cite{Title} citations in token streams
++    link_detector.py             LinkDetector protocol + make_link_detector factory
+   generation_loop.py             run_generation, link-detection loop
+   document_context.py            DocumentContext (inference context window)
+ kernels/                         Custom Triton attention kernels
+@@ -231,7 +236,7 @@ Full pipeline instructions (data extraction, pretokenization, training, generati
+ 
+ ## TODOs
+ in no particular priority order
+-- [ ] make ArXiv LaTeX dataset
++- [x] make ArXiv dataset (unarXive 2024 + OpenAlex-enriched citation edges, `\cite{Title}` targets) — see `data/arxiv_graph_extractor/`
+ - [ ] pull out actual validation splits
+   - [ ] one sparse & random doc
+   - [ ] one from dense sub-clusters
+diff --git a/data/collate.py b/data/collate.py
+index ca444ab..b29d9c3 100644
+--- a/data/collate.py
++++ b/data/collate.py
+@@ -131,6 +131,7 @@ def build_packed_batch(
+             outgoing_identifiers=outgoing_identifiers,
+             incoming_identifiers=graph.get_incoming_links(normed_id),
+             body_tokens=body_slice.tolist(),
++            categories=graph.get_categories(normed_id),
+         )
+ 
+         prefix_ids = layout.prefix_tokens(info)
+diff --git a/data/dataset.py b/data/dataset.py
+index f14891f..c252fac 100644
+--- a/data/dataset.py
++++ b/data/dataset.py
+@@ -121,6 +121,15 @@ class GraphIndex:
+         node = self.get_node(normed_identifier)
+         return node.get("raw_identifier") if node else None
+ 
++    def get_categories(self, normed_identifier: str) -> str:
++        """Returns the node's ``categories`` string (empty if absent).
++
++        Populated for the ArXiv dataset (e.g. ``"cs.CV eess.IV"``); empty for
++        Wikipedia / TheStack nodes that carry no categories field.
++        """
++        node = self.get_node(normed_identifier)
++        return (node.get("categories", "") if node else "") or ""
++
+     def get_outgoing_links(self, normed_identifier: str) -> List[str]:
+         """Returns the normed_identifiers that the given node links to."""
+         node = self.get_node(normed_identifier)
+diff --git a/data/document_sources.py b/data/document_sources.py
+index 19ac9f8..2a2460d 100644
+--- a/data/document_sources.py
++++ b/data/document_sources.py
+@@ -80,3 +80,42 @@ class StackJSONLSource:
+                 normed_id = f"{normalize_repo_name(repo)}:{path}"
+                 if normed_id in self._graph_normed_ids:
+                     yield normed_id, content
++
++
++class ArxivUnarxiveSource:
++    """
++    Yields (normed_id, content) for ArXiv papers from a pre-built content JSONL.
++
++    Unlike StackJSONLSource, the heavy lifting (normed_id computation, body
++    rehydration into LaTeX, citation rewriting) already happened in the ArXiv
++    extractor (data/arxiv_graph_extractor/extract.py), which emits a content
++    JSONL of one ``{"normed_identifier", "content"}`` object per line alongside
++    graph.jsonl. This source is therefore a thin reader: it yields each record
++    whose normed_id appears in the graph.
++
++    Args:
++        content_jsonl: Path to the extractor's content JSONL.
++        graph_normed_ids: Set of normed_identifier strings from graph.jsonl.
++            Only records whose normed_id appears here are yielded (keeps the
++            tokenized corpus aligned with the graph after any split/filter).
++    """
++
++    def __init__(self, content_jsonl: Path, graph_normed_ids: set[str]):
++        self._content_jsonl = content_jsonl
++        self._graph_normed_ids = graph_normed_ids
++
++    def __len__(self) -> int:
++        # As with StackJSONLSource, the graph size is the expected count; the
++        # writer's sentinel handles the actual termination so minor skew is fine.
++        return len(self._graph_normed_ids)
++
++    def __iter__(self) -> Iterator[tuple[str, str]]:
++        with open(self._content_jsonl, "r", encoding="utf-8") as f:
++            for line in f:
++                record = json.loads(line)
++                normed_id = record.get("normed_identifier", "")
++                content = record.get("content", "")
++                if not (normed_id and content):
++                    continue
++                if normed_id in self._graph_normed_ids:
++                    yield normed_id, content
+diff --git a/data/epoch_precompute.py b/data/epoch_precompute.py
+index d2b8421..e08cc54 100644
+--- a/data/epoch_precompute.py
++++ b/data/epoch_precompute.py
+@@ -278,8 +278,7 @@ def _worker_fn(
+     from data.layout import make_layout_policy
+     from data.pack_sampler import PackBatchSampler
+     from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+-    from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+-    from model.graph_traversal.python_import_detector import PythonImportDetector
++    from model.graph_traversal.link_detector import make_link_detector
+ 
+     logging.basicConfig(level=logging.WARNING)
+ 
+@@ -290,10 +289,7 @@ def _worker_fn(
+     if hasattr(layout, "set_epoch"):
+         layout.set_epoch(config.epoch_idx)
+ 
+-    if config.link_detector == "python":
+-        detector = PythonImportDetector(decode_fn=enc.decode)
+-    else:
+-        detector = MarkdownLinkDetector(decode_fn=enc.decode)
++    detector = make_link_detector(config.link_detector, enc.decode)
+ 
+     creator = CrossDocLinkMaskCreator(link_detector=detector)
+ 
+@@ -603,17 +599,13 @@ class EpochPrecomputer:
+         """GPU pass to fill kv_block_count using BlockMask (Method B)."""
+         import tiktoken
+         from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+-        from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+-        from model.graph_traversal.python_import_detector import PythonImportDetector
++        from model.graph_traversal.link_detector import make_link_detector
+ 
+         backend = PretokShardedBackend(graph)
+         enc = tiktoken.get_encoding(graph.metadata.get("tokenizer", "gpt2"))
+         layout = make_layout_policy(self.layout_policy_name, encode_fn=enc.encode_ordinary)
+ 
+-        if self.link_detector == "python":
+-            detector = PythonImportDetector(decode_fn=enc.decode)
+-        else:
+-            detector = MarkdownLinkDetector(decode_fn=enc.decode)
++        detector = make_link_detector(self.link_detector, enc.decode)
+ 
+         cross_doc_creator = CrossDocLinkMaskCreator(
+             link_detector=detector,
+diff --git a/data/layout.py b/data/layout.py
+index 07a0280..9b2daaf 100644
+--- a/data/layout.py
++++ b/data/layout.py
+@@ -32,6 +32,10 @@ class DocLayoutInfo:
+         body_tokens: The document body token ids (body only, excluding prefix
+             and suffix decoration).  None when the body has not yet been
+             fetched or generated (e.g. during pack-sampler length budgeting).
++        categories: Space-separated subject categories for the document (e.g.
++            ArXiv's ``"cs.CV eess.IV"``).  Empty string for datasets without
++            categories (Wikipedia, TheStack) and for the generation root.  Used
++            by the LaTeX-comment prefix-card policies.
+     """
+ 
+     raw_identifier: str
+@@ -39,6 +43,7 @@ class DocLayoutInfo:
+     outgoing_identifiers: List[str] = field(default_factory=list)
+     incoming_identifiers: List[str] = field(default_factory=list)
+     body_tokens: Optional[List[int]] = None
++    categories: str = ""
+ 
+ 
+ class DocLayoutPolicy(Protocol):
+@@ -130,143 +135,166 @@ class EOSLayoutPolicy(DocLayoutPolicy):
+         return [self.eos_token_id]
+ 
+ 
+-class IdentifierPrefixLayoutPolicy(DocLayoutPolicy):
+-    """
+-    Layout policy that prepends "# {raw_identifier}\\n\\n" as a prefix for each document.
+-
+-    Tokens are produced by an external encode function (e.g. a tiktoken encoding's
+-    encode_ordinary method) and cached per identifier to avoid repeated tokenization.
+-    No suffix is added.
+-    """
+-
+-    def __init__(self, encode_fn: Callable[[str], List[int]]):
+-        self._encode = encode_fn
+-        self._cache: Dict[str, List[int]] = {}
+-
+-    def _get_prefix_tokens(self, raw_identifier: str) -> List[int]:
+-        if raw_identifier not in self._cache:
+-            self._cache[raw_identifier] = self._encode(f"# {raw_identifier}\n\n")
+-        return self._cache[raw_identifier]
+-
+-    def prefix_length(self, info: DocLayoutInfo) -> int:
+-        return len(self._get_prefix_tokens(info.raw_identifier))
+-
+-    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
+-        return 0
++# ---------------------------------------------------------------------------
++# Prefix-card formatters
++# ---------------------------------------------------------------------------
++# A "format function" maps a DocLayoutInfo to the prefix string for that document.
++# It is the ONLY dataset-specific part of a prefix policy; everything else
++# (caching, the stochastic coin-flip, length/token agreement, the EOS suffix) is
++# shared by PrefixLayoutPolicy below.
+ 
+-    def prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
+-        return list(self._get_prefix_tokens(info.raw_identifier))
++def _markdown_heading_format(info: DocLayoutInfo) -> str:
++    """Wikipedia / TheStack style: ``# {raw_identifier}\\n\\n``."""
++    return f"# {info.raw_identifier}\n\n"
+ 
+-    def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
+-        return []
+ 
++def _latex_comment_card(info: DocLayoutInfo) -> str:
++    """ArXiv style LaTeX-comment card: ``% Title: ...`` (+ ``% Categories: ...``).
+ 
+-class IdentifierPrefixEOSLayoutPolicy(DocLayoutPolicy):
++    Title is always included; the categories line is emitted only when categories
++    are present.  The card is valid LaTeX (``%`` begins a comment), keeping the
++    token stream in-distribution for an otherwise-LaTeX ArXiv body.
+     """
+-    Layout policy that combines a title prefix with an EOS suffix.
++    lines = [f"% Title: {info.raw_identifier}"]
++    if info.categories:
++        lines.append(f"% Categories: {info.categories}")
++    return "\n".join(lines) + "\n\n"
+ 
+-    Each document is laid out as:
+ 
+-        encode("# {raw_identifier}\\n\\n") + [body] + [EOS]
+-
+-    This gives the model a human-readable identifier before its content
+-    (useful for code filenames and article titles) plus a clean EOS stop
+-    signal, without a redundant BOS prefix.
+-
+-    Token counts: prefix = len(encode("# {title}\\n\\n")), suffix = 1.
++class PrefixLayoutPolicy(DocLayoutPolicy):
++    """
++    Unified prefix-card layout policy parameterised over three orthogonal axes:
++
++    * ``format_fn``    — maps a ``DocLayoutInfo`` to the prefix string (the only
++                         dataset-specific bit; e.g. ``_markdown_heading_format``
++                         or ``_latex_comment_card``).
++    * ``stochastic``   — when True, the prefix is included on a per-(doc, epoch)
++                         50-50 coin flip (so the model is not OOD on benchmark
++                         prompts that lack a prefix); when False the prefix is
++                         always included and tokens are cached per format string.
++    * ``eos_token_id`` — when not None, appended as a 1-token suffix.
++
++    The coin flip is ``md5(normed_identifier + ":" + epoch) % 2 == 0`` —
++    deterministic across ranks, restarts, and subprocesses (unlike Python's
++    salted ``hash()``), and identical between ``prefix_length`` and
++    ``prefix_tokens`` for a given doc so the two never disagree.  Stochastic mode
++    intentionally does not cache (the decision is cheap and per-epoch); the
++    deterministic mode caches tokens keyed by the formatted string.
++
++    The named subclasses below pin these axes for the config-name factory and
++    preserve the historical class names that callers import directly.
+     """
+ 
+     def __init__(
+         self,
+         encode_fn: Callable[[str], List[int]],
+-        eos_token_id: int,
++        format_fn: Callable[[DocLayoutInfo], str],
++        *,
++        stochastic: bool = False,
++        eos_token_id: Optional[int] = None,
+     ):
+         self._encode = encode_fn
++        self._format = format_fn
++        self._stochastic = stochastic
+         self.eos_token_id = eos_token_id
++        self._epoch: int = 0
+         self._cache: Dict[str, List[int]] = {}
+ 
+-    def _get_title_tokens(self, raw_identifier: str) -> List[int]:
+-        if raw_identifier not in self._cache:
+-            self._cache[raw_identifier] = self._encode(f"# {raw_identifier}\n\n")
+-        return self._cache[raw_identifier]
++    def set_epoch(self, epoch: int) -> None:
++        """Update the epoch counter (drives the stochastic coin flip).
+ 
+-    def prefix_length(self, info: DocLayoutInfo) -> int:
+-        return len(self._get_title_tokens(info.raw_identifier))
++        Defined unconditionally; harmless for deterministic policies and lets the
++        training loop call it via a single ``hasattr(layout, 'set_epoch')`` check.
++        """
++        self._epoch = epoch
+ 
+-    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
+-        return 1
++    def _include_prefix(self, info: DocLayoutInfo) -> bool:
++        if not self._stochastic:
++            return True
++        key = f"{info.normed_identifier}:{self._epoch}".encode()
++        return int(hashlib.md5(key).hexdigest(), 16) % 2 == 0
++
++    def _prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
++        text = self._format(info)
++        if self._stochastic:
++            return self._encode(text)  # no cache: decision varies per epoch
++        if text not in self._cache:
++            self._cache[text] = self._encode(text)
++        return self._cache[text]
++
++    def prefix_length(self, info: DocLayoutInfo) -> int:
++        if not self._include_prefix(info):
++            return 0
++        return len(self._prefix_tokens(info))
+ 
+     def prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
+-        return list(self._get_title_tokens(info.raw_identifier))
++        if not self._include_prefix(info):
++            return []
++        return list(self._prefix_tokens(info))
++
++    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
++        return 0 if self.eos_token_id is None else 1
+ 
+     def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
+-        return [self.eos_token_id]
++        return [] if self.eos_token_id is None else [self.eos_token_id]
+ 
+ 
+-class StochasticIdentifierPrefixLayoutPolicy(DocLayoutPolicy):
+-    """
+-    Layout policy that randomly includes or omits the ``"# {raw_identifier}\\n\\n"``
+-    identifier prefix on a per-document, per-epoch basis.
++# Named policies: thin wrappers pinning PrefixLayoutPolicy's axes. They preserve
++# the class names that callers (generate.py, demo_traversal.py, eval) import and
++# isinstance-check, while sharing all behaviour with the unified base.
+ 
+-    Inclusion is decided by::
++class IdentifierPrefixLayoutPolicy(PrefixLayoutPolicy):
++    """``# {raw_identifier}\\n\\n`` prefix, no suffix (Wikipedia / TheStack)."""
+ 
+-        hash(normed_identifier + ":" + str(epoch)) % 2 == 0
++    def __init__(self, encode_fn: Callable[[str], List[int]]):
++        super().__init__(encode_fn, _markdown_heading_format)
+ 
+-    This is deterministic: the same ``(doc, epoch)`` pair always produces the
+-    same decision across ranks, restarts, and between the ``prefix_length()``
+-    and ``prefix_tokens()`` calls for the same document, with no shared state
+-    or cache required.
+ 
+-    An EOS token is always appended as suffix so that aux docs can end cleanly
+-    during generation regardless of whether the prefix was included.
++class IdentifierPrefixEOSLayoutPolicy(PrefixLayoutPolicy):
++    """``# {raw_identifier}\\n\\n`` prefix + EOS suffix."""
+ 
+-    Use case: train with 50-50 prefix/no-prefix so the model is not OOD on
+-    external benchmarks that have no identifier prefix, while still being able
+-    to generate aux docs (which need a starting string).  During inference,
+-    wire a separate deterministic policy (e.g. ``identifier_prefix_eos``)
+-    via the ``data.inference_layout_policy`` config key.
++    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
++        super().__init__(encode_fn, _markdown_heading_format, eos_token_id=eos_token_id)
+ 
+-    Call ``set_epoch(n)`` at the start of each epoch.  The training loop does
+-    this automatically via ``hasattr(layout, 'set_epoch')`` check.
++
++class StochasticIdentifierPrefixLayoutPolicy(PrefixLayoutPolicy):
++    """50-50 per-(doc, epoch) ``# {raw_identifier}\\n\\n`` prefix + EOS suffix.
++
++    Train with 50-50 prefix/no-prefix so the model is not OOD on external
++    benchmarks that lack a prefix, while still being able to start aux docs during
++    generation.  Wire a deterministic ``identifier_prefix_eos`` policy for
++    inference via ``data.inference_layout_policy``.
+     """
+ 
+     def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
+-        self._encode = encode_fn
+-        self.eos_token_id = eos_token_id
+-        self._epoch: int = 0
++        super().__init__(encode_fn, _markdown_heading_format,
++                         stochastic=True, eos_token_id=eos_token_id)
+ 
+-    def set_epoch(self, epoch: int) -> None:
+-        """Update the epoch counter. Called by BucketedPackDataset on epoch advance."""
+-        self._epoch = epoch
+ 
+-    def _include_prefix(self, normed_identifier: str) -> bool:
+-        """Deterministic per-(doc, epoch) coin flip; no cache, no shared state.
++class LatexCommentPrefixLayoutPolicy(PrefixLayoutPolicy):
++    """Deterministic LaTeX-comment card (title + categories) + EOS suffix.
+ 
+-        Uses hashlib.md5 rather than Python's built-in hash() so the result is
+-        stable across processes, interpreter restarts, and subprocesses (Python's
+-        hash() is randomized per-process by default via PYTHONHASHSEED).
+-        """
+-        key = f"{normed_identifier}:{self._epoch}".encode()
+-        return int(hashlib.md5(key).hexdigest(), 16) % 2 == 0
++    The inference counterpart to ``StochasticLatexCommentPrefixLayoutPolicy``
++    (wire via ``data.inference_layout_policy``): generation needs a deterministic
++    starting card for aux docs, whereas training randomises card inclusion.
++    """
+ 
+-    def _get_prefix_tokens(self, raw_identifier: str) -> List[int]:
+-        return self._encode(f"# {raw_identifier}\n\n")
++    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
++        super().__init__(encode_fn, _latex_comment_card, eos_token_id=eos_token_id)
+ 
+-    def prefix_length(self, info: DocLayoutInfo) -> int:
+-        if not self._include_prefix(info.normed_identifier):
+-            return 0
+-        return len(self._get_prefix_tokens(info.raw_identifier))
+ 
+-    def suffix_length(self, info: DocLayoutInfo) -> int:  # noqa: ARG002
+-        return 1
++class StochasticLatexCommentPrefixLayoutPolicy(PrefixLayoutPolicy):
++    """50-50 per-(doc, epoch) LaTeX-comment card (title + categories) + EOS suffix.
+ 
+-    def prefix_tokens(self, info: DocLayoutInfo) -> List[int]:
+-        if not self._include_prefix(info.normed_identifier):
+-            return []
+-        return self._get_prefix_tokens(info.raw_identifier)
++    Mirrors ``StochasticIdentifierPrefixLayoutPolicy`` but emits a LaTeX-comment
++    card and surfaces ``categories`` (a conceptual, learnable signal that survives
++    both inference-time corpus-fetch and document-generation).  Train with
++    50-50 card/no-card; wire ``latex_comment_prefix`` for inference.
++    """
+ 
+-    def suffix_tokens(self, info: DocLayoutInfo) -> List[int]:  # noqa: ARG002
+-        return [self.eos_token_id]
++    def __init__(self, encode_fn: Callable[[str], List[int]], eos_token_id: int):
++        super().__init__(encode_fn, _latex_comment_card,
++                         stochastic=True, eos_token_id=eos_token_id)
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -286,10 +314,12 @@ def make_layout_policy(
+ 
+     Args:
+         name: One of ``"null"``, ``"eos"``, ``"identifier_prefix"``,
+-              ``"identifier_prefix_eos"``, ``"stochastic_identifier_prefix"``.
++              ``"identifier_prefix_eos"``, ``"stochastic_identifier_prefix"``,
++              ``"latex_comment_prefix"``, ``"stochastic_latex_comment_prefix"``.
+         encode_fn: Required for policies that tokenise the identifier
+-            (``"identifier_prefix"``, ``"identifier_prefix_eos"``, and
+-            ``"stochastic_identifier_prefix"``).
++            (``"identifier_prefix"``, ``"identifier_prefix_eos"``,
++            ``"stochastic_identifier_prefix"``, ``"latex_comment_prefix"``,
++            ``"stochastic_latex_comment_prefix"``).
+         eos_token_id: EOS token id (default: GPT-2 ``<|endoftext|>`` = 50256).
+ 
+     Returns:
+@@ -320,8 +350,23 @@ def make_layout_policy(
+                 "(a tokeniser callable)."
+             )
+         return StochasticIdentifierPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
++    if name == "latex_comment_prefix":
++        if encode_fn is None:
++            raise ValueError(
++                "layout_policy='latex_comment_prefix' requires encode_fn "
++                "(a tokeniser callable)."
++            )
++        return LatexCommentPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
++    if name == "stochastic_latex_comment_prefix":
++        if encode_fn is None:
++            raise ValueError(
++                "layout_policy='stochastic_latex_comment_prefix' requires encode_fn "
++                "(a tokeniser callable)."
++            )
++        return StochasticLatexCommentPrefixLayoutPolicy(encode_fn, eos_token_id=eos_token_id)
+     raise ValueError(
+         f"Unknown layout_policy '{name}'. "
+         "Valid options: 'null', 'eos', 'identifier_prefix', "
+-        "'identifier_prefix_eos', 'stochastic_identifier_prefix'."
++        "'identifier_prefix_eos', 'stochastic_identifier_prefix', "
++        "'latex_comment_prefix', 'stochastic_latex_comment_prefix'."
+     )
+diff --git a/data/normalization.py b/data/normalization.py
+index fb26d77..58e6859 100644
+--- a/data/normalization.py
++++ b/data/normalization.py
+@@ -79,6 +79,39 @@ def normalize_package_name(raw: str) -> str:
+     return f"{body}_{h}"
+ 
+ 
++_ARXIV_VERSION_RE = re.compile(r"v\d+$")
++
++
++def canonical_arxiv_id(raw: str) -> str:
++    """Strip a trailing version suffix (e.g. 'v2') and surrounding whitespace.
++
++    A paper's node and every citation edge that points to it must derive from the
++    same id, so all arXiv ids are canonicalized to their version-less form before
++    use. New-style ids are 'YYYY.NNNNN'; old-style 'archive/NNNNNNN' canonicalize
++    likewise (the version suffix, if any, is removed).
++    """
++    return _ARXIV_VERSION_RE.sub("", raw.strip())
++
++
++def normalize_arxiv(raw: str) -> str:
++    """
++    Normalize an arXiv id (e.g. '2401.12345' or '2401.12345v2') to a normed_identifier.
++
++    The id is canonicalized (version suffix stripped) first, then dots and slashes
++    are replaced with underscores before _norm_body runs. The hash is of the
++    *canonical* id (not the raw, version-bearing string) so that a paper node and
++    any citation edge that references it always produce the same normed_identifier.
++
++    Because arXiv ids are globally unique, this guarantees a unique normed_identifier
++    per paper even when two papers share an identical title.
++    """
++    canon = canonical_arxiv_id(raw)
++    h = identifier_hash(canon)
++    pre = canon.replace(".", "_").replace("/", "_")
++    body = _norm_body(pre)
++    return f"{body}_{h}"
++
++
+ def strip_hash(normed: str) -> str:
+     """Remove the trailing '_[0-9a-f]{6}' hash suffix from a normed_identifier."""
+     return re.sub(r"_[0-9a-f]{6}$", "", normed)
+diff --git a/data/pack_sampler.py b/data/pack_sampler.py
+index 6868300..aaa11bb 100644
+--- a/data/pack_sampler.py
++++ b/data/pack_sampler.py
+@@ -221,6 +221,7 @@ class PackBatchSampler:
+             outgoing_identifiers=self.graph.get_outgoing_links(normed),
+             incoming_identifiers=self.graph.get_incoming_links(normed),
+             body_tokens=None,  # body not available during length-budgeting
++            categories=self.graph.get_categories(normed),
+         )
+         return (
+             self.layout_policy.prefix_length(info),
+diff --git a/generate.py b/generate.py
+index 3d8535e..6b0eaf0 100644
+--- a/generate.py
++++ b/generate.py
+@@ -45,8 +45,7 @@ from model.graph_traversal.block_mask_creator import (
+     make_mask_creator_callable_from,
+ )
+ from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+-from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+-from model.graph_traversal.python_import_detector import PythonImportDetector
++from model.graph_traversal.link_detector import make_link_detector
+ from data.normalization import normalize_wiki_title
+ from model.modules.training_module import TS2TSTrainingModule
+ 
+@@ -139,15 +138,7 @@ def load_inference_model(
+     link_detector      = None
+ 
+     if mask_type == "cross_doc_link":
+-        if link_detector_name == "markdown":
+-            link_detector = MarkdownLinkDetector(decode_fn=enc.decode)
+-        elif link_detector_name == "python":
+-            link_detector = PythonImportDetector(decode_fn=enc.decode)
+-        else:
+-            raise ValueError(
+-                f"Unknown link_detector {link_detector_name!r}. "
+-                "Expected 'markdown' or 'python'."
+-            )
++        link_detector = make_link_detector(link_detector_name, enc.decode)
+ 
+     # Training backend — determines which attention kernel was used during training
+     use_triton = model_cfg.get("attention_backend", "triton") != "flex"
+diff --git a/main.py b/main.py
+index d1c75e1..7bd469e 100644
+--- a/main.py
++++ b/main.py
+@@ -35,8 +35,7 @@ from model.graph_traversal.block_mask_creator import (
+     create_doc_concat_triton_mask,
+ )
+ from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+-from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+-from model.graph_traversal.python_import_detector import PythonImportDetector
++from model.graph_traversal.link_detector import make_link_detector
+ from data.dataset import GraphIndex, PretokShardedBackend
+ from data.packed_dataset import PackedSequenceDataset
+ from data.bucketed_pack_dataset import BucketedPackDataset, BucketState
+@@ -238,6 +237,7 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
+     # Select prompts that match the actual link detector syntax so links fire.
+     from model.graph_traversal.python_import_detector import PythonImportDetector
+     from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
++    from model.graph_traversal.arxiv_cite_detector import ArxivCiteDetector
+     if isinstance(link_detector, PythonImportDetector):
+         prompts = [
+             '"""Sorting utilities."""\nimport heapq\nfrom utils import validate_input\n\ndef quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n',
+@@ -248,6 +248,11 @@ def _run_generation_demo(training_module, tokenizer, link_detector, layout_polic
+             'The [quicksort](Quicksort) algorithm is a divide-and-conquer sorting method. It was developed by [Tony Hoare](Tony_Hoare) in 1959.',
+             '[Python](Python_(programming_language)) is a high-level programming language known for its readability. See also [Java](Java_(programming_language)).',
+         ]
++    elif isinstance(link_detector, ArxivCiteDetector):
++        prompts = [
++            '% Title: Attention Mechanisms for Sequence Modeling\n\nThe Transformer architecture \\cite{Attention Is All You Need} replaced recurrence with self-attention. ',
++            '% Title: A Survey of Deep Residual Networks\n\nDeep residual learning \\cite{Deep Residual Learning for Image Recognition} enabled training of very deep networks. ',
++        ]
+     else:
+         # Fallback: no link detection (doc_causal or unknown detector).
+         prompts = [
+@@ -671,19 +676,11 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+         link_detector_name = cfg.get('model', {}).get('link_detector')
+         if not link_detector_name:
+             raise ValueError(
+-                "model.link_detector must be set to 'markdown' or 'python' "
++                "model.link_detector must be set to 'markdown', 'python' or 'arxiv' "
+                 f"when model.mask_type is '{mask_type}'"
+             )
+         enc = tiktoken.get_encoding('gpt2')
+-        if link_detector_name == 'markdown':
+-            detector = MarkdownLinkDetector(decode_fn=enc.decode)
+-        elif link_detector_name == 'python':
+-            detector = PythonImportDetector(decode_fn=enc.decode)
+-        else:
+-            raise ValueError(
+-                f"Unknown model.link_detector '{link_detector_name}'. "
+-                "Use 'markdown' (Wikipedia) or 'python' (TheStack)."
+-            )
++        detector = make_link_detector(link_detector_name, enc.decode)
+         attention_backend = 'triton_v18' if use_triton else 'flex'
+         block_mask_creator = make_mask_creator_callable_from(
+             CrossDocLinkMaskCreator(
+diff --git a/mem_probe.py b/mem_probe.py
+index ad18adc..9646ddb 100644
+--- a/mem_probe.py
++++ b/mem_probe.py
+@@ -16,8 +16,7 @@ from model.graph_traversal.block_mask_creator import (
+     make_mask_creator_callable, make_mask_creator_callable_from,
+ )
+ from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+-from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+-from model.graph_traversal.python_import_detector import PythonImportDetector
++from model.graph_traversal.link_detector import make_link_detector
+ from data.dataset import GraphIndex, PretokShardedBackend
+ from data.packed_dataset import PackedSequenceDataset
+ from data.layout import NullLayoutPolicy
+@@ -54,8 +53,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+     if mask_type == "cross_doc_link":
+         enc = tiktoken.get_encoding("gpt2")
+         det_name = cfg["model"]["link_detector"]
+-        detector = PythonImportDetector(decode_fn=enc.decode) if det_name == "python" \
+-                   else MarkdownLinkDetector(decode_fn=enc.decode)
++        detector = make_link_detector(det_name, enc.decode)
+         bmc = make_mask_creator_callable_from(CrossDocLinkMaskCreator(link_detector=detector))
+     else:
+         bmc = make_mask_creator_callable(mask_type)
+diff --git a/model/graph_traversal/link_detector.py b/model/graph_traversal/link_detector.py
+index a7efdcc..27ff464 100644
+--- a/model/graph_traversal/link_detector.py
++++ b/model/graph_traversal/link_detector.py
+@@ -4,10 +4,14 @@ LinkDetector protocol and shared LinkInfo type.
+ All dataset-specific link detectors implement this protocol:
+     MarkdownLinkDetector  (markdown_link_detector.py)  — Wikipedia / Markdown
+     PythonImportDetector  (python_import_detector.py)  — Python / TheStack
++    ArxivCiteDetector     (arxiv_cite_detector.py)     — ArXiv / unarXive
++
++Use ``make_link_detector(name, decode_fn)`` to construct one by config name
++rather than dispatching on the name at each call site.
+ """
+ from __future__ import annotations
+ 
+-from typing import Any, List, NamedTuple, Protocol, runtime_checkable
++from typing import Any, Callable, List, NamedTuple, Protocol, runtime_checkable
+ 
+ import torch
+ 
+@@ -82,3 +86,41 @@ class LinkDetector(Protocol):
+         sub-component.
+         """
+         return span.raw_identifier
++
++
++# Valid names accepted by ``make_link_detector`` (and the ``model.link_detector``
++# config key), kept here as the single source of truth for error messages.
++LINK_DETECTOR_NAMES = ("markdown", "python", "arxiv")
++
++
++def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "LinkDetector":
++    """
++    Construct a dataset-specific LinkDetector by config name.
++
++    Single dispatch point for ``model.link_detector`` so adding a dataset means
++    one entry here instead of editing every training/inference/profiling script.
++
++    Args:
++        name: ``'markdown'`` (Wikipedia), ``'python'`` (TheStack), or
++              ``'arxiv'`` (unarXive ``\\cite{Title}`` citations).
++        decode_fn: Token-ids → str callable (typically ``tiktoken_enc.decode``).
++
++    Raises:
++        ValueError: If ``name`` is unknown.
++    """
++    # Imported lazily: the concrete detector modules import LinkInfo from this
++    # module, so importing them at top level would create a circular import.
++    if name == "markdown":
++        from .markdown_link_detector import MarkdownLinkDetector
++        return MarkdownLinkDetector(decode_fn=decode_fn)
++    if name == "python":
++        from .python_import_detector import PythonImportDetector
++        return PythonImportDetector(decode_fn=decode_fn)
++    if name == "arxiv":
++        from .arxiv_cite_detector import ArxivCiteDetector
++        return ArxivCiteDetector(decode_fn=decode_fn)
++    raise ValueError(
++        f"Unknown model.link_detector '{name}'. "
++        f"Valid options: {', '.join(LINK_DETECTOR_NAMES)} "
++        "('markdown'=Wikipedia, 'python'=TheStack, 'arxiv'=unarXive)."
++    )
+diff --git a/profile_training.py b/profile_training.py
+index d21fcf7..38f2a78 100644
+--- a/profile_training.py
++++ b/profile_training.py
+@@ -55,8 +55,7 @@ from model.graph_traversal.block_mask_creator import (
+     make_mask_creator_callable_from,
+ )
+ from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+-from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+-from model.graph_traversal.python_import_detector import PythonImportDetector
++from model.graph_traversal.link_detector import make_link_detector
+ from data.dataset import GraphIndex, PretokShardedBackend
+ from data.packed_dataset import PackedSequenceDataset
+ from data.layout import make_layout_policy
+@@ -176,15 +175,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+         link_detector_name = cfg.get('model', {}).get('link_detector')
+         if not link_detector_name:
+             raise ValueError(
+-                "model.link_detector must be set to 'markdown' or 'python' "
++                "model.link_detector must be set to 'markdown', 'python' or 'arxiv' "
+                 "when model.mask_type is 'cross_doc_link'"
+             )
+-        if link_detector_name == 'markdown':
+-            detector = MarkdownLinkDetector(decode_fn=enc.decode)
+-        elif link_detector_name == 'python':
+-            detector = PythonImportDetector(decode_fn=enc.decode)
+-        else:
+-            raise ValueError(f"Unknown link_detector: {link_detector_name!r}")
++        detector = make_link_detector(link_detector_name, enc.decode)
+         _mcfg = cfg.get('model', {})
+         block_mask_creator = make_mask_creator_callable_from(
+             CrossDocLinkMaskCreator(
+diff --git a/tests/data/test_bucketed_pack_dataset.py b/tests/data/test_bucketed_pack_dataset.py
+index b7fdde6..46f9ed4 100644
+--- a/tests/data/test_bucketed_pack_dataset.py
++++ b/tests/data/test_bucketed_pack_dataset.py
+@@ -70,6 +70,7 @@ class _MockGraph:
+     def get_raw_identifier(self, nid): return nid
+     def get_outgoing_links(self, nid): return []
+     def get_incoming_links(self, nid): return []
++    def get_categories(self, nid): return ""
+ 
+ 
+ class _MockBackend:
+diff --git a/tests/data/test_document_sources.py b/tests/data/test_document_sources.py
+index 4fc3d12..4f1f410 100644
+--- a/tests/data/test_document_sources.py
++++ b/tests/data/test_document_sources.py
+@@ -6,6 +6,7 @@ from pathlib import Path
+ from data.document_sources import (
+     MarkdownDirectorySource,
+     StackJSONLSource,
++    ArxivUnarxiveSource,
+ )
+ from data.normalization import normalize_repo_name as _normalize_repo_name
+ 
+@@ -208,3 +209,56 @@ class TestStackJSONLSource:
+         all_titles = {_graph_title("user/repo", "x.py")}
+         source = StackJSONLSource(jsonl_path, all_titles)
+         assert list(source) == []
++
++
++# ---------------------------------------------------------------------------
++# ArxivUnarxiveSource
++# ---------------------------------------------------------------------------
++
++@pytest.fixture
++def arxiv_content(tmp_path):
++    records = [
++        {"normed_identifier": "2401_00001_aaa111", "content": "Body of paper one \\cite{Paper Two}."},
++        {"normed_identifier": "2401_00002_bbb222", "content": "Body of paper two."},
++        # Present in JSONL but NOT in the graph — should be skipped.
++        {"normed_identifier": "2401_99999_zzz999", "content": "Orphan body."},
++        # Missing content — should be skipped even if in graph.
++        {"normed_identifier": "2401_00003_ccc333", "content": ""},
++    ]
++    path = tmp_path / "content.jsonl"
++    with open(path, "w", encoding="utf-8") as f:
++        for rec in records:
++            f.write(json.dumps(rec) + "\n")
++    graph_ids = {"2401_00001_aaa111", "2401_00002_bbb222", "2401_00003_ccc333"}
++    return path, graph_ids
++
++
++class TestArxivUnarxiveSource:
++    def test_len_equals_graph_ids(self, arxiv_content):
++        path, graph_ids = arxiv_content
++        assert len(ArxivUnarxiveSource(path, graph_ids)) == 3
++
++    def test_yields_only_graph_members(self, arxiv_content):
++        path, graph_ids = arxiv_content
++        ids = {nid for nid, _ in ArxivUnarxiveSource(path, graph_ids)}
++        # Orphan (not in graph) and empty-content record both excluded.
++        assert ids == {"2401_00001_aaa111", "2401_00002_bbb222"}
++
++    def test_yields_content_verbatim(self, arxiv_content):
++        path, graph_ids = arxiv_content
++        results = dict(ArxivUnarxiveSource(path, graph_ids))
++        assert results["2401_00001_aaa111"] == "Body of paper one \\cite{Paper Two}."
++
++    def test_skips_empty_content(self, arxiv_content):
++        path, graph_ids = arxiv_content
++        ids = {nid for nid, _ in ArxivUnarxiveSource(path, graph_ids)}
++        assert "2401_00003_ccc333" not in ids
++
++    def test_empty_graph_ids_yields_nothing(self, arxiv_content):
++        path, _ = arxiv_content
++        assert list(ArxivUnarxiveSource(path, set())) == []
++
++    def test_iterable_multiple_times(self, arxiv_content):
++        path, graph_ids = arxiv_content
++        source = ArxivUnarxiveSource(path, graph_ids)
++        assert sorted(n for n, _ in source) == sorted(n for n, _ in source)
+diff --git a/tests/data/test_layout.py b/tests/data/test_layout.py
+index 4e5d0c3..7e3ed48 100644
+--- a/tests/data/test_layout.py
++++ b/tests/data/test_layout.py
+@@ -4,9 +4,12 @@ from data.layout import (
+     EOSLayoutPolicy,
+     IdentifierPrefixEOSLayoutPolicy,
+     IdentifierPrefixLayoutPolicy,
++    LatexCommentPrefixLayoutPolicy,
+     NullLayoutPolicy,
++    StochasticLatexCommentPrefixLayoutPolicy,
+     make_layout_policy,
+     DocLayoutInfo,
++    _latex_comment_card,
+ )
+ 
+ 
+@@ -14,13 +17,14 @@ from data.layout import (
+ # Helpers
+ # ---------------------------------------------------------------------------
+ 
+-def make_info(raw="", normed="", outgoing=None, incoming=None, body_tokens=None):
++def make_info(raw="", normed="", outgoing=None, incoming=None, body_tokens=None, categories=""):
+     return DocLayoutInfo(
+         raw_identifier=raw,
+         normed_identifier=normed,
+         outgoing_identifiers=outgoing or [],
+         incoming_identifiers=incoming or [],
+         body_tokens=body_tokens,
++        categories=categories,
+     )
+ 
+ 
+@@ -238,3 +242,128 @@ def test_factory_requires_encode_fn_for_prefix_policies():
+ def test_factory_unknown_name_raises():
+     with pytest.raises(ValueError, match="Unknown layout_policy"):
+         make_layout_policy("banana")
++
++
++# ---------------------------------------------------------------------------
++# _latex_comment_card helper
++# ---------------------------------------------------------------------------
++
++def test_latex_card_with_categories():
++    card = _latex_comment_card(make_info("Attention Is All You Need", categories="cs.CL cs.LG"))
++    assert card == "% Title: Attention Is All You Need\n% Categories: cs.CL cs.LG\n\n"
++
++
++def test_latex_card_without_categories():
++    # No categories line emitted when categories is empty.
++    card = _latex_comment_card(make_info("Some Paper", categories=""))
++    assert card == "% Title: Some Paper\n\n"
++
++
++# ---------------------------------------------------------------------------
++# LatexCommentPrefixLayoutPolicy (deterministic, for inference)
++# ---------------------------------------------------------------------------
++
++def test_latex_comment_prefix_format():
++    p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
++    info = make_info("My Paper", "arxiv_123", categories="cs.LG")
++    assert p.prefix_tokens(info) == _simple_encode("% Title: My Paper\n% Categories: cs.LG\n\n")
++
++
++def test_latex_comment_prefix_no_categories():
++    p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
++    info = make_info("My Paper", "arxiv_123", categories="")
++    assert p.prefix_tokens(info) == _simple_encode("% Title: My Paper\n\n")
++
++
++def test_latex_comment_prefix_suffix_is_eos():
++    p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=42)
++    assert p.suffix_tokens(make_info("x")) == [42]
++    assert p.suffix_length(make_info("x")) == 1
++
++
++def test_latex_comment_prefix_length_matches_tokens():
++    p = LatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
++    info = make_info("Title", "n", categories="cs.AI")
++    assert p.prefix_length(info) == len(p.prefix_tokens(info))
++
++
++def test_latex_comment_prefix_caches():
++    calls = [0]
++    def counting_encode(text):
++        calls[0] += 1
++        return _simple_encode(text)
++    p = LatexCommentPrefixLayoutPolicy(counting_encode, eos_token_id=2)
++    info = make_info("Title", "n", categories="cs.AI")
++    p.prefix_tokens(info)
++    p.prefix_tokens(info)
++    p.prefix_length(info)
++    assert calls[0] == 1
++
++
++# ---------------------------------------------------------------------------
++# StochasticLatexCommentPrefixLayoutPolicy
++# ---------------------------------------------------------------------------
++
++def test_stochastic_latex_prefix_length_matches_tokens_both_branches():
++    # For every doc, in either include/exclude state, prefix_length must equal
++    # len(prefix_tokens) — the shared _include_prefix guarantees agreement.
++    p = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
++    for i in range(50):
++        info = make_info(f"Title {i}", f"arxiv_{i}", categories="cs.LG")
++        assert p.prefix_length(info) == len(p.prefix_tokens(info))
++
++
++def test_stochastic_latex_prefix_deterministic_across_instances():
++    a = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
++    b = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
++    for i in range(30):
++        info = make_info(f"T{i}", f"arxiv_{i}", categories="cs.LG")
++        assert a.prefix_tokens(info) == b.prefix_tokens(info)
++
++
++def test_stochastic_latex_prefix_both_outcomes_occur():
++    # Across many docs, the coin flip should produce both included and omitted cards.
++    p = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
++    lengths = {
++        p.prefix_length(make_info(f"T{i}", f"arxiv_{i}", categories="cs.LG")) > 0
++        for i in range(100)
++    }
++    assert lengths == {True, False}
++
++
++def test_stochastic_latex_prefix_epoch_changes_decision():
++    # The same doc can flip inclusion across epochs (at least one differs over a span).
++    p = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=2)
++    info = make_info("Title", "arxiv_42", categories="cs.LG")
++    p.set_epoch(0)
++    e0 = [p.prefix_length(make_info("T", f"arxiv_{i}", categories="c")) > 0 for i in range(20)]
++    p.set_epoch(1)
++    e1 = [p.prefix_length(make_info("T", f"arxiv_{i}", categories="c")) > 0 for i in range(20)]
++    assert e0 != e1  # epoch participates in the hash, so the pattern shifts
++
++
++def test_stochastic_latex_prefix_always_eos_suffix():
++    p = StochasticLatexCommentPrefixLayoutPolicy(_simple_encode, eos_token_id=99)
++    # Suffix is EOS regardless of prefix inclusion.
++    for i in range(20):
++        info = make_info(f"T{i}", f"arxiv_{i}")
++        assert p.suffix_tokens(info) == [99]
++
++
++def test_factory_latex_comment_prefix():
++    p = make_layout_policy("latex_comment_prefix", encode_fn=_simple_encode, eos_token_id=2)
++    assert isinstance(p, LatexCommentPrefixLayoutPolicy)
++
++
++def test_factory_stochastic_latex_comment_prefix():
++    p = make_layout_policy(
++        "stochastic_latex_comment_prefix", encode_fn=_simple_encode, eos_token_id=2
++    )
++    assert isinstance(p, StochasticLatexCommentPrefixLayoutPolicy)
++
++
++def test_factory_latex_policies_require_encode_fn():
++    with pytest.raises(ValueError, match="encode_fn"):
++        make_layout_policy("latex_comment_prefix")
++    with pytest.raises(ValueError, match="encode_fn"):
++        make_layout_policy("stochastic_latex_comment_prefix")
+diff --git a/tests/data/test_normalization.py b/tests/data/test_normalization.py
+index 9a0cf1f..e7c9ddc 100644
+--- a/tests/data/test_normalization.py
++++ b/tests/data/test_normalization.py
+@@ -9,6 +9,8 @@ from data.normalization import (
+     normalize_wiki_title,
+     normalize_repo_name,
+     normalize_package_name,
++    normalize_arxiv,
++    canonical_arxiv_id,
+     strip_hash,
+ )
+ 
+@@ -130,6 +132,58 @@ class TestNormalizePackageName:
+         assert normalize_package_name("os.path") == normalize_package_name("os.path")
+ 
+ 
++class TestCanonicalArxivId:
++    def test_strips_version(self):
++        assert canonical_arxiv_id("2401.12345v2") == "2401.12345"
++        assert canonical_arxiv_id("2401.12345v10") == "2401.12345"
++
++    def test_no_version_unchanged(self):
++        assert canonical_arxiv_id("2401.12345") == "2401.12345"
++
++    def test_strips_whitespace(self):
++        assert canonical_arxiv_id("  2401.12345v3  ") == "2401.12345"
++
++    def test_old_style_id(self):
++        # hep-th/9901001v2 -> hep-th/9901001 (only the version suffix is removed)
++        assert canonical_arxiv_id("hep-th/9901001v2") == "hep-th/9901001"
++
++
++class TestNormalizeArxiv:
++    def test_basic(self):
++        result = normalize_arxiv("2401.12345")
++        h = _raw_hash("2401.12345")
++        assert result == f"2401_12345_{h}"
++
++    def test_version_canonicalized_before_hash(self):
++        # A paper node ('2401.12345v2') and a citation edge ('2401.12345') must
++        # produce the SAME normed_identifier — hash is of the canonical id.
++        assert normalize_arxiv("2401.12345v2") == normalize_arxiv("2401.12345")
++        assert normalize_arxiv("2401.12345v2") == normalize_arxiv("2401.12345v7")
++
++    def test_hash_is_of_canonical(self):
++        result = normalize_arxiv("2401.12345v2")
++        assert result.endswith(f"_{_raw_hash('2401.12345')}")
++
++    def test_dots_to_underscore(self):
++        assert strip_hash(normalize_arxiv("2401.12345")) == "2401_12345"
++
++    def test_old_style_slash(self):
++        result = normalize_arxiv("hep-th/9901001")
++        h = _raw_hash("hep-th/9901001")
++        assert result == f"hep-th_9901001_{h}"
++
++    def test_uniqueness_independent_of_title(self):
++        # Two different arXiv ids always differ, even if titles were identical.
++        assert normalize_arxiv("2401.00001") != normalize_arxiv("2401.00002")
++
++    def test_deterministic(self):
++        assert normalize_arxiv("2401.12345") == normalize_arxiv("2401.12345")
++
++    def test_six_char_hash(self):
++        result = normalize_arxiv("2401.12345")
++        assert len(result.rsplit("_", 1)[1]) == 6
++
++
+ class TestStripHash:
+     def test_strips_valid_suffix(self):
+         assert strip_hash("python_a7f8c3") == "python"
+diff --git a/tests/data/test_pack_sampler.py b/tests/data/test_pack_sampler.py
+index d595258..78a6dab 100644
+--- a/tests/data/test_pack_sampler.py
++++ b/tests/data/test_pack_sampler.py
+@@ -43,6 +43,9 @@ class DummyGraph:
+     def get_incoming_links(self, normed_identifier: str) -> list:
+         return []
+ 
++    def get_categories(self, normed_identifier: str) -> str:
++        return ""
++
+ 
+ class _FixedSeedRng:
+     """Deterministic RNG stub that always returns the same value for randrange."""
+
+diff --git a/configs/arxiv_cross_doc.yaml b/configs/arxiv_cross_doc.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/arxiv_cross_doc.yaml
+@@ -0,0 +1,89 @@
++data:
++  dataset_dir: <to/be/generated>/pretokenized_datasets/arxiv
++  strategy: 'bfs'
++  layout_policy: 'stochastic_latex_comment_prefix'
++  inference_layout_policy: 'latex_comment_prefix'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   <to/be/generated>/pretokenized_datasets/arxiv/splits/train
++  val_dirs:
++    val_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/val_random
++  test_dirs:
++    test_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'arxiv'
++  max_grants: 256
++  # max_grants_start: 64
++  # max_grants_warmup_steps: 5000
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: hellaswag,          conditions: [doceval, annotated]}
++    - {name: boolq,              conditions: [doceval, annotated]}
++    - {name: openbookqa,         conditions: [doceval, annotated]}
++  max_docs: 500
++  annotator_corpus: <to/be/generated>/pretokenized_datasets/arxiv
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/data/arxiv_graph_extractor/build_openalex_map.py b/data/arxiv_graph_extractor/build_openalex_map.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/arxiv_graph_extractor/build_openalex_map.py
+@@ -0,0 +1,190 @@
++"""
++Phase 1 — Build the arXiv <-> OpenAlex id map for the corpus.
++
++Streams the OpenAlex `works` snapshot (s3://openalex/data/works/, ~639 GB gzip,
++~2128 parts) directly from S3 — no full download to disk — and extracts, for every
++work that has an arXiv source location, the pair (canonical_arxiv_id, openalex_id).
++
++Why we need it: unarXive resolves only ~14.5% of citations to a direct arXiv id but
++~46% to an OpenAlex id. The direct-id citation graph is hub-dominated (a few
++universally-cited papers create a 58.7% giant component that fragments under the
++training no-repeats rule). Mapping cited OpenAlex ids -> arXiv ids recovers non-hub
++lateral edges. With this map, a citation's `ids.open_alex_id` can be resolved to an
++in-corpus arXiv paper at extraction time (Phase 2).
++
++The output is a single JSONL of {"arxiv_id", "openalex_id"} (canonical, version-less
++arxiv ids; bare 'W...' openalex ids). The reverse direction is recoverable by swapping.
++~3M arXiv works -> a few hundred MB; written to /fss-data, never /fss.
++
++Parallelized with multiprocessing.Pool over snapshot parts (mirrors
++measure_density.py). Each worker streams its assigned parts over the public S3
++HTTPS endpoint (the `aws` CLI is not installed on compute nodes; HTTPS + urllib
++needs no external binary and no credentials — OpenAlex's bucket is public).
++
++Usage (via SLURM, CPU-only):
++    python data/arxiv_graph_extractor/build_openalex_map.py \
++        --out /fss-data/.../graphs/arxiv_openalex_map.jsonl \
++        --workers 32
++"""
++import argparse
++import gzip
++import json
++import logging
++import os
++import re
++import time
++import urllib.request
++from multiprocessing import Pool
++
++logger = logging.getLogger(__name__)
++
++# Public, unauthenticated S3 HTTPS endpoint for the OpenAlex bucket.
++OPENALEX_HTTPS_BASE = "https://openalex.s3.amazonaws.com/"
++OPENALEX_MANIFEST_KEY = "data/works/manifest"
++ARXIV_SOURCE_ID = "https://openalex.org/S4306400194"  # the arXiv source in OpenAlex
++
++
++def _s3_url_to_https(s3_url: str) -> str:
++    """Convert 's3://openalex/data/works/.../part.gz' to its public HTTPS URL."""
++    assert s3_url.startswith("s3://openalex/"), s3_url
++    return OPENALEX_HTTPS_BASE + s3_url[len("s3://openalex/"):]
++
++# Extract the arXiv id from a landing/pdf URL. Handles:
++#   http://arxiv.org/abs/2403.11716
++#   https://arxiv.org/pdf/1706.03762v5
++#   https://doi.org/10.48550/arxiv.1706.03762
++# New-style (YYMM.NNNNN) and old-style (archive/NNNNNNN) ids; version suffix stripped.
++_ARXIV_URL_RE = re.compile(
++    r"arxiv(?:\.org/(?:abs|pdf)/|[./])"
++    r"([a-z\-]+(?:\.[A-Z]{2})?/\d{7}|\d{4}\.\d{4,5})",
++    re.IGNORECASE,
++)
++_VERSION_RE = re.compile(r"v\d+$")
++
++
++def extract_arxiv_id(url: str) -> str | None:
++    """Return the canonical (version-less) arXiv id embedded in a URL, or None."""
++    if not url:
++        return None
++    m = _ARXIV_URL_RE.search(url)
++    if not m:
++        return None
++    return _VERSION_RE.sub("", m.group(1))
++
++
++def list_part_keys() -> list[str]:
++    """Read the snapshot manifest and return the full s3:// URLs of all works parts."""
++    with urllib.request.urlopen(OPENALEX_HTTPS_BASE + OPENALEX_MANIFEST_KEY, timeout=60) as r:
++        manifest = json.loads(r.read())
++    # manifest entries look like {"url": "s3://openalex/data/works/updated_date=.../part_000.gz", ...}
++    keys = [e["url"] for e in manifest.get("entries", [])]
++    if not keys:
++        raise RuntimeError("No entries in OpenAlex works manifest")
++    return keys
++
++
++def _worker(part_url: str, _retries: int = 3):
++    """Stream one snapshot part over HTTPS and return its (arxiv_id, openalex_id) pairs."""
++    https_url = _s3_url_to_https(part_url)
++    last_err = None
++    for attempt in range(_retries):
++        pairs = []
++        try:
++            with urllib.request.urlopen(https_url, timeout=300) as resp, \
++                 gzip.GzipFile(fileobj=resp) as gz:
++                for line in gz:
++                    try:
++                        w = json.loads(line)
++                    except Exception:
++                        continue
++                    # Find an arXiv-source location and pull its URL.
++                    arxiv_url = None
++                    for loc in (w.get("locations") or []):
++                        src = loc.get("source") or {}
++                        if src.get("id") == ARXIV_SOURCE_ID:
++                            arxiv_url = loc.get("landing_page_url") or loc.get("pdf_url")
++                            if arxiv_url:
++                                break
++                    if not arxiv_url:
++                        continue
++                    arxiv_id = extract_arxiv_id(arxiv_url)
++                    if not arxiv_id:
++                        continue
++                    oa = w.get("id")  # full https://openalex.org/W... URL
++                    if not oa:
++                        continue
++                    pairs.append((arxiv_id, oa.rsplit("/", 1)[-1]))  # bare 'W...'
++            return pairs
++        except Exception as e:  # transient network/gzip error: retry the whole part
++            last_err = e
++    # Exhausted retries: return a sentinel so one flaky part doesn't kill the whole
++    # run; the parent logs it as a gap (no silent loss — failures are counted).
++    return ("__FAILED__", part_url, str(last_err))
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--out", required=True, help="output JSONL of {arxiv_id, openalex_id}")
++    ap.add_argument("--workers", type=int, default=os.cpu_count() or 8)
++    ap.add_argument("--limit-parts", type=int, default=0, help="0 = all parts (debug only)")
++    args = ap.parse_args()
++
++    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
++
++    parts = list_part_keys()
++    if args.limit_parts:
++        parts = parts[: args.limit_parts]
++    logger.info("OpenAlex works snapshot: %d parts; using %d workers", len(parts), args.workers)
++
++    os.makedirs(os.path.dirname(args.out), exist_ok=True)
++    t0 = time.time()
++    n_pairs = 0
++    n_dup_arxiv = 0
++    failed_parts: list[str] = []
++    seen_arxiv: dict[str, str] = {}
++    # Write streaming so we never hold all pairs in RAM beyond the dedup dict.
++    with open(args.out, "w", encoding="utf-8") as fout, \
++         Pool(args.workers) as pool:
++        for i, result in enumerate(pool.imap_unordered(_worker, parts, chunksize=2)):
++            # A failed part comes back as the 3-tuple ("__FAILED__", url, err).
++            if result and result[0] == "__FAILED__":
++                failed_parts.append(result[1])
++                logger.warning("PART FAILED (skipped): %s — %s", result[1], result[2])
++                continue
++            for arxiv_id, oa_id in result:
++                # Keep the first OpenAlex id seen for an arXiv id; OpenAlex
++                # occasionally has duplicate works for the same preprint.
++                if arxiv_id in seen_arxiv:
++                    n_dup_arxiv += 1
++                    continue
++                seen_arxiv[arxiv_id] = oa_id
++                fout.write(json.dumps({"arxiv_id": arxiv_id, "openalex_id": oa_id}) + "\n")
++                n_pairs += 1
++            if (i + 1) % 100 == 0:
++                logger.info(
++                    "%d/%d parts, %d unique arxiv<->OA pairs (%d dup, %d failed parts), %.0fs",
++                    i + 1, len(parts), n_pairs, n_dup_arxiv, len(failed_parts), time.time() - t0,
++                )
++
++    logger.info(
++        "DONE: %d unique pairs (%d dup arxiv skipped, %d FAILED parts) in %.0fs -> %s",
++        n_pairs, n_dup_arxiv, len(failed_parts), time.time() - t0, args.out,
++    )
++    if failed_parts:
++        # Persist the gap list so a targeted re-run can fill it (no silent truncation).
++        fail_path = args.out + ".failed_parts.txt"
++        with open(fail_path, "w") as f:
++            f.write("\n".join(failed_parts) + "\n")
++        logger.warning("%d parts failed; listed in %s", len(failed_parts), fail_path)
++    print(json.dumps({
++        "unique_pairs": n_pairs,
++        "duplicate_arxiv_skipped": n_dup_arxiv,
++        "parts_processed": len(parts),
++        "failed_parts": len(failed_parts),
++        "elapsed_sec": round(time.time() - t0, 1),
++    }, indent=2))
++
++
++if __name__ == "__main__":
++    main()
++
+
+diff --git a/data/arxiv_graph_extractor/build_openalex_map.sh b/data/arxiv_graph_extractor/build_openalex_map.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/arxiv_graph_extractor/build_openalex_map.sh
+@@ -0,0 +1,29 @@
++#!/bin/bash
++#SBATCH --job-name=oa_map
++#SBATCH --output=/fss-data/evin_t/tagseq2tagseq_artifacts/graphs/oa_map_%j.log
++#SBATCH --nodes=1
++#SBATCH --ntasks=1
++#SBATCH --cpus-per-task=32
++#SBATCH --mem=64G
++#SBATCH --time=08:00:00
++#
++# Phase 1: build the arXiv <-> OpenAlex id map by streaming the OpenAlex works
++# snapshot (~639 GB gzip, 2127 parts) directly from S3. No bulk download to disk —
++# only the small id map is written to /fss-data. CPU + network bound; per cluster-kb.
++#
++# Usage: sbatch data/arxiv_graph_extractor/build_openalex_map.sh
++
++set -euo pipefail
++
++REPO=/fss/evin_t/tagseq2tagseq
++OUT=/fss-data/evin_t/tagseq2tagseq_artifacts/graphs/arxiv_openalex_map.jsonl
++
++cd "$REPO"
++source .venv/bin/activate
++
++echo "[$(date)] Building arXiv<->OpenAlex map ($SLURM_CPUS_PER_TASK workers, streaming from S3) ..."
++python -u data/arxiv_graph_extractor/build_openalex_map.py \
++    --out "$OUT" \
++    --workers "${SLURM_CPUS_PER_TASK:-8}"
++echo "[$(date)] DONE. Map at $OUT"
++
+
+diff --git a/data/arxiv_graph_extractor/extract.py b/data/arxiv_graph_extractor/extract.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/arxiv_graph_extractor/extract.py
+@@ -0,0 +1,354 @@
++r"""
++Phase 2 — ArXiv (unarXive 2024) graph + content extraction.
++
++Produces the two artifacts the pretokenizer consumes, mirroring the wiki/stack
++extractors but for arXiv papers (nodes) linked by citations (edges):
++
++  graph.jsonl   — one node per paper:
++      {normed_identifier, raw_identifier (title), categories, char_count,
++       outgoing[], incoming[]}
++  content.jsonl — one body per paper:
++      {normed_identifier, content (rehydrated LaTeX)}
++
++Link-target scheme (see memory `arxiv-dataset`): the model emits and we match on
++the paper TITLE (raw_identifier); normed_identifier = normalize_arxiv(paper_id) is
++the internal, globally-unique key. In-text citations are rewritten to LaTeX-native
++``\\cite{<cited title>}`` so the existing ArxivCiteDetector recovers them.
++
++Citation resolution is dual-path, direct first then OpenAlex-enriched:
++  1. bib_entries[*].contained_arXiv_ids / .ids.arxiv_id  -> arXiv id  (direct, ~14.5%)
++  2. bib_entries[*].ids.open_alex_id -> arxiv_openalex_map -> arXiv id  (enriched, +~52%)
++An edge (and a ``\\cite{Title}``) is created only when the resolved arXiv id is
++in-corpus; out-of-corpus citations are dropped to a bare textual marker.
++
++Body rehydration keeps everything as faithful LaTeX:
++  {{formula:uuid}} -> $<ref_entries[uuid].latex>$
++  {{figure|table:uuid}} -> \ref-like marker carrying the caption (when present)
++  (REF ) cross-refs -> \ref{}
++  {{cite:hexkey}} -> \cite{<title>} (in-corpus) or dropped
++
++Two passes (mirrors measure_density.py's Pool-over-shards):
++  Pass 1 — per shard, collect {canonical_arxiv_id -> (normed_id, title, categories)}
++           and {openalex_id -> canonical_arxiv_id} restricted to corpus papers.
++           Parent unions into the global corpus index; this is what makes a
++           cross-shard citation resolvable to its target's title.
++  Pass 2 — per shard, rehydrate bodies + resolve citations against the global
++           index; workers write their own graph/content shard files; parent
++           concatenates and computes incoming edges.
++
++Run via SLURM (CPU), output to /fss-data. See extract.sh.
++"""
++import argparse
++import glob
++import json
++import logging
++import os
++import re
++import time
++from multiprocessing import Pool
++
++from data.normalization import normalize_arxiv, canonical_arxiv_id
++
++logger = logging.getLogger(__name__)
++
++# ---------------------------------------------------------------------------
++# Placeholder / cross-ref rehydration patterns
++# ---------------------------------------------------------------------------
++_FORMULA_RE = re.compile(r"\{\{formula:([0-9a-f\-]+)\}\}")
++_FIGURE_RE = re.compile(r"\{\{(figure|table):([0-9a-f\-]+)\}\}")
++_CITE_RE = re.compile(r"\{\{cite:([0-9a-f]+)\}\}")
++# unarXive renders resolved internal cross-references (\ref, \eqref) as the literal
++# token "(REF )"; turn it back into a neutral LaTeX \ref{} so the body stays valid-ish.
++_XREF_RE = re.compile(r"\(REF \)")
++
++
++# ---------------------------------------------------------------------------
++# Globals populated in pass-2 workers via the Pool initializer (avoids pickling
++# the ~2M-entry corpus index to every task).
++# ---------------------------------------------------------------------------
++_ARXIV_TO_TITLE: dict = {}     # canonical arXiv id -> title (in-corpus targets)
++_ARXIV_TO_NORMED: dict = {}    # canonical arXiv id -> normed_identifier
++_OA_TO_ARXIV: dict = {}        # openalex id 'W...' -> canonical arXiv id (full OA map)
++
++
++def _norm_text(s: str) -> str:
++    return s if s is not None else ""
++
++
++# ---------------------------------------------------------------------------
++# Pass 1 worker: index corpus papers in one shard.
++# ---------------------------------------------------------------------------
++def _pass1_worker(shard: str):
++    """Return (corpus_entries, ) where corpus_entries maps canonical arXiv id ->
++    (normed_id, title, categories) for every paper in this shard."""
++    entries = {}
++    with open(shard, "r", encoding="utf-8") as f:
++        for line in f:
++            try:
++                r = json.loads(line)
++                pid = r["paper_id"]
++            except Exception:
++                continue
++            cid = canonical_arxiv_id(pid)
++            meta = r.get("metadata", {}) or {}
++            title = _norm_text(meta.get("title")).strip().replace("\n", " ")
++            # collapse internal whitespace runs in titles (latex wrapping artifacts)
++            title = re.sub(r"\s+", " ", title)
++            categories = _norm_text(meta.get("categories")).strip()
++            if title:  # a paper with no title can't be a learnable link target
++                entries[cid] = (normalize_arxiv(pid), title, categories)
++    return entries
++
++
++# ---------------------------------------------------------------------------
++# Pass 2: rehydration + citation resolution.
++# ---------------------------------------------------------------------------
++def _pass2_init(index_path: str, oa_map_path: str | None) -> None:
++    global _ARXIV_TO_TITLE, _ARXIV_TO_NORMED, _OA_TO_ARXIV
++    with open(index_path, "r", encoding="utf-8") as f:
++        for line in f:
++            cid, normed, title, cats = json.loads(line)
++            _ARXIV_TO_TITLE[cid] = title
++            _ARXIV_TO_NORMED[cid] = normed
++    if oa_map_path and os.path.exists(oa_map_path):
++        with open(oa_map_path, "r", encoding="utf-8") as f:
++            for line in f:
++                r = json.loads(line)
++                _OA_TO_ARXIV[r["openalex_id"]] = r["arxiv_id"]
++
++
++def _resolve_bib_to_arxiv(bib_entry: dict) -> str | None:
++    """Resolve one bib entry to a canonical in-corpus arXiv id, or None.
++
++    Direct arXiv id first (most reliable), then OpenAlex-id -> arXiv via the map.
++    Returns the id only if it is in-corpus (a known target title exists)."""
++    ids = bib_entry.get("ids") or {}
++    # 1) direct arXiv id
++    cand = None
++    cax = bib_entry.get("contained_arXiv_ids") or []
++    if cax and isinstance(cax[0], dict) and cax[0].get("id"):
++        cand = canonical_arxiv_id(cax[0]["id"])
++    elif ids.get("arxiv_id"):
++        cand = canonical_arxiv_id(ids["arxiv_id"])
++    if cand and cand in _ARXIV_TO_TITLE:
++        return cand
++    # 2) OpenAlex-id -> arXiv id (enrichment)
++    oa = ids.get("open_alex_id")
++    if oa:
++        ax = _OA_TO_ARXIV.get(oa.rsplit("/", 1)[-1])
++        if ax and ax in _ARXIV_TO_TITLE:
++            return ax
++    return None
++
++
++def _rehydrate_body(record: dict) -> tuple[str, list[str]]:
++    """Rehydrate a paper's sections into faithful LaTeX and rewrite in-corpus
++    citations to ``\\cite{Title}``.
++
++    Returns (body_text, outgoing_normed_ids).
++    """
++    ref_entries = record.get("ref_entries", {}) or {}
++    bib_entries = record.get("bib_entries", {}) or {}
++
++    # Pre-resolve every bib key -> (title, normed_id) for in-corpus targets.
++    bibkey_to_target: dict[str, tuple[str, str]] = {}
++    for bibkey, be in bib_entries.items():
++        ax = _resolve_bib_to_arxiv(be)
++        if ax is not None:
++            bibkey_to_target[bibkey] = (_ARXIV_TO_TITLE[ax], _ARXIV_TO_NORMED[ax])
++
++    outgoing: set[str] = set()
++
++    def sub_formula(m):
++        latex = (ref_entries.get(m.group(1), {}) or {}).get("latex", "")
++        return f"${latex}$" if latex else ""
++
++    def sub_figure(m):
++        kind, uid = m.group(1), m.group(2)
++        caption = (ref_entries.get(uid, {}) or {}).get("caption", "NO_CAPTION")
++        if caption and caption != "NO_CAPTION":
++            return f"\\ref{{{kind}}} ({caption})"
++        return f"\\ref{{{kind}}}"
++
++    def sub_cite(m):
++        target = bibkey_to_target.get(m.group(1))
++        if target is None:
++            return ""  # out-of-corpus citation: drop the marker (no edge, no text noise)
++        title, normed = target
++        outgoing.add(normed)
++        return f"\\cite{{{title}}}"
++
++    parts: list[str] = []
++    for section in record.get("sections", {}).values():
++        if not isinstance(section, dict):
++            continue
++        text = _norm_text(section.get("text"))
++        if not text:
++            continue
++        text = _FORMULA_RE.sub(sub_formula, text)
++        text = _FIGURE_RE.sub(sub_figure, text)
++        text = _CITE_RE.sub(sub_cite, text)
++        text = _XREF_RE.sub(r"\\ref{}", text)
++        parts.append(text)
++
++    body = "\n\n".join(parts)
++    return body, sorted(outgoing)
++
++
++def _pass2_worker(args):
++    """Rehydrate one shard; write its graph + content shard files; return counts."""
++    shard, out_dir, shard_idx = args
++    graph_path = os.path.join(out_dir, f"_graph_shard_{shard_idx:05d}.jsonl")
++    content_path = os.path.join(out_dir, f"_content_shard_{shard_idx:05d}.jsonl")
++    n_nodes = 0
++    n_edges = 0
++    with open(shard, "r", encoding="utf-8") as f, \
++         open(graph_path, "w", encoding="utf-8") as gout, \
++         open(content_path, "w", encoding="utf-8") as cout:
++        for line in f:
++            try:
++                r = json.loads(line)
++                pid = r["paper_id"]
++            except Exception:
++                continue
++            cid = canonical_arxiv_id(pid)
++            normed = _ARXIV_TO_NORMED.get(cid)
++            title = _ARXIV_TO_TITLE.get(cid)
++            if not normed or not title:
++                continue  # untitled paper, skipped in pass 1
++            categories = (r.get("metadata", {}) or {}).get("categories", "") or ""
++            body, outgoing = _rehydrate_body(r)
++            if not body:
++                continue  # empty body contributes nothing trainable
++            gout.write(json.dumps({
++                "normed_identifier": normed,
++                "raw_identifier": title,
++                "categories": categories.strip(),
++                "char_count": len(body),
++                "outgoing": outgoing,
++                "incoming": [],  # filled in the parent merge pass
++            }) + "\n")
++            cout.write(json.dumps({"normed_identifier": normed, "content": body}) + "\n")
++            n_nodes += 1
++            n_edges += len(outgoing)
++    return graph_path, content_path, n_nodes, n_edges
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--corpus-dir", required=True)
++    ap.add_argument("--out-dir", required=True, help="output dir for graph.jsonl + content.jsonl")
++    ap.add_argument("--oa-map", default=None, help="arxiv_openalex_map.jsonl (enrichment); omit to skip")
++    ap.add_argument("--workers", type=int, default=os.cpu_count() or 8)
++    ap.add_argument("--limit-shards", type=int, default=0)
++    args = ap.parse_args()
++
++    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
++    os.makedirs(args.out_dir, exist_ok=True)
++
++    shards = sorted(glob.glob(os.path.join(args.corpus_dir, "**", "*.jsonl"), recursive=True))
++    if args.limit_shards:
++        shards = shards[: args.limit_shards]
++    logger.info("Found %d shards; %d workers; oa_map=%s",
++                len(shards), args.workers, args.oa_map or "(none)")
++
++    # ---- Pass 1: build the global corpus index (arxiv id -> normed, title, cats). ----
++    t0 = time.time()
++    index_path = os.path.join(args.out_dir, "_corpus_index.jsonl")
++    arxiv_to_normed: dict[str, str] = {}
++    with Pool(args.workers) as pool, open(index_path, "w", encoding="utf-8") as idxf:
++        for i, entries in enumerate(pool.imap_unordered(_pass1_worker, shards, chunksize=8)):
++            for cid, (normed, title, cats) in entries.items():
++                if cid in arxiv_to_normed:
++                    continue  # first occurrence wins (canonical dedup)
++                arxiv_to_normed[cid] = normed
++                idxf.write(json.dumps([cid, normed, title, cats]) + "\n")
++            if (i + 1) % 2000 == 0:
++                logger.info("pass1 %d/%d shards, %d corpus papers", i + 1, len(shards), len(arxiv_to_normed))
++    logger.info("pass1 done: %d corpus papers in %.0fs", len(arxiv_to_normed), time.time() - t0)
++
++    # ---- Pass 2: rehydrate + resolve citations, writing per-shard graph/content. ----
++    t0 = time.time()
++    tasks = [(shard, args.out_dir, i) for i, shard in enumerate(shards)]
++    graph_shards: list[str] = []
++    content_shards: list[str] = []
++    total_nodes = total_edges = 0
++    with Pool(args.workers, initializer=_pass2_init, initargs=(index_path, args.oa_map)) as pool:
++        for i, (gpath, cpath, n_nodes, n_edges) in enumerate(
++            pool.imap_unordered(_pass2_worker, tasks, chunksize=8)
++        ):
++            graph_shards.append(gpath)
++            content_shards.append(cpath)
++            total_nodes += n_nodes
++            total_edges += n_edges
++            if (i + 1) % 2000 == 0:
++                logger.info("pass2 %d/%d shards, %d nodes, %d edges",
++                            i + 1, len(shards), total_nodes, total_edges)
++    logger.info("pass2 done: %d nodes, %d edges in %.0fs", total_nodes, total_edges, time.time() - t0)
++
++    # ---- Merge: concatenate content; compute incoming edges; write final graph.jsonl. ----
++    t0 = time.time()
++    content_out = os.path.join(args.out_dir, "content.jsonl")
++    with open(content_out, "w", encoding="utf-8") as cout:
++        for cpath in sorted(content_shards):
++            with open(cpath, "r", encoding="utf-8") as cin:
++                for line in cin:
++                    cout.write(line)
++            os.remove(cpath)
++
++    # First pass over graph shards: load nodes, detect title collisions, compute incoming.
++    nodes: dict[str, dict] = {}
++    incoming: dict[str, list[str]] = {}
++    seen_titles: dict[str, str] = {}   # title -> first normed_id that claimed it
++    n_title_collisions = 0
++    for gpath in sorted(graph_shards):
++        with open(gpath, "r", encoding="utf-8") as gin:
++            for line in gin:
++                node = json.loads(line)
++                normed = node["normed_identifier"]
++                title = node["raw_identifier"]
++                # Disambiguate colliding titles: the second paper to claim a title
++                # gets "(arxiv:YYYY.NNNNN)" appended so matching remains exact and unique.
++                # The arxiv id is recoverable from the normed_identifier suffix-stripped body.
++                if title in seen_titles:
++                    n_title_collisions += 1
++                    # Recover the canonical arxiv id from the normed_identifier:
++                    # normed form is e.g. "2401_12345_abc123" -> "2401.12345".
++                    arxiv_hint = re.sub(r"_[0-9a-f]{6}$", "", normed).replace("_", ".", 1)
++                    node["raw_identifier"] = f"{title} (arxiv:{arxiv_hint})"
++                else:
++                    seen_titles[title] = normed
++                nodes[normed] = node
++        os.remove(gpath)
++    if n_title_collisions:
++        logger.info("disambiguated %d title collisions (0.13%% expected)", n_title_collisions)
++
++    for normed, node in nodes.items():
++        for tgt in node["outgoing"]:
++            incoming.setdefault(tgt, []).append(normed)
++
++    graph_out = os.path.join(args.out_dir, "graph.jsonl")
++    with open(graph_out, "w", encoding="utf-8") as gout:
++        for normed, node in nodes.items():
++            node["incoming"] = incoming.get(normed, [])
++            gout.write(json.dumps(node) + "\n")
++    os.remove(index_path)
++    logger.info("merge done in %.0fs", time.time() - t0)
++
++    summary = {
++        "n_nodes": len(nodes),
++        "n_edges": total_edges,
++        "mean_out_degree": round(total_edges / len(nodes), 3) if nodes else 0,
++        "title_collisions_disambiguated": n_title_collisions,
++        "graph": graph_out,
++        "content": content_out,
++        "oa_map_used": bool(args.oa_map),
++    }
++    with open(os.path.join(args.out_dir, "extract_summary.json"), "w") as f:
++        json.dump(summary, f, indent=2)
++    print(json.dumps(summary, indent=2))
++
++
++if __name__ == "__main__":
++    main()
++
+
+diff --git a/data/arxiv_graph_extractor/extract.sh b/data/arxiv_graph_extractor/extract.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/arxiv_graph_extractor/extract.sh
+@@ -0,0 +1,34 @@
++#!/bin/bash
++#SBATCH --job-name=arxiv_extract
++#SBATCH --output=/fss-data/evin_t/tagseq2tagseq_artifacts/graphs/arxiv_extract_%j.log
++#SBATCH --nodes=1
++#SBATCH --ntasks=1
++#SBATCH --cpus-per-task=32
++#SBATCH --mem=128G
++#SBATCH --time=06:00:00
++#
++# Phase 2: extract the arXiv graph + rehydrated LaTeX content from unarXive 2024,
++# with OpenAlex-enriched citation resolution. CPU-only; reads/writes /fss-data
++# (per cluster-kb). Two passes over 12,937 shards + a merge pass.
++#
++# Usage: sbatch data/arxiv_graph_extractor/extract.sh
++
++set -euo pipefail
++
++REPO=/fss/evin_t/tagseq2tagseq
++CORPUS=/fss-data/evin_t/tagseq2tagseq_artifacts/raw/unarxive_2024/extracted/processed_unarxive_extended_data
++OA_MAP=/fss-data/evin_t/tagseq2tagseq_artifacts/graphs/arxiv_openalex_map.jsonl
++OUTDIR=/fss-data/evin_t/tagseq2tagseq_artifacts/graphs/arxiv
++
++cd "$REPO"
++source .venv/bin/activate
++
++mkdir -p "$OUTDIR"
++echo "[$(date)] Extracting arXiv graph+content ($SLURM_CPUS_PER_TASK workers, OpenAlex-enriched) ..."
++python -u data/arxiv_graph_extractor/extract.py \
++    --corpus-dir "$CORPUS" \
++    --out-dir "$OUTDIR" \
++    --oa-map "$OA_MAP" \
++    --workers "${SLURM_CPUS_PER_TASK:-8}"
++echo "[$(date)] DONE. graph.jsonl + content.jsonl in $OUTDIR"
++
+
+diff --git a/data/arxiv_graph_extractor/measure_density.py b/data/arxiv_graph_extractor/measure_density.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/arxiv_graph_extractor/measure_density.py
+@@ -0,0 +1,246 @@
++"""
++Phase 0 — ArXiv citation-graph density validation (parallelized).
++
++Streams all unarXive 2024 shards and measures the in-corpus citation graph density
++using ONLY directly-resolvable arXiv-id citations (no OpenAlex enrichment yet). This
++is the decision gate: if direct-id density already supports BFS packing, enrichment is
++a bonus; if sparse (expected), Phase 1 OpenAlex enrichment is required.
++
++A citation contributes an edge iff the cited arXiv id (from `bib_entries[*].contained_arXiv_ids`
++or `bib_entries[*].ids.arxiv_id`) canonicalizes to a paper that exists in the corpus.
++
++Parallelized across CPUs with multiprocessing.Pool (JSON parsing of 371 GB is the
++bottleneck). The per-shard parse pattern here is reused by the Phase 2 extractor.
++
++  Pass 1: workers return each shard's set of canonical paper ids → parent unions them
++          into a global id→index map, written to a temp file.
++  Pass 2: a Pool initializer loads that id map once per worker; workers return each
++          shard's edge list (src_idx, [tgt_idx...]) → parent accumulates degree and
++          a union-find for connected components.
++
++Run via SLURM (CPU), output to /fss-data. See measure_density.sh.
++
++Usage:
++    python data/arxiv_graph_extractor/measure_density.py \
++        --corpus-dir /fss-data/.../extracted/processed_unarxive_extended_data \
++        --out /fss-data/.../graphs/arxiv_density_report.json \
++        --workers 8
++"""
++import argparse
++import glob
++import json
++import logging
++import os
++import pickle
++import re
++import time
++from multiprocessing import Pool
++
++logger = logging.getLogger(__name__)
++
++# arXiv id with optional version suffix, e.g. "2401.12345", "2401.12345v2".
++_VERSION_RE = re.compile(r"v\d+$")
++
++
++def canonical_arxiv_id(raw: str) -> str:
++    """Strip a trailing version suffix and whitespace so ids match across cite/paper forms."""
++    return _VERSION_RE.sub("", raw.strip())
++
++
++def iter_shards(corpus_dir: str):
++    """Return shard file paths in sorted order."""
++    return sorted(glob.glob(os.path.join(corpus_dir, "**", "*.jsonl"), recursive=True))
++
++
++def _cited_ids(record: dict):
++    """Yield canonical arXiv ids referenced by this paper's bibliography (direct-id only)."""
++    for be in record.get("bib_entries", {}).values():
++        for cax in be.get("contained_arXiv_ids") or []:
++            cid = cax.get("id") if isinstance(cax, dict) else None
++            if cid:
++                yield canonical_arxiv_id(cid)
++        ax = (be.get("ids") or {}).get("arxiv_id")
++        if ax:
++            yield canonical_arxiv_id(ax)
++
++
++# ---------------------------------------------------------------------------
++# Pass 1 worker: collect canonical paper ids present in a shard.
++# ---------------------------------------------------------------------------
++def _pass1_worker(shard: str) -> set:
++    ids = set()
++    with open(shard, "r", encoding="utf-8") as f:
++        for line in f:
++            try:
++                ids.add(canonical_arxiv_id(json.loads(line)["paper_id"]))
++            except Exception:
++                continue
++    return ids
++
++
++# ---------------------------------------------------------------------------
++# Pass 2 worker: build this shard's edges against the global id→idx map.
++# The map is loaded once per worker process via the Pool initializer.
++# ---------------------------------------------------------------------------
++_ID_TO_IDX: dict = {}
++
++
++def _pass2_init(id_map_path: str) -> None:
++    global _ID_TO_IDX
++    with open(id_map_path, "rb") as f:
++        _ID_TO_IDX = pickle.load(f)
++
++
++def _pass2_worker(shard: str):
++    """Return (edges, n_cite_total, papers_with_cite) for one shard.
++
++    edges: list of (src_idx, tgt_idx) for in-corpus, non-self citations (deduped per paper).
++    """
++    edges = []
++    n_cite_total = 0
++    papers_with_cite = 0
++    idx = _ID_TO_IDX
++    with open(shard, "r", encoding="utf-8") as f:
++        for line in f:
++            try:
++                rec = json.loads(line)
++                src = idx[canonical_arxiv_id(rec["paper_id"])]
++            except Exception:
++                continue
++            targets = set()
++            has_cite = False
++            for cid in _cited_ids(rec):
++                has_cite = True
++                n_cite_total += 1
++                tgt = idx.get(cid)
++                if tgt is not None and tgt != src:
++                    targets.add(tgt)
++            if has_cite:
++                papers_with_cite += 1
++            for tgt in targets:
++                edges.append((src, tgt))
++    return edges, n_cite_total, papers_with_cite
++
++
++class UnionFind:
++    """Minimal union-find over integer node indices for connected-component sizing."""
++
++    def __init__(self, n: int):
++        self.parent = list(range(n))
++        self.size = [1] * n
++
++    def find(self, x: int) -> int:
++        root = x
++        while self.parent[root] != root:
++            root = self.parent[root]
++        while self.parent[x] != root:
++            self.parent[x], x = root, self.parent[x]
++        return root
++
++    def union(self, a: int, b: int) -> None:
++        ra, rb = self.find(a), self.find(b)
++        if ra == rb:
++            return
++        if self.size[ra] < self.size[rb]:
++            ra, rb = rb, ra
++        self.parent[rb] = ra
++        self.size[ra] += self.size[rb]
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--corpus-dir", required=True)
++    ap.add_argument("--out", required=True)
++    ap.add_argument("--workers", type=int, default=os.cpu_count() or 4)
++    ap.add_argument("--limit-shards", type=int, default=0, help="0 = all (debug only)")
++    args = ap.parse_args()
++
++    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
++
++    shards = iter_shards(args.corpus_dir)
++    if args.limit_shards:
++        shards = shards[: args.limit_shards]
++    logger.info("Found %d shards; using %d workers", len(shards), args.workers)
++
++    # ---- Pass 1: union per-shard id sets into a global id→idx map. ----
++    t0 = time.time()
++    id_to_idx: dict[str, int] = {}
++    with Pool(args.workers) as pool:
++        for i, shard_ids in enumerate(pool.imap_unordered(_pass1_worker, shards, chunksize=8)):
++            for cid in shard_ids:
++                if cid not in id_to_idx:
++                    id_to_idx[cid] = len(id_to_idx)
++            if (i + 1) % 2000 == 0:
++                logger.info("pass1 %d/%d shards, %d nodes", i + 1, len(shards), len(id_to_idx))
++    n_nodes = len(id_to_idx)
++    logger.info("pass1 done: %d nodes in %.1fs", n_nodes, time.time() - t0)
++
++    # Persist the id map so each pass-2 worker loads it once (not per task).
++    id_map_path = args.out + ".idmap.pkl"
++    os.makedirs(os.path.dirname(args.out), exist_ok=True)
++    with open(id_map_path, "wb") as f:
++        pickle.dump(id_to_idx, f, protocol=pickle.HIGHEST_PROTOCOL)
++
++    # ---- Pass 2: accumulate edges, degree, union-find across shards. ----
++    t0 = time.time()
++    uf = UnionFind(n_nodes)
++    out_degree = [0] * n_nodes
++    in_degree = [0] * n_nodes
++    n_edges = 0
++    n_cite_total = 0
++    papers_with_cite = 0
++    with Pool(args.workers, initializer=_pass2_init, initargs=(id_map_path,)) as pool:
++        for i, (edges, n_cite, n_paper) in enumerate(
++            pool.imap_unordered(_pass2_worker, shards, chunksize=8)
++        ):
++            n_cite_total += n_cite
++            papers_with_cite += n_paper
++            for src, tgt in edges:
++                n_edges += 1
++                out_degree[src] += 1
++                in_degree[tgt] += 1
++                uf.union(src, tgt)
++            if (i + 1) % 2000 == 0:
++                logger.info("pass2 %d/%d shards, %d edges", i + 1, len(shards), n_edges)
++    logger.info("pass2 done: %d edges in %.1fs", n_edges, time.time() - t0)
++
++    # ---- Component sizing + summary stats. ----
++    comp_size: dict[int, int] = {}
++    for i in range(n_nodes):
++        r = uf.find(i)
++        comp_size[r] = comp_size.get(r, 0) + 1
++    sizes = sorted(comp_size.values(), reverse=True)
++    largest_cc = sizes[0] if sizes else 0
++    singletons = sum(1 for s in sizes if s == 1)
++    nodes_with_out = sum(1 for d in out_degree if d > 0)
++    nodes_with_any = sum(1 for i in range(n_nodes) if out_degree[i] or in_degree[i])
++
++    report = {
++        "n_nodes": n_nodes,
++        "n_edges": n_edges,
++        "direct_cite_total": n_cite_total,
++        "direct_cite_incorpus": n_edges,
++        "incorpus_cite_fraction": round(n_edges / n_cite_total, 4) if n_cite_total else 0,
++        "papers_with_any_direct_cite": papers_with_cite,
++        "nodes_with_outgoing_edge": nodes_with_out,
++        "pct_nodes_with_outgoing": round(100 * nodes_with_out / n_nodes, 2) if n_nodes else 0,
++        "nodes_with_any_edge": nodes_with_any,
++        "pct_nodes_with_any_edge": round(100 * nodes_with_any / n_nodes, 2) if n_nodes else 0,
++        "mean_out_degree": round(n_edges / n_nodes, 3) if n_nodes else 0,
++        "n_connected_components": len(sizes),
++        "largest_cc_size": largest_cc,
++        "largest_cc_fraction": round(largest_cc / n_nodes, 4) if n_nodes else 0,
++        "singleton_components": singletons,
++        "top10_cc_sizes": sizes[:10],
++    }
++
++    with open(args.out, "w", encoding="utf-8") as f:
++        json.dump(report, f, indent=2)
++    os.remove(id_map_path)  # cleanup temp map
++    logger.info("wrote report to %s", args.out)
++    print(json.dumps(report, indent=2))
++
++
++if __name__ == "__main__":
++    main()
++
+
+diff --git a/data/arxiv_graph_extractor/measure_density.sh b/data/arxiv_graph_extractor/measure_density.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/arxiv_graph_extractor/measure_density.sh
+@@ -0,0 +1,30 @@
++#!/bin/bash
++#SBATCH --job-name=arxiv_density
++#SBATCH --output=/fss-data/evin_t/tagseq2tagseq_artifacts/graphs/arxiv_density_%j.log
++#SBATCH --nodes=1
++#SBATCH --ntasks=1
++#SBATCH --cpus-per-task=32
++#SBATCH --mem=64G
++#SBATCH --time=02:00:00
++#
++# Phase 0: measure in-corpus citation-graph density (direct arXiv ids only).
++# CPU-only, reads from /fss-data, writes report to /fss-data — per cluster-kb.
++#
++# Usage: sbatch data/arxiv_graph_extractor/measure_density.sh
++
++set -euo pipefail
++
++REPO=/fss/evin_t/tagseq2tagseq
++CORPUS=/fss-data/evin_t/tagseq2tagseq_artifacts/raw/unarxive_2024/extracted/processed_unarxive_extended_data
++OUT=/fss-data/evin_t/tagseq2tagseq_artifacts/graphs/arxiv_density_report.json
++
++cd "$REPO"
++source .venv/bin/activate
++
++echo "[$(date)] Starting density measurement over full corpus ($SLURM_CPUS_PER_TASK workers) ..."
++python -u data/arxiv_graph_extractor/measure_density.py \
++    --corpus-dir "$CORPUS" \
++    --out "$OUT" \
++    --workers "${SLURM_CPUS_PER_TASK:-8}"
++echo "[$(date)] DONE. Report at $OUT"
++
+
+diff --git a/data/arxiv_graph_extractor/pretokenize.sh b/data/arxiv_graph_extractor/pretokenize.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/arxiv_graph_extractor/pretokenize.sh
+@@ -0,0 +1,33 @@
++#!/bin/bash
++#SBATCH --job-name=arxiv_pretok
++#SBATCH --output=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv_pretok_%j.log
++#SBATCH --nodes=1
++#SBATCH --ntasks=1
++#SBATCH --cpus-per-task=48
++#SBATCH --mem=128G
++#SBATCH --time=10:00:00
++#
++# Phase 5: pre-tokenize the ArXiv dataset (2.2M docs, ~110 GB rehydrated LaTeX)
++# into sharded binary token files. CPU-bound tokenization; reads/writes /fss-data
++# (per cluster-kb). Output is a unique run dir under the -o root.
++#
++# Usage: sbatch data/arxiv_graph_extractor/pretokenize.sh
++
++set -euo pipefail
++
++REPO=/fss/evin_t/tagseq2tagseq
++ARXIV=/fss-data/evin_t/tagseq2tagseq_artifacts/graphs/arxiv
++OUT=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++
++cd "$REPO"
++source .venv/bin/activate
++
++mkdir -p "$OUT"
++echo "[$(date)] Pre-tokenizing ArXiv ($SLURM_CPUS_PER_TASK procs) ..."
++python -u -m data.pretokenize_arxiv \
++    "$ARXIV/content.jsonl" \
++    "$ARXIV/graph.jsonl" \
++    -o "$OUT" \
++    -p "${SLURM_CPUS_PER_TASK:-32}"
++echo "[$(date)] DONE. Pretokenized dataset under $OUT"
++
+
+diff --git a/data/download_unarxive.sh b/data/download_unarxive.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/download_unarxive.sh
+@@ -0,0 +1,71 @@
++#!/bin/bash
++#SBATCH --job-name=unarxive_dl
++#SBATCH --output=/fss-data/evin_t/tagseq2tagseq_artifacts/raw/unarxive_dl_%j.log
++#SBATCH --nodes=1
++#SBATCH --ntasks=1
++#SBATCH --cpus-per-task=8
++#SBATCH --time=12:00:00
++#
++# Download unarXive 2024 (ines-besrour/unarxive_2024) to /fss-data and stream-extract.
++#
++# Why SLURM + /fss-data (per cluster-kb skill):
++#   - 105 GB download is heavy I/O; must NOT run on a login node.
++#   - Extraction produces millions of small files; must NOT touch /fss.
++#   - /fss-data (NFS 172.16.6.40) is the dedicated bulk/high-frequency-write filesystem.
++#
++# Dataset layout on HF: one .tar.gz split into raw byte parts:
++#   unarXive_2024.tar.gz.part_aa  (~40 GB)
++#   unarXive_2024.tar.gz.part_ab  (~40 GB)
++#   unarXive_2024.tar.gz.part_ac  (~25 GB)
++# Reassembly = `cat part_* | tar xz` (stream-extract; no 105 GB intermediate).
++#
++# Resumable: hf download resumes partial part files; set FORCE_REEXTRACT=1 to redo extraction.
++#
++# Usage:
++#   sbatch data/download_unarxive.sh
++# Token: read from ~/.secrets (HUGGINGFACE_API_KEY); never echoed.
++
++set -euo pipefail
++
++DEST=/fss-data/evin_t/tagseq2tagseq_artifacts/raw/unarxive_2024
++PARTS_DIR="$DEST/parts"
++EXTRACT_DIR="$DEST/extracted"
++REPO=ines-besrour/unarxive_2024
++
++mkdir -p "$PARTS_DIR" "$EXTRACT_DIR"
++
++# --- auth (no echo) ---
++set +x
++source ~/.secrets 2>/dev/null || { echo "ERROR: ~/.secrets not found"; exit 1; }
++export HF_TOKEN="${HUGGINGFACE_API_KEY:?HUGGINGFACE_API_KEY not set in ~/.secrets}"
++# Keep HF's own cache off /fss too:
++export HF_HOME="$DEST/.hf_home"
++mkdir -p "$HF_HOME"
++
++echo "[$(date)] Downloading unarXive 2024 parts to $PARTS_DIR ..."
++# Download only the 3 tar parts (skip the 105GB-equivalent nothing else needed).
++for part in part_aa part_ab part_ac; do
++  echo "[$(date)] -> unarXive_2024.tar.gz.$part"
++  hf download "$REPO" "unarXive_2024.tar.gz.$part" \
++      --repo-type dataset \
++      --local-dir "$PARTS_DIR"
++done
++
++echo "[$(date)] Download complete. Parts on disk:"
++ls -la "$PARTS_DIR"/unarXive_2024.tar.gz.part_* 2>/dev/null || true
++
++# --- stream-extract (cat parts | tar xz), no intermediate concat file ---
++SENTINEL="$EXTRACT_DIR/.extract_complete"
++if [[ -f "$SENTINEL" && "${FORCE_REEXTRACT:-0}" != "1" ]]; then
++  echo "[$(date)] Extraction already complete ($SENTINEL). Set FORCE_REEXTRACT=1 to redo."
++else
++  echo "[$(date)] Stream-extracting into $EXTRACT_DIR ..."
++  cat "$PARTS_DIR"/unarXive_2024.tar.gz.part_a? | tar -xzf - -C "$EXTRACT_DIR"
++  touch "$SENTINEL"
++  echo "[$(date)] Extraction complete."
++fi
++
++echo "[$(date)] Top-level extracted contents:"
++ls -la "$EXTRACT_DIR" | head -30
++echo "[$(date)] DONE."
++
+
+diff --git a/data/pretokenize_arxiv.py b/data/pretokenize_arxiv.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/pretokenize_arxiv.py
+@@ -0,0 +1,94 @@
++"""
++ArXiv (unarXive) Pre-tokenizer: Pre-tokenize the ArXiv dataset extracted by
++data/arxiv_graph_extractor/extract.py into sharded binary files.
++
++Usage:
++    python -m data.pretokenize_arxiv \\
++        /fss-data/.../graphs/arxiv/content.jsonl \\
++        /fss-data/.../graphs/arxiv/graph.jsonl \\
++        -o /fss-data/.../pretokenized_datasets/arxiv \\
++        -p 60
++"""
++import argparse
++import json
++import logging
++import multiprocessing as mp
++from pathlib import Path
++
++from tunalab.reproducibility import ReproducibilityManager
++
++from data.document_sources import ArxivUnarxiveSource
++from data.pretokenize import run_preprocessing
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        prog="ArXiv Pre-tokenizer",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    parser.add_argument(
++        "content_jsonl",
++        type=Path,
++        help="Path to the content.jsonl produced by arxiv_graph_extractor/extract.py.",
++    )
++    parser.add_argument(
++        "graph_file",
++        type=Path,
++        help="Path to the graph.jsonl produced by arxiv_graph_extractor/extract.py.",
++    )
++    parser.add_argument(
++        "-o", "--runs-dir",
++        type=Path,
++        required=True,
++        help="Root directory to store experiment runs. A unique sub-directory will be created here.",
++    )
++    parser.add_argument(
++        "--tokenizer-file",
++        type=Path,
++        default=None,
++        help="Path to a custom .pkl tokenizer file. Overrides --tokenizer-name.",
++    )
++    parser.add_argument(
++        "--tokenizer-name",
++        type=str,
++        default="gpt2",
++        help="tiktoken tokenizer name if --tokenizer-file is not provided (default: gpt2).",
++    )
++    parser.add_argument(
++        "--shard-size-gb",
++        type=float,
++        default=2.0,
++        help="Target size for each binary shard in gigabytes (default: 2.0).",
++    )
++    parser.add_argument(
++        "-p", "--processes",
++        type=int,
++        default=max(1, mp.cpu_count() - 1),
++        help=f"Number of worker processes (default: {max(1, mp.cpu_count() - 1)}).",
++    )
++    parser.add_argument(
++        "-q", "--quiet",
++        action="store_true",
++        help="Suppress progress reporting and info messages.",
++    )
++    args = parser.parse_args()
++
++    log_level = logging.WARNING if args.quiet else logging.INFO
++    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
++    logger = logging.getLogger(__name__)
++
++    logger.info(f"Loading graph node ids from {args.graph_file} ...")
++    with open(args.graph_file, "r", encoding="utf-8") as f:
++        graph_normed_ids = {json.loads(line)["normed_identifier"] for line in f}
++    logger.info(f"Loaded {len(graph_normed_ids):,} graph nodes.")
++
++    source = ArxivUnarxiveSource(args.content_jsonl, graph_normed_ids)
++
++    with ReproducibilityManager(output_dir=str(args.runs_dir), is_main_process=True) as rep:
++        run_preprocessing(args, rep, source)
++
++
++if __name__ == "__main__":
++    main()
++
+
+diff --git a/model/graph_traversal/arxiv_cite_detector.py b/model/graph_traversal/arxiv_cite_detector.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/model/graph_traversal/arxiv_cite_detector.py
+@@ -0,0 +1,122 @@
++"""
++ArxivCiteDetector — link detection for LaTeX-native ``\\cite{Title}`` citations.
++
++Implements the LinkDetector protocol for the ArXiv (unarXive) dataset. At extraction
++time, every in-corpus citation placeholder is rewritten to ``\\cite{<paper title>}``
++where the title is the cited paper's ``raw_identifier`` (see data/arxiv_graph_extractor).
++Because the bibkey→title resolution already happened during extraction, this detector
++is purely syntactic: it scans for ``\\cite{...}`` and returns the title verbatim. No
++runtime bibliography resolution is needed.
++
++Design mirrors PythonImportDetector: decode the full sequence once, regex-parse for
++citations, and map regex character offsets back to token positions via a cumulative
++per-token char-length index (exact for ASCII LaTeX; off-by-one at worst for the rare
++multibyte token, which is acceptable for ``link_end_pos`` precision).
++"""
++from __future__ import annotations
++
++import bisect
++import logging
++import re
++from typing import Any, Callable, List
++
++import torch
++
++from .link_detector import LinkInfo
++
++logger = logging.getLogger(__name__)
++
++# Match \cite{...}, \citep{...}, \citet{...} etc. and capture the brace contents.
++# At extraction time we emit a bare \cite{Title}; the optional command-suffix and
++# optional [pre/post] note groups are tolerated so hand-written or variant forms
++# (\citep, \cite[p.5]{...}) still parse. Brace contents are captured greedily up to
++# the first closing brace (titles never contain a literal '}').
++_CITE_RE = re.compile(r"\\cite[a-zA-Z]*(?:\[[^\]]*\])*\{([^}]*)\}")
++
++
++class ArxivCiteDetector:
++    """
++    Detects ``\\cite{Title}`` citations in GPT-2 tokenized LaTeX sequences.
++
++    The captured title is matched exactly against ``DocSpan.raw_identifier`` by
++    ``CrossDocLinkMaskCreator``, so the string emitted at extraction time, the
++    string the model learns to produce, and the cited document's ``raw_identifier``
++    must all be byte-identical.
++
++    Args:
++        decode_fn: Callable mapping ``List[int]`` → ``str`` (e.g. ``tiktoken_enc.decode``).
++    """
++
++    def __init__(self, decode_fn: Callable[[List[int]], str]) -> None:
++        self.decode_fn = decode_fn
++
++    # ------------------------------------------------------------------
++    # LinkDetector protocol
++    # ------------------------------------------------------------------
++
++    def detect_links(self, input_ids: torch.Tensor) -> List[LinkInfo]:
++        """
++        Detect ``\\cite{...}`` citations and emit one LinkInfo per citation.
++
++        The full sequence is decoded once; a per-token character-length index maps
++        each match's closing-brace character offset back to a token position. The
++        target string is the (stripped) brace contents — empty captures (the
++        out-of-corpus ``\\cite{}`` placeholders left during extraction) are skipped,
++        since they intentionally match no document.
++        """
++        tokens = input_ids.tolist()
++        full_text = self.decode_fn(tokens)
++        cumulative = self._build_char_to_token_index(tokens)
++
++        links: List[LinkInfo] = []
++        for m in _CITE_RE.finditer(full_text):
++            target = m.group(1).strip()
++            if not target:
++                continue  # out-of-corpus placeholder \cite{} — matches nothing by design
++            # link_end_pos: attention to the target is granted from the token just
++            # after the closing brace, i.e. once the full citation has been emitted.
++            link_end_pos = self._char_pos_to_token_pos(cumulative, m.end())
++            links.append(LinkInfo(link_end_pos=link_end_pos, target_str=target))
++
++        logger.debug(
++            "ArxivCiteDetector: detected %d citations in sequence of length %d",
++            len(links),
++            len(tokens),
++        )
++        return links
++
++    def index_doc_span(self, span: Any) -> str:
++        """Exact match against ``raw_identifier`` (the paper title)."""
++        return span.raw_identifier
++
++    # ------------------------------------------------------------------
++    # Internal helpers (identical approach to PythonImportDetector)
++    # ------------------------------------------------------------------
++
++    def _build_char_to_token_index(self, tokens: List[int]) -> List[int]:
++        """
++        Build a cumulative character-count index for O(log N) char→token lookup.
++
++        ``cumulative[i]`` = number of characters in ``decode_fn(tokens[:i])``, with
++        ``cumulative[0] = 0``. Each token is decoded individually to get its char
++        contribution. Exact for ASCII (the common case for LaTeX source); for a rare
++        multi-byte token the count may be off by a character, which is acceptable.
++        """
++        cumulative = [0] * (len(tokens) + 1)
++        for i, tok in enumerate(tokens):
++            try:
++                char_len = len(self.decode_fn([tok]))
++            except Exception:
++                char_len = 1  # safe fallback: assume 1 char
++            cumulative[i + 1] = cumulative[i] + char_len
++        return cumulative
++
++    def _char_pos_to_token_pos(self, cumulative: List[int], char_pos: int) -> int:
++        """
++        Return the smallest token index ``t`` such that ``cumulative[t] >= char_pos``.
++
++        Uses ``bisect_left`` for O(log N) lookup; result clamped to ``[0, len(tokens)]``.
++        """
++        idx = bisect.bisect_left(cumulative, char_pos)
++        return max(0, min(idx, len(cumulative) - 1))
++
+
+diff --git a/tests/data/test_arxiv_extract.py b/tests/data/test_arxiv_extract.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/tests/data/test_arxiv_extract.py
+@@ -0,0 +1,172 @@
++"""
++Tests for data/arxiv_graph_extractor/extract.py — body rehydration and dual-path
++citation resolution. Uses synthetic records (no corpus dependency).
++"""
++import importlib
++
++import pytest
++
++extract = importlib.import_module("data.arxiv_graph_extractor.extract")
++
++
++@pytest.fixture(autouse=True)
++def _reset_globals():
++    """Populate the module globals the rehydration logic reads, then clear after."""
++    extract._ARXIV_TO_TITLE = {
++        "2401.00002": "Paper Two Title",
++        "2401.00003": "Paper Three Title",
++    }
++    extract._ARXIV_TO_NORMED = {
++        "2401.00002": "2401_00002_aaa",
++        "2401.00003": "2401_00003_bbb",
++    }
++    extract._OA_TO_ARXIV = {
++        "W123": "2401.00003",   # OpenAlex id that maps to an in-corpus paper
++        "W999": "9999.99999",   # maps to an out-of-corpus paper
++    }
++    yield
++    extract._ARXIV_TO_TITLE = {}
++    extract._ARXIV_TO_NORMED = {}
++    extract._OA_TO_ARXIV = {}
++
++
++# ---------------------------------------------------------------------------
++# _resolve_bib_to_arxiv
++# ---------------------------------------------------------------------------
++
++class TestResolveBib:
++    def test_direct_contained_arxiv_id(self):
++        be = {"contained_arXiv_ids": [{"id": "2401.00002"}], "ids": {}}
++        assert extract._resolve_bib_to_arxiv(be) == "2401.00002"
++
++    def test_direct_version_canonicalized(self):
++        be = {"contained_arXiv_ids": [{"id": "2401.00002v3"}], "ids": {}}
++        assert extract._resolve_bib_to_arxiv(be) == "2401.00002"
++
++    def test_direct_ids_arxiv_id(self):
++        be = {"contained_arXiv_ids": [], "ids": {"arxiv_id": "2401.00003"}}
++        assert extract._resolve_bib_to_arxiv(be) == "2401.00003"
++
++    def test_openalex_fallback(self):
++        # No direct id, but OpenAlex id maps to an in-corpus paper.
++        be = {"contained_arXiv_ids": [], "ids": {"open_alex_id": "https://openalex.org/W123"}}
++        assert extract._resolve_bib_to_arxiv(be) == "2401.00003"
++
++    def test_direct_preferred_over_openalex(self):
++        be = {"contained_arXiv_ids": [{"id": "2401.00002"}],
++              "ids": {"open_alex_id": "https://openalex.org/W123"}}
++        assert extract._resolve_bib_to_arxiv(be) == "2401.00002"
++
++    def test_out_of_corpus_direct_returns_none(self):
++        be = {"contained_arXiv_ids": [{"id": "9999.99999"}], "ids": {}}
++        assert extract._resolve_bib_to_arxiv(be) is None
++
++    def test_out_of_corpus_openalex_returns_none(self):
++        be = {"contained_arXiv_ids": [], "ids": {"open_alex_id": "https://openalex.org/W999"}}
++        assert extract._resolve_bib_to_arxiv(be) is None
++
++    def test_no_ids_returns_none(self):
++        assert extract._resolve_bib_to_arxiv({"contained_arXiv_ids": [], "ids": {}}) is None
++
++
++# ---------------------------------------------------------------------------
++# _rehydrate_body
++# ---------------------------------------------------------------------------
++
++def _record(text, bib_entries=None, ref_entries=None):
++    return {
++        "sections": {"S1": {"text": text}},
++        "bib_entries": bib_entries or {},
++        "ref_entries": ref_entries or {},
++    }
++
++
++# Realistic hex keys: ref_entries uuids are hex-with-dashes; cite keys are SHA1 hex.
++_F1 = "f5e8543d-c971-4ef2-9f0d-46bfeacad7c2"
++_FIG1 = "84547980-693d-429b-9bd2-5cc3c95d8813"
++_T1 = "fc72947b-5dc0-46b9-afee-19c8fec3a561"
++_K1 = "b1c06b34d06c7653e80ab0839d5dfa8930fb80f9"
++_K2 = "af2293d1c79fd5889a6e2ea5ee52db4c61070451"
++
++
++class TestRehydrate:
++    def test_formula_inlined_as_latex(self):
++        rec = _record(
++            f"The loss {{{{formula:{_F1}}}}} is minimized.",
++            ref_entries={_F1: {"latex": "\\mathcal{L}", "type": "formula"}},
++        )
++        body, outgoing = extract._rehydrate_body(rec)
++        assert "$\\mathcal{L}$" in body
++        assert outgoing == []
++
++    def test_figure_with_caption(self):
++        rec = _record(
++            f"See {{{{figure:{_FIG1}}}}}.",
++            ref_entries={_FIG1: {"caption": "Architecture diagram", "type": "figure"}},
++        )
++        body, _ = extract._rehydrate_body(rec)
++        assert "\\ref{figure} (Architecture diagram)" in body
++
++    def test_figure_no_caption(self):
++        rec = _record(
++            f"See {{{{table:{_T1}}}}}.",
++            ref_entries={_T1: {"caption": "NO_CAPTION", "type": "table"}},
++        )
++        body, _ = extract._rehydrate_body(rec)
++        assert "\\ref{table}" in body
++        assert "NO_CAPTION" not in body
++
++    def test_incorpus_cite_rewritten_to_title(self):
++        rec = _record(
++            f"As in {{{{cite:{_K1}}}}} we observe...",
++            bib_entries={_K1: {"contained_arXiv_ids": [{"id": "2401.00002"}], "ids": {}}},
++        )
++        body, outgoing = extract._rehydrate_body(rec)
++        assert "\\cite{Paper Two Title}" in body
++        assert outgoing == ["2401_00002_aaa"]
++
++    def test_openalex_cite_rewritten(self):
++        rec = _record(
++            f"Prior work {{{{cite:{_K1}}}}}.",
++            bib_entries={_K1: {"contained_arXiv_ids": [],
++                               "ids": {"open_alex_id": "https://openalex.org/W123"}}},
++        )
++        body, outgoing = extract._rehydrate_body(rec)
++        assert "\\cite{Paper Three Title}" in body
++        assert outgoing == ["2401_00003_bbb"]
++
++    def test_out_of_corpus_cite_dropped(self):
++        rec = _record(
++            f"Unrelated {{{{cite:{_K1}}}}} reference.",
++            bib_entries={_K1: {"contained_arXiv_ids": [{"id": "9999.99999"}], "ids": {}}},
++        )
++        body, outgoing = extract._rehydrate_body(rec)
++        assert "cite" not in body.lower()  # marker fully removed
++        assert outgoing == []
++        assert "Unrelated  reference." in body  # marker excised, text preserved
++
++    def test_xref_to_ref(self):
++        rec = _record("As shown in (REF ) above.")
++        body, _ = extract._rehydrate_body(rec)
++        assert "\\ref{}" in body
++        assert "(REF )" not in body
++
++    def test_outgoing_deduped_and_sorted(self):
++        rec = _record(
++            f"{{{{cite:{_K1}}}}} and again {{{{cite:{_K2}}}}} and {{{{cite:{_K1}}}}}.",
++            bib_entries={
++                _K1: {"contained_arXiv_ids": [{"id": "2401.00003"}], "ids": {}},
++                _K2: {"contained_arXiv_ids": [{"id": "2401.00002"}], "ids": {}},
++            },
++        )
++        _, outgoing = extract._rehydrate_body(rec)
++        assert outgoing == ["2401_00002_aaa", "2401_00003_bbb"]  # sorted, deduped
++
++    def test_multiple_sections_joined(self):
++        rec = {
++            "sections": {"A": {"text": "First."}, "B": {"text": "Second."}},
++            "bib_entries": {}, "ref_entries": {},
++        }
++        body, _ = extract._rehydrate_body(rec)
++        assert body == "First.\n\nSecond."
++
+
+diff --git a/tests/test_arxiv_cite_detector.py b/tests/test_arxiv_cite_detector.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/tests/test_arxiv_cite_detector.py
+@@ -0,0 +1,114 @@
++r"""
++Tests for arxiv_cite_detector.py
++
++Coverage:
++  - ArxivCiteDetector.detect_links: \cite{Title} detection end-to-end with tiktoken GPT-2
++  - variant commands (\citep, \citet) and optional [note] groups
++  - empty \cite{} placeholders skipped (out-of-corpus markers)
++  - multiple citations, titles with spaces/punctuation
++  - link_end_pos lands just after the closing brace
++  - index_doc_span returns raw_identifier verbatim
++"""
++import re
++from types import SimpleNamespace
++
++import pytest
++import tiktoken
++import torch
++
++from model.graph_traversal.arxiv_cite_detector import ArxivCiteDetector, _CITE_RE
++
++
++@pytest.fixture(scope="module")
++def enc():
++    return tiktoken.get_encoding("gpt2")
++
++
++@pytest.fixture(scope="module")
++def detector(enc):
++    return ArxivCiteDetector(decode_fn=enc.decode)
++
++
++def _encode(enc, text: str) -> torch.Tensor:
++    return torch.tensor(enc.encode(text), dtype=torch.long)
++
++
++class TestCiteRegex:
++    def test_basic(self):
++        assert _CITE_RE.findall(r"\cite{Attention Is All You Need}") == [
++            "Attention Is All You Need"
++        ]
++
++    def test_variant_commands(self):
++        assert _CITE_RE.findall(r"\citep{Foo}") == ["Foo"]
++        assert _CITE_RE.findall(r"\citet{Bar}") == ["Bar"]
++
++    def test_optional_note_group(self):
++        assert _CITE_RE.findall(r"\cite[p.~5]{Some Title}") == ["Some Title"]
++
++    def test_empty(self):
++        assert _CITE_RE.findall(r"\cite{}") == [""]
++
++    def test_multiple(self):
++        text = r"see \cite{A Paper} and \cite{B Paper}"
++        assert _CITE_RE.findall(text) == ["A Paper", "B Paper"]
++
++
++class TestDetectLinks:
++    def test_single_citation(self, detector, enc):
++        title = "Deep Residual Learning for Image Recognition"
++        ids = _encode(enc, f"As shown in \\cite{{{title}}}, we observe...")
++        links = detector.detect_links(ids)
++        assert len(links) == 1
++        assert links[0].target_str == title
++
++    def test_empty_placeholder_skipped(self, detector, enc):
++        # Out-of-corpus citations are emitted as \cite{} and must NOT produce a link.
++        ids = _encode(enc, r"Prior work \cite{} did not address this.")
++        assert detector.detect_links(ids) == []
++
++    def test_multiple_citations(self, detector, enc):
++        ids = _encode(enc, r"Both \cite{Title One} and \cite{Title Two} apply.")
++        links = detector.detect_links(ids)
++        assert [l.target_str for l in links] == ["Title One", "Title Two"]
++
++    def test_mixed_empty_and_real(self, detector, enc):
++        ids = _encode(enc, r"\cite{Real Paper} but not \cite{} here.")
++        links = detector.detect_links(ids)
++        assert [l.target_str for l in links] == ["Real Paper"]
++
++    def test_title_with_punctuation(self, detector, enc):
++        title = "BERT: Pre-training of Deep Bidirectional Transformers"
++        ids = _encode(enc, f"\\cite{{{title}}}")
++        links = detector.detect_links(ids)
++        assert len(links) == 1
++        assert links[0].target_str == title
++
++    def test_link_end_pos_after_brace(self, detector, enc):
++        # The token at link_end_pos should be at/after the closing brace — i.e. the
++        # decoded prefix up to link_end_pos contains the full \cite{...}.
++        title = "Some Title"
++        text = f"x \\cite{{{title}}} y"
++        ids = _encode(enc, text)
++        links = detector.detect_links(ids)
++        assert len(links) == 1
++        prefix = enc.decode(ids[: links[0].link_end_pos].tolist())
++        assert "}" in prefix
++        assert title in prefix
++
++    def test_no_citations(self, detector, enc):
++        ids = _encode(enc, "This text has no citations at all.")
++        assert detector.detect_links(ids) == []
++
++    def test_variant_citep(self, detector, enc):
++        ids = _encode(enc, r"\citep{Vaswani Transformer}")
++        links = detector.detect_links(ids)
++        assert len(links) == 1
++        assert links[0].target_str == "Vaswani Transformer"
++
++
++class TestIndexDocSpan:
++    def test_returns_raw_identifier(self, detector):
++        span = SimpleNamespace(raw_identifier="Attention Is All You Need", normed_identifier="x")
++        assert detector.index_doc_span(span) == "Attention Is All You Need"
++

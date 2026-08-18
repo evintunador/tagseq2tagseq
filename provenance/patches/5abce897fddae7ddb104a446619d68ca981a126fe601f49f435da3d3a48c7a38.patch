@@ -1,0 +1,183 @@
+diff --git a/configs/thestack_cross_doc.yaml b/configs/thestack_cross_doc.yaml
+index 120724c..4aad433 100644
+--- a/configs/thestack_cross_doc.yaml
++++ b/configs/thestack_cross_doc.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'identifier_prefix_eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true
+diff --git a/configs/thestack_doc_causal.yaml b/configs/thestack_doc_causal.yaml
+index ac5f61d..ede4b7d 100644
+--- a/configs/thestack_doc_causal.yaml
++++ b/configs/thestack_doc_causal.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true
+diff --git a/configs/thestack_doc_concatenated.yaml b/configs/thestack_doc_concatenated.yaml
+index c0281f1..06aea30 100644
+--- a/configs/thestack_doc_concatenated.yaml
++++ b/configs/thestack_doc_concatenated.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true
+
+diff --git a/downnode_rank_wrapper.sh b/downnode_rank_wrapper.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/downnode_rank_wrapper.sh
+@@ -0,0 +1,15 @@
++#!/bin/bash
++# Per-rank wrapper invoked by torchrun. Gives each rank its OWN inductor/triton
++# cache dir (keyed by LOCAL_RANK), matching launch_slurm.py's proven layout.
++# Concurrent cold-compile into a SHARED cache dir corrupts/hangs the compiler
++# (CLAUDE.md). torchrun sets LOCAL_RANK per process, so we key on it here.
++set -euo pipefail
++REPO=/fss/evin_t/tagseq2tagseq
++RUN_TAG="$1"; shift
++
++export TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_${RUN_TAG}/rank${LOCAL_RANK}
++export TRITON_CACHE_DIR=/tmp/triton_${RUN_TAG}/rank${LOCAL_RANK}
++mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
++
++exec "$REPO/.venv/bin/python" -u "$REPO/main.py" "$@"
++
+
+diff --git a/launch_downnode.sh b/launch_downnode.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/launch_downnode.sh
+@@ -0,0 +1,64 @@
++#!/bin/bash
++# Launch a 4-GPU torchrun training job on a SLURM-detached "down" node
++# (GPU-269/423/694 — broken 8th GPU, not in SLURM, ssh-only).
++#
++# 4 GPUs x accum_steps=2 = 262,144 tokens/step (matches the 8-GPU x accum=1 SLURM runs).
++#
++# Usage (run ON the node, from anywhere):
++#   launch_downnode.sh <config_yaml> <run_tag> [extra main.py args...]
++# Example:
++#   launch_downnode.sh configs/thestack_doc_causal.yaml dc269 --resume-from path/to/best_model.pt
++set -euo pipefail
++
++REPO=/fss/evin_t/tagseq2tagseq
++VENV=$REPO/.venv
++ART=/fss-data/evin_t/tagseq2tagseq_artifacts
++
++CONFIG="$1"; shift
++RUN_TAG="$1"; shift
++EXTRA_ARGS="$@"
++
++cd "$REPO"
++
++# --- env: replicate launch_slurm.py's critical settings ---
++export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
++export PYTORCH_ALLOC_CONF="expandable_segments:True"
++export TORCH_DIST_TIMEOUT_SECONDS=1800
++export NCCL_TIMEOUT=1800
++# Single-node intra-host: NVLink, no IB needed.
++# Prevent concurrent-compile segfault (CLAUDE.md): synchronous in-process compile.
++export TORCHINDUCTOR_COMPILE_THREADS=1
++export TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0
++# NOTE: compile cache is set PER-RANK inside downnode_rank_wrapper.sh (keyed by
++# LOCAL_RANK), matching launch_slurm.py. A single shared cache dir across ranks
++# cold-compiling concurrently corrupts/hangs the compiler (CLAUDE.md).
++
++# Use the 4 healthy GPUs (0-3; the broken one is higher-indexed / not enumerated).
++export CUDA_VISIBLE_DEVICES=0,1,2,3
++
++LOGDIR=$ART/pipeline_logs
++mkdir -p "$LOGDIR"
++LOG=$LOGDIR/downnode_${RUN_TAG}_$(hostname).log
++
++echo "[launch_downnode] host=$(hostname) config=$CONFIG tag=$RUN_TAG log=$LOG"
++echo "[launch_downnode] 4 GPUs x accum_steps=2 = 262144 tokens/step"
++
++# torchrun: 1 node, 4 procs. Random-ish port to avoid clashes if two jobs share a node.
++PORT=$(( 29500 + (RANDOM % 2000) ))
++
++nohup "$VENV/bin/torchrun" \
++    --standalone \
++    --nnodes=1 \
++    --nproc_per_node=4 \
++    --master_port=$PORT \
++    --no-python \
++    "$REPO/downnode_rank_wrapper.sh" "$RUN_TAG" \
++    --config "$CONFIG" \
++    --train_loop.max_optimizer_steps 27488 \
++    --train_loop.atomic_feature_kwargs.accum_steps 2 \
++    $EXTRA_ARGS \
++    > "$LOG" 2>&1 &
++
++echo "[launch_downnode] PID=$! LOG=$LOG"
++echo "$LOG"
++

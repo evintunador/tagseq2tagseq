@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "run_id": "run_20260722_000443_086890",
+  "naming_convention": "submitit",
+  "source_run_dirs": [
+    "/fss/evin_t/tagseq2tagseq/runs/run_20260722_000443_086890"
+  ],
+  "run_dir_exists": true,
+  "warnings": [],
+  "reproduce": {
+    "commit_hash": "0059cc035b39344a1170797f85c0bf76ea91c908",
+    "branch": "main",
+    "remote_url": "https://github.com/evintunador/tagseq2tagseq.git",
+    "github_url": "https://github.com/evintunador/tagseq2tagseq/commit/0059cc035b39344a1170797f85c0bf76ea91c908",
+    "git_is_dirty": false,
+    "patch": null,
+    "config_path": "configs/typescript_ablation/typescript_dfs_dc.yaml",
+    "cli_overrides": {},
+    "python_version": "3.13.2",
+    "torch_version": "2.10.0",
+    "torch_cuda_version": "12.8",
+    "cudnn_version": 91900,
+    "nvidia_driver_version": "560.35.03",
+    "slurm_job_id": "46804"
+  },
+  "environment": {
+    "gpu_model": "NVIDIA A100-SXM4-80GB",
+    "gpu_count": 8,
+    "world_size": 8,
+    "os_release": "5.15.0-122-generic"
+  },
+  "hyperparameters": {
+    "data": {
+      "dataset_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript",
+      "strategy": "dfs",
+      "layout_policy": "stochastic_slash_comment_prefix",
+      "inference_layout_policy": "eos",
+      "order_mode": "prefer_targets_first",
+      "doc_budget": null,
+      "train_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/train",
+      "epoch_dirs": [
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/typescript_dfs/epoch_0"
+      ],
+      "val_dirs": {
+        "val_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_community",
+        "val_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_random"
+      },
+      "test_dirs": {
+        "test_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/test_community",
+        "test_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/test_random"
+      }
+    },
+    "model": {
+      "compile": true,
+      "compile_mode": "default",
+      "attention_backend": "triton",
+      "inference_attention_backend": "flex",
+      "mask_type": "doc_causal",
+      "activation_checkpointing": false,
+      "model_dim": 1024,
+      "num_layers": 24,
+      "num_heads": 8,
+      "max_seq_len": 32768,
+      "drop_path_rate": 0.0,
+      "fp8": false,
+      "weight_tying": true,
+      "untie_at_frac": 0.667,
+      "ignore_index": -100,
+      "dtype": "bfloat16",
+      "logit_softcap": 30.0,
+      "mtp_extra_weights": [
+        0.5,
+        0.25
+      ],
+      "mtp_decay_steps": 0,
+      "ve_layers": [],
+      "shared_ve_bank": false
+    },
+    "optimizer": {
+      "type": "muon",
+      "muon_wd": 0.1,
+      "adamw_wd": 0.005,
+      "momentum": 0.95,
+      "muon_beta2": 0.95,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "muon_lr": 0.003,
+      "adamw_lr": "3e-05",
+      "muon_momentum_warmup_steps": 300,
+      "adamw_embed_beta1": 0.5
+    },
+    "train_loop": {
+      "epochs": 1,
+      "max_optimizer_steps": 15000,
+      "warmup_steps": 300,
+      "cooldown_frac": 0.4,
+      "min_lr_ratio": 0.1,
+      "val_steps": 20,
+      "val_interval": 250,
+      "save_latest_interval": 250,
+      "atomic_feature_kwargs": {
+        "norm_clip_value": 1.0,
+        "accum_steps": 1
+      }
+    },
+    "seed": 42,
+    "eval": {
+      "run_on_completion": true,
+      "benchmarks": [
+        {
+          "name": "held_out_perplexity",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "community_pack_perplexity",
+          "conditions": [
+            "doceval"
+          ]
+        }
+      ],
+      "max_docs": 500,
+      "link_fuzzy_match": false
+    }
+  },
+  "hyperparameters_sha256": "8771ff30e1641ef5dabef3886fd9ad14400221f0eccdafa111f417343854179e",
+  "timestamps": {
+    "run_started": "2026-07-22T00:04:43",
+    "slurm_start_time": "1784678683",
+    "slurm_end_time": "1785024283"
+  },
+  "eval": {
+    "present": true,
+    "eval_results_sha256": "0ad92d15f29f349cf328c39639dc816b3cf3e699aac42bcd48e6c5d2c4458d87",
+    "metrics": {
+      "held_out_perplexity/doceval": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 1.427982684224844,
+        "perplexity": 4.170277933148737,
+        "nll_ci_low": 1.3703131930291652,
+        "nll_ci_high": 1.479309469551593,
+        "perplexity_ci_low": 3.936583412904792,
+        "perplexity_ci_high": 4.389913265276046
+      },
+      "community_pack_perplexity/doceval": {
+        "split": "val_community",
+        "n_packs": 361,
+        "mean_nll_cross_doc": 1.5339413929019672,
+        "mean_nll_baseline": 1.5339413929019672,
+        "mean_delta": 0.0,
+        "delta_ci_low": 0.0,
+        "delta_ci_high": 0.0,
+        "cross_doc_ci_low": 1.4797232546631407,
+        "cross_doc_ci_high": 1.5920901947678792,
+        "baseline_ci_low": 1.4832954604449267,
+        "baseline_ci_high": 1.5929389850368074
+      },
+      "community_pack_perplexity/doceval__val_community": {
+        "split": "val_community",
+        "n_packs": 361,
+        "mean_nll_cross_doc": 1.5339413929019672,
+        "mean_nll_baseline": 1.5339413929019672,
+        "mean_delta": 0.0,
+        "delta_ci_low": 0.0,
+        "delta_ci_high": 0.0,
+        "cross_doc_ci_low": 1.4811089675393287,
+        "cross_doc_ci_high": 1.5901973164837615,
+        "baseline_ci_low": 1.4820075730274316,
+        "baseline_ci_high": 1.5868181142440967
+      },
+      "held_out_perplexity/doceval__val_random": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 1.4538288500607013,
+        "perplexity": 4.279468630186739,
+        "nll_ci_low": 1.3978619687139988,
+        "nll_ci_high": 1.5062195832826197,
+        "perplexity_ci_low": 4.046539084362628,
+        "perplexity_ci_high": 4.50965017182213
+      },
+      "community_pack_perplexity/doceval__test_community": {
+        "split": "test_community",
+        "n_packs": 378,
+        "mean_nll_cross_doc": 1.5132450681341787,
+        "mean_nll_baseline": 1.5132450681341787,
+        "mean_delta": 0.0,
+        "delta_ci_low": 0.0,
+        "delta_ci_high": 0.0,
+        "cross_doc_ci_low": 1.4596748252823013,
+        "cross_doc_ci_high": 1.570617490494222,
+        "baseline_ci_low": 1.4641735650700012,
+        "baseline_ci_high": 1.5690906839335277
+      },
+      "held_out_perplexity/doceval__test_random": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 1.4308388045430183,
+        "perplexity": 4.182205774252331,
+        "nll_ci_low": 1.3722976421378552,
+        "nll_ci_high": 1.4868245089627803,
+        "perplexity_ci_low": 3.944403118687709,
+        "perplexity_ci_high": 4.423027909556816
+      }
+    }
+  },
+  "distilled_at": "2026-08-18T15:33:21Z"
+}

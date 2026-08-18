@@ -1,0 +1,71 @@
+# Results ledger: the single source of truth for every number that enters the paper.
+#
+# Each entry maps a stable claim-key to a value SOURCE (a specific field of a specific
+# run's distilled record), never a hand-typed number. `scripts/gen_values_tex.py`
+# resolves every entry against `provenance/runs/<run_id>.json` and emits
+# `paper/generated/values.tex`; the paper cites the number as `\val{claim-key}`.
+# `scripts/check_grounding.py` re-resolves and fails on any drift.
+#
+# Claim-key rules: characters [A-Za-z0-9._/-] only. Convention: dot-separated
+# <topic>.<subject>.<quantity>, optionally suffixed .ci for a confidence interval.
+#
+# Value source kinds:
+#   eval       {metric_path, field}  -- read record.eval.metrics[metric_path][field].
+#                                        For a CI: give an array field (e.g. accuracy_ci)
+#                                        OR a "<base>_ci" field; the resolver also accepts
+#                                        the sibling-scalar form <base>_ci_low/<base>_ci_high
+#                                        and normalizes both to [lo, hi].
+#   hyperparam {path}                 -- dotted lookup into record.hyperparameters.
+#   literal    {value}                -- a number NOT in any distilled artifact (e.g. read
+#                                        from a training log). REQUIRES a `note`. Tracked as
+#                                        grounding debt; see provenance/README.md.
+#
+# `expected` (optional) is re-checked against the resolved value within tolerance -- it
+# catches a metric that silently changed (e.g. eval_results re-merged after the fact).
+# Multiple run_ids must agree within tolerance (use for claims aggregated over runs).
+#
+# `format`: {sig_figs: N} (default 3), optional {units: "..."} appended, or
+#           {kind: interval} to render a [lo, hi] pair as "[lo, hi]".
+#
+# NOTE: the entries below are SCHEMA EXAMPLES that exercise every resolver path against
+# real harvested runs. Replace them with real curated paper claims as the paper's \todo
+# numbers are grounded (see the deferred step in the plan / README).
+
+schema_version: 1
+
+entries:
+
+  example.wiki_random.mean_nll:
+    run_ids: [run_20260803_013329_201048]
+    source: {kind: eval, metric_path: "held_out_perplexity/baseline__wiki_random", field: mean_nll}
+    expected: 12.401257372580242
+    units: nll
+    format: {sig_figs: 3}
+    note: "SCHEMA EXAMPLE (eval scalar). Held-out random-split mean NLL."
+
+  example.wiki_random.mean_nll.ci:
+    run_ids: [run_20260803_013329_201048]
+    source: {kind: eval, metric_path: "held_out_perplexity/baseline__wiki_random", field: nll_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "SCHEMA EXAMPLE (eval CI via sibling *_ci_low/_ci_high scalars)."
+
+  example.wiki_qa.accuracy.ci:
+    run_ids: [run_20260803_013329_201048]
+    source: {kind: eval, metric_path: "wiki_qa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "SCHEMA EXAMPLE (eval CI via inline [lo, hi] array)."
+
+  example.model.num_layers:
+    run_ids: [run_20260803_013329_201048]
+    source: {kind: hyperparam, path: "model.num_layers"}
+    expected: 24
+    format: {sig_figs: 0}
+    note: "SCHEMA EXAMPLE (hyperparameter lookup)."
+
+  example.traversal.val_loss.literal:
+    run_ids: [run_20260803_013329_201048]
+    source: {kind: literal, value: 2.42}
+    units: "bits/token (val)"
+    format: {sig_figs: 3}
+    note: "SCHEMA EXAMPLE (literal escape hatch). Stand-in for a training-log-derived
+      number not present in eval_results.json; grounding debt until a `log` source exists."

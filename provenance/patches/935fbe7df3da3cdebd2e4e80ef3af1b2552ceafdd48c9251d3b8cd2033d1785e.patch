@@ -1,0 +1,94 @@
+
+diff --git a/scripts/build_merged_v2_packs_32b_balanced.sh b/scripts/build_merged_v2_packs_32b_balanced.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/build_merged_v2_packs_32b_balanced.sh
+@@ -0,0 +1,41 @@
++#!/usr/bin/env bash
++# Build the 32B PERFECTLY-BALANCED merged pack set (multi-epoch union) — 2x the 16B
++# balanced arm. Equal-ish share = 96932 packs (~3.18B tok) per source, EXCEPT zig
++# which maxes ~14.7k packs across its 16 distinct-seed epochs (gives 'all'); its
++# shortfall is absorbed into the other 10 targets. Each source unions the minimum #
++# of distinct-seed epoch dirs whose pooled packs reach 96932 (merge_packs balance-
++# selects across the union). Total ~32B.
++#
++# NOTE: at 32B the small sources repeat heavily (zig ~16x, dart 7x, java 6x, go 5x).
++# That over-repetition is inherent to a balanced 32B on a ~16B-unique corpus; it is
++# the tradeoff vs the 'natural' 32B (which skews code/arxiv-heavy instead). Ordering
++# within the schedule is irrelevant now — training shuffles within buckets (seed=42),
++# so source-clustered pack_id order no longer causes forgetting (commit 93d542c).
++set -euo pipefail
++ART=/fss-data/evin_t/tagseq2tagseq_artifacts
++P=$ART/pretokenized_datasets
++S=$ART/schedules
++MT=$P/merged_all_v2/splits/train
++OUT=$P/merged_all_v2/epoch_32b_balanced
++cd /fss/evin_t/tagseq2tagseq
++
++# helper: comma-join epoch_0..(n-1) under a schedule root
++ep() { local root="$1" n="$2" out=""; for i in $(seq 0 $((n-1))); do out="$out${out:+,}$root/epoch_$i"; done; echo "$out"; }
++
++python -m data.merge_packs \
++  --merged-train-dir "$MT" \
++  --output "$OUT" \
++  --n-buckets 32 --seed 42 --token-budget 32768 \
++  --source "wiki=$P/wiki_merged/splits/train=$(ep $S/wiki_merged_bfs 4)=96932" \
++  --source "stack=$P/thestack/splits/train=$(ep $S/thestack_bfs 1)=96932" \
++  --source "arxiv=$P/arxiv/splits/train=$(ep $S/arxiv_bfs 1)=96932" \
++  --source "go=$P/go/splits/train=$(ep $S/go_bfs 5)=96932" \
++  --source "java=$P/java/splits/train=$(ep $S/java_bfs 6)=96932" \
++  --source "typescript=$P/typescript/splits/train=$(ep $S/typescript_bfs 1)=96932" \
++  --source "kotlin=$P/kotlin/splits/train=$(ep $S/kotlin_bfs 2)=96932" \
++  --source "rust=$P/rust/splits/train=$(ep $S/rust_bfs 4)=96932" \
++  --source "javascript=$P/javascript/splits/train=$(ep $S/javascript_bfs 1)=96932" \
++  --source "zig=$P/zig/splits/train=$(ep $S/zig_bfs 16)=all" \
++  --source "dart=$P/dart/splits/train=$(ep $S/dart_bfs 9)=96932"
++echo "=== built $OUT (32B perfectly-balanced) ==="
++
+
+diff --git a/scripts/eval_sparsity_500.sbatch b/scripts/eval_sparsity_500.sbatch
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/eval_sparsity_500.sbatch
+@@ -0,0 +1,39 @@
++#!/bin/bash
++# Full-fidelity (max-packs=500) community_pack eval for graph-sparsity keep-arms,
++# on ONE 8-GPU SLURM node. Reads an eval-list file (lines: ds|keeptag|ckpt_path),
++# runs 8 evals concurrently (one per local GPU), waves until the list is done.
++# Each eval = eval/sparsity_sweep at keep=1.0 (full-density test) -> {ds}_keep{K}.json.
++#
++# Submit: LIST=/path/eval_list.txt sbatch scripts/eval_sparsity_500.sbatch
++#SBATCH --job-name=sparseval
++#SBATCH --partition=compute
++#SBATCH --gpus-per-node=8
++#SBATCH --cpus-per-task=64
++#SBATCH --mem=512G
++#SBATCH --time=8:00:00
++#SBATCH --output=/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/phase2_traintime/logs/sbatch_%j.out
++set -uo pipefail
++: "${LIST:?eval list file}"; : "${MAXP:=500}"
++REPO=/fss/evin_t/tagseq2tagseq-sparsity; cd "$REPO"
++source /fss/evin_t/tagseq2tagseq/.venv/bin/activate 2>/dev/null || true
++ART=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets
++OUT=/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/phase2_traintime
++mkdir -p "$OUT/logs"
++mapfile -t SPECS < "$LIST"
++NG=8; i=0
++while [ $i -lt ${#SPECS[@]} ]; do
++  pids=()
++  for ((g=0; g<NG && i<${#SPECS[@]}; g++, i++)); do
++    IFS='|' read -r ds keep ckpt <<< "${SPECS[$i]}"
++    out="$OUT/${ds}_keep${keep}.json"
++    echo "[$(date +%H:%M:%S)] $ds keep$keep -> local gpu $g (maxpacks=$MAXP)"
++    CUDA_VISIBLE_DEVICES=$g python -m eval.sparsity_sweep \
++      --checkpoint "$ckpt" --dataset "$ART/$ds" --split val_community \
++      --max-packs "$MAXP" --keep-fracs 1.0 --modes edge --seeds 0 \
++      --dataset-tag "$ds" --output "$out" > "$OUT/logs/${ds}_keep${keep}_500.log" 2>&1 &
++    pids+=($!); sleep 5
++  done
++  for p in "${pids[@]}"; do wait "$p"; done
++done
++echo "[$(date +%H:%M:%S)] ALL EVALS DONE"
++

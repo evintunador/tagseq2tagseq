@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "run_id": "20260702_010558",
+  "naming_convention": "bare",
+  "source_run_dirs": [
+    "/fss/evin_t/tagseq2tagseq/runs/20260702_010558"
+  ],
+  "run_dir_exists": true,
+  "warnings": [],
+  "reproduce": {
+    "commit_hash": "ea8ae03a3a619e486b427bec7d47b9a742a96254",
+    "branch": "main",
+    "remote_url": "https://github.com/evintunador/tagseq2tagseq.git",
+    "github_url": "https://github.com/evintunador/tagseq2tagseq/commit/ea8ae03a3a619e486b427bec7d47b9a742a96254",
+    "git_is_dirty": true,
+    "patch": {
+      "hash": "94f011a8042b2f5faf2f08f1f30d79f9b21b99354d7f73ff8a38525755c43f71",
+      "path": "provenance/patches/94f011a8042b2f5faf2f08f1f30d79f9b21b99354d7f73ff8a38525755c43f71.patch",
+      "bytes": 19413
+    },
+    "config_path": "configs/thestack_doc_concat_link.yaml",
+    "cli_overrides": {
+      "train_loop.max_optimizer_steps": "27488",
+      "train_loop.atomic_feature_kwargs.accum_steps": "8"
+    },
+    "python_version": "3.13.2",
+    "torch_version": "2.10.0",
+    "torch_cuda_version": "12.8",
+    "cudnn_version": 91900,
+    "nvidia_driver_version": "560.35.03",
+    "slurm_job_id": null
+  },
+  "environment": {
+    "gpu_model": "NVIDIA A100-SXM4-80GB",
+    "gpu_count": 1,
+    "world_size": 1,
+    "os_release": "5.15.0-122-generic"
+  },
+  "hyperparameters": {
+    "data": {
+      "dataset_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack",
+      "strategy": "bfs",
+      "layout_policy": "stochastic_identifier_prefix",
+      "inference_layout_policy": "eos",
+      "order_mode": "prefer_targets_first",
+      "doc_budget": null,
+      "train_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train",
+      "epoch_dirs": "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0",
+      "val_dirs": {
+        "val_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community",
+        "val_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random"
+      },
+      "test_dirs": {
+        "test_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community",
+        "test_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random"
+      }
+    },
+    "model": {
+      "compile": true,
+      "compile_mode": "default",
+      "attention_backend": "triton",
+      "inference_attention_backend": "flex",
+      "mask_type": "doc_concat_link",
+      "link_detector": "python",
+      "max_grants": 256,
+      "activation_checkpointing": false,
+      "model_dim": 1024,
+      "num_layers": 24,
+      "num_heads": 8,
+      "max_seq_len": 32768,
+      "drop_path_rate": 0.0,
+      "fp8": false,
+      "weight_tying": true,
+      "untie_at_frac": 0.667,
+      "ignore_index": -100,
+      "dtype": "bfloat16",
+      "logit_softcap": 30.0,
+      "mtp_extra_weights": [
+        0.5,
+        0.25
+      ],
+      "mtp_decay_steps": 0,
+      "ve_layers": [
+        1,
+        2,
+        21,
+        22,
+        23
+      ],
+      "shared_ve_bank": false
+    },
+    "optimizer": {
+      "type": "muon",
+      "muon_wd": 1.2,
+      "adamw_wd": 0.005,
+      "momentum": 0.95,
+      "muon_beta2": 0.95,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "muon_lr": 0.001,
+      "adamw_lr": 1e-05,
+      "muon_momentum_warmup_steps": 300,
+      "adamw_embed_beta1": 0.5
+    },
+    "train_loop": {
+      "epochs": 1,
+      "max_optimizer_steps": 27488,
+      "warmup_steps": 300,
+      "cooldown_frac": 0.4,
+      "min_lr_ratio": 0.1,
+      "val_steps": 30,
+      "val_interval": 300,
+      "atomic_feature_kwargs": {
+        "norm_clip_value": 1.0,
+        "accum_steps": 8
+      }
+    },
+    "seed": 42,
+    "eval": {
+      "run_on_completion": true,
+      "benchmarks": [
+        {
+          "name": "held_out_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "community_pack_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "repobench",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "codexglue_code_to_text",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "humaneval_buggy",
+          "conditions": [
+            "doceval"
+          ]
+        }
+      ],
+      "max_docs": 500
+    }
+  },
+  "hyperparameters_sha256": "1cbbd2d0da3df9266477e76ca58b413fef37254e0b8d1d1824cf436ff387438a",
+  "timestamps": {
+    "run_started": "2026-07-02T01:05:58",
+    "slurm_start_time": null,
+    "slurm_end_time": null
+  },
+  "eval": {
+    "present": true,
+    "eval_results_sha256": "94ffc1f4634a8c93de23ea699538665fb1c46bc06deea05a8aeab488b99a7244",
+    "metrics": {
+      "repobench/doceval": {
+        "exact_match_accuracy": 0.0,
+        "exact_match_accuracy_ci": [
+          0.0,
+          0.0
+        ],
+        "average_nll": 2.246725685209036,
+        "perplexity": 9.45672080677153,
+        "perplexity_ci": [
+          8.998277403438522,
+          9.945307181855098
+        ],
+        "total_examples": 2000
+      },
+      "codexglue_code_to_text/doceval": {
+        "exact_match_accuracy": 0.0,
+        "exact_match_accuracy_ci": [
+          0.0,
+          0.0
+        ],
+        "average_nll": 1.8240695437192918,
+        "perplexity": 6.1970262737202715,
+        "perplexity_ci": [
+          5.796287820600235,
+          6.653203534864991
+        ],
+        "total_examples": 2000
+      },
+      "humaneval_buggy/doceval": {
+        "accuracy": 0.5609756097560976,
+        "accuracy_ci": [
+          0.4878048780487805,
+          0.6402439024390244
+        ],
+        "total_examples": 164
+      },
+      "held_out_perplexity/doceval": {
+        "split": "all",
+        "num_docs": 2000,
+        "mean_nll": 2.095232307717204,
+        "perplexity": 8.127328792125002,
+        "nll_ci_low": 2.0469451546698805,
+        "nll_ci_high": 2.151658868771419,
+        "perplexity_ci_low": 7.744207578344787,
+        "perplexity_ci_high": 8.59911136931672
+      },
+      "community_pack_perplexity/experimental": {
+        "split": "val_community",
+        "n_packs": 280,
+        "mean_nll_cross_doc": 2.4518554599711266,
+        "mean_nll_baseline": 2.4760313914132617,
+        "mean_delta": 0.02417593144213512,
+        "delta_ci_low": 0.01357172503847968,
+        "delta_ci_high": 0.038181739344976665,
+        "cross_doc_ci_low": 2.324930984043051,
+        "cross_doc_ci_high": 2.5924475927099913,
+        "baseline_ci_low": 2.350858513431365,
+        "baseline_ci_high": 2.6211680410193128
+      }
+    }
+  },
+  "distilled_at": "2026-08-18T15:33:20Z"
+}
