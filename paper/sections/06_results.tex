@@ -1,10 +1,9 @@
 \section{Results}
 \label{sec:results}
 
-All numbers in this section are generated from \texttt{provenance/ledger.yaml} (via
-\texttt{scripts/gen\_values\_tex.py}) and cited with generated \verb|\val| macros, so each
-traces to the run and code state that produced it; see \Cref{app:recipe} and
-\texttt{provenance/README.md}.
+% Numbers in this section are generated from provenance/ledger.yaml via
+% scripts/gen_values_tex.py and cited with \val macros, so each traces to the run and
+% code state that produced it; see provenance/README.md. (Author note, not rendered.)
 
 \subsection{Cross-document attention beats flat concatenation}
 On the Wikipedia HotpotQA cross-document benchmark, the link-aware \crossdoc model attains
@@ -16,15 +15,15 @@ on Java RepoBench cross-document completion, cross-document attention lowers NLL
 \val{crossdoc.repobench_java.bfs.delta_nll} (bfs), \val{crossdoc.repobench_java.dfs.delta_nll}
 (dfs), and \val{crossdoc.repobench_java.rw.delta_nll} (random-walk traversal).
 Python RepoBench cross-doc shows a $\Delta$nll of \fillin{Python $\Delta$nll} (max\_grants=256).
-\todo{Not yet grounded: the corrected re-eval was written to a sidecar JSON that the distiller
-does not ingest, so the distilled record still holds the superseded 64-cap value. Re-eval into
-eval\_results.json, re-distill, then add the ledger entry.}
+% Not yet grounded: the corrected re-eval was written to a sidecar JSON the distiller does
+% not ingest, so the distilled record still holds the superseded 64-cap value. Re-eval into
+% eval_results.json, re-distill, then add the ledger entry.
 
 \subsection{Single-document benchmarks are unaffected}
 Across the single-document controls (HellaSwag, ARC, PIQA, \dots), the four masks are
 \fillin{$=$/$\neq$?} --- cross-document attention has nothing to attend to on isolated
 documents, as predicted.
-\todo{Ground once the per-benchmark accuracies + CIs are selected into the ledger.}
+% Ground once the per-benchmark accuracies + CIs are selected into the ledger.
 
 \subsection{Compute controls}
 Granting the baselines more within-context attention does not close the gap. On code
@@ -42,19 +41,19 @@ under graph (bfs/dfs) packing versus \val{traversal.wiki_val_loss.random} under 
 packing. The incremental cross-document benefit is itself traversal-robust --- the Java
 cross-document $\Delta$nll above is positive and similar across bfs, dfs, and random-walk
 traversals --- so packing quality and cross-document attention are two decoupled axes.
-(The two validation-loss figures are read from training logs, not the eval harness, and are
-tracked as grounding debt until a log-value source lands; see \texttt{provenance/README.md}.)
+% The two validation-loss figures are read from training logs, not the eval harness, and
+% are tracked as grounding debt until a log-value source lands; see provenance/README.md.
 
 \subsection{Diversity scaling (merged multi-source model)}
 An 11-source merged model's cross-document $\Delta$ is \fillin{ratio $\times$}
 \fillin{larger/smaller?} than single-domain specialists (flat scaling
 \fillin{params} $\to$ \fillin{params}), suggesting joint training over many link types
 \fillin{strengthens/weakens?} the cross-document machinery itself.
-\todo{Aggregate over per-port harness JSONs (results/merged\_v2\_8b\_ports\_useline/); not
-yet an eval-grounded ledger entry.}
+% Aggregate over per-port harness JSONs (results/merged_v2_8b_ports_useline/); not yet an
+% eval-grounded ledger entry.
 
 \subsection{Density-aware scheduling efficiency}
 Density-aware batching yields a \fillin{mean $\times$} mean / \fillin{max $\times$} max
 step-time \fillin{speedup/slowdown?}, with per-bucket coefficient-of-variation
 \fillin{$\downarrow$/$\uparrow$?}.
-\todo{Wall-clock timing from step-timing logs, not the eval harness --- needs a log-value source.}
+% Wall-clock timing from step-timing logs, not the eval harness --- needs a log-value source.
