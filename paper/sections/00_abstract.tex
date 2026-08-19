@@ -11,7 +11,8 @@ sparse attention mask grants a linking document read-access, from the link posit
 onward, into the document it links to, while causally isolating unrelated documents.
 The same link machinery runs at inference: a generated link that resolves to a
 corpus document pulls that document into the attention context.
-\todo{headline results sentence: cross-doc attention $>$ flat concatenation of the
-same linked content on multi-hop QA (+1.29 $\Delta$nll on HotpotQA-cross-doc) and
-cross-file code completion; effect isolated from compute via concat controls; a
-merged multi-source model strengthens the effect.}
+\todo{headline results sentence.} Cross-document attention beats flat concatenation of
+the same linked content on multi-hop QA ($\val{crossdoc.wiki_hotpotqa.delta_nll}$
+$\Delta$nll on HotpotQA-cross-doc) and cross-file code completion, with the effect
+isolated from raw compute via concatenation controls; a merged multi-source model
+\fillin{strengthens/weakens?} the effect.

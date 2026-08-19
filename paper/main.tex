@@ -41,6 +41,11 @@
     {\csname val@\detokenize{#1}\endcsname}}
 \makeatother
 \input{generated/values.tex}
+
+% \fillin{hint} — a visible red blank standing in for an un-grounded number or
+% directional claim. Nothing quantitative/directional should be asserted unless it is
+% either a \val{} (grounded to a run) or an explicit \fillin{} awaiting real data.
+\newcommand{\fillin}[1]{\textcolor{red}{[\underline{\hspace{1.5em}}\,\textit{#1}]}}
 % ---------------------------------------------------------------------------
 
 \title{\method: Training Language Models on Text-Attributed Graphs\\
