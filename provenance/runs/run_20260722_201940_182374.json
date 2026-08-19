@@ -152,7 +152,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "29c71911d17e6dcd258571bffe6f186df4c521044c9ffc345e4b6793b7ab026d",
+    "eval_results_sha256": "ec66c333816f9dc0ae1422425acdc2ea659a961f1c3822b55c1ffa25aca76892",
     "metrics": {
       "held_out_perplexity/doceval": {
         "split": "all",
@@ -167,28 +167,28 @@
       "community_pack_perplexity/baseline": {
         "split": "val_community",
         "n_packs": 215,
-        "mean_nll_cross_doc": 1.4768891194369052,
-        "mean_nll_baseline": 1.4771328299793918,
-        "mean_delta": 0.00024371054248668175,
-        "delta_ci_low": -0.0011393582824136218,
-        "delta_ci_high": 0.001730571464520053,
-        "cross_doc_ci_low": 1.3845762618584414,
-        "cross_doc_ci_high": 1.5726028264401748,
-        "baseline_ci_low": 1.380691263707631,
-        "baseline_ci_high": 1.576478247660606
+        "mean_nll_cross_doc": 1.4889328500364125,
+        "mean_nll_baseline": 1.4885345007964974,
+        "mean_delta": -0.0003983492399151414,
+        "delta_ci_low": -0.0010415166148870349,
+        "delta_ci_high": 5.155651631032082e-05,
+        "cross_doc_ci_low": 1.3991382850769674,
+        "cross_doc_ci_high": 1.5772694250815966,
+        "baseline_ci_low": 1.4018749532809773,
+        "baseline_ci_high": 1.5882722886687077
       },
       "community_pack_perplexity/experimental": {
         "split": "val_community",
         "n_packs": 212,
-        "mean_nll_cross_doc": 1.3858052717663436,
-        "mean_nll_baseline": 1.3860767430321914,
-        "mean_delta": 0.0002714712658479297,
-        "delta_ci_low": -0.000999665929786342,
-        "delta_ci_high": 0.0013991176637686046,
-        "cross_doc_ci_low": 1.2973540813692803,
-        "cross_doc_ci_high": 1.4861831484795165,
-        "baseline_ci_low": 1.2903772213360298,
-        "baseline_ci_high": 1.4885173772093687
+        "mean_nll_cross_doc": 1.4107646091667891,
+        "mean_nll_baseline": 1.4105462523259538,
+        "mean_delta": -0.00021835684083552253,
+        "delta_ci_low": -0.0005123716958360435,
+        "delta_ci_high": 1.4384233841719981e-05,
+        "cross_doc_ci_low": 1.3219841418341285,
+        "cross_doc_ci_high": 1.5005324936365054,
+        "baseline_ci_low": 1.3241501148875792,
+        "baseline_ci_high": 1.4998920259099984
       },
       "humaneval_buggy/doceval": {
         "accuracy": 0.6646341463414634,
@@ -269,8 +269,37 @@
         "nll_ci_high": 1.3099681267410517,
         "perplexity_ci_low": 3.3725243877419597,
         "perplexity_ci_high": 3.7060555862583016
+      },
+      "repobench_cross_doc/experimental": {
+        "perplexity_cross_doc_only": 4.166098107701474,
+        "average_nll_cross_doc_only": 1.4269798921777848,
+        "perplexity_flat_linked_only": 4.298951363428714,
+        "average_nll_flat_linked_only": 1.4583711239885777,
+        "n_cross_doc": 470,
+        "perplexity_with_fallback": 4.191998566895412,
+        "average_nll_with_fallback": 1.43317760515213,
+        "total_examples": 500,
+        "n_link_found": 470,
+        "n_link_not_found": 30
+      },
+      "repobench_cross_doc/baseline": {
+        "perplexity_cross_doc_only": 4.166098107701474,
+        "average_nll_cross_doc_only": 1.4269798921777848,
+        "perplexity_flat_linked_only": 4.298951363428714,
+        "average_nll_flat_linked_only": 1.4583711239885777,
+        "n_cross_doc": 470,
+        "perplexity_with_fallback": 4.191998566895412,
+        "average_nll_with_fallback": 1.43317760515213,
+        "total_examples": 500,
+        "n_link_found": 470,
+        "n_link_not_found": 30
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_java_repobench_final.json",
+      "eval_reeval256.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:22Z"
+  "distilled_at": "2026-08-19T20:41:37Z"
 }

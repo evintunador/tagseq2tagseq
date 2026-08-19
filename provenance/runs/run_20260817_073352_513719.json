@@ -233,7 +233,10 @@
         "perplexity_ci_low": 3.8962036018656856,
         "perplexity_ci_high": 4.376547734158296
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:24Z"
+  "distilled_at": "2026-08-19T20:41:39Z"
 }

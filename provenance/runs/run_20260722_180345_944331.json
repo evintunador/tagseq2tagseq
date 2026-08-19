@@ -147,33 +147,38 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "a954014aeb683a3627130134db4a203c9b439c57cc7e0bd9087a2971861a41e7",
+    "eval_results_sha256": "5dcc315425e87fe46c9fe4a888a088c166d2d8ed8cb80308ae30e34b44ba1190",
     "metrics": {
       "held_out_perplexity/doceval": {
-        "split": "all",
-        "num_docs": 500,
-        "mean_nll": 1.1676717374324799,
-        "perplexity": 3.2144997198012906,
-        "nll_ci_low": 1.1163473114848137,
-        "nll_ci_high": 1.2206776167929172,
-        "perplexity_ci_low": 3.053679666519325,
-        "perplexity_ci_high": 3.3894837267242877
+        "split": "val_random",
+        "num_docs": 0,
+        "mean_nll": NaN,
+        "perplexity": NaN,
+        "nll_ci_low": NaN,
+        "nll_ci_high": NaN,
+        "perplexity_ci_low": NaN,
+        "perplexity_ci_high": NaN
       },
       "community_pack_perplexity/doceval": {
-        "strategy": "all",
-        "n_packs": 0,
-        "mean_nll_cross_doc": NaN,
-        "mean_nll_baseline": NaN,
-        "mean_delta": NaN,
-        "delta_ci_low": NaN,
-        "delta_ci_high": NaN,
-        "cross_doc_ci_low": NaN,
-        "cross_doc_ci_high": NaN,
-        "baseline_ci_low": NaN,
-        "baseline_ci_high": NaN,
-        "split": "all"
+        "split": "val_random",
+        "n_packs": 20,
+        "mean_nll_cross_doc": 1.2293330420600335,
+        "mean_nll_baseline": 1.2295851406289173,
+        "mean_delta": 0.0002520985688841015,
+        "delta_ci_low": -2.610545058320715e-05,
+        "delta_ci_high": 0.0005326178918641508,
+        "cross_doc_ci_low": 1.068070178332489,
+        "cross_doc_ci_high": 1.3924285792015416,
+        "baseline_ci_low": 1.0624200053966963,
+        "baseline_ci_high": 1.390457367451664
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_commpack_valcommunity.json",
+      "eval_commpack_valrandom.json",
+      "eval_heldout_valrandom.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:21Z"
+  "distilled_at": "2026-08-19T20:41:37Z"
 }

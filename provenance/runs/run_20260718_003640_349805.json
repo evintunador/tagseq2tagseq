@@ -163,7 +163,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "d7673175ba00e990069cdffbb307629c70c90dae4533044f0728a8b41734262c",
+    "eval_results_sha256": "d3c3dd3308ef72d4a8ba2bf309687707d2bfcf67e179bb823f6463eb3ef44415",
     "metrics": {
       "held_out_perplexity/doceval": {
         "split": "all",
@@ -283,8 +283,38 @@
         "nll_ci_high": 2.5686815574167965,
         "perplexity_ci_low": 11.07378497559564,
         "perplexity_ci_high": 13.04860925271933
+      },
+      "community_pack_perplexity/baseline": {
+        "split": "val_community",
+        "n_packs": 5,
+        "mean_nll_cross_doc": 3.2860270294369167,
+        "mean_nll_baseline": 3.2860270294369167,
+        "mean_delta": 0.0,
+        "delta_ci_low": 0.0,
+        "delta_ci_high": 0.0,
+        "cross_doc_ci_low": 2.798066250175479,
+        "cross_doc_ci_high": 3.9821703266245145,
+        "baseline_ci_low": 2.757568017543985,
+        "baseline_ci_high": 3.892015962331567
+      },
+      "community_pack_perplexity/experimental": {
+        "split": "val_community",
+        "n_packs": 5,
+        "mean_nll_cross_doc": 3.2860270294369167,
+        "mean_nll_baseline": 3.2860270294369167,
+        "mean_delta": 0.0,
+        "delta_ci_low": 0.0,
+        "delta_ci_high": 0.0,
+        "cross_doc_ci_low": 2.72487679509286,
+        "cross_doc_ci_high": 3.883764522005548,
+        "baseline_ci_low": 2.757568017543985,
+        "baseline_ci_high": 3.8837645220055483
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_reeval256.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:21Z"
+  "distilled_at": "2026-08-19T20:41:37Z"
 }

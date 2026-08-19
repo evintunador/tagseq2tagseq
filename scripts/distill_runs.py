@@ -278,13 +278,34 @@ def build_record(run_id, run_dirs, patches_dir, dry_run=False):
 
 
 def _attach_eval(record, dirs):
+    """Attach eval metrics, merging sidecar eval files over eval_results.json.
+
+    A run dir may carry corrected/extra evals in sibling files (e.g.
+    eval_reeval256.json, eval_java_repobench_final.json) that a later standalone
+    re-eval wrote instead of updating eval_results.json. We layer every eval_*.json
+    on top of eval_results.json, later files overriding earlier per metric_path, so
+    the distilled record reflects the corrected numbers rather than the stale primary.
+    """
     for d in dirs:
-        ev = read_json(d / "eval_results.json")
-        if ev is not None:
+        eval_files = sorted(d.glob("eval_*.json"))
+        if not eval_files:
+            continue
+        base = d / "eval_results.json"
+        ordered = ([base] if base.exists() else []) + \
+                  [f for f in eval_files if f.name != "eval_results.json"]
+        metrics = {}
+        sources = []
+        for f in ordered:
+            data = read_json(f)
+            if isinstance(data, dict):
+                metrics.update(data)  # top-level key = "<benchmark>/<condition>"
+                sources.append(f.name)
+        if sources:
             record["eval"] = {
                 "present": True,
-                "eval_results_sha256": canonical_sha256(ev),
-                "metrics": ev,
+                "eval_results_sha256": canonical_sha256(metrics),
+                "metrics": metrics,
+                "eval_source_files": sources,
             }
             return
 

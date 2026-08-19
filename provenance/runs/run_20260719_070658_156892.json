@@ -177,23 +177,41 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "87d13198184aefb2f8dd3eb2375350f0afe940c9ed45f71de251b6cb85d191fd",
+    "eval_results_sha256": "ad37bb6f1ff1f3b8523839dc3b9cd4ebf60a240bbf792e0137f34f50515c33a6",
     "metrics": {
       "hotpotqa_cross_doc/experimental": {
-        "perplexity_cross_doc_only": 256.08802763325497,
-        "average_nll_cross_doc_only": 5.545521243316371,
-        "perplexity_flat_linked_only": 886.1898639794749,
-        "average_nll_flat_linked_only": 6.786931221078082,
-        "n_cross_doc": 738,
-        "perplexity_with_fallback": 331.646688392625,
-        "average_nll_with_fallback": 5.8040702106740865,
-        "total_examples": 878,
-        "n_link_found": 738,
-        "n_link_not_found": 140,
+        "perplexity_cross_doc_only": 313.79583728960944,
+        "average_nll_cross_doc_only": 5.748742574722129,
+        "perplexity_flat_linked_only": 1019.6814378416512,
+        "average_nll_flat_linked_only": 6.927245541656049,
+        "n_cross_doc": 377,
+        "perplexity_with_fallback": 373.93688557454146,
+        "average_nll_with_fallback": 5.924087028025495,
+        "total_examples": 439,
+        "n_link_found": 377,
+        "n_link_not_found": 62,
         "n_skipped_no_corpus": 0,
-        "n_skipped_no_link": 122
+        "n_skipped_no_link": 61
+      },
+      "hotpotqa_cross_doc/baseline": {
+        "perplexity_cross_doc_only": 313.79583728960944,
+        "average_nll_cross_doc_only": 5.748742574722129,
+        "perplexity_flat_linked_only": 1019.6814378416512,
+        "average_nll_flat_linked_only": 6.927245541656049,
+        "n_cross_doc": 377,
+        "perplexity_with_fallback": 373.93688557454146,
+        "average_nll_with_fallback": 5.924087028025495,
+        "total_examples": 439,
+        "n_link_found": 377,
+        "n_link_not_found": 62,
+        "n_skipped_no_corpus": 0,
+        "n_skipped_no_link": 61
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_reeval256.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:21Z"
+  "distilled_at": "2026-08-19T20:41:37Z"
 }

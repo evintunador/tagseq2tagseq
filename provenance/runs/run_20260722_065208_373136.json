@@ -150,31 +150,30 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "8b4d2af4afa26aeb6776b4c6e42269485efa723add60d04870c2dcdb580dfde3",
+    "eval_results_sha256": "e39069768096e4b85b16ed0ed53f3fc915d5ddda30d7651dd49fb77c0bad42d2",
     "metrics": {
       "held_out_perplexity/doceval": {
-        "split": "all",
-        "num_docs": 500,
-        "mean_nll": 1.177240393102169,
-        "perplexity": 3.2454057897301887,
-        "nll_ci_low": 1.1418988042876124,
-        "nll_ci_high": 1.209530058453977,
-        "perplexity_ci_low": 3.132711126649284,
-        "perplexity_ci_high": 3.3519090810290946
+        "split": "val_random",
+        "num_docs": 0,
+        "mean_nll": NaN,
+        "perplexity": NaN,
+        "nll_ci_low": NaN,
+        "nll_ci_high": NaN,
+        "perplexity_ci_low": NaN,
+        "perplexity_ci_high": NaN
       },
       "community_pack_perplexity/doceval": {
-        "strategy": "all",
-        "n_packs": 0,
-        "mean_nll_cross_doc": NaN,
-        "mean_nll_baseline": NaN,
-        "mean_delta": NaN,
-        "delta_ci_low": NaN,
-        "delta_ci_high": NaN,
-        "cross_doc_ci_low": NaN,
-        "cross_doc_ci_high": NaN,
-        "baseline_ci_low": NaN,
-        "baseline_ci_high": NaN,
-        "split": "all"
+        "split": "val_random",
+        "n_packs": 6,
+        "mean_nll_cross_doc": 1.6527748204381085,
+        "mean_nll_baseline": 1.6527197257535242,
+        "mean_delta": -5.50946845841264e-05,
+        "delta_ci_low": -0.0007070744426981671,
+        "delta_ci_high": 0.00041826741535518536,
+        "cross_doc_ci_low": 1.2493643087677813,
+        "cross_doc_ci_high": 2.054734537487864,
+        "baseline_ci_low": 1.2613423829440993,
+        "baseline_ci_high": 2.0454903229376633
       },
       "humaneval_buggy/doceval": {
         "accuracy": 0.6341463414634146,
@@ -184,7 +183,13 @@
         ],
         "total_examples": 164
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_commpack_valcommunity.json",
+      "eval_commpack_valrandom.json",
+      "eval_heldout_valrandom.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:21Z"
+  "distilled_at": "2026-08-19T20:41:37Z"
 }

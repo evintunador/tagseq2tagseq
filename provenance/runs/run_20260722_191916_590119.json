@@ -152,7 +152,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "e09e6b991b3a288e6c739e19e5bddb3776ab546100ab0b7e97c0ab5d3d4a4b8b",
+    "eval_results_sha256": "caa84e9ec2ab32ec4248f689b56456762d0a9f616f04984222e9e1c35d24a081",
     "metrics": {
       "held_out_perplexity/baseline": {
         "split": "all",
@@ -165,32 +165,30 @@
         "perplexity_ci_high": 3.2535246761181065
       },
       "community_pack_perplexity/baseline": {
-        "strategy": "all",
-        "n_packs": 0,
-        "mean_nll_cross_doc": NaN,
-        "mean_nll_baseline": NaN,
-        "mean_delta": NaN,
-        "delta_ci_low": NaN,
-        "delta_ci_high": NaN,
-        "cross_doc_ci_low": NaN,
-        "cross_doc_ci_high": NaN,
-        "baseline_ci_low": NaN,
-        "baseline_ci_high": NaN,
-        "split": "all"
+        "split": "val_community",
+        "n_packs": 215,
+        "mean_nll_cross_doc": 1.4968649271060874,
+        "mean_nll_baseline": 1.4969065949068503,
+        "mean_delta": 4.166780076303264e-05,
+        "delta_ci_low": -0.000197947217784222,
+        "delta_ci_high": 0.00031878992657928047,
+        "cross_doc_ci_low": 1.4122523464289818,
+        "cross_doc_ci_high": 1.5848278091192525,
+        "baseline_ci_low": 1.4114605470169757,
+        "baseline_ci_high": 1.5849738101099362
       },
       "community_pack_perplexity/experimental": {
-        "strategy": "all",
-        "n_packs": 0,
-        "mean_nll_cross_doc": NaN,
-        "mean_nll_baseline": NaN,
-        "mean_delta": NaN,
-        "delta_ci_low": NaN,
-        "delta_ci_high": NaN,
-        "cross_doc_ci_low": NaN,
-        "cross_doc_ci_high": NaN,
-        "baseline_ci_low": NaN,
-        "baseline_ci_high": NaN,
-        "split": "all"
+        "split": "val_community",
+        "n_packs": 212,
+        "mean_nll_cross_doc": 1.4177126483599363,
+        "mean_nll_baseline": 1.4176958770178272,
+        "mean_delta": -1.6771342108675054e-05,
+        "delta_ci_low": -0.0002998039063097116,
+        "delta_ci_high": 0.00029770050284438844,
+        "cross_doc_ci_low": 1.3368362080390488,
+        "cross_doc_ci_high": 1.5114726994657144,
+        "baseline_ci_low": 1.3295704414873257,
+        "baseline_ci_high": 1.515153666108158
       },
       "humaneval_buggy/baseline": {
         "accuracy": 0.6036585365853658,
@@ -223,8 +221,27 @@
         "total_examples": 500,
         "n_link_found": 470,
         "n_link_not_found": 30
+      },
+      "held_out_perplexity/doceval": {
+        "split": "val_random",
+        "num_docs": 0,
+        "mean_nll": NaN,
+        "perplexity": NaN,
+        "nll_ci_low": NaN,
+        "nll_ci_high": NaN,
+        "perplexity_ci_low": NaN,
+        "perplexity_ci_high": NaN
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_commpack_valcommunity.json",
+      "eval_commpack_valrandom.json",
+      "eval_heldout_valrandom.json",
+      "eval_java_repobench.json",
+      "eval_java_repobench_final.json",
+      "eval_reeval256.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:22Z"
+  "distilled_at": "2026-08-19T20:41:37Z"
 }

@@ -170,7 +170,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "2a0c8ece6f0595c9f28da9aa43a8d66530f372b10fe3a6182e7ab0ca8b8d136b",
+    "eval_results_sha256": "2d97cf7909d1f6574e8cf6e86abc6e6adeece955d5ddd022d14ddf321cf55678",
     "metrics": {
       "held_out_perplexity/doceval": {
         "split": "all",
@@ -185,28 +185,28 @@
       "community_pack_perplexity/baseline": {
         "split": "val_community",
         "n_packs": 280,
-        "mean_nll_cross_doc": 1.6245355023748358,
-        "mean_nll_baseline": 1.6277376236483385,
-        "mean_delta": 0.0032021212735028268,
-        "delta_ci_low": 0.0011517906762071957,
-        "delta_ci_high": 0.005546474862898976,
-        "cross_doc_ci_low": 1.5466736787923347,
-        "cross_doc_ci_high": 1.71777974584666,
-        "baseline_ci_low": 1.5477471403356728,
-        "baseline_ci_high": 1.7141798426159471
+        "mean_nll_cross_doc": 1.6534194178710653,
+        "mean_nll_baseline": 1.656185912069149,
+        "mean_delta": 0.0027664941980836857,
+        "delta_ci_low": 0.0009241189782543709,
+        "delta_ci_high": 0.005236632818315835,
+        "cross_doc_ci_low": 1.5757803097590575,
+        "cross_doc_ci_high": 1.7320086957590533,
+        "baseline_ci_low": 1.5830489165556614,
+        "baseline_ci_high": 1.7353198106295489
       },
       "community_pack_perplexity/experimental": {
         "split": "val_community",
         "n_packs": 276,
-        "mean_nll_cross_doc": 1.5539575691323797,
-        "mean_nll_baseline": 1.5567128005181934,
-        "mean_delta": 0.002755231385813553,
-        "delta_ci_low": 0.000544530820163264,
-        "delta_ci_high": 0.00513048351216473,
-        "cross_doc_ci_low": 1.4750983296877096,
-        "cross_doc_ci_high": 1.626937935808461,
-        "baseline_ci_low": 1.4851118569154227,
-        "baseline_ci_high": 1.6334020255260306
+        "mean_nll_cross_doc": 1.580835514013117,
+        "mean_nll_baseline": 1.582471891864377,
+        "mean_delta": 0.001636377851260279,
+        "delta_ci_low": 0.00031123379022951237,
+        "delta_ci_high": 0.003694251461631283,
+        "cross_doc_ci_low": 1.5141525113041419,
+        "cross_doc_ci_high": 1.6526512161840556,
+        "baseline_ci_low": 1.5162823273902322,
+        "baseline_ci_high": 1.654063053701271
       },
       "repobench/doceval": {
         "exact_match_accuracy": 0.0,
@@ -245,16 +245,16 @@
         "total_examples": 164
       },
       "repobench_cross_doc/experimental": {
-        "perplexity_cross_doc_only": 7.436202485996677,
-        "average_nll_cross_doc_only": 2.0063602999882764,
-        "perplexity_flat_linked_only": 8.647187891350827,
-        "average_nll_flat_linked_only": 2.1572341688217653,
-        "n_cross_doc": 434,
-        "perplexity_with_fallback": 7.339027990007597,
-        "average_nll_with_fallback": 1.9932064074277878,
+        "perplexity_cross_doc_only": 5.430163142690022,
+        "average_nll_cross_doc_only": 1.6919691781888062,
+        "perplexity_flat_linked_only": 5.823805354666539,
+        "average_nll_flat_linked_only": 1.7619538890904394,
+        "n_cross_doc": 435,
+        "perplexity_with_fallback": 5.404068620367482,
+        "average_nll_with_fallback": 1.687152118086815,
         "total_examples": 500,
-        "n_link_found": 434,
-        "n_link_not_found": 66
+        "n_link_found": 435,
+        "n_link_not_found": 65
       },
       "community_pack_perplexity/baseline__val_community": {
         "split": "val_community",
@@ -327,8 +327,24 @@
         "nll_ci_high": 1.5038942869842054,
         "perplexity_ci_low": 3.9998564438854607,
         "perplexity_ci_high": 4.499176081371777
+      },
+      "repobench_cross_doc/baseline": {
+        "perplexity_cross_doc_only": 5.430163142690022,
+        "average_nll_cross_doc_only": 1.6919691781888062,
+        "perplexity_flat_linked_only": 5.823805354666539,
+        "average_nll_flat_linked_only": 1.7619538890904394,
+        "n_cross_doc": 435,
+        "perplexity_with_fallback": 5.404068620367482,
+        "average_nll_with_fallback": 1.687152118086815,
+        "total_examples": 500,
+        "n_link_found": 435,
+        "n_link_not_found": 65
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_reeval256.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:21Z"
+  "distilled_at": "2026-08-19T20:41:37Z"
 }

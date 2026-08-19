@@ -11,19 +11,25 @@ a cross-document negative log-likelihood of \val{crossdoc.wiki_hotpotqa.nll_cros
 against \val{crossdoc.wiki_hotpotqa.nll_flat} for the flat-linked baseline over the same
 $n=\val{crossdoc.wiki_hotpotqa.n}$ query--target pairs, a reduction of
 $\Delta\mathrm{nll}=\val{crossdoc.wiki_hotpotqa.delta_nll}$. The effect carries over to code:
-on Java RepoBench cross-document completion, cross-document attention lowers NLL by
-\val{crossdoc.repobench_java.bfs.delta_nll} (bfs), \val{crossdoc.repobench_java.dfs.delta_nll}
-(dfs), and \val{crossdoc.repobench_java.rw.delta_nll} (random-walk traversal).
-Python RepoBench cross-doc shows a $\Delta$nll of \fillin{Python $\Delta$nll} (max\_grants=256).
-% Not yet grounded: the corrected re-eval was written to a sidecar JSON the distiller does
-% not ingest, so the distilled record still holds the superseded 64-cap value. Re-eval into
-% eval_results.json, re-distill, then add the ledger entry.
+on Java RepoBench cross-document completion, cross-document attention lowers NLL across all
+traversals --- from \val{crossdoc.repobench_java.random.delta_nll} (random packing) to
+\val{crossdoc.repobench_java.rw.delta_nll} (random-walk), with
+\val{crossdoc.repobench_java.bfs.delta_nll} (bfs) and \val{crossdoc.repobench_java.dfs.delta_nll}
+(dfs) in between --- and Python RepoBench cross-doc shows a $\Delta$nll of
+\val{crossdoc.repobench_python.delta_nll} (max\_grants=256).
 
 \subsection{Single-document benchmarks are unaffected}
-Across the single-document controls (HellaSwag, ARC, PIQA, \dots), the four masks are
-\fillin{$=$/$\neq$?} --- cross-document attention has nothing to attend to on isolated
-documents, as predicted.
-% Ground once the per-benchmark accuracies + CIs are selected into the ledger.
+Across the single-document controls (HellaSwag, ARC-easy, PIQA, WinoGrande, OpenBookQA,
+BoolQ), the four masks are statistically indistinguishable. On HellaSwag the matched
+wiki\_merged 4-mask set scores \val{singledoc.hellaswag.doc_causal} (\doccausal),
+\val{singledoc.hellaswag.cross_doc_link} (\crossdoc),
+\val{singledoc.hellaswag.doc_concatenated} (\concat), and
+\val{singledoc.hellaswag.doc_concat_link} (\concatlink), with overlapping 95\% confidence
+intervals (e.g.\ \val{singledoc.hellaswag.doc_causal.ci} for \doccausal vs
+\val{singledoc.hellaswag.cross_doc_link.ci} for \crossdoc) --- cross-document attention has
+nothing to attend to on isolated documents, as predicted. These models are undertrained
+(accuracies near chance), so the claim is that the mask does not \emph{degrade}
+single-document capability, not a strong-capability equivalence.
 
 \subsection{Compute controls}
 Granting the baselines more within-context attention does not close the gap. On code
@@ -39,7 +45,7 @@ Graph-structured packing matters for the base language model independent of the
 cross-document objective: final validation loss is \val{traversal.wiki_val_loss.graph}
 under graph (bfs/dfs) packing versus \val{traversal.wiki_val_loss.random} under random
 packing. The incremental cross-document benefit is itself traversal-robust --- the Java
-cross-document $\Delta$nll above is positive and similar across bfs, dfs, and random-walk
+cross-document $\Delta$nll above stays positive across all four bfs/dfs/random-walk/random
 traversals --- so packing quality and cross-document attention are two decoupled axes.
 % The two validation-loss figures are read from training logs, not the eval harness, and
 % are tracked as grounding debt until a log-value source lands; see provenance/README.md.
@@ -49,11 +55,16 @@ An 11-source merged model's cross-document $\Delta$ is \fillin{ratio $\times$}
 \fillin{larger/smaller?} than single-domain specialists (flat scaling
 \fillin{params} $\to$ \fillin{params}), suggesting joint training over many link types
 \fillin{strengthens/weakens?} the cross-document machinery itself.
-% Aggregate over per-port harness JSONs (results/merged_v2_8b_ports_useline/); not yet an
-% eval-grounded ledger entry.
+% DO NOT ground yet: numbers are recomputable from results/merged_v2_{3p9b,8b}_ports_useline/*.json
+% (merge delta_real) + eval/benchmark_harness/reports/matrix/*.json (specialist baselines),
+% BUT the entire merged_all_v2 family was retracted 2026-08-14 (sequential-not-interleaved
+% dataloader bug; see RESULTS_graph_sparsity.md) and this claim is built on it. Kotlin/TS
+% baselines are external ports (indicative, not exact). Re-run on a fixed merge before grounding.
 
 \subsection{Density-aware scheduling efficiency}
 Density-aware batching yields a \fillin{mean $\times$} mean / \fillin{max $\times$} max
 step-time \fillin{speedup/slowdown?}, with per-bucket coefficient-of-variation
 \fillin{$\downarrow$/$\uparrow$?}.
-% Wall-clock timing from step-timing logs, not the eval harness --- needs a log-value source.
+% Wall-clock timing (step_timing_rank*.csv), not the eval harness. Raw CSVs are not located
+% in-repo and carry no run_id; only README.md prose + docs/images/density_aware_timing*.png
+% survive. Indicative only until the originating run + its CSVs are identified.

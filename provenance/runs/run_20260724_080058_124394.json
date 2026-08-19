@@ -153,7 +153,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "62adff5e03c54a4fa203ebb918736f915a1d565395d901168213459fb4b38fbc",
+    "eval_results_sha256": "1b15b372ae9715d768b4a174119219bda636e35f259fa45d2da01d85aedb02b5",
     "metrics": {
       "community_pack_perplexity/baseline": {
         "split": "val_community",
@@ -161,12 +161,12 @@
         "mean_nll_cross_doc": 4.423463468886532,
         "mean_nll_baseline": 4.422992456450469,
         "mean_delta": -0.00047101243606310374,
-        "delta_ci_low": -0.0019665070747416106,
-        "delta_ci_high": 0.00085179827024081,
-        "cross_doc_ci_low": 4.257437454684058,
-        "cross_doc_ci_high": 4.597194845334699,
-        "baseline_ci_low": 4.249161287441134,
-        "baseline_ci_high": 4.600785430880837
+        "delta_ci_low": -0.0021645402386927548,
+        "delta_ci_high": 0.0010555347991823068,
+        "cross_doc_ci_low": 4.24565740574913,
+        "cross_doc_ci_high": 4.609396239491342,
+        "baseline_ci_low": 4.249095880451998,
+        "baseline_ci_high": 4.605627683198993
       },
       "community_pack_perplexity/experimental": {
         "split": "val_community",
@@ -174,14 +174,29 @@
         "mean_nll_cross_doc": 4.378288044287561,
         "mean_nll_baseline": 4.381428738676686,
         "mean_delta": 0.0031406943891248824,
-        "delta_ci_low": 0.0015502803435948403,
-        "delta_ci_high": 0.005093003358016389,
-        "cross_doc_ci_low": 4.212107991069688,
-        "cross_doc_ci_high": 4.5531205281105915,
-        "baseline_ci_low": 4.215260253595869,
-        "baseline_ci_high": 4.565235009790649
+        "delta_ci_low": 0.001302546996294467,
+        "delta_ci_high": 0.004957038444358863,
+        "cross_doc_ci_low": 4.201768734447056,
+        "cross_doc_ci_high": 4.547624867828496,
+        "baseline_ci_low": 4.208983389548092,
+        "baseline_ci_high": 4.556020406789402
+      },
+      "held_out_perplexity/doceval": {
+        "split": "all",
+        "num_docs": 220,
+        "mean_nll": 2.617757843028415,
+        "perplexity": 13.704960437472696,
+        "nll_ci_low": 2.4664907805147496,
+        "nll_ci_high": 2.7708443019945515,
+        "perplexity_ci_low": 11.78103200019375,
+        "perplexity_ci_high": 15.972113605943033
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_heldout_valrandom.json",
+      "eval_reeval256.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:22Z"
+  "distilled_at": "2026-08-19T20:41:38Z"
 }

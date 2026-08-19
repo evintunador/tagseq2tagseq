@@ -131,6 +131,80 @@ entries:
     source: {kind: derived, op: subtract, operands: [crossdoc.repobench_java.rw.nll_flat, crossdoc.repobench_java.rw.nll_crossdoc]}
     units: nll
     note: "Java random-walk cross-doc NLL reduction."
+  crossdoc.repobench_java.random.nll_crossdoc:
+    run_ids: [run_20260722_201940_182374]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 1.4269798921777848
+    units: nll
+    note: "Java RepoBench cross-doc, random-packing traversal (java_random_cdl.yaml; from eval_java_repobench_final.json sidecar)."
+  crossdoc.repobench_java.random.nll_flat:
+    run_ids: [run_20260722_201940_182374]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 1.4583711239885777
+    units: nll
+    note: "Java RepoBench flat-linked, random-packing traversal."
+  crossdoc.repobench_java.random.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.repobench_java.random.nll_flat, crossdoc.repobench_java.random.nll_crossdoc]}
+    units: nll
+    note: "Java random-packing cross-doc NLL reduction (low end of the traversal range)."
+
+  # === Python RepoBench cross-doc Delta nll (corrected, max_grants=256) ===
+  # From eval_reeval256.json (the distiller now ingests sidecar eval files); the primary
+  # eval_results.json held the superseded 64-grant value.
+  crossdoc.repobench_python.nll_crossdoc:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 1.6998099421632702
+    units: nll
+    note: "Python RepoBench cross-doc, cross_doc_link, max_grants=256."
+  crossdoc.repobench_python.nll_flat:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 1.7924900263205341
+    units: nll
+    note: "Python RepoBench flat-linked, same run."
+  crossdoc.repobench_python.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.repobench_python.nll_flat, crossdoc.repobench_python.nll_crossdoc]}
+    units: nll
+    note: "Python cross-doc NLL reduction (~+0.09 at max_grants=256)."
+
+  # === Single-document control: HellaSwag accuracy across the four masks ===
+  # Matched 4-mask set (wiki_merged, bfs, 3614 steps); overlapping CIs => the mask does
+  # not move single-document performance. Undertrained regime (accuracies near chance).
+  singledoc.hellaswag.doc_causal:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.283
+    format: {sig_figs: 3}
+    note: "doc_causal, HellaSwag accuracy."
+  singledoc.hellaswag.doc_causal.ci:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, HellaSwag 95% CI."
+  singledoc.hellaswag.cross_doc_link:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.2905
+    format: {sig_figs: 3}
+    note: "cross_doc_link, HellaSwag accuracy."
+  singledoc.hellaswag.cross_doc_link.ci:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, HellaSwag 95% CI."
+  singledoc.hellaswag.doc_concatenated:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.2845
+    format: {sig_figs: 3}
+    note: "doc_concatenated, HellaSwag accuracy."
+  singledoc.hellaswag.doc_concat_link:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.2865
+    format: {sig_figs: 3}
+    note: "doc_concat_link, HellaSwag accuracy."
 
   # === Traversal ablation: base-LM val loss (LITERAL / grounding debt) ===
   # These are training-log validation cross-entropy, NOT in eval_results.json, so they
@@ -141,10 +215,14 @@ entries:
     source: {kind: literal, value: 2.42}
     units: "val CE"
     format: {decimals: 2}
-    note: "Base-LM final val loss, graph packing (bfs/dfs ~2.42). Training-log value; grounding debt."
+    note: "Base-LM final val loss, graph packing (bfs/dfs ~2.42). Recoverable via a future
+      kind:log source from runs/run_20260717_173951_071952/logs/metrics_rank_0.jsonl
+      (field val_loss_mean); literal grounding debt until then."
   traversal.wiki_val_loss.random:
     run_ids: [run_20260719_070658_156892]
     source: {kind: literal, value: 3.00}
     units: "val CE"
     format: {decimals: 2}
-    note: "Base-LM final val loss, random packing (~3.00). Training-log value; grounding debt."
+    note: "Base-LM final val loss, random packing (~3.00). Recoverable via a future kind:log
+      source from runs/run_20260719_070658_156892/logs/metrics_rank_0.jsonl (field
+      val_loss_mean = 3.0006); literal grounding debt until then."

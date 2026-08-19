@@ -140,7 +140,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "1b7e986d7a3013ececc2291483d36fa86880bbf415f65124ebc606bbd2f2a1f4",
+    "eval_results_sha256": "eeca70e388e3009af8a2d48284ea0a12b0faa65f9229823695af88646a3246e0",
     "metrics": {
       "community_pack_perplexity/doceval": {
         "split": "val_community",
@@ -154,8 +154,22 @@
         "cross_doc_ci_high": 1.6074578939233146,
         "baseline_ci_low": 1.460529190732837,
         "baseline_ci_high": 1.611138420304408
+      },
+      "held_out_perplexity/doceval": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 1.2409592955112456,
+        "perplexity": 3.458930009767053,
+        "nll_ci_low": 1.1847562947064638,
+        "nll_ci_high": 1.3000190037913621,
+        "perplexity_ci_low": 3.2698898348929295,
+        "perplexity_ci_high": 3.669366398830138
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_heldout_valrandom.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:22Z"
+  "distilled_at": "2026-08-19T20:41:38Z"
 }

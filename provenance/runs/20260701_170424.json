@@ -223,7 +223,10 @@
         "baseline_ci_low": 4.344668044782326,
         "baseline_ci_high": 6.489108267231542
       }
-    }
+    },
+    "eval_source_files": [
+      "eval_results.json"
+    ]
   },
-  "distilled_at": "2026-08-18T15:33:20Z"
+  "distilled_at": "2026-08-19T20:41:36Z"
 }
