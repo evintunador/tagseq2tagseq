@@ -69,12 +69,18 @@ def check(args):
             failures.append(f"(b) {values_path} is stale -- run gen_values_tex.py")
 
     # (c) \val usage cross-check
-    used = set()
+    cited = set()
     for tex in Path(args.paper_sections).rglob("*.tex"):
         for m in VAL_RE.finditer(tex.read_text()):
-            used.add(m.group(1))
-    for key in sorted(used - set(entries)):
+            cited.add(m.group(1))
+    for key in sorted(cited - set(entries)):
         failures.append(f"(c) paper cites \\val{{{key}}} but ledger has no such key")
+    # A key is "used" if cited in the paper OR consumed as a derived operand.
+    used = set(cited)
+    for entry in entries.values():
+        src = entry.get("source") or {}
+        if src.get("kind") == "derived":
+            used.update(src.get("operands") or [])
     orphans = sorted(set(entries) - used)
     if orphans:
         msg = f"(c) {len(orphans)} ledger keys never cited by \\val: {', '.join(orphans)}"

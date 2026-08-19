@@ -67,12 +67,19 @@ def _resolve_ci(group, field, key, run_id):
     )
 
 
-def resolve_raw(key, entry, records):
+def resolve_raw(key, entries, records, _stack=None):
     """Resolve a ledger entry to a raw value (float, int, or [lo, hi] list).
 
+    `entries` is the whole ledger (so a `derived` entry can reference other keys).
     Verifies all run_ids agree within tolerance and, if `expected` is set, that the
     resolved value matches it.
     """
+    _stack = _stack or ()
+    if key in _stack:
+        raise ResolveError(f"{key}: derived-source cycle {' -> '.join(_stack + (key,))}")
+    entry = entries.get(key)
+    if entry is None:
+        raise ResolveError(f"{key}: no such ledger key (referenced by a derived entry)")
     src = entry.get("source") or {}
     kind = src.get("kind")
     run_ids = entry.get("run_ids") or []
@@ -82,6 +89,22 @@ def resolve_raw(key, entry, records):
         if not entry.get("note"):
             raise ResolveError(f"{key}: literal source requires a non-empty `note`")
         return src["value"]
+
+    if kind == "derived":
+        op = src.get("op")
+        operands = src.get("operands") or []
+        if len(operands) < 2:
+            raise ResolveError(f"{key}: derived source needs >=2 operand keys")
+        vals = [resolve_raw(k, entries, records, _stack + (key,)) for k in operands]
+        if any(isinstance(v, (list, tuple)) for v in vals):
+            raise ResolveError(f"{key}: derived op cannot combine interval values")
+        if op == "subtract":
+            value = vals[0] - vals[1]
+        elif op == "add":
+            value = sum(vals)
+        else:
+            raise ResolveError(f"{key}: unknown derived op {op!r} (use subtract|add)")
+        return _check_expected(key, entry, value)
 
     if not run_ids:
         raise ResolveError(f"{key}: source kind {kind!r} needs at least one run_id")
@@ -116,8 +139,10 @@ def resolve_raw(key, entry, records):
             raise ResolveError(f"{key}: unknown source kind {kind!r}")
 
     _assert_agreement(key, values)
-    value = values[0]
+    return _check_expected(key, entry, values[0])
 
+
+def _check_expected(key, entry, value):
     expected = entry.get("expected")
     if expected is not None and not _close(value, expected):
         raise ResolveError(f"{key}: resolved value {value} != expected {expected} "
@@ -145,9 +170,11 @@ def _close(a, b, tol=DEFAULT_TOLERANCE):
     return a == b
 
 
-def _fmt_num(x, sig_figs):
+def _fmt_num(x, sig_figs, decimals=None):
     if isinstance(x, bool):
         return str(x)
+    if decimals is not None:
+        return f"{x:.{decimals}f}"
     if isinstance(x, int) or (isinstance(x, float) and x == int(x) and sig_figs == 0):
         return str(int(x))
     if sig_figs == 0:
@@ -155,20 +182,22 @@ def _fmt_num(x, sig_figs):
     return f"{x:.{sig_figs}g}"
 
 
-def render(key, entry, records):
+def render(key, entries, records):
     """Resolve and format a ledger entry into the LaTeX string emitted by \\valdef.
 
     Emits only the number (or interval). `units` is ledger metadata; prose supplies units.
     """
-    raw = resolve_raw(key, entry, records)
+    raw = resolve_raw(key, entries, records)
+    entry = entries[key]
     fmt = entry.get("format") or {}
     sig = fmt.get("sig_figs", 3)
+    dec = fmt.get("decimals")
     if fmt.get("kind") == "interval":
         lo, hi = raw
-        return f"[{_fmt_num(lo, sig)}, {_fmt_num(hi, sig)}]"
-    return _fmt_num(raw, sig)
+        return f"[{_fmt_num(lo, sig, dec)}, {_fmt_num(hi, sig, dec)}]"
+    return _fmt_num(raw, sig, dec)
 
 
 def render_all(entries, records):
     """key -> rendered string for every entry, in sorted key order. Raises on first failure."""
-    return {key: render(key, entries[key], records) for key in sorted(entries)}
+    return {key: render(key, entries, records) for key in sorted(entries)}
