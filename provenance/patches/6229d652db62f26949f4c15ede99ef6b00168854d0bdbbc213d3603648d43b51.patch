@@ -1,0 +1,551 @@
+diff --git a/TODOS.md b/TODOS.md
+index 8b150a5..181579f 100644
+--- a/TODOS.md
++++ b/TODOS.md
+@@ -51,30 +51,63 @@ a redirect title that isn't a first-class node.
+ 
+ ## Training
+ 
+-### 8-GPU (multi-rank DDP) training hangs (BUG)
+-Multi-rank DDP training hangs and is killed by the wall-clock timeout. Observed
+-facts only (no diagnosis):
+-- **Reproduced** on the arxiv `cross_doc_link` config via `launch_slurm.py`,
+-  1 node × 8 GPUs, smoke model (`model_dim=512, num_layers=6, num_heads=4,
+-  max_seq_len=8192, mtp_extra_weights=[], ve_layers=[]`), `max_optimizer_steps=200`,
+-  `val_interval=50`. Hangs deterministically; rank 0's tqdm bar freezes around
+-  step ~152.
+-- **1-GPU and 2-GPU** runs of the same config complete 200 steps with decreasing
+-  loss and no NaN. The hang appears only at ≥4 ranks (4-GPU also reproduced).
+-- With `TORCH_DISTRIBUTED_DEBUG=DETAIL`, ranks report a collective-fingerprint
+-  mismatch (e.g. one rank in `ALLREDUCE` while another is in a different op /
+-  sequence number) before the timeout. Without it, the job sits until the SLURM
+-  wall-clock kills it (`STEP ... CANCELLED ... DUE TO TIME LIMIT`).
+-- All GPUs show ~100% utilization during the hang.
+-- Not isolated to the data: packs are uniformly `max_seq_len` (verified by CPU
+-  audit on both arxiv and thestack splits); the tensor sizes feeding attention
+-  are correct.
+-
+-**Diagnosis blocker:** the run only captures rank-0 logs (`tracking.init` symlinks
+-rank-0 stderr/stdout into the run `logs/` dir; non-main ranks' `.err` files are
+-empty). To diagnose, first make non-main ranks observable — per-rank file logging
+-+ `faulthandler` stack dumps on SIGTERM/timeout — then capture each hung rank's
+-Python stack (or `py-spy dump` live).
++### 8-GPU (multi-rank DDP) training hangs — ROOT-CAUSED & FIXED 2026-06-17
++**Root cause:** `PackBatchSampler._apply_pack_truncation` did not enforce
++`token_budget` as a hard cap. Its `else` branch (when `effective_len < overshoot
++< prefix+body+suffix`) skipped the doc and let `overshoot` leak, so a pack made
++of many docs each carrying a non-trimmable prefix (the `*_prefix` layouts) could
++ship ABOVE `max_seq_len`. One oversized pack (observed: 10185 > 8192) trips the
++RoPE cos/sin cache assert (`cos.size(0) >= seq_len`) in the attention forward on
++whichever DDP rank drew it; that AssertionError unwinds into the end-of-run
++`ReproducibilityManager.__exit__` barrier, which hangs because the other ranks
++never reach it — masking the traceback and presenting as a generic collective
++hang. Manifests only at world_size ≥ 2 (a single GPU just raises visibly).
++
++**Fix:** `_apply_pack_truncation` now trims layout decoration (prefix/suffix) as
++a last resort — via the new `DocPlacement.decoration_trim` field, honored in
++`data/collate.py` (drops suffix first, then prefix tail, preserving the prefix
++card's leading marker) — so the pack hits `token_budget` EXACTLY: the doc is
++kept, its body preserved as far as possible, no under-fill, never over budget.
++`decoration_trim` is also persisted through `epoch_precompute.PackRecord` so the
++precomputed/bucketed path stays consistent. Regression tests:
++`tests/data/test_pack_sampler.py::test_pack_truncation_is_a_hard_cap_with_prefixes`
++(+ `_no_overshoot_is_noop`). Verified end-to-end (job 42247, 4-GPU arxiv smoke):
++blew past the old gstep-76 crash, all ranks max seqlen = 8191.
++
++How it was diagnosed (the prior blocker — rank-0-only logs): added opt-in
++`TS2TS_DEBUG=1` per-rank file logging + `faulthandler` watchdog
++(`debug_instrumentation.py`) and a try/except around `smart_train` in `main.py`
++that logs the per-rank traceback before the masking barrier.
++
++### Per-rank Triton-kernel autotune stall at ≥2 ranks (BUG — separate, still open)
++After the truncation fix, the same smoke run stalled at gstep≈110: one rank
++(GPU idle, 0% util) sat in the **custom Triton kernel's autotuner** — the saved
++stack is `kernels/cross_doc_bitmask_bim_v18.py:forward` →
++`triton.runtime.autotuner.do_bench` → `triton.compiler.compile` / `make_llir`
++(NOT FlexAttention; training uses `triton_v18`). The `cdb_bim_v18` kernel
++autotunes per input shape, so a mask/grant shape first seen by one rank triggers
++a fresh JIT-compile+benchmark of all autotune configs ONLY on that rank, while
++the peers busy-wait (100% util) at the next gradient all-reduce. Each rank also
++has its OWN inductor/triton cache (`launch_slurm.py:70` →
++`/tmp/torchinductor_<job>/rank<N>`), so nothing is shared. The autotune appeared
++to hang (>10 min) — needs confirmation whether it's pathological autotune time or
++a true livelock. Candidate fixes: persist/share the Triton autotune cache across
++ranks, pre-warm the kernel on representative shapes before the loop, pin/reduce
++the autotune config space for v18, or pad grant/mask tensors to rank-invariant
++shapes. Reproduce with `TS2TS_DEBUG=1` and watch `nvidia-smi` for one idle GPU
++while others are pinned; confirm the stall frame is the v18 autotuner.
++
++### Live PackedSequenceDataset: dedup docs within an epoch (TODO — consider)
++The live `PackedSequenceDataset` / `PackBatchSampler` path samples WITH
++replacement: seeds are drawn via `self._rng.randrange(num_nodes)` and dedup is
++only *within* a pack (`pack_doc_ids`), with no cross-pack/epoch visited set. So a
++doc can appear in many packs and some may never appear in a given pass. The
++precomputed path already dedups per epoch (`epoch_precompute.py` `epoch_visited`
++set → visited docs read as tok_len=0). Consider giving the live path the same
++"each doc at most once per epoch" guarantee (a persistent visited set on the
++sampler, reset per epoch) so the two paths match and data usage is even. Note the
++interaction with truncation: a doc dropped/partially-used by pack-level trimming
++should arguably remain eligible until its body is actually consumed.
+ 
+ ### Parallelized eval in main.py
+ `run_benchmarks_on_model` runs serially. Naïve thread-pool parallelism is risky:
+diff --git a/data/collate.py b/data/collate.py
+index b29d9c3..7c62bca 100644
+--- a/data/collate.py
++++ b/data/collate.py
+@@ -137,6 +137,20 @@ def build_packed_batch(
+         prefix_ids = layout.prefix_tokens(info)
+         suffix_ids = layout.suffix_tokens(info)
+ 
++        # Pack-level truncation may ask us to shed a few decoration tokens so the
++        # pack hits token_budget exactly without dropping the doc or trimming its
++        # body (see PackBatchSampler._apply_pack_truncation).  Remove them
++        # suffix-first, then from the prefix TAIL, so the prefix card's leading
++        # marker (e.g. "% Title:") and the body are preserved.
++        decoration_trim = getattr(p, "decoration_trim", 0)
++        if decoration_trim > 0:
++            drop_suffix = min(decoration_trim, len(suffix_ids))
++            if drop_suffix:
++                suffix_ids = suffix_ids[: len(suffix_ids) - drop_suffix]
++            drop_prefix = decoration_trim - drop_suffix
++            if drop_prefix:
++                prefix_ids = prefix_ids[: max(0, len(prefix_ids) - drop_prefix)]
++
+         if body_slice.size == 0 and not prefix_ids and not suffix_ids:
+             # Entirely empty contribution; skip to avoid degenerate spans.
+             continue
+diff --git a/data/epoch_precompute.py b/data/epoch_precompute.py
+index e08cc54..a07b93f 100644
+--- a/data/epoch_precompute.py
++++ b/data/epoch_precompute.py
+@@ -76,6 +76,7 @@ class PackRecord:
+     link_end_positions:  List[int]          # keys of link_to_target
+     link_target_doc_ids: List[List[int]]    # values of link_to_target
+     component_ids:       List[int] = field(default_factory=list)  # connected-component id per doc
++    decoration_trim:     List[int] = field(default_factory=list)  # prefix/suffix tokens to drop per doc
+     kv_block_count:      int = -1           # filled by GPU pass
+     bucket_id:           int = -1           # filled by bucketing
+ 
+@@ -88,14 +89,18 @@ def _record_to_placements(record: PackRecord) -> List[DocPlacement]:
+     doc_concatenated mask degenerate to doc_causal — the safe default.
+     """
+     component_ids = record.component_ids or list(record.doc_ids)
++    # Records written before decoration_trim existed have an empty list → 0
++    # (full decoration), which matches the historical behaviour.
++    decoration_trim = record.decoration_trim or [0] * len(record.doc_ids)
+     return [
+-        DocPlacement(d, e, t, s, component_id=c)
+-        for d, e, t, s, c in zip(
++        DocPlacement(d, e, t, s, component_id=c, decoration_trim=dt)
++        for d, e, t, s, c, dt in zip(
+             record.doc_ids,
+             record.effective_lens,
+             record.truncated_flags,
+             record.trim_sides,
+             component_ids,
++            decoration_trim,
+         )
+     ]
+ 
+@@ -358,6 +363,7 @@ def _worker_fn(
+             link_end_positions=link_end_positions,
+             link_target_doc_ids=link_target_doc_ids,
+             component_ids=[p.component_id for p in placements],
++            decoration_trim=[p.decoration_trim for p in placements],
+             kv_block_count=kv_bc,
+             bucket_id=-1,
+         ))
+diff --git a/data/pack_sampler.py b/data/pack_sampler.py
+index aaa11bb..29431ce 100644
+--- a/data/pack_sampler.py
++++ b/data/pack_sampler.py
+@@ -51,6 +51,12 @@ class DocPlacement:
+     truncated: bool
+     doc_trim_side: str
+     component_id: int = -1
++    decoration_trim: int = 0
++    """Number of layout decoration (prefix+suffix) tokens to drop at collate
++    time, used by pack-level truncation as a last resort to hit ``token_budget``
++    exactly without dropping the document or trimming its body.  The collate
++    layer removes these tokens suffix-first, then from the prefix tail (so the
++    prefix card's leading marker survives).  ``0`` means full decoration."""
+ 
+ 
+ class PackBatchSampler:
+@@ -604,10 +610,34 @@ class PackBatchSampler:
+                 p.effective_len -= overshoot
+                 overshoot = 0
+                 p.truncated = True
+-            # else: overshoot > effective_len but < full_doc_tokens — cannot
+-            # fix by trimming body (would go to 0) and cannot drop doc (would
+-            # over-correct by removing pre+suf too).  Skip this doc and try
+-            # the next one in the trim direction.
++            else:
++                # overshoot > effective_len but < full_doc_tokens: a body trim
++                # alone can't close the gap (would have to go below 0), and the
++                # residual lives in the layout decoration (prefix + suffix).
++                # Previously this doc was SKIPPED, which let overshoot LEAK — a
++                # pack of many small docs each carrying a fixed prefix (the
++                # latex-comment / identifier-prefix layouts) could ship ABOVE
++                # token_budget.  One such over-budget pack trips the RoPE cache
++                # assert (cos.size(0) >= seq_len) in the attention forward on
++                # whichever DDP rank drew it; that exception unwinds into the
++                # end-of-run barrier and hangs the whole job (the multi-rank DDP
++                # hang in TODOS.md).
++                #
++                # Fix: remove exactly `overshoot` tokens from this doc,
++                # DECORATION first (collate drops decoration_trim tokens
++                # suffix-first, then from the prefix tail — preserving the prefix
++                # card's leading marker), then from the body only if the
++                # decoration can't absorb it all.  Because full_doc_tokens >
++                # overshoot, the doc keeps a positive body and is NOT dropped by
++                # the filter below.  The pack hits token_budget EXACTLY: no
++                # under-fill, no dropped doc, body preserved as far as possible.
++                decoration = pre + suf
++                decoration_trim = min(overshoot, decoration)
++                body_trim = overshoot - decoration_trim  # < effective_len here
++                p.decoration_trim = decoration_trim
++                p.effective_len -= body_trim
++                overshoot = 0
++                p.truncated = True
+ 
+         # Drop any documents that have been reduced to zero length.
+         final_placements = [p for p in placements if p.effective_len > 0]
+diff --git a/main.py b/main.py
+index 2ee3bd2..ea86f03 100644
+--- a/main.py
++++ b/main.py
+@@ -356,6 +356,24 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+     # leave ranks blocked in a collective operation.
+     setup_signal_handlers()
+ 
++    # Per-rank observability for the multi-rank DDP hang (TODOS.md). Opt-in via
++    # TS2TS_DEBUG=1; no-op otherwise. Installs DEBUG file logging + faulthandler
++    # stack-dump watchdog for EVERY rank (the diagnosis blocker was rank-0-only
++    # logs). Must run before any collective so a hang anywhere is captured.
++    from debug_instrumentation import setup_rank_debug_logging, debug_enabled
++    setup_rank_debug_logging(dist.rank, dist.local_rank)
++    if debug_enabled():
++        # Route torch.compile recompile/guard-failure reasons into our per-rank
++        # log so we can see if one rank recompiles while peers enter a collective.
++        try:
++            torch._logging.set_logs(recompiles=True, graph_breaks=True)
++        except Exception as _e:
++            logger.debug("could not enable dynamo recompile logging: %s", _e)
++        logger.debug(
++            "TS2TS_DEBUG active: rank=%d local_rank=%d world_size=%d device=%s",
++            dist.rank, dist.local_rank, dist.world_size, dist.device,
++        )
++
+     # -------------------------------------------------------------------------
+     # 1. Setup Logging & Reproducibility
+     # -------------------------------------------------------------------------
+@@ -995,12 +1013,32 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+                     split_step,
+                     "yes" if embed_state else "no (cold start)",
+                 )
++                # HYPOTHESIS-2 PROBE: the split mutates the module + optimizer
++                # param_groups under static_graph=True DDP. Record the exact
++                # _step_count at which THIS rank performs the split. If ranks
++                # disagree (they shouldn't — step count is collective-driven),
++                # the post-split collective sequence will desync.
++                logger.debug(
++                    "split_fn EXECUTED at split_step=%d; new lm_head id=%x; "
++                    "n_param_groups=%d",
++                    split_step, id(new_lm_head), len(opt.param_groups),
++                )
+ 
+             if dist.is_distributed:
+                 def pre_step_fn():
+                     # After the split, lm_head is a new param DDP doesn't know about.
+                     # Manually all-reduce its gradient before the optimizer step.
+                     w = _tm.loss_fn.weight
++                    # HYPOTHESIS-2 PROBE: this all_reduce is GATED on w.grad being
++                    # non-None. If even one rank sees grad=None (or the split itself
++                    # ran on a different step on different ranks), the collective
++                    # counts diverge → fingerprint mismatch. Log the gate on every
++                    # rank so we can confirm/deny symmetric participation.
++                    logger.debug(
++                        "pre_step_fn: split_done, lm_head.grad is %s (id=%x)",
++                        "None" if w.grad is None else "present",
++                        id(w),
++                    )
+                     if w.grad is not None:
+                         torch.distributed.all_reduce(w.grad)
+                         w.grad.div_(dist.world_size)
+@@ -1052,13 +1090,27 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+     if epoch_dirs:
+         atomic_feature_kwargs['bucket_state_fn'] = dataset.get_state
+ 
+-    result = smart_train(
+-        model=model,
+-        optimizer=optimizer,
+-        train_loader=train_loader,
+-        llm_client=get_default_llm_client(),
+-        **atomic_feature_kwargs
+-    )
++    # DIAGNOSIS PROBE (TODOS.md DDP hang): wrap smart_train so any per-rank
++    # exception inside the training loop (e.g. a data-dependent forward failure
++    # on one rank) is logged with a full traceback BEFORE it unwinds into
++    # ReproducibilityManager.__exit__'s unconditional barrier() — which would
++    # otherwise hang (the other ranks never reach it) and swallow the traceback.
++    try:
++        result = smart_train(
++            model=model,
++            optimizer=optimizer,
++            train_loader=train_loader,
++            llm_client=get_default_llm_client(),
++            **atomic_feature_kwargs
++        )
++    except BaseException:
++        logger.exception(
++            "smart_train raised on rank %d — capturing traceback before the "
++            "ReproducibilityManager.__exit__ barrier masks it.", dist.rank,
++        )
++        import faulthandler as _fh, sys as _sys
++        _fh.dump_traceback(file=_sys.stderr, all_threads=True)
++        raise
+ 
+     logger.info("Training complete!")
+ 
+diff --git a/tests/data/test_pack_sampler.py b/tests/data/test_pack_sampler.py
+index 78a6dab..24c71b2 100644
+--- a/tests/data/test_pack_sampler.py
++++ b/tests/data/test_pack_sampler.py
+@@ -330,6 +330,126 @@ def test_pack_level_truncation_head_vs_tail():
+     )
+ 
+ 
++class _FixedPrefixLayout:
++    """Layout stub that adds a fixed, non-trimmable prefix to every doc.
++
++    Mirrors the real prefix-carrying layouts (identifier_prefix,
++    latex_comment_prefix, etc.) whose prefix tokens cannot be trimmed by
++    pack-level body truncation.
++    """
++
++    def __init__(self, prefix_len: int, suffix_len: int = 0) -> None:
++        self._pre = prefix_len
++        self._suf = suffix_len
++
++    def prefix_length(self, info) -> int:  # noqa: ARG002
++        return self._pre
++
++    def suffix_length(self, info) -> int:  # noqa: ARG002
++        return self._suf
++
++
++def _materialised_len(p, pre, suf):
++    """Tokens this placement contributes to the pack after decoration trimming."""
++    decoration = pre + suf
++    return max(0, decoration - p.decoration_trim) + p.effective_len
++
++
++def test_pack_truncation_is_a_hard_cap_with_prefixes():
++    """token_budget must be a HARD cap even when docs carry non-trimmable prefixes.
++
++    Regression for the multi-rank DDP hang (TODOS.md): the old
++    _apply_pack_truncation 'else' branch skipped a doc when
++    effective_len < overshoot < prefix+body+suffix, letting overshoot leak so
++    the pack shipped ABOVE token_budget.  An over-budget pack trips the RoPE
++    cos/sin cache assert (cos.size(0) >= seq_len) in the attention forward on
++    whichever DDP rank drew it; that exception unwinds into the end-of-run
++    barrier and hangs the whole job.
++
++    The fix trims layout decoration (via DocPlacement.decoration_trim) as a last
++    resort so the pack hits token_budget EXACTLY — keeping the doc and its full
++    body — instead of leaking over budget or dropping the doc.
++    """
++    # 6 docs, each body=20, prefix=10 → per-doc full=30, pack total=180.
++    # budget 95 → overshoot 85.  Tail trim: drop two whole docs (85→55→25); the
++    # third doc has full=30 > 25 but body=20 < 25 — the leak gap.  OLD code
++    # skipped it (pack shipped 120 > 95).  NEW code trims that doc by 25 tokens:
++    # decoration_trim=min(25,10)=10 and body_trim=15 → body 20→5, so the doc is
++    # KEPT (body 5) and the pack lands exactly at 95.
++    n_docs = 6
++    body, pre = 20, 10
++    graph = DummyGraph(
++        token_lens={i: body for i in range(n_docs)},
++        outgoing={i: [] for i in range(n_docs)},
++        incoming={i: [] for i in range(n_docs)},
++    )
++    token_budget = 95
++    sampler = PackBatchSampler(
++        graph=graph,
++        strategy_factory=lambda: RandomSelectionStrategy(),
++        token_budget=token_budget,
++        doc_budget=None,
++        overflow_policy="truncate",
++        doc_level_trim_side="tail",
++        pack_level_trim_side="tail",
++        seed=0,
++        layout_policy=_FixedPrefixLayout(prefix_len=pre),
++    )
++    placements = [
++        DocPlacement(doc_id=i, effective_len=body, truncated=False, doc_trim_side="tail")
++        for i in range(n_docs)
++    ]
++    total_tokens = sum(pre + p.effective_len for p in placements)  # 180
++    trimmed = sampler._apply_pack_truncation(placements, total_tokens=total_tokens)
++
++    # Hard-cap invariant: the materialised pack must never exceed token_budget,
++    # accounting for decoration trimming.
++    final_total = sum(_materialised_len(p, pre, 0) for p in trimmed)
++    assert final_total <= token_budget, (
++        f"pack shipped {final_total} tokens > budget {token_budget} — "
++        "overshoot leaked through pack truncation"
++    )
++    # Maximum-data-usage invariant: when the overshoot can be absorbed by body +
++    # decoration trims, the pack should fill the budget EXACTLY (no under-fill).
++    assert final_total == token_budget, (
++        f"pack under-filled at {final_total} < budget {token_budget} — "
++        "decoration trimming should fill exactly"
++    )
++    # The doc in the former 'leak gap' must be KEPT (not dropped), with body
++    # preserved as much as possible.
++    assert len(trimmed) == 4, f"expected 4 surviving docs, got {len(trimmed)}"
++    # No surviving doc may have a negative or impossible decoration_trim.
++    for p in trimmed:
++        assert 0 <= p.decoration_trim <= pre, p.decoration_trim
++
++
++def test_pack_truncation_no_overshoot_is_noop():
++    """When total <= budget, truncation leaves placements untouched (no trims)."""
++    graph = DummyGraph(
++        token_lens={0: 5, 1: 5},
++        outgoing={0: [], 1: []},
++        incoming={0: [], 1: []},
++    )
++    sampler = PackBatchSampler(
++        graph=graph,
++        strategy_factory=lambda: RandomSelectionStrategy(),
++        token_budget=100,
++        doc_budget=None,
++        overflow_policy="truncate",
++        doc_level_trim_side="tail",
++        pack_level_trim_side="tail",
++        seed=0,
++        layout_policy=_FixedPrefixLayout(prefix_len=3),
++    )
++    placements = [
++        DocPlacement(doc_id=0, effective_len=5, truncated=False, doc_trim_side="tail"),
++        DocPlacement(doc_id=1, effective_len=5, truncated=False, doc_trim_side="tail"),
++    ]
++    trimmed = sampler._apply_pack_truncation(placements, total_tokens=16)
++    assert len(trimmed) == 2
++    assert all(p.decoration_trim == 0 and not p.truncated for p in trimmed)
++
++
+ class _ChainStrategy:
+     """
+     Deterministic traversal strategy that walks along outgoing edges in a chain.
+
+diff --git a/debug_instrumentation.py b/debug_instrumentation.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/debug_instrumentation.py
+@@ -0,0 +1,102 @@
++"""Per-rank observability for diagnosing the multi-rank DDP hang (TODOS.md).
++
++Opt-in via the ``TS2TS_DEBUG=1`` environment variable so normal runs are
++unaffected.  When enabled, every rank (not just rank 0) gets:
++
++  1. A per-rank DEBUG-level log file with line-buffered flushing, written to
++     node-local ``/tmp`` (cluster-KB: never high-frequency-write to /fss).
++     Survives a SIGKILL because each line is flushed immediately.
++
++  2. A ``faulthandler`` watchdog that dumps *all* Python thread stacks for this
++     rank every ``TS2TS_DEBUG_DUMP_EVERY`` seconds (default 90).  When a rank
++     wedges in a collective, the periodic dump shows exactly which line each
++     rank is parked on — this is what distinguishes "stuck in NCCL allreduce"
++     from "stuck recompiling the backbone" from "stuck in a Python guard".
++
++  3. SIGTERM/SIGUSR1 handlers that dump stacks on demand, so `kill -USR1 <pid>`
++     or SLURM's pre-timeout SIGTERM produces a final stack snapshot.
++
++Collect the artifacts after a run with::
++
++    # single-node repro — all ranks' files are on the one allocated node
++    srun --jobid <JID> --overlap bash -c 'cat /tmp/ts2ts_debug_*/rank*.log'
++
++or just read /tmp/ts2ts_debug_<jobid>/ directly on the node.
++"""
++
++import faulthandler
++import logging
++import os
++import signal
++import sys
++from typing import Optional
++
++_FAULT_FILE = None  # keep a reference so the fd isn't garbage-collected
++
++
++def debug_enabled() -> bool:
++    return os.environ.get("TS2TS_DEBUG", "").strip() in ("1", "true", "yes")
++
++
++def _debug_dir() -> str:
++    job_id = os.environ.get("SLURM_JOB_ID", "local")
++    d = f"/tmp/ts2ts_debug_{job_id}"
++    os.makedirs(d, exist_ok=True)
++    return d
++
++
++def setup_rank_debug_logging(rank: int, local_rank: int) -> Optional[str]:
++    """Install per-rank DEBUG file logging + faulthandler watchdog.
++
++    No-op unless TS2TS_DEBUG is truthy.  Returns the log path (or None).
++    """
++    if not debug_enabled():
++        return None
++
++    global _FAULT_FILE
++    d = _debug_dir()
++    log_path = os.path.join(d, f"rank{rank}.log")
++
++    # Line-buffered so every record hits disk before the next collective; a
++    # SIGKILL on a hung rank therefore still leaves a complete log up to the
++    # last line executed.
++    fh = logging.FileHandler(log_path, mode="w")
++    fh.setLevel(logging.DEBUG)
++    fh.setFormatter(logging.Formatter(
++        f"%(asctime)s.%(msecs)03d r{rank} l{local_rank} %(name)s %(levelname)s %(message)s",
++        datefmt="%H:%M:%S",
++    ))
++    # Force line flushing on the underlying stream.
++    fh.stream.reconfigure(line_buffering=True)
++
++    root = logging.getLogger()
++    root.setLevel(logging.DEBUG)
++    root.addHandler(fh)
++
++    # Quiet the very noisy libraries so the signal isn't buried.
++    for noisy in ("PIL", "matplotlib", "urllib3", "filelock", "fsspec"):
++        logging.getLogger(noisy).setLevel(logging.INFO)
++
++    # faulthandler: periodic all-thread stack dumps for THIS rank.
++    fault_path = os.path.join(d, f"rank{rank}.faulthandler.log")
++    _FAULT_FILE = open(fault_path, "w", buffering=1)  # line-buffered
++    faulthandler.enable(file=_FAULT_FILE, all_threads=True)
++
++    dump_every = int(os.environ.get("TS2TS_DEBUG_DUMP_EVERY", "90"))
++    # repeat=True → keep dumping every `dump_every`s for the life of the process,
++    # so a hang produces a series of identical stacks (proves it's wedged, not slow).
++    faulthandler.dump_traceback_later(dump_every, repeat=True, file=_FAULT_FILE)
++
++    # On-demand dumps: SIGUSR1 (manual) is non-fatal; SIGTERM (SLURM pre-timeout)
++    # dumps then lets the existing handler exit.
++    try:
++        faulthandler.register(signal.SIGUSR1, file=_FAULT_FILE, all_threads=True, chain=True)
++    except (ValueError, OSError):
++        pass
++
++    logging.getLogger("ts2ts.debug").debug(
++        "rank debug logging online: log=%s fault=%s dump_every=%ds pid=%d",
++        log_path, fault_path, dump_every, os.getpid(),
++    )
++    return log_path
++

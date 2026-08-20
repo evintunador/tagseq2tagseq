@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "run_id": "run_20260805_200832_901646",
+  "naming_convention": "submitit",
+  "source_run_dirs": [
+    "/fss/evin_t/tagseq2tagseq/runs/run_20260805_200832_901646"
+  ],
+  "run_dir_exists": true,
+  "warnings": [],
+  "reproduce": {
+    "commit_hash": "2ab234eaf7c613bd65289cc70e33e5f6dc8ad7e1",
+    "branch": "main",
+    "remote_url": "https://github.com/evintunador/tagseq2tagseq.git",
+    "github_url": "https://github.com/evintunador/tagseq2tagseq/commit/2ab234eaf7c613bd65289cc70e33e5f6dc8ad7e1",
+    "git_is_dirty": true,
+    "patch": {
+      "hash": "84fc7234181e43a14558c917c6bedafe1947fe28018d96e788c73a4bb720fa27",
+      "path": "provenance/patches/84fc7234181e43a14558c917c6bedafe1947fe28018d96e788c73a4bb720fa27.patch",
+      "bytes": 80112
+    },
+    "config_path": "configs/sparsity/thestack_keep0p5_cdl.yaml",
+    "cli_overrides": {},
+    "python_version": "3.13.2",
+    "torch_version": "2.10.0",
+    "torch_cuda_version": "12.8",
+    "cudnn_version": 91900,
+    "nvidia_driver_version": "560.35.03",
+    "slurm_job_id": "51370"
+  },
+  "environment": {
+    "gpu_model": "NVIDIA A100-SXM4-80GB",
+    "gpu_count": 8,
+    "world_size": 8,
+    "os_release": "5.15.0-122-generic"
+  },
+  "hyperparameters": {
+    "data": {
+      "dataset_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack",
+      "strategy": "bfs",
+      "layout_policy": "stochastic_identifier_prefix",
+      "inference_layout_policy": "identifier_prefix_eos",
+      "order_mode": "prefer_targets_first",
+      "doc_budget": null,
+      "train_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train",
+      "epoch_dirs": [
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/thestack_bfs_keep0p5/epoch_0"
+      ],
+      "val_dirs": {
+        "val_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community",
+        "val_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random"
+      },
+      "test_dirs": {
+        "test_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community",
+        "test_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random"
+      }
+    },
+    "model": {
+      "compile": true,
+      "compile_mode": "default",
+      "attention_backend": "triton",
+      "inference_attention_backend": "flex",
+      "mask_type": "cross_doc_link",
+      "link_detector": "python",
+      "max_grants": 256,
+      "activation_checkpointing": false,
+      "model_dim": 1024,
+      "num_layers": 24,
+      "num_heads": 8,
+      "max_seq_len": 32768,
+      "drop_path_rate": 0.0,
+      "fp8": false,
+      "weight_tying": true,
+      "untie_at_frac": 0.667,
+      "ignore_index": -100,
+      "dtype": "bfloat16",
+      "logit_softcap": 30.0,
+      "mtp_extra_weights": [
+        0.5,
+        0.25
+      ],
+      "mtp_decay_steps": 0,
+      "ve_layers": [],
+      "shared_ve_bank": false
+    },
+    "optimizer": {
+      "type": "muon",
+      "muon_wd": 0.1,
+      "adamw_wd": 0.005,
+      "momentum": 0.95,
+      "muon_beta2": 0.95,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "muon_lr": 0.003,
+      "adamw_lr": "3e-05",
+      "muon_momentum_warmup_steps": 300,
+      "adamw_embed_beta1": 0.5
+    },
+    "train_loop": {
+      "epochs": 1,
+      "max_optimizer_steps": 15000,
+      "warmup_steps": 300,
+      "cooldown_frac": 0.4,
+      "min_lr_ratio": 0.1,
+      "val_steps": 20,
+      "val_interval": 250,
+      "save_latest_interval": 250,
+      "atomic_feature_kwargs": {
+        "norm_clip_value": 1.0,
+        "accum_steps": 1
+      }
+    },
+    "seed": 42,
+    "eval": {
+      "run_on_completion": true,
+      "benchmarks": [
+        {
+          "name": "held_out_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "community_pack_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "repobench",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "repobench_cross_doc",
+          "conditions": [
+            "experimental"
+          ]
+        },
+        {
+          "name": "codexglue_code_to_text",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "humaneval_buggy",
+          "conditions": [
+            "doceval"
+          ]
+        }
+      ],
+      "max_docs": 500,
+      "link_fuzzy_match": true,
+      "link_fuzzy_strategies": [
+        "exact",
+        "norm",
+        "word_overlap_ordered",
+        "edit_distance"
+      ],
+      "link_ed_threshold": 0.2
+    }
+  },
+  "hyperparameters_sha256": "a797bff0cce417e78f59140beda4de3f4fb336e3b2718a28d31c9875e221c8cc",
+  "timestamps": {
+    "run_started": "2026-08-05T20:08:32",
+    "slurm_start_time": "1785960512",
+    "slurm_end_time": "1786306112"
+  },
+  "eval": {
+    "present": false,
+    "eval_results_sha256": null,
+    "metrics": null
+  },
+  "distilled_at": "2026-08-18T15:33:23Z"
+}

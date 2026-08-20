@@ -29,6 +29,25 @@
 \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
 % ---------------------------------------------------------------------------
 
+% --- grounded values (provenance) ------------------------------------------
+% Every result number is bound in generated/values.tex (from provenance/ledger.yaml)
+% and cited in prose as \val{claim-key}. \detokenize lets keys carry _ . / and keeps
+% the define/use sides byte-identical. Undefined keys raise a hard error, never a blank.
+\makeatletter
+\newcommand{\valdef}[2]{\expandafter\def\csname val@\detokenize{#1}\endcsname{#2}}
+\newcommand{\val}[1]{%
+  \@ifundefined{val@\detokenize{#1}}%
+    {\PackageError{val}{Undefined \string\val{\detokenize{#1}} -- run gen_values_tex.py}{}}%
+    {\csname val@\detokenize{#1}\endcsname}}
+\makeatother
+\input{generated/values.tex}
+
+% \fillin{hint} — a visible red blank standing in for an un-grounded number or
+% directional claim. Nothing quantitative/directional should be asserted unless it is
+% either a \val{} (grounded to a run) or an explicit \fillin{} awaiting real data.
+\newcommand{\fillin}[1]{\textcolor{red}{[\underline{\hspace{1.5em}}\,\textit{#1}]}}
+% ---------------------------------------------------------------------------
+
 \title{\method: Training Language Models on Text-Attributed Graphs\\
        with Link-Aware Cross-Document Attention}
 \author{\todo{authors}}

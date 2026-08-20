@@ -1,0 +1,1630 @@
+diff --git a/TODOS.md b/TODOS.md
+index d855be8..d550ead 100644
+--- a/TODOS.md
++++ b/TODOS.md
+@@ -51,27 +51,6 @@ a redirect title that isn't a first-class node.
+ 
+ ## Training
+ 
+-### doc-concatenated baseline (controls for cross_doc_link FLOP allocation)
+-`cross_doc_link` gets more FLOPs than `doc_causal` because BFS-packed batches tend
+-to have denser attention patterns (linked docs attend to each other). The existing
+-`doc_causal` baseline controls for *architecture* but not for *compute*. Add a
+-`doc_concatenated` mask type: connected documents in a BFS batch are treated as a
+-single concatenated sequence (full causal attention across their combined tokens) while
+-still using BFS traversal. Documents from disjoint sub-graphs within the same batch
+-remain causally isolated from each other, so it's *not* simply a lower-triangular
+-matrix.
+-
+-Implementation: reuse the existing varlen/doc-causal kernel infrastructure — just
+-merge the `doc_spans` of BFS-connected runs into a single span before passing to the
+-mask creator. No new kernel needed.
+-
+-This lets the comparison table become:
+-- `doc_causal` — BFS packing, isolated documents, fewest FLOPs
+-- `doc_concatenated` — BFS packing, connected docs merged, more FLOPs, no inference-time
+-  linking
+-- `cross_doc_link` — BFS packing, connected docs linked via attention mask, most FLOPs,
+-  full inference-time linking
+-
+ ### Parallelized eval in main.py
+ `run_benchmarks_on_model` runs serially. Naïve thread-pool parallelism is risky:
+ benchmarks vary widely in runtime (HellaSwag ~30s vs. community_pack_perplexity
+diff --git a/benchmarks/attention_harness.py b/benchmarks/attention_harness.py
+index a95c0c7..35209cb 100644
+--- a/benchmarks/attention_harness.py
++++ b/benchmarks/attention_harness.py
+@@ -117,8 +117,14 @@ def _build_cross_doc_masks(
+     link_to_target: Dict[int, List[int]],
+     device: torch.device,
+     max_grants: int = 64,
++    whole_doc_grant: bool = False,
+ ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+-    """Returns (dense_mask [T,T], q_bitmasks [n_chunks,T], kv_bitmasks [n_chunks,T])."""
++    """Returns (dense_mask [T,T], q_bitmasks [n_chunks,T], kv_bitmasks [n_chunks,T]).
++
++    When ``whole_doc_grant`` is True (the doc_concat_link condition), each grant
++    spans the entire source document (from ``source.start``) instead of from the
++    link position — mirroring ``CrossDocLinkMaskCreator(whole_doc_grant=True)``.
++    """
+     n_chunks = max(1, (max_grants + 63) // 64)
+ 
+     # Dense mask
+@@ -134,7 +140,7 @@ def _build_cross_doc_masks(
+             if link_span is None or target_span is None:
+                 continue
+ 
+-            gs = link_pos
++            gs = max(0, link_span.start) if whole_doc_grant else link_pos
+             ge = min(seq_len, link_span.end)
+             ts = max(0, target_span.start)
+             te = min(seq_len, target_span.end)
+diff --git a/data/collate.py b/data/collate.py
+index 11f6907..e715c53 100644
+--- a/data/collate.py
++++ b/data/collate.py
+@@ -31,6 +31,11 @@ class DocSpan:
+     truncated: bool
+     outgoing_identifiers: List[str]
+     raw_identifier: str
++    # Index of the traversal component (BFS sub-graph) this doc belongs to in
++    # the pack; docs sharing a component_id are merged into one super-document
++    # by the doc_concatenated mask. Defaults to the doc's own id when the
++    # producing placement carries no component assignment (component_id == -1).
++    component_id: int = -1
+ 
+ 
+ def _slice_body_tokens(
+@@ -150,6 +155,10 @@ def build_packed_batch(
+         doc_tokens = np.concatenate([prefix_arr, body_arr, suffix_arr], axis=0)
+         doc_len = int(doc_tokens.shape[0])
+ 
++        # Fall back to the doc's own id when the placement carries no component
++        # assignment, so a component of one == an isolated doc (doc_causal).
++        component_id = p.component_id if p.component_id >= 0 else p.doc_id
++
+         span = DocSpan(
+             doc_id=p.doc_id,
+             normed_identifier=normed_id,
+@@ -158,6 +167,7 @@ def build_packed_batch(
+             truncated=p.truncated,
+             outgoing_identifiers=outgoing_identifiers,
+             raw_identifier=raw_id,
++            component_id=component_id,
+         )
+ 
+         segments.append(doc_tokens)
+diff --git a/data/epoch_precompute.py b/data/epoch_precompute.py
+index d34cb4f..b51139e 100644
+--- a/data/epoch_precompute.py
++++ b/data/epoch_precompute.py
+@@ -75,19 +75,27 @@ class PackRecord:
+     trim_sides:          List[str]          # "head" or "tail" per doc
+     link_end_positions:  List[int]          # keys of link_to_target
+     link_target_doc_ids: List[List[int]]    # values of link_to_target
++    component_ids:       List[int] = field(default_factory=list)  # traversal component per doc
+     kv_block_count:      int = -1           # filled by GPU pass
+     bucket_id:           int = -1           # filled by bucketing
+ 
+ 
+ def _record_to_placements(record: PackRecord) -> List[DocPlacement]:
+-    """Reconstruct a DocPlacement list from a PackRecord."""
++    """Reconstruct a DocPlacement list from a PackRecord.
++
++    Records written before component_ids existed have an empty list; in that
++    case each doc gets a unique component (its own doc_id), which makes the
++    doc_concatenated mask degenerate to doc_causal — the safe default.
++    """
++    component_ids = record.component_ids or list(record.doc_ids)
+     return [
+-        DocPlacement(d, e, t, s)
+-        for d, e, t, s in zip(
++        DocPlacement(d, e, t, s, component_id=c)
++        for d, e, t, s, c in zip(
+             record.doc_ids,
+             record.effective_lens,
+             record.truncated_flags,
+             record.trim_sides,
++            component_ids,
+         )
+     ]
+ 
+@@ -353,6 +361,7 @@ def _worker_fn(
+             trim_sides=[p.doc_trim_side for p in placements],
+             link_end_positions=link_end_positions,
+             link_target_doc_ids=link_target_doc_ids,
++            component_ids=[p.component_id for p in placements],
+             kv_block_count=kv_bc,
+             bucket_id=-1,
+         ))
+@@ -422,12 +431,17 @@ def _records_to_table(records: List[PackRecord]) -> pa.Table:
+             [r.link_target_doc_ids for r in records],
+             pa.list_(pa.list_(pa.int32())),
+         ),
++        "component_ids":       pa.array([r.component_ids       for r in records], pa.list_(pa.int32())),
+     })
+ 
+ 
+ def _table_to_records(table: pa.Table) -> List[PackRecord]:
+     cols = table.to_pydict()
+     n = len(cols["pack_id"])
++    # Back-compat: parquet written before component_ids existed lacks the
++    # column; leave it empty so _record_to_placements falls back to per-doc
++    # components (doc_concatenated degenerates to doc_causal).
++    has_components = "component_ids" in cols
+     return [
+         PackRecord(
+             pack_id=int(cols["pack_id"][i]),
+@@ -440,6 +454,8 @@ def _table_to_records(table: pa.Table) -> List[PackRecord]:
+             link_end_positions=[int(x) for x in cols["link_end_positions"][i]],
+             link_target_doc_ids=[[int(y) for y in row]
+                                  for row in cols["link_target_doc_ids"][i]],
++            component_ids=([int(x) for x in cols["component_ids"][i]]
++                           if has_components else []),
+         )
+         for i in range(n)
+     ]
+diff --git a/data/pack_sampler.py b/data/pack_sampler.py
+index 6df7b65..601fd01 100644
+--- a/data/pack_sampler.py
++++ b/data/pack_sampler.py
+@@ -35,12 +35,19 @@ class DocPlacement:
+             ``"tail"``. For causal language modeling we typically trim from the
+             ``"tail"``, but this is recorded explicitly so that collate logic
+             can slice tokens correctly.
++        component_id: Index of the traversal component (BFS sub-graph grown
++            from a single seed) this document belongs to within the pack. All
++            documents reached from the same seed share a ``component_id``;
++            disjoint sub-graphs packed into the same batch get distinct ids.
++            Used by the ``doc_concatenated`` mask to merge a component into one
++            super-document. Defaults to ``-1`` when not assigned by the sampler.
+     """
+ 
+     doc_id: int
+     effective_len: int
+     truncated: bool
+     doc_trim_side: str
++    component_id: int = -1
+ 
+ 
+ class PackBatchSampler:
+@@ -253,6 +260,9 @@ class PackBatchSampler:
+         placements: List[DocPlacement] = []
+         pack_doc_ids: Set[int] = set()
+         current_total_tokens = 0
++        # Monotonic counter: each _seed_and_grow_subgraph call grows one
++        # traversal component and tags its docs with the current value.
++        component_idx = 0
+ 
+         num_nodes = len(self.graph)
+         if num_nodes == 0:
+@@ -262,8 +272,9 @@ class PackBatchSampler:
+         # can find seeds.
+         while current_total_tokens < self.token_budget:
+             updated_total = self._seed_and_grow_subgraph(
+-                placements, pack_doc_ids, current_total_tokens
++                placements, pack_doc_ids, current_total_tokens, component_idx
+             )
++            component_idx += 1
+             # _seed_and_grow_subgraph mutates placements and pack_doc_ids and
+             # returns the new total token count.
+             current_total_tokens = updated_total
+@@ -287,6 +298,7 @@ class PackBatchSampler:
+         placements: List[DocPlacement],
+         pack_doc_ids: Set[int],
+         current_total_tokens: int,
++        component_id: int = -1,
+     ) -> int:
+         """
+         Seed a new graph subwalk and grow it using a traversal strategy.
+@@ -295,6 +307,8 @@ class PackBatchSampler:
+             placements: Current list of placements (mutated in-place).
+             pack_doc_ids: Set of doc ids already included in this pack.
+             current_total_tokens: Running total of tokens in the pack so far.
++            component_id: Identifier stamped on every DocPlacement produced by
++                this call, so docs reached from the same seed share a component.
+ 
+         Returns:
+             Updated ``current_total_tokens`` if a subgraph was added, or
+@@ -336,6 +350,7 @@ class PackBatchSampler:
+                     effective_len=per_doc_len,
+                     truncated=truncated,
+                     doc_trim_side=self.doc_level_trim_side,
++                    component_id=component_id,
+                 )
+             )
+             pack_doc_ids.add(first_doc_id)
+@@ -388,6 +403,7 @@ class PackBatchSampler:
+                     effective_len=per_doc_len,
+                     truncated=truncated,
+                     doc_trim_side=self.doc_level_trim_side,
++                    component_id=component_id,
+                 )
+             )
+             pack_doc_ids.add(candidate)
+@@ -413,12 +429,43 @@ class PackBatchSampler:
+         as possible, documents that are linked-to appear before documents that
+         link to them. Cycles are broken by falling back to insertion order for
+         any remaining nodes.
++
++        The sort is applied **independently within each traversal component**
++        and components are emitted as contiguous blocks (ordered by the
++        insertion index of their first document). Edges only exist between docs
++        of the same component (disjoint sub-graphs are graph-disconnected), so
++        sorting per-component is equivalent to the old global sort for ordering
++        purposes, but it guarantees each component stays contiguous in the pack
++        — a hard requirement for the ``doc_concatenated`` mask, whose kernel
++        merges a component only if its positions form a single contiguous run.
+         """
+         if self.order_mode == "as_traversed" or len(placements) <= 1:
+             return placements
+ 
++        # Group placements by component, preserving insertion order within each
++        # group and ordering the groups by their first-insertion index.
++        component_order: List[int] = []
++        component_members: Dict[int, List[DocPlacement]] = {}
++        for p in placements:
++            if p.component_id not in component_members:
++                component_members[p.component_id] = []
++                component_order.append(p.component_id)
++            component_members[p.component_id].append(p)
++
++        ordered: List[DocPlacement] = []
++        for comp_id in component_order:
++            ordered.extend(self._topo_sort_component(component_members[comp_id]))
++        return ordered
++
++    def _topo_sort_component(
++        self, placements: List[DocPlacement]
++    ) -> List[DocPlacement]:
++        """Kahn-sort a single component's placements (targets before linkers)."""
++        if len(placements) <= 1:
++            return placements
++
+         # Build induced adjacency: if u -> v in the original graph and both are
+-        # in this pack, we add an edge v -> u so that v is preferred before u.
++        # in this component, we add an edge v -> u so that v is preferred before u.
+         doc_ids = [p.doc_id for p in placements]
+         doc_set = set(doc_ids)
+         insertion_index: Dict[int, int] = {doc_id: i for i, doc_id in enumerate(doc_ids)}
+diff --git a/eval_checkpoints.py b/eval_checkpoints.py
+index 9e04dc4..d84e285 100644
+--- a/eval_checkpoints.py
++++ b/eval_checkpoints.py
+@@ -194,6 +194,15 @@ _SINGLE_DOC_BENCHMARKS = frozenset({
+     "hotpotqa",
+ })
+ 
++# Mask types whose attention is multi-document (so the 'experimental' condition
++# differs from the doc_causal 'baseline'). Single-doc benchmarks score each doc
++# in isolation, so for these models 'experimental' == 'baseline' and is skipped.
++_MULTI_DOC_MASK_TYPES = frozenset({
++    "cross_doc_link",
++    "doc_concat_link",
++    "doc_concatenated",
++})
++
+ _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
+     "baseline": {
+         "mask_type":               "doc_causal",
+@@ -332,29 +341,30 @@ def run_benchmarks_on_model(
+             if cond.get("_is_annotated"):
+                 continue
+ 
+-            # Skip conditions that only make sense for cross_doc_link models.
+-            # Doc-causal models ARE the baseline; running the baseline condition
+-            # on them gives identical mask_type as experimental — no information.
+-            if cond.get("requires_cross_doc_link") and model.mask_type != "cross_doc_link":
++            # Skip the doc_causal 'baseline' condition on models whose own mask
++            # is already doc_causal — it would be identical to experimental, no
++            # information. Multi-doc models (cross_doc_link, doc_concat*) all get
++            # a meaningful doc_causal baseline floor.
++            if cond.get("requires_cross_doc_link") and model.mask_type not in _MULTI_DOC_MASK_TYPES:
+                 logger.debug(
+-                    "Skipping condition %r for %s/%r: requires cross_doc_link model",
++                    "Skipping condition %r for %s/%r: requires multi-doc model",
+                     cname, bname, model.mask_type,
+                 )
+                 continue
+ 
+             # Skip the experimental condition on single-doc benchmarks when the
+-            # model is cross_doc_link. Each document is scored in isolation so
+-            # cross-doc grants can never fire — the result is identical to
+-            # baseline/doc_causal but pays full BIM construction cost per doc.
++            # model uses a multi-doc mask. Each document is scored in isolation so
++            # cross-doc attention can never fire — the result is identical to
++            # baseline/doc_causal but pays full mask construction cost per doc.
+             if (
+                 bname in _SINGLE_DOC_BENCHMARKS
+                 and cond.get("mask_type") is None
+-                and model.mask_type == "cross_doc_link"
++                and model.mask_type in _MULTI_DOC_MASK_TYPES
+             ):
+                 logger.info(
+                     "Skipping condition %r for %s: single-doc benchmark, "
+-                    "cross_doc_link mask has no effect (identical to baseline).",
+-                    cname, bname,
++                    "%s mask has no effect (identical to baseline).",
++                    cname, bname, model.mask_type,
+                 )
+                 continue
+ 
+diff --git a/main.py b/main.py
+index f1951cf..5d4d75b 100644
+--- a/main.py
++++ b/main.py
+@@ -662,12 +662,15 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+             "need to run without compile (e.g. for quick smoke tests)."
+         )
+ 
+-    if mask_type == 'cross_doc_link':
++    # cross_doc_link and doc_concat_link both use the link-grant kernel; the
++    # latter sets whole_doc_grant=True so a detected link concatenates the entire
++    # source doc onto the target (no link-position gate, strict FLOP-superset).
++    if mask_type in ('cross_doc_link', 'doc_concat_link'):
+         link_detector_name = cfg.get('model', {}).get('link_detector')
+         if not link_detector_name:
+             raise ValueError(
+                 "model.link_detector must be set to 'markdown' or 'python' "
+-                "when model.mask_type is 'cross_doc_link'"
++                f"when model.mask_type is '{mask_type}'"
+             )
+         enc = tiktoken.get_encoding('gpt2')
+         if link_detector_name == 'markdown':
+@@ -687,8 +690,19 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+                 max_grants_start=model_cfg.get('max_grants_start'),
+                 max_grants_warmup_steps=int(model_cfg.get('max_grants_warmup_steps', 0)),
+                 backend=attention_backend,
++                whole_doc_grant=(mask_type == 'doc_concat_link'),
+             )
+         )
++    elif mask_type == 'doc_concatenated':
++        # Merge each BFS traversal component into one causally-concatenated
++        # super-doc; reuses the doc-causal varlen kernel with component-keyed ids.
++        if use_triton:
++            attention_backend = 'varlen_bim_v2'
++            from model.graph_traversal.block_mask_creator import create_doc_concat_triton_mask
++            block_mask_creator = make_mask_creator_callable_from(create_doc_concat_triton_mask)
++        else:
++            attention_backend = 'flex'
++            block_mask_creator = make_mask_creator_callable(mask_type)
+     else:
+         if use_triton and mask_type == 'doc_causal':
+             attention_backend = 'varlen_bim_v2'
+@@ -1096,7 +1110,9 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+                 # community dirs  → community_pack_perplexity
+                 # random dirs     → held_out_perplexity (split="all" since dir is already filtered)
+                 _conditions = ["doceval"]
+-                if mask_type == "cross_doc_link":
++                # Multi-doc masks get the dual-mask eval: doc_causal 'baseline'
++                # (apples-to-apples) + the model's own mask 'experimental'.
++                if mask_type in ("cross_doc_link", "doc_concat_link", "doc_concatenated"):
+                     _conditions = ["baseline", "experimental"]
+ 
+                 _split_results: Dict[str, Any] = {}
+diff --git a/model/graph_traversal/block_mask_creator.py b/model/graph_traversal/block_mask_creator.py
+index f94caca..bd6cdf3 100644
+--- a/model/graph_traversal/block_mask_creator.py
++++ b/model/graph_traversal/block_mask_creator.py
+@@ -69,7 +69,7 @@ except ImportError:
+ 
+ from data.pack_sampler import PackBatchSampler
+ from data.dataset import GraphIndex, PretokShardedBackend
+-from data.layout import NullLayoutPolicy
++from data.layout import NullLayoutPolicy, make_layout_policy
+ from data.collate import build_packed_batch
+ from data.traversal import (
+     BFSStrategy,
+@@ -160,6 +160,98 @@ def create_doc_causal_triton_mask(
+     return DocCausalTritonMaskInputs(document_ids=document_ids)
+ 
+ 
++def _build_component_document_ids(
++    tokens: torch.Tensor, doc_spans: List[Any]
++) -> torch.Tensor:
++    """Build a [T] int32 document_ids tensor keyed by ``component_id``.
++
++    Documents sharing a ``component_id`` (a traversal sub-graph) are assigned
++    the SAME id, so the doc-causal kernel — which merges positions that lie in
++    the same contiguous run of equal ids — treats the whole component as one
++    causally-concatenated super-document.
++
++    This relies on each component occupying a single contiguous run in the pack
++    (guaranteed by ``PackBatchSampler._order_placements``). We assert that
++    invariant here and fail loud rather than silently building a malformed mask
++    if a future ordering change interleaves components.
++    """
++    device = tokens.device
++    seq_len = tokens.shape[-1]
++    document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
++
++    for span in doc_spans:
++        start = max(0, span.start)
++        end = min(seq_len, span.end)
++        if start < end:
++            # Fall back to doc_id when a span carries no component assignment
++            # (component_id == -1), making it its own singleton component.
++            comp = getattr(span, "component_id", -1)
++            document_ids[start:end] = comp if comp >= 0 else span.doc_id
++
++    # Contiguity check: every distinct component id (ignoring -1 gaps) must form
++    # exactly one contiguous run. Count runs per id and assert at most one.
++    ids_cpu = document_ids.detach().to("cpu")
++    if seq_len > 0:
++        ids_list = ids_cpu.tolist()
++        runs_seen: dict = {}
++        prev = None
++        for cid in ids_list:
++            if cid != prev:
++                if cid != -1:
++                    runs_seen[cid] = runs_seen.get(cid, 0) + 1
++                prev = cid
++        offenders = {cid: n for cid, n in runs_seen.items() if n > 1}
++        if offenders:
++            raise AssertionError(
++                "doc_concatenated requires each component to be one contiguous "
++                f"run, but these component ids are split across multiple runs: "
++                f"{offenders}. doc_spans order: "
++                f"{[(s.doc_id, getattr(s, 'component_id', -1), s.start, s.end) for s in doc_spans]}"
++            )
++
++    return document_ids
++
++
++def create_doc_concat_triton_mask(
++    tokens: torch.Tensor, doc_spans: List[Any], **kwargs
++) -> DocCausalTritonMaskInputs:
++    """doc_concatenated mask for the varlen_bim_v2 Triton kernel.
++
++    Identical to ``create_doc_causal_triton_mask`` except positions are labelled
++    by ``component_id`` instead of ``doc_id``, so a whole traversal component is
++    merged into one causally-concatenated super-document.
++    """
++    document_ids = _build_component_document_ids(tokens, doc_spans)
++    return DocCausalTritonMaskInputs(document_ids=document_ids)
++
++
++def create_doc_concat_block_mask(
++    tokens: torch.Tensor, doc_spans: List[Any], **kwargs
++) -> BlockMask:
++    """doc_concatenated mask as a FlexAttention BlockMask (inference/eval/viz).
++
++    Causal + component isolation: a position attends to earlier positions in the
++    same traversal component (the flex twin of ``create_doc_concat_triton_mask``).
++    """
++    device = tokens.device
++    seq_len = tokens.shape[-1]
++    document_ids = _build_component_document_ids(tokens, doc_spans)
++
++    def doc_concat_mod(b, h, q_idx, kv_idx):
++        causal = q_idx >= kv_idx
++        same_component = document_ids[q_idx] == document_ids[kv_idx]
++        return causal & same_component
++
++    return create_block_mask(
++        doc_concat_mod,
++        B=None,
++        H=None,
++        Q_LEN=seq_len,
++        KV_LEN=seq_len,
++        device=device,
++    )
++
++
+ def create_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **kwargs) -> BlockMask:
+     """
+     Creates a standard causal block mask (no document isolation).
+@@ -270,6 +362,7 @@ def create_doc_bidirectional_block_mask(tokens: torch.Tensor, doc_spans: List[An
+ 
+ MASK_CREATORS = {
+     'doc_causal': create_doc_causal_block_mask,
++    'doc_concatenated': create_doc_concat_block_mask,
+     'causal': create_causal_block_mask,
+     'full': create_full_attention_block_mask,
+     'doc_bidirectional': create_doc_bidirectional_block_mask,
+@@ -361,7 +454,7 @@ if __name__ == "__main__":
+     parser = argparse.ArgumentParser(description="Visualize FlexAttention mask for a real batch.")
+     parser.add_argument("dataset_dir", type=Path,
+                         help="Path to pretokenized dataset directory (REQUIRED)")
+-    _viz_mask_types = list_mask_creators() + ['cross_doc_link']
++    _viz_mask_types = list_mask_creators() + ['cross_doc_link', 'doc_concat_link']
+     parser.add_argument("--mask-type", type=str, default="doc_causal",
+                         choices=_viz_mask_types,
+                         help=f"Type of attention mask to create. Available: {', '.join(_viz_mask_types)}")
+@@ -374,6 +467,13 @@ if __name__ == "__main__":
+     parser.add_argument("--link-detector", type=str, default="markdown",
+                         choices=["markdown", "python"],
+                         help="Link detector for cross_doc_link: 'markdown' (Wikipedia) or 'python' (TheStack)")
++    parser.add_argument("--layout-policy", type=str, default="stochastic_identifier_prefix",
++                        choices=["null", "eos", "identifier_prefix",
++                                 "identifier_prefix_eos", "stochastic_identifier_prefix"],
++                        help="Layout policy for packing. Defaults to the training policy "
++                             "'stochastic_identifier_prefix' so link targets resolve to "
++                             "co-packed docs (cross_doc_link / doc_concat_link grants only "
++                             "fire when the identifier prefix is emitted into the tokens).")
+     args = parser.parse_args()
+ 
+     logging.basicConfig(level=logging.INFO)
+@@ -388,7 +488,17 @@ if __name__ == "__main__":
+     graph_index = GraphIndex(args.dataset_dir)
+     backend = PretokShardedBackend(graph_index)
+     
+-    # 2. Setup Sampler
++    # 2. Setup layout policy. The identifier-prefix policies emit each doc's
++    # identifier into its tokens, which is what lets the link detector resolve a
++    # link's target to a co-packed doc — without it cross_doc_link /
++    # doc_concat_link grants almost never fire. Defaults to the training policy.
++    _enc = tiktoken.get_encoding('gpt2') if tiktoken is not None else None
++    layout_policy = make_layout_policy(
++        args.layout_policy,
++        encode_fn=(_enc.encode_ordinary if _enc is not None else None),
++    )
++
++    # 3. Setup Sampler
+     logger.info(f"Initializing sampler with seed {args.seed} and strategy {args.strategy}...")
+ 
+     # Map strategy name to factory function
+@@ -406,21 +516,22 @@ if __name__ == "__main__":
+         doc_budget=args.doc_budget,
+         seed=args.seed,
+         overflow_policy="truncate",
+-        order_mode="prefer_targets_first"
++        order_mode="prefer_targets_first",
++        layout_policy=layout_policy,
+     )
+-    
+-    # 3. Fetch Batch
++
++    # 4. Fetch Batch
+     logger.info("Fetching batch...")
+     try:
+         placements = next(iter(pack_sampler))
+     except StopIteration:
+         logger.error("Sampler yielded no packs. Check budget or dataset.")
+         sys.exit(1)
+-        
++
+     batch = build_packed_batch(
+         graph=graph_index,
+         backend=backend,
+-        layout=NullLayoutPolicy(),
++        layout=layout_policy,
+         placements=placements,
+         as_2d=True
+     )
+@@ -433,11 +544,11 @@ if __name__ == "__main__":
+     doc_identifiers = [s.normed_identifier for s in doc_spans]
+     logger.info(f"Docs in batch ({len(doc_identifiers)}): {doc_identifiers}")
+ 
+-    # 4. Create Mask
++    # 5. Create Mask
+     cross_doc_creator = None
+-    if args.mask_type == 'cross_doc_link':
++    if args.mask_type in ('cross_doc_link', 'doc_concat_link'):
+         if tiktoken is None:
+-            raise ImportError("tiktoken is required for cross_doc_link visualization. Install with: pip install tiktoken")
++            raise ImportError(f"tiktoken is required for {args.mask_type} visualization. Install with: pip install tiktoken")
+         enc = tiktoken.get_encoding('gpt2')
+         if args.link_detector == 'python':
+             from model.graph_traversal.python_import_detector import PythonImportDetector
+@@ -445,22 +556,29 @@ if __name__ == "__main__":
+         else:
+             from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
+             detector = MarkdownLinkDetector(decode_fn=enc.decode)
+-        cross_doc_creator = CrossDocLinkMaskCreator(link_detector=detector)
++        # doc_concat_link: whole-doc grants (full concatenation, no link gate).
++        cross_doc_creator = CrossDocLinkMaskCreator(
++            link_detector=detector,
++            whole_doc_grant=(args.mask_type == 'doc_concat_link'),
++        )
+         block_mask = cross_doc_creator(tokens, doc_spans)
+     else:
+         block_mask = get_mask_creator(args.mask_type)(tokens, doc_spans)
+     logger.info(f"Block mask created using '{args.mask_type}' strategy.")
+ 
+-    # 5. Visualization
++    # 6. Visualization
+     input_len = tokens.shape[-1]
+ 
+     # Reconstruct the dense mask by re-applying the mask logic
+     # This is generic and works for any mask type
+     doc_map = torch.full((input_len,), -1, dtype=torch.int32)
++    comp_map = torch.full((input_len,), -1, dtype=torch.int32)
+     for span in doc_spans:
+         s, e = max(0, span.start), min(input_len, span.end)
+         if s < e:
+             doc_map[s:e] = span.doc_id
++            comp = getattr(span, "component_id", -1)
++            comp_map[s:e] = comp if comp >= 0 else span.doc_id
+ 
+     # Generate dense mask based on the selected mask type
+     # We reconstruct the logic here for visualization purposes
+@@ -472,6 +590,11 @@ if __name__ == "__main__":
+         causal_mask = q_indices >= k_indices
+         same_doc_mask = doc_map.unsqueeze(1) == doc_map.unsqueeze(0)
+         dense_mask = causal_mask & same_doc_mask
++    elif args.mask_type == 'doc_concatenated':
++        # Causal + component isolation (connected docs merged into a super-doc)
++        causal_mask = q_indices >= k_indices
++        same_component = comp_map.unsqueeze(1) == comp_map.unsqueeze(0)
++        dense_mask = causal_mask & same_component
+     elif args.mask_type == 'causal':
+         # Just causal
+         dense_mask = q_indices >= k_indices
+@@ -481,7 +604,7 @@ if __name__ == "__main__":
+     elif args.mask_type == 'doc_bidirectional':
+         # Same document only (bidirectional within docs)
+         dense_mask = doc_map.unsqueeze(1) == doc_map.unsqueeze(0)
+-    elif args.mask_type == 'cross_doc_link':
++    elif args.mask_type in ('cross_doc_link', 'doc_concat_link'):
+         dense_mask = cross_doc_creator.build_dense_mask_for_visualization(
+             tokens, doc_spans, device=torch.device('cpu')
+         )
+@@ -518,7 +641,7 @@ if __name__ == "__main__":
+     plt.savefig(output_img)
+     logger.info(f"Saved visualization to {output_img}")
+ 
+-    # 6. Dump Batch Info
++    # 7. Dump Batch Info
+     # Initialize decoder
+     enc = None
+     if tiktoken:
+diff --git a/model/graph_traversal/cross_doc_mask.py b/model/graph_traversal/cross_doc_mask.py
+index 311a212..fd9176a 100644
+--- a/model/graph_traversal/cross_doc_mask.py
++++ b/model/graph_traversal/cross_doc_mask.py
+@@ -171,12 +171,17 @@ def _kv_block_count_analytical(
+     link_to_target: Dict[int, List[int]],
+     seq_len: int,
+     block_size: int = 128,
++    whole_doc_grant: bool = False,
+ ) -> int:
+     """Method C: set-based analytical count of non-empty (q_block, kv_block) pairs.
+ 
+     Exact when every target doc ends before the corresponding link_end_pos
+     (which holds for standard packing order).  Counts both causal+same_doc
+     blocks and cross-doc grant blocks without double-counting.
++
++    When ``whole_doc_grant`` is True (doc_concat_link), the grant region begins
++    at the source doc's start rather than the link position, matching the grant
++    bitmasks built with ``CrossDocLinkMaskCreator(whole_doc_grant=True)``.
+     """
+     non_empty: Set[Tuple[int, int]] = set()
+ 
+@@ -201,10 +206,11 @@ def _kv_block_count_analytical(
+         if q_span is None:
+             continue
+         grant_end = min(seq_len, q_span.end)
+-        if link_pos >= grant_end:
++        grant_start = max(0, q_span.start) if whole_doc_grant else link_pos
++        if grant_start >= grant_end:
+             continue
+ 
+-        q_first_blk = link_pos // block_size
++        q_first_blk = grant_start // block_size
+         q_last_blk = (grant_end - 1) // block_size
+ 
+         for target_doc_id in target_doc_ids:
+@@ -256,6 +262,7 @@ class CrossDocLinkMaskCreator:
+         max_grants_warmup_steps: int = 0,
+         backend: str = "flex",
+         triton_block_size: int = 64,
++        whole_doc_grant: bool = False,
+     ):
+         """
+         Args:
+@@ -263,6 +270,15 @@ class CrossDocLinkMaskCreator:
+             max_grants:             Maximum cross-doc grants per batch.
+             max_grants_start:       Cosine-warmup starting value (None = no warmup).
+             max_grants_warmup_steps: Steps over which to ramp max_grants.
++            whole_doc_grant:        When True, a detected link grants attention from
++                                    the *entire source document* (``source.start``
++                                    onward) to the target, instead of only from the
++                                    link position onward. This implements the
++                                    ``doc_concat_link`` condition: connected docs are
++                                    fully concatenated (no link-position gating), a
++                                    strict FLOP-superset of the gated cross_doc_link
++                                    grant. The kernel is unchanged — only the grant
++                                    bitmask construction differs.
+             backend:                ``"flex"``   — return FlexAttention ``BlockMask``
+                                                    (default, used during training
+                                                    with torch.compile + DDP).
+@@ -280,6 +296,7 @@ class CrossDocLinkMaskCreator:
+         self.max_grants = max_grants
+         self.backend = backend
+         self.triton_block_size = triton_block_size
++        self.whole_doc_grant = whole_doc_grant
+         # Schedule: cosine ascent from max_grants_start → max_grants over
+         # max_grants_warmup_steps forward passes.  Disabled when start is None
+         # or warmup_steps is 0 (max_grants is used from step 0).
+@@ -460,8 +477,11 @@ class CrossDocLinkMaskCreator:
+                     continue
+ 
+                 # Grant access: positions from link_pos onward (within source doc)
+-                # can attend to all positions in the target doc
+-                grant_start = link_pos
++                # can attend to all positions in the target doc. Under
++                # whole_doc_grant (doc_concat_link) the grant instead spans the
++                # entire source doc — full concatenation, no link-position gate.
++                grant_start = link_doc_span.start if self.whole_doc_grant else link_pos
++                grant_start = max(0, grant_start)
+                 grant_end = min(seq_len, link_doc_span.end)
+                 target_start = max(0, target_doc_span.start)
+                 target_end = min(seq_len, target_doc_span.end)
+@@ -542,7 +562,11 @@ class CrossDocLinkMaskCreator:
+                     logger.warning(f"Target doc {target_doc_id} not found in doc_spans")
+                     continue
+ 
+-                grant_start = link_pos
++                # whole_doc_grant (doc_concat_link): grant from the source doc's
++                # start, fully concatenating it onto the target. Otherwise gate
++                # from the link position (cross_doc_link).
++                grant_start = link_doc_span.start if self.whole_doc_grant else link_pos
++                grant_start = max(0, grant_start)
+                 grant_end = min(seq_len, link_doc_span.end)
+                 target_start = max(0, target_doc_span.start)
+                 target_end = min(seq_len, target_doc_span.end)
+diff --git a/model/model.py b/model/model.py
+index 349b75c..88f83c8 100644
+--- a/model/model.py
++++ b/model/model.py
+@@ -105,34 +105,51 @@ class TS2TSModel:
+             make_mask_creator_callable,
+             make_mask_creator_callable_from,
+             create_doc_causal_triton_mask,
++            create_doc_concat_triton_mask,
+         )
+         from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+ 
+         creators: Dict[str, Callable] = {}
+ 
+-        # doc_causal always available — needed for eval overrides on cross_doc_link models
++        # doc_causal always available — needed for eval overrides on every model
++        # (the apples-to-apples isolated-attention eval condition).
+         creators['doc_causal_flex'] = make_mask_creator_callable('doc_causal')
+         creators['doc_causal_triton'] = make_mask_creator_callable_from(
+             create_doc_causal_triton_mask
+         )
+ 
+-        if self.mask_type == 'cross_doc_link':
++        if self.mask_type == 'doc_concatenated':
++            # Merge each traversal component into one causally-concatenated
++            # super-doc; reuses the doc-causal varlen kernel via component ids.
++            creators['doc_concatenated_flex'] = make_mask_creator_callable(
++                'doc_concatenated'
++            )
++            creators['doc_concatenated_triton'] = make_mask_creator_callable_from(
++                create_doc_concat_triton_mask
++            )
++
++        if self.mask_type in ('cross_doc_link', 'doc_concat_link'):
+             if self.link_detector is None:
+                 raise ValueError(
+-                    "link_detector must be set when mask_type='cross_doc_link'"
++                    f"link_detector must be set when mask_type='{self.mask_type}'"
+                 )
++            # doc_concat_link grants whole-doc attention (full concatenation, no
++            # link-position gate); cross_doc_link gates from the link position.
++            whole_doc = self.mask_type == 'doc_concat_link'
+             # Triton creator: no warmup state (warmup lives in the training module)
+-            creators['cross_doc_link_triton'] = make_mask_creator_callable_from(
++            creators[f'{self.mask_type}_triton'] = make_mask_creator_callable_from(
+                 CrossDocLinkMaskCreator(
+                     link_detector=self.link_detector,
+                     backend='triton_v12',
++                    whole_doc_grant=whole_doc,
+                 )
+             )
+             # Flex creator: used for inference and eval
+-            creators['cross_doc_link_flex'] = make_mask_creator_callable_from(
++            creators[f'{self.mask_type}_flex'] = make_mask_creator_callable_from(
+                 CrossDocLinkMaskCreator(
+                     link_detector=self.link_detector,
+                     backend='flex',
++                    whole_doc_grant=whole_doc,
+                 )
+             )
+ 
+diff --git a/scripts/generate_pack_fixtures.py b/scripts/generate_pack_fixtures.py
+index 26ccb6b..45bdb19 100644
+--- a/scripts/generate_pack_fixtures.py
++++ b/scripts/generate_pack_fixtures.py
+@@ -8,7 +8,8 @@ in tests/fixtures/real_packs/.
+ Each fixture is a dict:
+     tokens          [T] int64 token sequence (1-D, input tokens only)
+     doc_spans       list of dicts: {doc_id, start, end, raw_identifier,
+-                                    normed_identifier, outgoing_identifiers, truncated}
++                                    normed_identifier, outgoing_identifiers, truncated,
++                                    component_id}
+     link_to_target  {link_pos: [target_doc_id, ...]} — pre-resolved grants
+     n_grants        int  (total resolved grants in this pack)
+     kv_block_count  int  (analytical block count including cross-doc grants)
+@@ -103,6 +104,7 @@ def _collect_packs(
+                 "normed_identifier":   s.normed_identifier,
+                 "outgoing_identifiers": list(s.outgoing_identifiers),
+                 "truncated":           s.truncated,
++                "component_id":        getattr(s, "component_id", s.doc_id),
+             }
+             for s in doc_spans_raw
+         ]
+diff --git a/tests/data/test_pack_sampler.py b/tests/data/test_pack_sampler.py
+index 2a3be07..35c8b83 100644
+--- a/tests/data/test_pack_sampler.py
++++ b/tests/data/test_pack_sampler.py
+@@ -160,6 +160,51 @@ def test_order_placements_prefer_targets_first():
+     assert [p.doc_id for p in ordered] == [2, 1, 0]
+ 
+ 
++def test_order_placements_keeps_components_contiguous():
++    """prefer_targets_first must keep each traversal component contiguous.
++
++    Two independent chains (10->11->12 and 20->21) are packed together. The
++    targets-first sort reverses each chain internally, but a component's docs
++    must never be interleaved with another component's — the doc_concatenated
++    mask kernel requires each component to be a single contiguous run.
++    """
++    graph = DummyGraph(
++        token_lens={d: 1 for d in (10, 11, 12, 20, 21)},
++        outgoing={10: [11], 11: [12], 12: [], 20: [21], 21: []},
++        incoming={11: [10], 12: [11], 21: [20]},
++    )
++
++    sampler = PackBatchSampler(
++        graph=graph,
++        strategy_factory=lambda: RandomSelectionStrategy(),
++        token_budget=10,
++        order_mode="prefer_targets_first",
++        doc_budget=None,
++        overflow_policy="truncate",
++        doc_level_trim_side="tail",
++        pack_level_trim_side="head",
++        seed=0,
++    )
++
++    # Deliberately interleave the two components in insertion order.
++    placements = [
++        DocPlacement(10, 1, False, "tail", component_id=0),
++        DocPlacement(20, 1, False, "tail", component_id=1),
++        DocPlacement(11, 1, False, "tail", component_id=0),
++        DocPlacement(21, 1, False, "tail", component_id=1),
++        DocPlacement(12, 1, False, "tail", component_id=0),
++    ]
++
++    ordered = sampler._order_placements(placements)
++
++    # Each component appears as one contiguous block; component 0 first since
++    # its first doc was inserted before component 1's.
++    comp_seq = [p.component_id for p in ordered]
++    assert comp_seq == [0, 0, 0, 1, 1]
++    # Within each component, targets precede linkers.
++    assert [p.doc_id for p in ordered] == [12, 11, 10, 21, 20]
++
++
+ def test_pack_level_truncation_head_vs_tail():
+     """Pack-level truncation should trim from the configured end of the pack."""
+     graph = DummyGraph(
+
+diff --git a/configs/simplewiki_doc_concat_link.yaml b/configs/simplewiki_doc_concat_link.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/simplewiki_doc_concat_link.yaml
+@@ -0,0 +1,102 @@
++data:
++  dataset_dir: <to/be/generated>/pretokenized_datasets/simplewiki
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   <to/be/generated>/pretokenized_datasets/simplewiki/splits/train
++  val_dirs:
++    val_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_community
++    val_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_random
++  test_dirs:
++    test_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_community
++    test_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  # doc_concat_link: a detected link concatenates the *entire* source doc onto
++  # the target (full causal, no link-position gate) — a strict FLOP-superset of
++  # cross_doc_link with the same connectivity but no inference-time linking.
++  # Reuses the cross-doc grant kernel with whole_doc_grant=True.
++  mask_type: 'doc_concat_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  # max_grants_start: 64
++  # max_grants_warmup_steps: 5000
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # determined by epoch precomputation once community partitioner is implemented
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
++    # experimental = the model's own doc_concat_link mask.
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    # No 'annotated' condition: link injection at inference is a cross_doc_link
++    # capability; concat conditions train link-aware but eval with eos layout
++    # (no inference-time link prediction — that's their deliberate disadvantage).
++    - {name: wiki_qa,            conditions: [doceval]}
++    - {name: hellaswag,          conditions: [doceval]}
++    - {name: boolq,              conditions: [doceval]}
++    - {name: openbookqa,         conditions: [doceval]}
++    - {name: hotpotqa,           conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: <to/be/generated>/pretokenized_datasets/simplewiki
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/simplewiki_doc_concatenated.yaml b/configs/simplewiki_doc_concatenated.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/simplewiki_doc_concatenated.yaml
+@@ -0,0 +1,95 @@
++data:
++  dataset_dir: <to/be/generated>/pretokenized_datasets/simplewiki
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   <to/be/generated>/pretokenized_datasets/simplewiki/splits/train
++  val_dirs:
++    val_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_community
++    val_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_random
++  test_dirs:
++    test_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_community
++    test_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  # doc_concatenated: merge each BFS traversal component into one causally-
++  # concatenated super-doc (full causal attention across connected docs). FLOP
++  # control for cross_doc_link — more FLOPs than doc_causal, no inference-time
++  # link prediction. Reuses the doc-causal varlen kernel via component ids.
++  mask_type: 'doc_concatenated'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # determined by epoch precomputation once community partitioner is implemented
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
++    # experimental = the model's own doc_concatenated mask.
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: <to/be/generated>/pretokenized_datasets/simplewiki
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/thestack_doc_concat_link.yaml b/configs/thestack_doc_concat_link.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/thestack_doc_concat_link.yaml
+@@ -0,0 +1,99 @@
++data:
++  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  val_dirs:
++    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
++    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++  test_dirs:
++    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
++    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  # doc_concat_link: a detected link concatenates the *entire* source doc onto
++  # the target (full causal, no link-position gate) — a strict FLOP-superset of
++  # cross_doc_link with the same connectivity but no inference-time linking.
++  # Reuses the cross-doc grant kernel with whole_doc_grant=True.
++  mask_type: 'doc_concat_link'
++  link_detector: 'python'
++  max_grants: 256
++  # max_grants_start: 64
++  # max_grants_warmup_steps: 5000
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # set after epoch precomputation; BucketedPackDataset terminates naturally
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 30
++  val_interval: 300
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
++    # experimental = the model's own doc_concat_link mask.
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    # No repobench_cross_doc: concat conditions deliberately do NOT do
++    # inference-time link prediction (inference_layout_policy: eos), so the
++    # cross-doc inference benchmarks don't apply — that capability is unique to
++    # the cross_doc_link experimental condition.
++    - {name: repobench,                 conditions: [doceval]}
++    - {name: codexglue_code_to_text,    conditions: [doceval]}
++    - {name: humaneval_buggy,           conditions: [doceval]}
++  max_docs: 500
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/thestack_doc_concatenated.yaml b/configs/thestack_doc_concatenated.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/thestack_doc_concatenated.yaml
+@@ -0,0 +1,91 @@
++data:
++  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  val_dirs:
++    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
++    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++  test_dirs:
++    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
++    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  # doc_concatenated: merge each BFS traversal component into one causally-
++  # concatenated super-doc (full causal attention across connected docs). FLOP
++  # control for cross_doc_link — more FLOPs than doc_causal, no inference-time
++  # link prediction. Reuses the doc-causal varlen kernel via component ids.
++  mask_type: 'doc_concatenated'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # set after epoch precomputation; BucketedPackDataset terminates naturally
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 30
++  val_interval: 300
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
++    # experimental = the model's own doc_concatenated mask.
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: repobench,                 conditions: [doceval]}
++    - {name: codexglue_code_to_text,    conditions: [doceval]}
++    - {name: humaneval_buggy,           conditions: [doceval]}
++  max_docs: 500
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/scripts/launch_concat_smoke.sh b/scripts/launch_concat_smoke.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/launch_concat_smoke.sh
+@@ -0,0 +1,63 @@
++#!/usr/bin/env bash
++# Smoke-test all four mask conditions on both datasets (8 jobs).
++#
++# Goal: confirm each condition TRAINS (no crash, no NaN loss, no pathological
++# slowdown) on the real compute graph. Per CLAUDE.md we keep compile/backend/
++# max_seq_len at production values and only shrink steps/val/eval — anything
++# else would silently test a different execution path.
++#
++# 2 GPUs per job (modest resource use; loss descends slower at the smaller
++# effective batch but that's fine for a smoke). thestack forces the LIVE data
++# path (--data.epoch_dirs '') because the existing precomputed epoch dirs
++# predate component_id, on which doc_concatenated would silently degenerate to
++# doc_causal.
++set -euo pipefail
++
++ART=/fss/evin_t/tagseq2tagseq_artifacts
++EXCLUDE="GPU-495,GPU-954,GPU-269,GPU-423,GPU-658,GPU-670"   # broken-NFS + down nodes
++
++# Shrunk-but-real smoke overrides. NOTE: model.compile, attention_backend, and
++# max_seq_len are deliberately left at config (production) values.
++COMMON=(
++  --gpus-per-node 2
++  --time 02:00:00
++  --no-tail
++  --exclude "$EXCLUDE"
++  --train_loop.max_optimizer_steps 20
++  --train_loop.val_steps 2
++  --train_loop.val_interval 10
++  --eval.run_on_completion false
++)
++
++launch_simplewiki () {
++  local cfg=$1
++  python launch_slurm.py "${COMMON[@]}" --config "configs/${cfg}.yaml" \
++    --data.dataset_dir "$ART/pretokenized_datasets/simplewiki" \
++    --data.train_dir   "$ART/pretokenized_datasets/simplewiki/splits/train" \
++    --data.val_dirs.val_community "$ART/pretokenized_datasets/simplewiki/splits/val_community" \
++    --data.val_dirs.val_random    "$ART/pretokenized_datasets/simplewiki/splits/val_random"
++}
++
++launch_thestack () {
++  local cfg=$1
++  # epoch_dirs '' forces the live PackBatchSampler path (generates component_id).
++  python launch_slurm.py "${COMMON[@]}" --config "configs/${cfg}.yaml" \
++    --data.dataset_dir "$ART/pretokenized_datasets/thestack" \
++    --data.train_dir   "$ART/pretokenized_datasets/thestack/splits/train" \
++    --data.epoch_dirs  '' \
++    --data.val_dirs.val_community "$ART/pretokenized_datasets/thestack/splits/val_community" \
++    --data.val_dirs.val_random    "$ART/pretokenized_datasets/thestack/splits/val_random"
++}
++
++echo "=== simplewiki ==="
++launch_simplewiki simplewiki_doc_causal
++launch_simplewiki simplewiki_doc_concatenated
++launch_simplewiki simplewiki_cross_doc
++launch_simplewiki simplewiki_doc_concat_link
++
++echo "=== thestack ==="
++launch_thestack thestack_doc_causal
++launch_thestack thestack_doc_concatenated
++launch_thestack thestack_cross_doc
++launch_thestack thestack_doc_concat_link
++
+
+diff --git a/tests/model/graph_traversal/test_doc_concat_masks.py b/tests/model/graph_traversal/test_doc_concat_masks.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/tests/model/graph_traversal/test_doc_concat_masks.py
+@@ -0,0 +1,233 @@
++"""
++Tests for the two concat-baseline mask conditions:
++
++  * ``doc_concatenated``  — merge each BFS traversal component into one causally
++    concatenated super-doc. Built by ``create_doc_concat_*`` from ``component_id``;
++    reuses the doc-causal varlen kernel.
++  * ``doc_concat_link``   — a detected link concatenates the *entire* source doc
++    onto its target. Built by ``CrossDocLinkMaskCreator(whole_doc_grant=True)``;
++    reuses the cross-doc-link grant kernel.
++
++These run on CPU (dense / flex BlockMask reconstruction); they do not require CUDA.
++"""
++
++import random
++from dataclasses import dataclass, field
++from typing import Dict, List
++
++import pytest
++import torch
++
++from model.graph_traversal.cross_doc_mask import (
++    CrossDocLinkMaskCreator,
++    _kv_block_count_analytical,
++)
++from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
++from model.graph_traversal.block_mask_creator import (
++    _build_component_document_ids,
++    create_doc_concat_triton_mask,
++)
++
++CPU = torch.device("cpu")
++
++
++@dataclass
++class MockDocSpan:
++    doc_id: int
++    raw_identifier: str
++    start: int
++    end: int
++    truncated: bool = False
++    outgoing_identifiers: List[str] = field(default_factory=list)
++    component_id: int = -1
++
++
++def _creator(whole_doc_grant: bool, max_grants: int = 64) -> CrossDocLinkMaskCreator:
++    import tiktoken
++    enc = tiktoken.get_encoding("gpt2")
++    return CrossDocLinkMaskCreator(
++        link_detector=MarkdownLinkDetector(decode_fn=enc.decode),
++        max_grants=max_grants,
++        whole_doc_grant=whole_doc_grant,
++    )
++
++
++# ---------------------------------------------------------------------------
++# 1. whole_doc_grant grant semantics (doc_concat_link)
++# ---------------------------------------------------------------------------
++
++class TestWholeDocGrant:
++    def test_grant_spans_whole_source_doc(self):
++        """whole_doc_grant grants from source.start; gated grants from link_pos."""
++        seq_len = 16
++        doc_spans = [
++            MockDocSpan(doc_id=0, raw_identifier="A", start=0, end=5),
++            MockDocSpan(doc_id=1, raw_identifier="B", start=5, end=16),
++        ]
++        link_to_target = {8: [0]}  # link at pos 8 inside B, target doc A
++
++        gated = _creator(whole_doc_grant=False)._build_cross_doc_mask(
++            seq_len, doc_spans, link_to_target, CPU
++        )
++        whole = _creator(whole_doc_grant=True)._build_cross_doc_mask(
++            seq_len, doc_spans, link_to_target, CPU
++        )
++
++        # Gated: only positions [8, 16) of B can see A.
++        assert gated[8, 2].item() is True
++        assert gated[5, 2].item() is False   # before the link position
++        assert gated[7, 2].item() is False
++
++        # Whole-doc: the ENTIRE source doc B [5, 16) can see A.
++        assert whole[5, 2].item() is True
++        assert whole[7, 2].item() is True
++        assert whole[8, 2].item() is True
++        # Positions before B (i.e. in A itself) still cannot see A via a grant.
++        assert whole[4, 2].item() is False
++
++        # whole_doc strictly contains gated.
++        assert (whole | gated).equal(whole)
++        assert whole.sum() > gated.sum()
++
++    def test_whole_doc_grant_bitmasks_match_dense(self):
++        """The bitmask path agrees with the dense path under whole_doc_grant."""
++        seq_len = 30
++        doc_spans = [
++            MockDocSpan(doc_id=0, raw_identifier="A", start=0, end=8),
++            MockDocSpan(doc_id=1, raw_identifier="B", start=8, end=18),
++            MockDocSpan(doc_id=2, raw_identifier="C", start=18, end=30),
++        ]
++        link_to_target = {12: [0], 22: [0], 25: [1]}
++        c = _creator(whole_doc_grant=True)
++        dense = c._build_cross_doc_mask(seq_len, doc_spans, link_to_target, CPU)
++        q_bms, kv_bms = c._build_grant_bitmasks(seq_len, doc_spans, link_to_target, CPU)
++        bitmask_dense = (q_bms[0][:, None] & kv_bms[0][None, :]) != 0
++        for q_bm, kv_bm in zip(q_bms[1:], kv_bms[1:]):
++            bitmask_dense = bitmask_dense | ((q_bm[:, None] & kv_bm[None, :]) != 0)
++        assert torch.equal(dense, bitmask_dense)
++
++    def test_analytical_count_matches_geometry_whole_doc(self):
++        """_kv_block_count_analytical(whole_doc_grant=True) counts the wider grant."""
++        seq_len = 384
++        doc_spans = [
++            MockDocSpan(doc_id=0, raw_identifier="A", start=0, end=128),
++            MockDocSpan(doc_id=1, raw_identifier="B", start=128, end=384),
++        ]
++        link_to_target = {300: [0]}
++        gated = _kv_block_count_analytical(doc_spans, link_to_target, seq_len, whole_doc_grant=False)
++        whole = _kv_block_count_analytical(doc_spans, link_to_target, seq_len, whole_doc_grant=True)
++        # The whole-doc grant covers more query blocks, never fewer.
++        assert whole >= gated
++
++
++# ---------------------------------------------------------------------------
++# 2. component relabeling + contiguity assertion (doc_concatenated)
++# ---------------------------------------------------------------------------
++
++class TestComponentDocumentIds:
++    def test_contiguous_components_merge(self):
++        tokens = torch.zeros(1, 6, dtype=torch.long)
++        spans = [
++            MockDocSpan(10, "a", 0, 2, component_id=0),
++            MockDocSpan(11, "b", 2, 4, component_id=0),
++            MockDocSpan(20, "c", 4, 6, component_id=1),
++        ]
++        ids = _build_component_document_ids(tokens, spans)
++        assert ids.tolist() == [0, 0, 0, 0, 1, 1]
++
++    def test_interleaved_components_raise(self):
++        tokens = torch.zeros(1, 6, dtype=torch.long)
++        spans = [
++            MockDocSpan(10, "a", 0, 2, component_id=0),
++            MockDocSpan(20, "b", 2, 4, component_id=1),
++            MockDocSpan(11, "c", 4, 6, component_id=0),  # component 0 split!
++        ]
++        with pytest.raises(AssertionError, match="contiguous"):
++            _build_component_document_ids(tokens, spans)
++
++    def test_component_id_minus_one_falls_back_to_doc_id(self):
++        tokens = torch.zeros(1, 6, dtype=torch.long)
++        spans = [
++            MockDocSpan(10, "a", 0, 3, component_id=-1),
++            MockDocSpan(20, "b", 3, 6, component_id=-1),
++        ]
++        ids = _build_component_document_ids(tokens, spans)
++        assert ids.tolist() == [10, 10, 10, 20, 20, 20]
++
++    def test_triton_mask_inputs_carry_component_ids(self):
++        tokens = torch.zeros(1, 6, dtype=torch.long)
++        spans = [
++            MockDocSpan(10, "a", 0, 3, component_id=7),
++            MockDocSpan(11, "b", 3, 6, component_id=7),
++        ]
++        out = create_doc_concat_triton_mask(tokens, spans)
++        assert out.document_ids.tolist() == [7, 7, 7, 7, 7, 7]
++
++    def test_concat_merges_more_than_doc_causal(self):
++        """Two linked docs in one component attend across the boundary; doc_causal does not."""
++        tokens = torch.zeros(1, 6, dtype=torch.long)
++        spans = [
++            MockDocSpan(10, "a", 0, 3, component_id=0),
++            MockDocSpan(11, "b", 3, 6, component_id=0),
++        ]
++        comp_ids = _build_component_document_ids(tokens, spans)
++        # doc-causal labels positions by doc_id.
++        doc_ids = torch.tensor([10, 10, 10, 11, 11, 11])
++        q = torch.arange(6).unsqueeze(1)
++        kv = torch.arange(6).unsqueeze(0)
++        causal = q >= kv
++        concat_mask = causal & (comp_ids.unsqueeze(1) == comp_ids.unsqueeze(0))
++        doc_causal_mask = causal & (doc_ids.unsqueeze(1) == doc_ids.unsqueeze(0))
++        # Position 4 (doc B) can attend to position 1 (doc A) under concat, not doc_causal.
++        assert concat_mask[4, 1].item() is True
++        assert doc_causal_mask[4, 1].item() is False
++        # concat is a strict superset of doc_causal.
++        assert (concat_mask | doc_causal_mask).equal(concat_mask)
++
++
++# ---------------------------------------------------------------------------
++# 3. flex BlockMask agrees with the dense reconstruction (CUDA only)
++# ---------------------------------------------------------------------------
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention requires CUDA")
++def test_doc_concat_flex_blockmask_matches_dense():
++    """Run flex_attention with the concat BlockMask and compare to a manually
++    masked reference. BlockMask.to_dense() is block-granular (128-block), so we
++    validate at element granularity via the actual attention output instead.
++    """
++    from torch.nn.attention.flex_attention import flex_attention
++    from model.graph_traversal.block_mask_creator import create_doc_concat_block_mask
++
++    device = torch.device("cuda")
++    # Use a seq_len > one flex block so the mask actually partitions the sequence.
++    seq_len = 256
++    comp_ids = torch.zeros(seq_len, dtype=torch.long)
++    comp_ids[:160] = 0   # component 0 spans docs A+B (a merged super-doc)
++    comp_ids[160:] = 1   # component 1 is a separate doc
++    spans = [
++        MockDocSpan(0, "a", 0, 96, component_id=0),
++        MockDocSpan(1, "b", 96, 160, component_id=0),
++        MockDocSpan(2, "c", 160, seq_len, component_id=1),
++    ]
++    tokens = torch.zeros(1, seq_len, dtype=torch.long, device=device)
++    bm = create_doc_concat_block_mask(tokens, spans)
++
++    torch.manual_seed(0)
++    H, D = 2, 32
++    q = torch.randn(1, H, seq_len, D, device=device, dtype=torch.float32)
++    k = torch.randn(1, H, seq_len, D, device=device, dtype=torch.float32)
++    v = torch.randn(1, H, seq_len, D, device=device, dtype=torch.float32)
++
++    out_flex = flex_attention(q, k, v, block_mask=bm)
++
++    # Reference: dense masked attention with the same causal + same-component mask.
++    comp = comp_ids.to(device)
++    qi = torch.arange(seq_len, device=device).unsqueeze(1)
++    ki = torch.arange(seq_len, device=device).unsqueeze(0)
++    allow = (qi >= ki) & (comp.unsqueeze(1) == comp.unsqueeze(0))   # [T, T]
++    scores = (q @ k.transpose(-1, -2)) / (D ** 0.5)                 # [1, H, T, T]
++    scores = scores.masked_fill(~allow, float("-inf"))
++    out_ref = torch.softmax(scores, dim=-1) @ v
++
++    assert torch.allclose(out_flex, out_ref, atol=1e-3, rtol=1e-3)
++

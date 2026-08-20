@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "run_id": "run_20260807_004016_085353",
+  "naming_convention": "submitit",
+  "source_run_dirs": [
+    "/fss/evin_t/tagseq2tagseq/runs/run_20260807_004016_085353"
+  ],
+  "run_dir_exists": true,
+  "warnings": [
+    "no reproducibility dir"
+  ],
+  "reproduce": null,
+  "environment": null,
+  "hyperparameters": null,
+  "hyperparameters_sha256": null,
+  "timestamps": {
+    "run_started": "2026-08-07T00:40:16"
+  },
+  "eval": {
+    "present": false,
+    "eval_results_sha256": null,
+    "metrics": null
+  },
+  "distilled_at": "2026-08-18T15:33:23Z"
+}

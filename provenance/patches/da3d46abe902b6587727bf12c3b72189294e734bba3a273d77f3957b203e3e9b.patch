@@ -1,0 +1,296 @@
+diff --git a/TODOS.md b/TODOS.md
+index 8b150a5..181579f 100644
+--- a/TODOS.md
++++ b/TODOS.md
+@@ -51,30 +51,63 @@ a redirect title that isn't a first-class node.
+ 
+ ## Training
+ 
+-### 8-GPU (multi-rank DDP) training hangs (BUG)
+-Multi-rank DDP training hangs and is killed by the wall-clock timeout. Observed
+-facts only (no diagnosis):
+-- **Reproduced** on the arxiv `cross_doc_link` config via `launch_slurm.py`,
+-  1 node × 8 GPUs, smoke model (`model_dim=512, num_layers=6, num_heads=4,
+-  max_seq_len=8192, mtp_extra_weights=[], ve_layers=[]`), `max_optimizer_steps=200`,
+-  `val_interval=50`. Hangs deterministically; rank 0's tqdm bar freezes around
+-  step ~152.
+-- **1-GPU and 2-GPU** runs of the same config complete 200 steps with decreasing
+-  loss and no NaN. The hang appears only at ≥4 ranks (4-GPU also reproduced).
+-- With `TORCH_DISTRIBUTED_DEBUG=DETAIL`, ranks report a collective-fingerprint
+-  mismatch (e.g. one rank in `ALLREDUCE` while another is in a different op /
+-  sequence number) before the timeout. Without it, the job sits until the SLURM
+-  wall-clock kills it (`STEP ... CANCELLED ... DUE TO TIME LIMIT`).
+-- All GPUs show ~100% utilization during the hang.
+-- Not isolated to the data: packs are uniformly `max_seq_len` (verified by CPU
+-  audit on both arxiv and thestack splits); the tensor sizes feeding attention
+-  are correct.
+-
+-**Diagnosis blocker:** the run only captures rank-0 logs (`tracking.init` symlinks
+-rank-0 stderr/stdout into the run `logs/` dir; non-main ranks' `.err` files are
+-empty). To diagnose, first make non-main ranks observable — per-rank file logging
+-+ `faulthandler` stack dumps on SIGTERM/timeout — then capture each hung rank's
+-Python stack (or `py-spy dump` live).
++### 8-GPU (multi-rank DDP) training hangs — ROOT-CAUSED & FIXED 2026-06-17
++**Root cause:** `PackBatchSampler._apply_pack_truncation` did not enforce
++`token_budget` as a hard cap. Its `else` branch (when `effective_len < overshoot
++< prefix+body+suffix`) skipped the doc and let `overshoot` leak, so a pack made
++of many docs each carrying a non-trimmable prefix (the `*_prefix` layouts) could
++ship ABOVE `max_seq_len`. One oversized pack (observed: 10185 > 8192) trips the
++RoPE cos/sin cache assert (`cos.size(0) >= seq_len`) in the attention forward on
++whichever DDP rank drew it; that AssertionError unwinds into the end-of-run
++`ReproducibilityManager.__exit__` barrier, which hangs because the other ranks
++never reach it — masking the traceback and presenting as a generic collective
++hang. Manifests only at world_size ≥ 2 (a single GPU just raises visibly).
++
++**Fix:** `_apply_pack_truncation` now trims layout decoration (prefix/suffix) as
++a last resort — via the new `DocPlacement.decoration_trim` field, honored in
++`data/collate.py` (drops suffix first, then prefix tail, preserving the prefix
++card's leading marker) — so the pack hits `token_budget` EXACTLY: the doc is
++kept, its body preserved as far as possible, no under-fill, never over budget.
++`decoration_trim` is also persisted through `epoch_precompute.PackRecord` so the
++precomputed/bucketed path stays consistent. Regression tests:
++`tests/data/test_pack_sampler.py::test_pack_truncation_is_a_hard_cap_with_prefixes`
++(+ `_no_overshoot_is_noop`). Verified end-to-end (job 42247, 4-GPU arxiv smoke):
++blew past the old gstep-76 crash, all ranks max seqlen = 8191.
++
++How it was diagnosed (the prior blocker — rank-0-only logs): added opt-in
++`TS2TS_DEBUG=1` per-rank file logging + `faulthandler` watchdog
++(`debug_instrumentation.py`) and a try/except around `smart_train` in `main.py`
++that logs the per-rank traceback before the masking barrier.
++
++### Per-rank Triton-kernel autotune stall at ≥2 ranks (BUG — separate, still open)
++After the truncation fix, the same smoke run stalled at gstep≈110: one rank
++(GPU idle, 0% util) sat in the **custom Triton kernel's autotuner** — the saved
++stack is `kernels/cross_doc_bitmask_bim_v18.py:forward` →
++`triton.runtime.autotuner.do_bench` → `triton.compiler.compile` / `make_llir`
++(NOT FlexAttention; training uses `triton_v18`). The `cdb_bim_v18` kernel
++autotunes per input shape, so a mask/grant shape first seen by one rank triggers
++a fresh JIT-compile+benchmark of all autotune configs ONLY on that rank, while
++the peers busy-wait (100% util) at the next gradient all-reduce. Each rank also
++has its OWN inductor/triton cache (`launch_slurm.py:70` →
++`/tmp/torchinductor_<job>/rank<N>`), so nothing is shared. The autotune appeared
++to hang (>10 min) — needs confirmation whether it's pathological autotune time or
++a true livelock. Candidate fixes: persist/share the Triton autotune cache across
++ranks, pre-warm the kernel on representative shapes before the loop, pin/reduce
++the autotune config space for v18, or pad grant/mask tensors to rank-invariant
++shapes. Reproduce with `TS2TS_DEBUG=1` and watch `nvidia-smi` for one idle GPU
++while others are pinned; confirm the stall frame is the v18 autotuner.
++
++### Live PackedSequenceDataset: dedup docs within an epoch (TODO — consider)
++The live `PackedSequenceDataset` / `PackBatchSampler` path samples WITH
++replacement: seeds are drawn via `self._rng.randrange(num_nodes)` and dedup is
++only *within* a pack (`pack_doc_ids`), with no cross-pack/epoch visited set. So a
++doc can appear in many packs and some may never appear in a given pass. The
++precomputed path already dedups per epoch (`epoch_precompute.py` `epoch_visited`
++set → visited docs read as tok_len=0). Consider giving the live path the same
++"each doc at most once per epoch" guarantee (a persistent visited set on the
++sampler, reset per epoch) so the two paths match and data usage is even. Note the
++interaction with truncation: a doc dropped/partially-used by pack-level trimming
++should arguably remain eligible until its body is actually consumed.
+ 
+ ### Parallelized eval in main.py
+ `run_benchmarks_on_model` runs serially. Naïve thread-pool parallelism is risky:
+
+diff --git a/debug_instrumentation.py b/debug_instrumentation.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/debug_instrumentation.py
+@@ -0,0 +1,102 @@
++"""Per-rank observability for diagnosing the multi-rank DDP hang (TODOS.md).
++
++Opt-in via the ``TS2TS_DEBUG=1`` environment variable so normal runs are
++unaffected.  When enabled, every rank (not just rank 0) gets:
++
++  1. A per-rank DEBUG-level log file with line-buffered flushing, written to
++     node-local ``/tmp`` (cluster-KB: never high-frequency-write to /fss).
++     Survives a SIGKILL because each line is flushed immediately.
++
++  2. A ``faulthandler`` watchdog that dumps *all* Python thread stacks for this
++     rank every ``TS2TS_DEBUG_DUMP_EVERY`` seconds (default 90).  When a rank
++     wedges in a collective, the periodic dump shows exactly which line each
++     rank is parked on — this is what distinguishes "stuck in NCCL allreduce"
++     from "stuck recompiling the backbone" from "stuck in a Python guard".
++
++  3. SIGTERM/SIGUSR1 handlers that dump stacks on demand, so `kill -USR1 <pid>`
++     or SLURM's pre-timeout SIGTERM produces a final stack snapshot.
++
++Collect the artifacts after a run with::
++
++    # single-node repro — all ranks' files are on the one allocated node
++    srun --jobid <JID> --overlap bash -c 'cat /tmp/ts2ts_debug_*/rank*.log'
++
++or just read /tmp/ts2ts_debug_<jobid>/ directly on the node.
++"""
++
++import faulthandler
++import logging
++import os
++import signal
++import sys
++from typing import Optional
++
++_FAULT_FILE = None  # keep a reference so the fd isn't garbage-collected
++
++
++def debug_enabled() -> bool:
++    return os.environ.get("TS2TS_DEBUG", "").strip() in ("1", "true", "yes")
++
++
++def _debug_dir() -> str:
++    job_id = os.environ.get("SLURM_JOB_ID", "local")
++    d = f"/tmp/ts2ts_debug_{job_id}"
++    os.makedirs(d, exist_ok=True)
++    return d
++
++
++def setup_rank_debug_logging(rank: int, local_rank: int) -> Optional[str]:
++    """Install per-rank DEBUG file logging + faulthandler watchdog.
++
++    No-op unless TS2TS_DEBUG is truthy.  Returns the log path (or None).
++    """
++    if not debug_enabled():
++        return None
++
++    global _FAULT_FILE
++    d = _debug_dir()
++    log_path = os.path.join(d, f"rank{rank}.log")
++
++    # Line-buffered so every record hits disk before the next collective; a
++    # SIGKILL on a hung rank therefore still leaves a complete log up to the
++    # last line executed.
++    fh = logging.FileHandler(log_path, mode="w")
++    fh.setLevel(logging.DEBUG)
++    fh.setFormatter(logging.Formatter(
++        f"%(asctime)s.%(msecs)03d r{rank} l{local_rank} %(name)s %(levelname)s %(message)s",
++        datefmt="%H:%M:%S",
++    ))
++    # Force line flushing on the underlying stream.
++    fh.stream.reconfigure(line_buffering=True)
++
++    root = logging.getLogger()
++    root.setLevel(logging.DEBUG)
++    root.addHandler(fh)
++
++    # Quiet the very noisy libraries so the signal isn't buried.
++    for noisy in ("PIL", "matplotlib", "urllib3", "filelock", "fsspec"):
++        logging.getLogger(noisy).setLevel(logging.INFO)
++
++    # faulthandler: periodic all-thread stack dumps for THIS rank.
++    fault_path = os.path.join(d, f"rank{rank}.faulthandler.log")
++    _FAULT_FILE = open(fault_path, "w", buffering=1)  # line-buffered
++    faulthandler.enable(file=_FAULT_FILE, all_threads=True)
++
++    dump_every = int(os.environ.get("TS2TS_DEBUG_DUMP_EVERY", "90"))
++    # repeat=True → keep dumping every `dump_every`s for the life of the process,
++    # so a hang produces a series of identical stacks (proves it's wedged, not slow).
++    faulthandler.dump_traceback_later(dump_every, repeat=True, file=_FAULT_FILE)
++
++    # On-demand dumps: SIGUSR1 (manual) is non-fatal; SIGTERM (SLURM pre-timeout)
++    # dumps then lets the existing handler exit.
++    try:
++        faulthandler.register(signal.SIGUSR1, file=_FAULT_FILE, all_threads=True, chain=True)
++    except (ValueError, OSError):
++        pass
++
++    logging.getLogger("ts2ts.debug").debug(
++        "rank debug logging online: log=%s fault=%s dump_every=%ds pid=%d",
++        log_path, fault_path, dump_every, os.getpid(),
++    )
++    return log_path
++
+
+diff --git a/tests/data/test_collate_padding.py b/tests/data/test_collate_padding.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/tests/data/test_collate_padding.py
+@@ -0,0 +1,88 @@
++"""Tests for fixed-length padding in build_packed_batch.
++
++Padding makes the packed sequence length CONSTANT across packs so the Triton
++attention kernels (which take seq-len as a tl.constexpr ``N``) autotune once
++instead of re-running the ~140s 48-config autotune on every new length — the
++latter desyncs DDP ranks when one draws a short pack (see TODOS.md).
++"""
++import numpy as np
++import torch
++
++from data.collate import build_packed_batch
++from data.pack_sampler import DocPlacement
++
++
++class _MockGraph:
++    def get_normed_identifier(self, doc_id): return f"doc_{doc_id}"
++    def get_raw_identifier(self, nid): return nid
++    def get_outgoing_links(self, nid): return []
++    def get_incoming_links(self, nid): return []
++    def get_categories(self, nid): return ""
++
++
++class _MockBackend:
++    """Returns a distinctive non-pad body so padding is visible."""
++    def __init__(self, body_len=20, fill=7):
++        self.body_len = body_len
++        self.fill = fill
++    def get_tokens_by_id(self, doc_id):
++        return np.full(self.body_len, self.fill, dtype=np.int32)
++
++
++class _NullLayout:
++    def prefix_length(self, info): return 0
++    def suffix_length(self, info): return 0
++    def prefix_tokens(self, info): return []
++    def suffix_tokens(self, info): return []
++
++
++def _build(body_len, pad_to_length, pad_token_id=0):
++    placements = [DocPlacement(doc_id=0, effective_len=body_len, truncated=False, doc_trim_side="tail")]
++    return build_packed_batch(
++        graph=_MockGraph(),
++        backend=_MockBackend(body_len=body_len, fill=7),
++        layout=_NullLayout(),
++        placements=placements,
++        as_2d=True,
++        pad_to_length=pad_to_length,
++        pad_token_id=pad_token_id,
++    )
++
++
++def test_padding_produces_fixed_length():
++    """Different real lengths all pad to the same fixed sequence length."""
++    for body_len in (20, 50, 99):
++        batch = _build(body_len, pad_to_length=128)
++        assert batch["tokens"].shape == (1, 128), batch["tokens"].shape
++        assert batch["n_real_tokens"] == body_len
++
++
++def test_padding_uses_pad_token_and_marks_real_count():
++    batch = _build(body_len=20, pad_to_length=128, pad_token_id=0)
++    toks = batch["tokens"][0]
++    # First 20 are real body (fill=7), remainder is pad (0).
++    assert torch.all(toks[:20] == 7)
++    assert torch.all(toks[20:] == 0)
++    assert batch["n_real_tokens"] == 20
++
++
++def test_no_padding_when_pad_to_length_none():
++    """Backward-compatible: without pad_to_length, length == real length."""
++    batch = _build(body_len=33, pad_to_length=None)
++    assert batch["tokens"].shape == (1, 33)
++    assert batch["n_real_tokens"] == 33
++
++
++def test_exact_length_is_noop():
++    batch = _build(body_len=128, pad_to_length=128)
++    assert batch["tokens"].shape == (1, 128)
++    assert batch["n_real_tokens"] == 128
++    assert torch.all(batch["tokens"][0] == 7)  # no pad tokens
++
++
++def test_over_length_raises():
++    """A pack longer than pad_to_length is a bug upstream — fail loudly."""
++    import pytest
++    with pytest.raises(ValueError, match="exceeds pad_to_length"):
++        _build(body_len=200, pad_to_length=128)
++
