@@ -18,6 +18,35 @@ traversals --- from \val{crossdoc.repobench_java.random.delta_nll} (random packi
 (dfs) in between --- and Python RepoBench cross-doc shows a $\Delta$nll of
 \val{crossdoc.repobench_python.delta_nll} (max\_grants=256).
 
+\subsection{The cross-document gain is specific, not memorization}
+Two controls confirm the reduction above comes from reading the \emph{correct} linked
+document, not from generic extra context or verbatim re-exposure of overlapping text.
+First, a derangement \emph{placebo}: for each query we keep the original link identifiers
+(so the grant still fires) but replace the granted document's content with another
+example's, so the model attends to a wrong-but-plausible document. This collapses most of
+the benefit, leaving a placebo separation (placebo minus cross-document NLL) of
+\val{crossdoc.wiki_hotpotqa.placebo_sep} (95\% CI
+\val{crossdoc.wiki_hotpotqa.placebo_sep.ci}) on HotpotQA, and
+\val{crossdoc.repobench_python.placebo_sep}
+(\val{crossdoc.repobench_python.placebo_sep.ci}) and
+\val{crossdoc.repobench_java.bfs.placebo_sep}
+(\val{crossdoc.repobench_java.bfs.placebo_sep.ci}) on Python and Java RepoBench --- all
+CIs excluding zero. Second, we stratify the cross-document $\Delta$nll by the
+target--context $n$-gram overlap $\alpha$ (RETRO's leakage protocol): even in the
+lowest-overlap stratum ($\alpha<0.05$), where the target cannot be copied from the granted
+context, the reduction persists at
+\val{crossdoc.wiki_hotpotqa.leakage_lowalpha.delta_nll}
+(\val{crossdoc.wiki_hotpotqa.leakage_lowalpha.delta_nll.ci},
+$n=\val{crossdoc.wiki_hotpotqa.leakage_lowalpha.n}$) on HotpotQA,
+\val{crossdoc.repobench_python.leakage_lowalpha.delta_nll}
+(\val{crossdoc.repobench_python.leakage_lowalpha.delta_nll.ci},
+$n=\val{crossdoc.repobench_python.leakage_lowalpha.n}$) on Python, and
+\val{crossdoc.repobench_java.bfs.leakage_lowalpha.delta_nll}
+(\val{crossdoc.repobench_java.bfs.leakage_lowalpha.delta_nll.ci},
+$n=\val{crossdoc.repobench_java.bfs.leakage_lowalpha.n}$) on Java --- again all CIs
+excluding zero. The gain therefore reflects cross-document reasoning over the right link,
+not surface duplication.
+
 \subsection{Single-document benchmarks are unaffected}
 Across the single-document controls (HellaSwag, ARC-easy, PIQA, WinoGrande, OpenBookQA,
 BoolQ), the four masks are statistically indistinguishable. On HellaSwag the matched

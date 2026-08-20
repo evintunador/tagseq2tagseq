@@ -7,3 +7,12 @@ more local/predictable than Wikipedia bridge reasoning. community\_pack
 \fillin{near-noise?} for code. Limitations: undertrained regime, scale ceiling,
 single-language benchmark coverage gaps (only Python/Java have RepoBench). Honest
 framing of the flat scaling.}
+
+\paragraph{The effect is a genuine linking bias.}
+The placebo and leakage controls (Section~\ref{sec:results}) rule out the two deflationary
+readings of the cross-document $\Delta$nll. The derangement placebo removes almost all of
+the gain while holding the amount of granted context fixed, so the benefit is specificity
+to the correct linked document, not generic extra context; and the reduction persists in
+the lowest $n$-gram-overlap stratum, so it is not verbatim copying of duplicated text. What
+remains is the intended inductive bias: attention gated onto the right cross-document
+target at generation time.

@@ -3,7 +3,7 @@
   "run_id": "run_20260717_173951_071952",
   "naming_convention": "submitit",
   "source_run_dirs": [
-    "/fss/evin_t/tagseq2tagseq/runs/run_20260717_173951_071952"
+    "/fss/evin_t/tagseq2tagseq/.claude/worktrees/synthesis-todos-dig/runs/run_20260717_173951_071952"
   ],
   "run_dir_exists": true,
   "warnings": [],
@@ -177,7 +177,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "0c10d06819511fb8c9232c87705b6bf6c95f1bf7567480a85ef1b5e80fe3ae4e",
+    "eval_results_sha256": "3b3e6eec820be120e3be3d5fe61e76f61c4d24ea8e09477776afc2e3759bd174",
     "metrics": {
       "held_out_perplexity/doceval": {
         "split": "all",
@@ -268,11 +268,76 @@
         "baseline_ci_low": NaN,
         "baseline_ci_high": NaN,
         "split": "all"
+      },
+      "hotpotqa_xdoc_placebo/native": {
+        "delta_real": 1.291742959518752,
+        "delta_real_ci": [
+          1.1766344780842084,
+          1.4083524123226343
+        ],
+        "placebo_separation": 1.2762295113225872,
+        "placebo_separation_ci": [
+          1.1622530515007141,
+          1.3914918630103175
+        ],
+        "mean_nll_cross": 5.612475715613251,
+        "mean_nll_flat": 6.904218675132003,
+        "mean_nll_placebo": 6.888705226935838,
+        "n_cross_doc": 837,
+        "fire_rate": 0.837,
+        "mean_alpha": 0.1992444689813111,
+        "leakage_ngram_n": 8
+      },
+      "hotpotqa_leakage/alpha_0.00_0.05": {
+        "delta_real": 1.0777658168282753,
+        "delta_real_ci": [
+          0.9563405773070643,
+          1.2045266096820644
+        ],
+        "n": 662,
+        "mean_alpha": 0.0
+      },
+      "hotpotqa_leakage/alpha_0.05_0.25": {
+        "delta_real": NaN,
+        "delta_real_ci": [
+          NaN,
+          NaN
+        ],
+        "n": 0,
+        "mean_alpha": NaN
+      },
+      "hotpotqa_leakage/alpha_0.25_0.50": {
+        "delta_real": NaN,
+        "delta_real_ci": [
+          NaN,
+          NaN
+        ],
+        "n": 0,
+        "mean_alpha": NaN
+      },
+      "hotpotqa_leakage/alpha_0.50_0.75": {
+        "delta_real": 2.082098667438214,
+        "delta_real_ci": [
+          1.3352324641667879,
+          2.9770186648919026
+        ],
+        "n": 13,
+        "mean_alpha": 0.5538461538461539
+      },
+      "hotpotqa_leakage/alpha_0.75_1.00": {
+        "delta_real": 2.1077568990103206,
+        "delta_real_ci": [
+          1.7995843887884424,
+          2.419508337604333
+        ],
+        "n": 161,
+        "mean_alpha": 0.9898656898656899
       }
     },
     "eval_source_files": [
-      "eval_results.json"
+      "eval_results.json",
+      "eval_leakage_placebo.json"
     ]
   },
-  "distilled_at": "2026-08-19T20:41:37Z"
+  "distilled_at": "2026-08-20T21:57:32Z"
 }

@@ -3,7 +3,7 @@
   "run_id": "run_20260722_063905_465684",
   "naming_convention": "submitit",
   "source_run_dirs": [
-    "/fss/evin_t/tagseq2tagseq/runs/run_20260722_063905_465684"
+    "/fss/evin_t/tagseq2tagseq/.claude/worktrees/synthesis-todos-dig/runs/run_20260722_063905_465684"
   ],
   "run_dir_exists": true,
   "warnings": [],
@@ -152,7 +152,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "7d6b5a9de49fc524b85833f087726803789e56ec24cc62457b21b0dc32985ff3",
+    "eval_results_sha256": "f6deba09153fcfb82c1424fc5f83f783f905cf15284d633e63f02f0651b57582",
     "metrics": {
       "held_out_perplexity/baseline": {
         "split": "all",
@@ -231,6 +231,70 @@
         "nll_ci_high": NaN,
         "perplexity_ci_low": NaN,
         "perplexity_ci_high": NaN
+      },
+      "repobench_java_xdoc_placebo/native": {
+        "delta_real": 0.06572685035769009,
+        "delta_real_ci": [
+          0.048973249792732904,
+          0.08331930728972982
+        ],
+        "placebo_separation": 0.07738205790519714,
+        "placebo_separation_ci": [
+          0.05922832496368322,
+          0.09676321543465356
+        ],
+        "mean_nll_cross": 1.3727369480506546,
+        "mean_nll_flat": 1.4384637984083446,
+        "mean_nll_placebo": 1.4501190059558517,
+        "n_cross_doc": 470,
+        "fire_rate": 0.94,
+        "mean_alpha": 0.08578983672377624,
+        "leakage_ngram_n": 8
+      },
+      "repobench_java_leakage/alpha_0.00_0.05": {
+        "delta_real": 0.038774442022497004,
+        "delta_real_ci": [
+          0.020425437940792605,
+          0.058902800706299864
+        ],
+        "n": 275,
+        "mean_alpha": 0.005303959235974377
+      },
+      "repobench_java_leakage/alpha_0.05_0.25": {
+        "delta_real": 0.08273686417217913,
+        "delta_real_ci": [
+          0.05545179240662476,
+          0.11172815480108918
+        ],
+        "n": 145,
+        "mean_alpha": 0.11099187010607511
+      },
+      "repobench_java_leakage/alpha_0.25_0.50": {
+        "delta_real": 0.19977280305277917,
+        "delta_real_ci": [
+          0.09031716890392764,
+          0.3276157163804577
+        ],
+        "n": 31,
+        "mean_alpha": 0.32816248597080216
+      },
+      "repobench_java_leakage/alpha_0.50_0.75": {
+        "delta_real": 0.1202742338180542,
+        "delta_real_ci": [
+          NaN,
+          NaN
+        ],
+        "n": 5,
+        "mean_alpha": 0.636362539421363
+      },
+      "repobench_java_leakage/alpha_0.75_1.00": {
+        "delta_real": 0.11745673418045044,
+        "delta_real_ci": [
+          -0.048711496591567996,
+          0.2885279539227485
+        ],
+        "n": 10,
+        "mean_alpha": 0.9070804195804195
       }
     },
     "eval_source_files": [
@@ -240,8 +304,9 @@
       "eval_heldout_valrandom.json",
       "eval_java_repobench.json",
       "eval_java_repobench_final.json",
+      "eval_leakage_placebo.json",
       "eval_reeval256.json"
     ]
   },
-  "distilled_at": "2026-08-19T20:41:37Z"
+  "distilled_at": "2026-08-20T21:57:32Z"
 }
