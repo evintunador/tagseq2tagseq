@@ -1,11 +1,13 @@
 #!/bin/bash
 # LR-sweep courtesy watcher (node-demand-aware).
 #
-# Frees nodes for coworkers: when OTHER users have jobs PENDING and blocked on node
-# availability (REASON Resources/Priority), cancels our lowest-priority sweep jobs
-# (name-prefixed, default ts2ts_) YOUNGEST-first, freeing as many nodes as the
-# waiting jobs collectively request (capped at how many we're running). All sweep
-# runs checkpoint latest.pt every 250 steps → resumable via --resume-from.
+# Frees nodes for higher-priority work: when a job is PENDING and blocked on node
+# availability (REASON Resources/Priority) — either ANOTHER user's job, or one of MY
+# OWN non-sweep jobs (name NOT prefixed ts2ts_) — cancels our lowest-priority sweep
+# jobs (name-prefixed, default ts2ts_) YOUNGEST-first, freeing as many nodes as the
+# waiting jobs collectively request (capped at how many we're running). Our own
+# PENDING sweep jobs never count as demand, so sweeps don't yield to each other. All
+# sweep runs checkpoint latest.pt every 250 steps → resumable via --resume-from.
 #
 # The user (evin_t) explicitly authorized auto-kill: "do not hesitate to kill if
 # somebody's waiting in line." Personal, non-urgent project.
@@ -45,8 +47,9 @@ IDLE_SINCE="$STATE_DIR/node_idle_since.tsv"        # node<TAB>first_idle_epoch
 # Input (stdin): lines "USER|STATE|REASON|NODES|JOBID|NAME" (squeue -o "%u|%T|%r|%D|%i|%j").
 # Args: $1=me (my username), $2=prefix (my sweep job-name prefix), $3=max_kill.
 # Output (stdout): job IDs to cancel, one per line, youngest-first, sized to the
-#   total nodes demanded by other users' blocked-pending jobs (capped at max_kill
-#   and at how many sweep jobs I actually have running). Empty output = do nothing.
+#   total nodes demanded by blocked-pending jobs we yield to — other users' jobs plus
+#   my own non-sweep jobs (capped at max_kill and at how many sweep jobs I actually
+#   have running). Empty output = do nothing.
 # Also prints, to stderr, a human summary line prefixed "SUMMARY:".
 decide_cancellations() {
   local me="$1" prefix="$2" max_kill="$3"
@@ -61,8 +64,11 @@ decide_cancellations() {
     }
     {
       user=$1; state=$2; reason=$3; nodes=$4+0; jobid=$5; name=$6; elapsed=$7
-      # Other users blocked in the queue waiting for nodes:
-      if (user!=me && state=="PENDING" && (reason=="Resources"||reason=="Priority")) {
+      # Jobs blocked in the queue waiting for nodes that our sweep should yield to:
+      # any OTHER users blocked-pending job, plus MY OWN blocked-pending NON-sweep
+      # jobs. My own pending SWEEP jobs (name starts with prefix) are excluded so
+      # that sweeps do not yield to each other.
+      if (state=="PENDING" && (reason=="Resources"||reason=="Priority") && (user!=me || index(name,prefix)!=1)) {
         demand += nodes
         waiters = waiters " " jobid "(" nodes "n:" reason ")"
       }
@@ -164,7 +170,19 @@ run_selftest() {
     'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
     'evin_t|PENDING|Resources|1|45060|ts2ts_pending|0:00' \
     | decide_cancellations evin_t ts2ts_ 8 2>/dev/null)"
-  _check "E own-pending-ignored" "" "$E"
+  _check "E own-sweep-pending-ignored" "" "$E"
+  # Scenario M: my OWN pending NON-sweep job (different prefix) SHOULD trigger a yield.
+  local M; M="$(printf '%s\n' \
+    'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
+    'evin_t|PENDING|Resources|1|45061|mic_big|0:00' \
+    | decide_cancellations evin_t ts2ts_ 8 2>/dev/null)"
+  _check "M own-nonsweep-pending-triggers" "45048" "$M"
+  # Scenario N: my own pending NON-sweep job, but idle covers it -> net 0 -> NO kill.
+  local N; N="$(printf '%s\n' \
+    'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
+    'evin_t|PENDING|Resources|1|45061|mic_big|0:00' \
+    | decide_cancellations evin_t ts2ts_ 8 1 2>/dev/null)"
+  _check "N own-nonsweep-idle-covers-no-kill" "" "$N"
   # Scenario F: pending but NOT resource-blocked (e.g. Dependency) -> ignore
   local F; F="$(printf '%s\n' \
     'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
@@ -224,8 +242,16 @@ job_to_rundir_config() {
   local jid="$1"
   local name; name="$(squeue -h -j "$jid" -o '%j' 2>/dev/null)"
   [ -z "$name" ] && return 1
-  local rundir="$REPO/runs/${name#${PREFIX}}"
-  [ -d "$rundir" ] || return 1
+  # Run dirs may live under $REPO/runs (old default) OR the fss-data artifacts root
+  # (new default from the "default run dir to fss-data" change, overridable via
+  # TS2TS_RUNS_ROOT). Check all candidates — hard-coding $REPO/runs silently dropped
+  # fss-data runs from the yield ledger, so they never auto-resumed.
+  local base="${name#${PREFIX}}" rundir=""
+  local root
+  for root in "${TS2TS_RUNS_ROOT:-}" "$REPO/runs" "/fss-data/evin_t/tagseq2tagseq_artifacts/runs"; do
+    [ -n "$root" ] && [ -d "$root/$base" ] && { rundir="$root/$base"; break; }
+  done
+  [ -z "$rundir" ] && return 1
   # Config comes from run_invocation.json (reliable), via the shared helper so the
   # yield-time record and the relaunch-time self-heal use identical logic.
   local cfg; cfg="$(config_from_rundir "$rundir")"
