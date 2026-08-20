@@ -1,0 +1,275 @@
+diff --git a/main.py b/main.py
+index 2ee3bd2..4df2a65 100644
+--- a/main.py
++++ b/main.py
+@@ -202,6 +202,88 @@ class LimitedDataLoader:
+         return self.loader.dataset
+ 
+ 
++class DistributedSyncDataLoader:
++    """Wraps a train loader so all DDP ranks stop iterating on the same step.
++
++    Root cause this fixes (TODOS.md "multi-rank DDP hangs"): each rank builds
++    its own ``PackedSequenceDataset`` from a rank-seeded ``PackBatchSampler``,
++    whose graph traversal yields a *finite, rank-dependent* number of packs.
++    With ``num_epochs=1`` the first rank to exhaust its sampler leaves the
++    training loop and proceeds to the end-of-run barrier, while the other ranks
++    are still mid-loop and block forever on the in-flight DDP gradient
++    all-reduce from their next ``backward()`` — an NCCL collective desync.
++
++    Fix (coordinated termination): before yielding each batch, all-reduce a
++    per-rank "do I still have a batch?" flag with ``MIN``.  As soon as *any*
++    rank's underlying iterator is exhausted, the reduced flag is 0 and *every*
++    rank stops on that same step — without yielding the orphan batch that a
++    rank which still had data would otherwise forward/backward alone.  Every
++    rank therefore performs an identical number of forward/backward passes, so
++    the collective sequence stays in lockstep.
++
++    CRITICAL — the flag exchange runs on the secondary **Gloo** process group
++    (``tunalab.distributed._CPU_GROUP``) with a CPU tensor, NOT the default NCCL
++    group.  An all-reduce on the NCCL group would interleave with DDP's
++    bucketed gradient all-reduces (issued asynchronously by autograd hooks),
++    desynchronising NCCL collective sequence numbers across ranks — the very
++    failure this class fixes.  This is the same reasoning behind ``cpu_barrier``
++    for checkpoint sync: keep control-plane collectives off the NCCL data plane.
++    Falls back to a CPU Gloo collective on the default group only if no
++    secondary group exists.
++
++    A no-op passthrough when not distributed (single process / CPU).
++    """
++
++    def __init__(self, loader, device) -> None:
++        self.loader = loader
++        self.device = device
++
++    def __iter__(self):
++        import tunalab.distributed as _td
++        it = iter(self.loader)
++        distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
++        # Control-plane group: prefer the Gloo side-group so we never touch NCCL.
++        group = _td._CPU_GROUP if (distributed and _td._CPU_GROUP is not None) else None
++        _dbg = logger.isEnabledFor(logging.DEBUG)
++        _n = 0
++        while True:
++            try:
++                batch = next(it)
++                local_has = 1
++            except StopIteration:
++                batch = None
++                local_has = 0
++
++            if distributed:
++                # CPU tensor + Gloo group → fully decoupled from the NCCL
++                # gradient all-reduce stream. MIN: 1 only if EVERY rank still
++                # has a batch.
++                _n += 1
++                if _dbg:
++                    logger.debug("SyncLoader: flag_reduce #%d enter local_has=%d", _n, local_has)
++                flag = torch.tensor([local_has], dtype=torch.int32, device="cpu")
++                torch.distributed.all_reduce(
++                    flag, op=torch.distributed.ReduceOp.MIN, group=group
++                )
++                if _dbg:
++                    logger.debug("SyncLoader: flag_reduce #%d exit reduced=%d", _n, int(flag.item()))
++                if int(flag.item()) == 0:
++                    if local_has and _dbg:
++                        logger.debug(
++                            "DistributedSyncDataLoader: this rank still had a batch but "
++                            "another rank's loader is exhausted — stopping all ranks in lockstep."
++                        )
++                    return
++            elif local_has == 0:
++                return
++
++            yield batch
++
++    @property
++    def dataset(self):
++        return self.loader.dataset
++
++
+ def _run_generation_demo(training_module, tokenizer, link_detector, layout_policy, mask_type,
+                          inference_model=None):
+     """
+@@ -356,6 +438,24 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+     # leave ranks blocked in a collective operation.
+     setup_signal_handlers()
+ 
++    # Per-rank observability for the multi-rank DDP hang (TODOS.md). Opt-in via
++    # TS2TS_DEBUG=1; no-op otherwise. Installs DEBUG file logging + faulthandler
++    # stack-dump watchdog for EVERY rank (the diagnosis blocker was rank-0-only
++    # logs). Must run before any collective so a hang anywhere is captured.
++    from debug_instrumentation import setup_rank_debug_logging, debug_enabled
++    setup_rank_debug_logging(dist.rank, dist.local_rank)
++    if debug_enabled():
++        # Route torch.compile recompile/guard-failure reasons into our per-rank
++        # log so we can see if one rank recompiles while peers enter a collective.
++        try:
++            torch._logging.set_logs(recompiles=True, graph_breaks=True)
++        except Exception as _e:
++            logger.debug("could not enable dynamo recompile logging: %s", _e)
++        logger.debug(
++            "TS2TS_DEBUG active: rank=%d local_rank=%d world_size=%d device=%s",
++            dist.rank, dist.local_rank, dist.world_size, dist.device,
++        )
++
+     # -------------------------------------------------------------------------
+     # 1. Setup Logging & Reproducibility
+     # -------------------------------------------------------------------------
+@@ -566,6 +666,14 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+         accum_steps = cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1)
+         train_loader = LimitedDataLoader(train_loader, max_batches=max_optimizer_steps * accum_steps)
+ 
++    # Coordinate train-loader termination across DDP ranks. Rank-seeded samplers
++    # yield different finite pack counts; without this, the first rank to exhaust
++    # its loader leaves the loop and deadlocks the rest at their next gradient
++    # all-reduce (TODOS.md multi-rank DDP hang). Wrapping last so the per-step
++    # MIN-flag all-reduce sees the post-LimitedDataLoader batch stream.
++    if dist.is_distributed:
++        train_loader = DistributedSyncDataLoader(train_loader, dist.device)
++
+     # ── Validation loaders ────────────────────────────────────────────────────
+     # data.val_dirs  — dict of {name: path} for live-packed val loaders.
+     # data.val_epoch_dirs — dict of {name: [epoch_dir, ...]} for precomputed val.
+@@ -995,12 +1103,32 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+                     split_step,
+                     "yes" if embed_state else "no (cold start)",
+                 )
++                # HYPOTHESIS-2 PROBE: the split mutates the module + optimizer
++                # param_groups under static_graph=True DDP. Record the exact
++                # _step_count at which THIS rank performs the split. If ranks
++                # disagree (they shouldn't — step count is collective-driven),
++                # the post-split collective sequence will desync.
++                logger.debug(
++                    "split_fn EXECUTED at split_step=%d; new lm_head id=%x; "
++                    "n_param_groups=%d",
++                    split_step, id(new_lm_head), len(opt.param_groups),
++                )
+ 
+             if dist.is_distributed:
+                 def pre_step_fn():
+                     # After the split, lm_head is a new param DDP doesn't know about.
+                     # Manually all-reduce its gradient before the optimizer step.
+                     w = _tm.loss_fn.weight
++                    # HYPOTHESIS-2 PROBE: this all_reduce is GATED on w.grad being
++                    # non-None. If even one rank sees grad=None (or the split itself
++                    # ran on a different step on different ranks), the collective
++                    # counts diverge → fingerprint mismatch. Log the gate on every
++                    # rank so we can confirm/deny symmetric participation.
++                    logger.debug(
++                        "pre_step_fn: split_done, lm_head.grad is %s (id=%x)",
++                        "None" if w.grad is None else "present",
++                        id(w),
++                    )
+                     if w.grad is not None:
+                         torch.distributed.all_reduce(w.grad)
+                         w.grad.div_(dist.world_size)
+
+diff --git a/debug_instrumentation.py b/debug_instrumentation.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/debug_instrumentation.py
+@@ -0,0 +1,102 @@
++"""Per-rank observability for diagnosing the multi-rank DDP hang (TODOS.md).
++
++Opt-in via the ``TS2TS_DEBUG=1`` environment variable so normal runs are
++unaffected.  When enabled, every rank (not just rank 0) gets:
++
++  1. A per-rank DEBUG-level log file with line-buffered flushing, written to
++     node-local ``/tmp`` (cluster-KB: never high-frequency-write to /fss).
++     Survives a SIGKILL because each line is flushed immediately.
++
++  2. A ``faulthandler`` watchdog that dumps *all* Python thread stacks for this
++     rank every ``TS2TS_DEBUG_DUMP_EVERY`` seconds (default 90).  When a rank
++     wedges in a collective, the periodic dump shows exactly which line each
++     rank is parked on — this is what distinguishes "stuck in NCCL allreduce"
++     from "stuck recompiling the backbone" from "stuck in a Python guard".
++
++  3. SIGTERM/SIGUSR1 handlers that dump stacks on demand, so `kill -USR1 <pid>`
++     or SLURM's pre-timeout SIGTERM produces a final stack snapshot.
++
++Collect the artifacts after a run with::
++
++    # single-node repro — all ranks' files are on the one allocated node
++    srun --jobid <JID> --overlap bash -c 'cat /tmp/ts2ts_debug_*/rank*.log'
++
++or just read /tmp/ts2ts_debug_<jobid>/ directly on the node.
++"""
++
++import faulthandler
++import logging
++import os
++import signal
++import sys
++from typing import Optional
++
++_FAULT_FILE = None  # keep a reference so the fd isn't garbage-collected
++
++
++def debug_enabled() -> bool:
++    return os.environ.get("TS2TS_DEBUG", "").strip() in ("1", "true", "yes")
++
++
++def _debug_dir() -> str:
++    job_id = os.environ.get("SLURM_JOB_ID", "local")
++    d = f"/tmp/ts2ts_debug_{job_id}"
++    os.makedirs(d, exist_ok=True)
++    return d
++
++
++def setup_rank_debug_logging(rank: int, local_rank: int) -> Optional[str]:
++    """Install per-rank DEBUG file logging + faulthandler watchdog.
++
++    No-op unless TS2TS_DEBUG is truthy.  Returns the log path (or None).
++    """
++    if not debug_enabled():
++        return None
++
++    global _FAULT_FILE
++    d = _debug_dir()
++    log_path = os.path.join(d, f"rank{rank}.log")
++
++    # Line-buffered so every record hits disk before the next collective; a
++    # SIGKILL on a hung rank therefore still leaves a complete log up to the
++    # last line executed.
++    fh = logging.FileHandler(log_path, mode="w")
++    fh.setLevel(logging.DEBUG)
++    fh.setFormatter(logging.Formatter(
++        f"%(asctime)s.%(msecs)03d r{rank} l{local_rank} %(name)s %(levelname)s %(message)s",
++        datefmt="%H:%M:%S",
++    ))
++    # Force line flushing on the underlying stream.
++    fh.stream.reconfigure(line_buffering=True)
++
++    root = logging.getLogger()
++    root.setLevel(logging.DEBUG)
++    root.addHandler(fh)
++
++    # Quiet the very noisy libraries so the signal isn't buried.
++    for noisy in ("PIL", "matplotlib", "urllib3", "filelock", "fsspec"):
++        logging.getLogger(noisy).setLevel(logging.INFO)
++
++    # faulthandler: periodic all-thread stack dumps for THIS rank.
++    fault_path = os.path.join(d, f"rank{rank}.faulthandler.log")
++    _FAULT_FILE = open(fault_path, "w", buffering=1)  # line-buffered
++    faulthandler.enable(file=_FAULT_FILE, all_threads=True)
++
++    dump_every = int(os.environ.get("TS2TS_DEBUG_DUMP_EVERY", "90"))
++    # repeat=True → keep dumping every `dump_every`s for the life of the process,
++    # so a hang produces a series of identical stacks (proves it's wedged, not slow).
++    faulthandler.dump_traceback_later(dump_every, repeat=True, file=_FAULT_FILE)
++
++    # On-demand dumps: SIGUSR1 (manual) is non-fatal; SIGTERM (SLURM pre-timeout)
++    # dumps then lets the existing handler exit.
++    try:
++        faulthandler.register(signal.SIGUSR1, file=_FAULT_FILE, all_threads=True, chain=True)
++    except (ValueError, OSError):
++        pass
++
++    logging.getLogger("ts2ts.debug").debug(
++        "rank debug logging online: log=%s fault=%s dump_every=%ds pid=%d",
++        log_path, fault_path, dump_every, os.getpid(),
++    )
++    return log_path
++

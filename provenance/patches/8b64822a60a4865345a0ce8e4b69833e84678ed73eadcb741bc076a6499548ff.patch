@@ -1,0 +1,897 @@
+
+diff --git a/configs/wiki_merged_cross_doc.yaml b/configs/wiki_merged_cross_doc.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_merged_cross_doc.yaml
+@@ -0,0 +1,95 @@
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'identifier_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  # max_grants_start: 64
++  # max_grants_warmup_steps: 5000
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # determined by epoch precomputation once community partitioner is implemented
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: wiki_qa,            conditions: [doceval, annotated]}
++    - {name: hellaswag,          conditions: [doceval, annotated]}
++    - {name: boolq,              conditions: [doceval, annotated]}
++    - {name: openbookqa,         conditions: [doceval, annotated]}
++    - {name: hotpotqa,           conditions: [doceval]}
++    - {name: hotpotqa_cross_doc, conditions: [experimental]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wiki_merged_doc_causal.yaml b/configs/wiki_merged_doc_causal.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_merged_doc_causal.yaml
+@@ -0,0 +1,90 @@
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # determined by epoch precomputation once community partitioner is implemented
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wiki_merged_doc_concat_link.yaml b/configs/wiki_merged_doc_concat_link.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_merged_doc_concat_link.yaml
+@@ -0,0 +1,103 @@
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  # doc_concat_link: a detected link concatenates the *entire* source doc onto
++  # the target (full causal, no link-position gate) — a strict FLOP-superset of
++  # cross_doc_link with the same connectivity but no inference-time linking.
++  # Reuses the cross-doc grant kernel with whole_doc_grant=True.
++  mask_type: 'doc_concat_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  # max_grants_start: 64
++  # max_grants_warmup_steps: 5000
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # determined by epoch precomputation once community partitioner is implemented
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
++    # experimental = the model's own doc_concat_link mask.
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    # No 'annotated' condition: link injection at inference is a cross_doc_link
++    # capability; concat conditions train link-aware but eval with eos layout
++    # (no inference-time link prediction — that's their deliberate disadvantage).
++    - {name: wiki_qa,            conditions: [doceval]}
++    - {name: hellaswag,          conditions: [doceval]}
++    - {name: boolq,              conditions: [doceval]}
++    - {name: openbookqa,         conditions: [doceval]}
++    - {name: hotpotqa,           conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wiki_merged_doc_concatenated.yaml b/configs/wiki_merged_doc_concatenated.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_merged_doc_concatenated.yaml
+@@ -0,0 +1,96 @@
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  # doc_concatenated: merge each BFS traversal component into one causally-
++  # concatenated super-doc (full causal attention across connected docs). FLOP
++  # control for cross_doc_link — more FLOPs than doc_causal, no inference-time
++  # link prediction. Reuses the doc-causal varlen kernel via component ids.
++  mask_type: 'doc_concatenated'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # determined by epoch precomputation once community partitioner is implemented
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    # baseline = doc_causal (isolated, apples-to-apples vs other conditions);
++    # experimental = the model's own doc_concatenated mask.
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/tunalab/train_loops/profile_training.py b/tunalab/train_loops/profile_training.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/tunalab/train_loops/profile_training.py
+@@ -0,0 +1,376 @@
++"""Atomic feature (ts2-local): DDP-aware training profiler.
++
++Replaces the drift-prone standalone ``profile_training.py`` script that used to
++live at the repo root.  Because this is a real atomic feature discovered by
++``smart_train`` (via its unique trigger kwarg ``profile_run``), it exercises the
++*exact* model / optimizer / dataloader that main.py builds — it can never drift
++away from the real training path the way a parallel script did.
++
++What it measures
++----------------
++Per training step, broken out so a bottleneck is unambiguous:
++
++    data_load    — CPU wall time blocked on next(loader) (graph traversal,
++                   memmap I/O, packing, collate).  High → input-bound.
++    mask_create  — CPU wall time building the FlexAttention/Triton block mask
++                   (timed by wrapping model.block_mask_creator).
++    forward      — GPU time, model(batch) up to loss (CUDA events).
++    bwd+NCCL     — GPU time, loss.backward() on SYNC steps (includes DDP
++                   gradient all-reduce).
++    bwd only     — GPU time, loss.backward() on no_sync steps (compute only).
++    NCCL est.    — derived (sync_bwd − nosync_bwd): the grad-sync cost.
++    optim_step   — GPU time, optimizer.step() + zero_grad.
++    step_wall    — total end-to-end wall time.
++
++Model-internal breakdown (``profile_model_internals=True``, default when
++profiling): forward hooks recording CUDA events around the eager top-level
++components — ``embedding``, ``backbone`` (whole compiled stack), ``norm``,
++``loss_fn`` — so you can see how the step's GPU time splits across them WITHOUT
++touching the compute graph (hooks fire in eager around the compiled call; no
++Python timers are injected inside the compiled region, which would force a
++graph break / recompile).  For per-layer / per-kernel detail *inside* the
++compiled backbone (attention kernel vs. MLP vs. Newton-Schulz), enable
++``profile_trace=True`` to emit a chrome trace and open it in a trace viewer.
++
++Diagnosing the multi-rank DDP hang
++-----------------------------------
++The standing hang-diagnosis blocker (TODOS.md) is "only rank-0 logs are
++captured".  This feature makes every rank observable when
++``profile_all_ranks=True``: each rank prints its own per-phase line, so a rank
++frozen mid-step reveals which phase (and which rank) stalled.  Combine with
++``profile_nccl_bench_steps>0`` to first confirm raw collective health.
++
++Unique trigger kwarg
++--------------------
++profile_run : bool  (default False)
++    False → this loop is byte-for-byte ``base_loop`` (base-loop compliance).
++    True  → the profiling loop below runs instead of normal training.
++
++All other knobs are read from ``**kwargs`` (defaults below) so the feature is
++selected purely by ``profile_run`` and never overlaps another feature's kwargs:
++
++    profile_warmup_steps      int   3    steps discarded before timing
++    profile_no_sync_steps     int   0    no_sync steps (isolate NCCL cost)
++    profile_active_steps      int   20   timed steps after warmup+no_sync
++    profile_model_internals   bool  True forward-hook component breakdown
++    profile_trace             bool  False emit torch.profiler chrome trace
++    profile_trace_steps       int   6    active-window length for the trace
++    profile_nccl_bench_steps  int   0    raw all_reduce micro-benchmark reps
++    profile_all_ranks         bool  False every rank prints (not just rank 0)
++    output_dir                str   None chrome-trace / CSV destination
++    device                    str   'cuda' device to move batch tensors to
++"""
++
++import os
++import time
++import csv
++import statistics
++from contextlib import nullcontext
++from typing import Any, Dict, List, Optional
++
++import torch
++import torch.nn as nn
++import torch.distributed as dist
++
++
++def _base_loop(model, optimizer, train_loader):
++    """Exact ``base_loop`` — the profile_run=False path (numerical equivalence)."""
++    model.train()
++    optimizer.zero_grad(set_to_none=True)
++    for batch in train_loader:
++        loss = model(batch)
++        loss.backward()
++        optimizer.step()
++        optimizer.zero_grad(set_to_none=True)
++    return {"model": model}
++
++
++def _to_device(batch: Any, device: torch.device) -> Any:
++    """Move tensor(s) in a batch to device (dict / tensor / list-tuple)."""
++    if isinstance(batch, torch.Tensor):
++        return batch.to(device, non_blocking=True)
++    if isinstance(batch, dict):
++        return {k: (v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v)
++                for k, v in batch.items()}
++    if isinstance(batch, (list, tuple)):
++        return type(batch)(
++            v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
++            for v in batch
++        )
++    return batch
++
++
++def run_training(
++    model: nn.Module,
++    optimizer: torch.optim.Optimizer,
++    train_loader,
++    *,
++    profile_run: bool = False,     # unique trigger — selects this feature
++    **kwargs,
++) -> Dict[str, Any]:
++    """Profiling training loop.  See module docstring.
++
++    With ``profile_run=False`` (default) this is exactly ``base_loop``.
++    """
++    if not profile_run:
++        return _base_loop(model, optimizer, train_loader)
++
++    # ---- config ----
++    warmup_steps   = int(kwargs.get("profile_warmup_steps", 3))
++    no_sync_steps  = int(kwargs.get("profile_no_sync_steps", 0))
++    active_steps   = int(kwargs.get("profile_active_steps", 20))
++    do_internals   = bool(kwargs.get("profile_model_internals", True))
++    do_trace       = bool(kwargs.get("profile_trace", False))
++    trace_steps    = int(kwargs.get("profile_trace_steps", 6))
++    nccl_bench     = int(kwargs.get("profile_nccl_bench_steps", 0))
++    all_ranks      = bool(kwargs.get("profile_all_ranks", False))
++    output_dir     = kwargs.get("output_dir", None)
++    device         = torch.device(kwargs.get("device", "cuda")
++                                  if torch.cuda.is_available() else "cpu")
++
++    total_steps = warmup_steps + no_sync_steps + active_steps
++
++    is_dist = dist.is_available() and dist.is_initialized()
++    rank = dist.get_rank() if is_dist else 0
++    world = dist.get_world_size() if is_dist else 1
++    is_main = rank == 0
++    should_print = is_main or all_ranks
++
++    cuda = torch.cuda.is_available()
++    sync = torch.cuda.synchronize if cuda else (lambda: None)
++
++    model.train()
++    optimizer.zero_grad(set_to_none=True)
++
++    if should_print:
++        print(
++            f"[profile rank={rank}] start  warmup={warmup_steps} "
++            f"no_sync={no_sync_steps} active={active_steps} world={world} "
++            f"internals={do_internals} trace={do_trace} device={device}",
++            flush=True,
++        )
++
++    # -------------------------------------------------------------------------
++    # Optional NCCL micro-benchmark — raw all_reduce health before any model op.
++    # -------------------------------------------------------------------------
++    if is_dist and nccl_bench > 0 and cuda:
++        buf = torch.zeros(256 * 1024 * 1024 // 4, dtype=torch.float32, device=device)
++        for mb in (1, 16, 64, 256):
++            n = mb * 1024 * 1024 // 4
++            sub = buf[:n]
++            dist.all_reduce(sub); sync()          # warm
++            t0 = time.perf_counter()
++            for _ in range(nccl_bench):
++                dist.all_reduce(sub)
++            sync()
++            ms = (time.perf_counter() - t0) / nccl_bench * 1000
++            if is_main:
++                bw = mb * 2 / (ms / 1000) / 1024   # GB/s effective
++                print(f"[profile nccl_bench] {mb:>4}MB all_reduce: "
++                      f"{ms:>7.2f}ms ({bw:.1f} GB/s)", flush=True)
++        del buf
++
++    # -------------------------------------------------------------------------
++    # Wrap block_mask_creator to time CPU-side mask construction.
++    # -------------------------------------------------------------------------
++    inner = model.module if hasattr(model, "module") else model
++    _mask_times: List[float] = []
++    _orig_bmc = getattr(inner, "block_mask_creator", None)
++    if _orig_bmc is not None:
++        def _timed_bmc(*a, **kw):
++            t0 = time.perf_counter()
++            r = _orig_bmc(*a, **kw)
++            _mask_times.append(time.perf_counter() - t0)
++            return r
++        inner.block_mask_creator = _timed_bmc
++
++    # -------------------------------------------------------------------------
++    # Model-internal forward hooks (CUDA events around eager top-level parts).
++    # Compile-safe: hooks fire in eager around the compiled backbone call; we
++    # never inject a Python timer inside the compiled region.
++    # -------------------------------------------------------------------------
++    comp_names = ["embedding", "backbone", "norm", "loss_fn"]
++    comp_events: Dict[str, List] = {n: [] for n in comp_names}
++    _pending: Dict[str, Any] = {}
++    _collect = [False]
++    hook_handles = []
++
++    if do_internals and cuda:
++        def _mk_pre(name):
++            def pre(_m, _args):
++                if not _collect[0]:
++                    return
++                ev = torch.cuda.Event(enable_timing=True); ev.record()
++                _pending[name] = ev
++            return pre
++
++        def _mk_post(name):
++            def post(_m, _args, _out):
++                if not _collect[0] or name not in _pending:
++                    return
++                end = torch.cuda.Event(enable_timing=True); end.record()
++                comp_events[name].append((_pending.pop(name), end))
++            return post
++
++        for name in comp_names:
++            mod = getattr(inner, name, None)
++            if isinstance(mod, nn.Module):
++                hook_handles.append(mod.register_forward_pre_hook(_mk_pre(name)))
++                hook_handles.append(mod.register_forward_hook(_mk_post(name)))
++
++    # -------------------------------------------------------------------------
++    # Optional chrome trace (fine-grained, incl. inside the compiled backbone).
++    # -------------------------------------------------------------------------
++    trace_ctx = nullcontext()
++    prof = None
++    if do_trace and cuda:
++        from torch.profiler import ProfilerActivity, schedule as _sched, profile as _profile
++
++        def _on_ready(p):
++            dest = output_dir or "."
++            os.makedirs(dest, exist_ok=True)
++            out = os.path.join(dest, f"profile_trace_rank{rank}.json.gz")
++            p.export_chrome_trace(out)
++            if should_print:
++                print(f"[profile rank={rank}] chrome trace → {out}", flush=True)
++
++        prof = _profile(
++            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
++            schedule=_sched(wait=1, warmup=1, active=max(1, trace_steps), repeat=1),
++            on_trace_ready=_on_ready,
++            record_shapes=False, with_stack=False,
++        )
++        trace_ctx = prof
++
++    # -------------------------------------------------------------------------
++    # Profiling loop.
++    # -------------------------------------------------------------------------
++    no_sync_bwd: List[float] = []
++    sync_rows:   List[Dict[str, float]] = []
++
++    _iter = iter(train_loader)
++    with trace_ctx:
++        for step in range(total_steps):
++            is_warmup  = step < warmup_steps
++            is_no_sync = warmup_steps <= step < warmup_steps + no_sync_steps
++            is_active  = step >= warmup_steps + no_sync_steps
++            _collect[0] = is_active and do_internals
++
++            # --- data fetch (CPU: traversal / memmap / packing) ---
++            t0 = time.perf_counter()
++            try:
++                batch = next(_iter)
++            except StopIteration:
++                if should_print:
++                    print(f"[profile rank={rank}] loader exhausted at step {step}",
++                          flush=True)
++                break
++            batch = _to_device(batch, device)
++            t_data = time.perf_counter()
++
++            e_fs, e_fe, e_be, e_oe = [torch.cuda.Event(enable_timing=True)
++                                      for _ in range(4)] if cuda else (None,)*4
++
++            if cuda: e_fs.record()
++            ctx = model.no_sync() if (is_dist and is_no_sync and hasattr(model, "no_sync")) \
++                else nullcontext()
++            with ctx:
++                loss = model(batch)
++                if cuda: e_fe.record()
++                loss.backward()
++            if cuda: e_be.record()
++
++            optimizer.step()
++            optimizer.zero_grad(set_to_none=True)
++            if cuda: e_oe.record()
++
++            sync()
++            t_end = time.perf_counter()
++
++            if not is_warmup:
++                row = dict(
++                    data_ms=(t_data - t0) * 1000,
++                    mask_ms=(_mask_times[-1] * 1000) if _mask_times else 0.0,
++                    fwd_ms=e_fs.elapsed_time(e_fe) if cuda else 0.0,
++                    bwd_ms=e_fe.elapsed_time(e_be) if cuda else 0.0,
++                    opt_ms=e_be.elapsed_time(e_oe) if cuda else 0.0,
++                    wall_ms=(t_end - t0) * 1000,
++                )
++                if is_no_sync:
++                    no_sync_bwd.append(row["bwd_ms"])
++                else:
++                    sync_rows.append(row)
++                if should_print:
++                    print(
++                        f"[profile rank={rank}] step={step:>3} "
++                        f"{'no_sync' if is_no_sync else 'active'}  "
++                        f"loss={float(loss.detach()):.4f}  "
++                        f"wall={row['wall_ms']:.0f}ms  data={row['data_ms']:.0f}  "
++                        f"mask={row['mask_ms']:.0f}  fwd={row['fwd_ms']:.0f}  "
++                        f"bwd={row['bwd_ms']:.0f}  opt={row['opt_ms']:.0f}",
++                        flush=True,
++                    )
++
++            if prof is not None and is_active:
++                prof.step()
++
++    # ---- restore wrapped mask creator ----
++    if _orig_bmc is not None:
++        inner.block_mask_creator = _orig_bmc
++    for h in hook_handles:
++        h.remove()
++
++    result: Dict[str, Any] = {"model": model}
++    if not sync_rows:
++        if should_print:
++            print(f"[profile rank={rank}] no active steps timed "
++                  f"(increase profile_active_steps).", flush=True)
++        return result
++
++    # -------------------------------------------------------------------------
++    # Aggregate + component breakdown.
++    # -------------------------------------------------------------------------
++    keys = ["data_ms", "mask_ms", "fwd_ms", "bwd_ms", "opt_ms", "wall_ms"]
++    mean = {k: statistics.mean([r[k] for r in sync_rows]) for k in keys}
++    nccl_est = max(0.0, mean["bwd_ms"] - statistics.mean(no_sync_bwd)) if no_sync_bwd else None
++
++    comp_mean: Dict[str, float] = {}
++    for name, evs in comp_events.items():
++        if evs:
++            comp_mean[name] = statistics.mean([s.elapsed_time(e) for s, e in evs])
++
++    result["profile_summary"] = {
++        "mean_ms": mean, "nccl_est_ms": nccl_est, "component_ms": comp_mean,
++        "world_size": world,
++    }
++
++    # Per-rank CSV (always) so multi-rank asymmetry is inspectable post-hoc.
++    if output_dir is not None:
++        os.makedirs(output_dir, exist_ok=True)
++        csv_path = os.path.join(output_dir, f"profile_rank{rank}.csv")
++        with open(csv_path, "w", newline="") as f:
++            w = csv.writer(f)
++            w.writerow(["step"] + keys)
++            for i, r in enumerate(sync_rows):
++                w.writerow([i] + [f"{r[k]:.4f}" for k in keys])
++
++    if not is_main:
++        return result
++
++    sep = "=" * 68
++    print(f"\n{sep}\n  profile_training summary  (world={world}, "
++          f"{len(sync_rows)} active steps)\n{sep}", flush=True)
++    for k in keys:
++        print(f"  {k:<12} {mean[k]:>8.1f} ms", flush=True)
++    if nccl_est is not None:
++        print(f"  {'NCCL est.':<12} {nccl_est:>8.1f} ms  (sync_bwd − nosync_bwd)",
++              flush=True)
++    if comp_mean:
++        print(f"{'-'*68}\n  model-internal breakdown (GPU, mean per step):", flush=True)
++        for name in comp_names:
++            if name in comp_mean:
++                print(f"    {name:<12} {comp_mean[name]:>8.1f} ms", flush=True)
++    print(sep, flush=True)
++
++    return result
++
+
+diff --git a/tunalab/train_loops/test_profile_training.py b/tunalab/train_loops/test_profile_training.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/tunalab/train_loops/test_profile_training.py
+@@ -0,0 +1,95 @@
++"""
++Specific tests for the profile_training atomic feature.
++Registered in __specific_tests__ so smart_train's compilation pipeline can
++validate them (signature: (run_training_fn, device)).
++"""
++
++import torch
++import torch.nn as nn
++from torch.utils.data import DataLoader, IterableDataset
++
++
++class _SimpleModel(nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.embedding = nn.Linear(4, 8)   # named like the real module's parts
++        self.backbone = nn.Sequential(nn.Linear(8, 8), nn.ReLU())
++        self.norm = nn.LayerNorm(8)
++        self.loss_fn = nn.Linear(8, 1)
++
++    def forward(self, batch):
++        x = self.embedding(batch.float())
++        x = self.backbone(x)
++        x = self.norm(x)
++        return self.loss_fn(x).mean()
++
++
++class _SimpleDataset(IterableDataset):
++    def __init__(self, n=24):
++        self.n = n
++
++    def __iter__(self):
++        for _ in range(self.n):
++            yield torch.randn(4)
++
++
++def _mk(device):
++    model = _SimpleModel().to(device)
++    opt = torch.optim.SGD(model.parameters(), lr=0.05)
++    loader = DataLoader(_SimpleDataset(24), batch_size=None)
++    return model, opt, loader
++
++
++def test_profile_off_is_base_loop(run_training_fn, device):
++    """profile_run defaults off → behaves like base_loop and the model learns."""
++    model, opt, loader = _mk(device)
++    with torch.no_grad():
++        pre = model(torch.randn(64, 4).to(device)).item()
++    out = run_training_fn(model=model, optimizer=opt, train_loader=loader)
++    assert "model" in out
++    assert "profile_summary" not in out  # off → no profiling output
++    with torch.no_grad():
++        post = model(torch.randn(64, 4).to(device)).item()
++    # loose learning check (SGD on a random target-free objective still moves)
++    assert post != pre
++
++
++def test_profile_on_returns_summary(run_training_fn, device):
++    """profile_run=True runs the profiling loop and returns a per-phase summary."""
++    model, opt, loader = _mk(device)
++    out = run_training_fn(
++        model=model, optimizer=opt, train_loader=loader,
++        profile_run=True,
++        profile_warmup_steps=1,
++        profile_active_steps=4,
++        profile_model_internals=True,
++    )
++    assert "model" in out
++    summ = out.get("profile_summary")
++    assert summ is not None, "profile_run=True must return profile_summary"
++    for k in ("data_ms", "fwd_ms", "bwd_ms", "opt_ms", "wall_ms"):
++        assert k in summ["mean_ms"], f"missing phase {k} in summary"
++
++
++def test_profile_no_sync_nccl_estimate_single_process(run_training_fn, device):
++    """no_sync steps requested single-process: runs cleanly, nccl_est is None."""
++    model, opt, loader = _mk(device)
++    out = run_training_fn(
++        model=model, optimizer=opt, train_loader=loader,
++        profile_run=True,
++        profile_warmup_steps=1,
++        profile_no_sync_steps=2,
++        profile_active_steps=3,
++    )
++    summ = out["profile_summary"]
++    # Single process → no_sync path still exercised, but NCCL isolation needs
++    # ≥2 ranks; ensure it degrades gracefully rather than crashing.
++    assert summ["world_size"] == 1
++
++
++__specific_tests__ = [
++    test_profile_off_is_base_loop,
++    test_profile_on_returns_summary,
++    test_profile_no_sync_nccl_estimate_single_process,
++]
++

@@ -1,0 +1,147 @@
+diff --git a/launch_slurm.py b/launch_slurm.py
+index cbdde49..6536dcb 100644
+--- a/launch_slurm.py
++++ b/launch_slurm.py
+@@ -10,7 +10,7 @@ Launcher options (all optional):
+     --config PATH        Config YAML              (default: configs/baseline.yaml)
+     --partition NAME     SLURM partition          (default: compute)
+     --time HH:MM:SS      Wall-clock time limit    (default: 24:00:00)
+-    --mem-per-gpu GB     CPU RAM per GPU in GB    (default: 64)
++    --mem-per-gpu GB     CPU RAM per GPU in GB    (default: 192)
+     --cpus-per-task N    CPU cores per task/GPU   (default: 8)
+     --exclude NODES      Comma-separated node list to exclude
+     --no-tail            Don't follow logs interactively
+@@ -169,7 +169,7 @@ def launch(
+     config:        str   = "configs/baseline.yaml",
+     partition:     str   = "compute",
+     time_limit:    str   = "168:00:00",
+-    mem_per_gpu:   int   = 128,
++    mem_per_gpu:   int   = 192,
+     cpus_per_task: int   = 8,
+     exclude:       str   = None,
+     nodelist:      str   = None,
+@@ -279,7 +279,7 @@ def main():
+                         help="SLURM partition")
+     parser.add_argument("--time",          type=str, default="168:00:00",
+                         help="Wall-clock limit HH:MM:SS")
+-    parser.add_argument("--mem-per-gpu",   type=int, default=64,
++    parser.add_argument("--mem-per-gpu",   type=int, default=192,
+                         help="CPU RAM (GB) per GPU")
+     parser.add_argument("--cpus-per-task", type=int, default=8,
+                         help="CPU cores per task/GPU")
+diff --git a/scripts/sweep_yield_watcher.sh b/scripts/sweep_yield_watcher.sh
+index f1dd030..20086a5 100755
+--- a/scripts/sweep_yield_watcher.sh
++++ b/scripts/sweep_yield_watcher.sh
+@@ -1,11 +1,13 @@
+ #!/bin/bash
+ # LR-sweep courtesy watcher (node-demand-aware).
+ #
+-# Frees nodes for coworkers: when OTHER users have jobs PENDING and blocked on node
+-# availability (REASON Resources/Priority), cancels our lowest-priority sweep jobs
+-# (name-prefixed, default ts2ts_) YOUNGEST-first, freeing as many nodes as the
+-# waiting jobs collectively request (capped at how many we're running). All sweep
+-# runs checkpoint latest.pt every 250 steps → resumable via --resume-from.
++# Frees nodes for higher-priority work: when a job is PENDING and blocked on node
++# availability (REASON Resources/Priority) — either ANOTHER user's job, or one of MY
++# OWN non-sweep jobs (name NOT prefixed ts2ts_) — cancels our lowest-priority sweep
++# jobs (name-prefixed, default ts2ts_) YOUNGEST-first, freeing as many nodes as the
++# waiting jobs collectively request (capped at how many we're running). Our own
++# PENDING sweep jobs never count as demand, so sweeps don't yield to each other. All
++# sweep runs checkpoint latest.pt every 250 steps → resumable via --resume-from.
+ #
+ # The user (evin_t) explicitly authorized auto-kill: "do not hesitate to kill if
+ # somebody's waiting in line." Personal, non-urgent project.
+@@ -45,8 +47,9 @@ IDLE_SINCE="$STATE_DIR/node_idle_since.tsv"        # node<TAB>first_idle_epoch
+ # Input (stdin): lines "USER|STATE|REASON|NODES|JOBID|NAME" (squeue -o "%u|%T|%r|%D|%i|%j").
+ # Args: $1=me (my username), $2=prefix (my sweep job-name prefix), $3=max_kill.
+ # Output (stdout): job IDs to cancel, one per line, youngest-first, sized to the
+-#   total nodes demanded by other users' blocked-pending jobs (capped at max_kill
+-#   and at how many sweep jobs I actually have running). Empty output = do nothing.
++#   total nodes demanded by blocked-pending jobs we yield to — other users' jobs plus
++#   my own non-sweep jobs (capped at max_kill and at how many sweep jobs I actually
++#   have running). Empty output = do nothing.
+ # Also prints, to stderr, a human summary line prefixed "SUMMARY:".
+ decide_cancellations() {
+   local me="$1" prefix="$2" max_kill="$3"
+@@ -61,8 +64,11 @@ decide_cancellations() {
+     }
+     {
+       user=$1; state=$2; reason=$3; nodes=$4+0; jobid=$5; name=$6; elapsed=$7
+-      # Other users blocked in the queue waiting for nodes:
+-      if (user!=me && state=="PENDING" && (reason=="Resources"||reason=="Priority")) {
++      # Jobs blocked in the queue waiting for nodes that our sweep should yield to:
++      # any OTHER users blocked-pending job, plus MY OWN blocked-pending NON-sweep
++      # jobs. My own pending SWEEP jobs (name starts with prefix) are excluded so
++      # that sweeps do not yield to each other.
++      if (state=="PENDING" && (reason=="Resources"||reason=="Priority") && (user!=me || index(name,prefix)!=1)) {
+         demand += nodes
+         waiters = waiters " " jobid "(" nodes "n:" reason ")"
+       }
+@@ -164,7 +170,19 @@ run_selftest() {
+     'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
+     'evin_t|PENDING|Resources|1|45060|ts2ts_pending|0:00' \
+     | decide_cancellations evin_t ts2ts_ 8 2>/dev/null)"
+-  _check "E own-pending-ignored" "" "$E"
++  _check "E own-sweep-pending-ignored" "" "$E"
++  # Scenario M: my OWN pending NON-sweep job (different prefix) SHOULD trigger a yield.
++  local M; M="$(printf '%s\n' \
++    'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
++    'evin_t|PENDING|Resources|1|45061|mic_big|0:00' \
++    | decide_cancellations evin_t ts2ts_ 8 2>/dev/null)"
++  _check "M own-nonsweep-pending-triggers" "45048" "$M"
++  # Scenario N: my own pending NON-sweep job, but idle covers it -> net 0 -> NO kill.
++  local N; N="$(printf '%s\n' \
++    'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
++    'evin_t|PENDING|Resources|1|45061|mic_big|0:00' \
++    | decide_cancellations evin_t ts2ts_ 8 1 2>/dev/null)"
++  _check "N own-nonsweep-idle-covers-no-kill" "" "$N"
+   # Scenario F: pending but NOT resource-blocked (e.g. Dependency) -> ignore
+   local F; F="$(printf '%s\n' \
+     'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
+
+diff --git a/scripts/eval_ports_local.sh b/scripts/eval_ports_local.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/eval_ports_local.sh
+@@ -0,0 +1,39 @@
++#!/usr/bin/env bash
++# Run the cross-doc benchmark PORTS (Tier 0/1/2) on completed merged_v2 cross_doc
++# checkpoints, using the free LOCAL GPUs on the login node (GPU 0 is in use → use 1-7).
++# One port-audit per GPU, gated to NGPU concurrent. Writes <run>/port_eval/<port>.json.
++set -uo pipefail
++REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
++GPUS=(1 2 3 4 5 6 7)
++MAXEX="${MAXEX:-500}"
++PORTS=(repobench_python repobench_java ase_kotlin crosscodeeval_ts \
++       internal_python internal_go internal_java internal_javascript \
++       internal_kotlin internal_rust internal_typescript internal_zig internal_dart)
++# checkpoint label -> run dir (cross_doc completed runs; latest.pt = fully-cooled final)
++declare -A CK=(
++  [8b_cdl]=runs/run_20260813_144916_125137
++  [16bnat_cdl]=runs/run_20260813_182257_104861
++)
++JOBS=()
++for lbl in "${!CK[@]}"; do
++  for p in "${PORTS[@]}"; do JOBS+=("$lbl $p"); done
++done
++echo "=== ${#JOBS[@]} port-audits across ${#GPUS[@]} GPUs (max-examples $MAXEX) ==="
++i=0
++while [ $i -lt ${#JOBS[@]} ]; do
++  for g in "${GPUS[@]}"; do
++    [ $i -ge ${#JOBS[@]} ] && break
++    set -- ${JOBS[$i]}; lbl="$1"; port="$2"
++    rd="${CK[$lbl]}"; out="$rd/port_eval"; mkdir -p "$out"
++    ck="$rd/checkpoints/latest.pt"
++    echo "[$i] $lbl/$port -> cuda:$g"
++    CUDA_VISIBLE_DEVICES=$g nohup python -m eval.benchmark_harness.run_port_audit \
++      --port "$port" --tiers 0 1 2 --checkpoint "$ck" --scope native \
++      --max-examples "$MAXEX" --device cuda --out "$out/${port}.json" \
++      > "$out/${port}.log" 2>&1 &
++    i=$((i+1)); sleep 3
++  done
++  wait   # barrier: let this batch of NGPU finish before the next
++done
++echo "=== ALL PORT AUDITS DONE ==="
++

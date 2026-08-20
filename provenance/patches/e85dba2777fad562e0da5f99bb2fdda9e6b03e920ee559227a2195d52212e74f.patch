@@ -1,0 +1,1345 @@
+diff --git a/TODOS.md b/TODOS.md
+index c97b202..2e9a4e6 100644
+--- a/TODOS.md
++++ b/TODOS.md
+@@ -18,6 +18,17 @@ a redirect title that isn't a first-class node.
+ 
+ ## Model
+ 
++### Profile training throughput — even plain doc_causal may be leaving speed on the table
++thestack_doc_causal runs ~6.6s/it at 262144 tok/step on 4 GPUs (~26 GPU-s/step);
++the cross-doc-link mask is NOT the bottleneck (thestack_doc_concat_link is actually
++cheaper per GPU-s, and arxiv's slowness is just its long docs filling the T×T matrix).
++But 6s/it for this model size/context still feels high — plausibly 1-2s/it is
++achievable. Profile the doc_causal path to find where time goes: dataloader / pack
++build / collate (CPU-bound, starving GPU?), the varlen_bim Triton kernel, optimizer
++(distributed Muon Newton-Schulz), grad-accum sync, or activation checkpointing / recompute.
++Check GPU utilization (is it <90%? → input-bound). Use profile_training.py. Flagged
++2026-07-02; user suspects headroom to 1-2s/it.
++
+ ### Additional datasets
+ - **EnWiki / full Wikipedia**: expand beyond SimpleWiki to the other available Wikipedia
+   dumps (enwiki, etc.). Same markdown link graph pipeline; main cost is graph build +
+diff --git a/data/split_graph.py b/data/split_graph.py
+index 374ed6e..403a9a9 100644
+--- a/data/split_graph.py
++++ b/data/split_graph.py
+@@ -161,12 +161,28 @@ def assign_splits(
+     community_size_min: int,
+     community_size_max: int,
+     seed: int,
++    stratify_by_source: bool = False,
+ ) -> Dict[str, List[int]]:
+-    """Return a dict mapping split name -> list of node indices."""
++    """Return a dict mapping split name -> list of node indices.
++
++    When ``stratify_by_source`` is set, communities AND random splits are drawn
++    proportionally from each node's ``source`` (provenance stamped by
++    merge_datasets.py). This prevents one densely-interconnected source (e.g.
++    enwiktionary) from dominating the community-val/test splits, which would
++    otherwise make the val-loss signal reflect mostly that one source's
++    distribution. Cross-source edges stay in train for the model to learn from.
++    """
+     import random
+ 
+     n = len(nodes)
+     rng = random.Random(seed)
++
++    if stratify_by_source:
++        return _assign_splits_stratified(
++            nodes, out_adj, in_adj, val_frac, test_frac,
++            community_size_min, community_size_max, rng,
++        )
++
+     assigned: Set[int] = set()
+ 
+     community_target = int(round(n * (val_frac + test_frac)))
+@@ -217,6 +233,85 @@ def assign_splits(
+     return split_map
+ 
+ 
++def _assign_splits_stratified(
++    nodes: List[dict],
++    out_adj: Dict[int, List[int]],
++    in_adj: Dict[int, List[int]],
++    val_frac: float,
++    test_frac: float,
++    community_size_min: int,
++    community_size_max: int,
++    rng,
++) -> Dict[str, List[int]]:
++    """Source-stratified variant of assign_splits.
++
++    For each distinct ``source``: extract communities restricted to that
++    source's induced subgraph (BFS can't leave the source because every
++    other-source node is pre-marked excluded), targeting
++    ``(val_frac+test_frac) × |source|`` nodes; then take proportional random
++    splits from that source's leftovers. Per-source contributions are unioned
++    into the global splits. Nodes lacking a ``source`` field share one implicit
++    bucket (``"__nosource__"``), so this degrades gracefully on unmerged data.
++    """
++    n = len(nodes)
++
++    # Group node indices by source.
++    by_source: Dict[str, List[int]] = collections.defaultdict(list)
++    for idx, node in enumerate(nodes):
++        by_source[node.get("source", "__nosource__")].append(idx)
++
++    logger.info(
++        "Source-stratified split over %d source(s): %s",
++        len(by_source),
++        {s: len(ids) for s, ids in sorted(by_source.items())},
++    )
++
++    split_map: Dict[str, List[int]] = {k: [] for k in ALL_SPLITS}
++
++    for source in sorted(by_source):
++        src_ids = by_source[source]
++        src_set = set(src_ids)
++        n_src = len(src_ids)
++
++        # Pre-exclude every node not in this source so BFS stays intra-source.
++        # (excluded is consumed AND mutated by _extract_communities.)
++        excluded: Set[int] = set(range(n)) - src_set
++
++        community_target = int(round(n_src * (val_frac + test_frac)))
++        communities = _extract_communities(
++            n_nodes=n,
++            out_adj=out_adj,
++            in_adj=in_adj,
++            target_node_count=community_target,
++            community_size_min=community_size_min,
++            community_size_max=community_size_max,
++            rng=rng,
++            excluded=excluded,
++        )
++
++        rng.shuffle(communities)
++        comm_ids = [idx for comm in communities for idx in comm]
++        midpoint = len(comm_ids) // 2
++        split_map["val_community"].extend(comm_ids[:midpoint])
++        split_map["test_community"].extend(comm_ids[midpoint:])
++
++        # Random splits from this source's leftovers (community nodes are in
++        # `excluded`; subtract the pre-seeded other-source exclusions back out).
++        comm_assigned = excluded - (set(range(n)) - src_set)
++        remaining = [i for i in src_ids if i not in comm_assigned]
++        rng.shuffle(remaining)
++        val_n  = int(round(n_src * val_frac))
++        test_n = int(round(n_src * test_frac))
++        split_map["val_random"].extend(remaining[:val_n])
++        split_map["test_random"].extend(remaining[val_n : val_n + test_n])
++        split_map["train"].extend(remaining[val_n + test_n:])
++
++    counts = {k: len(v) for k, v in split_map.items()}
++    assert sum(counts.values()) == n, f"Sum {sum(counts.values())} != {n}"
++    logger.info("Stratified split counts: %s", counts)
++    return split_map
++
++
+ # ---------------------------------------------------------------------------
+ # Writing split subdirectories
+ # ---------------------------------------------------------------------------
+@@ -319,6 +414,12 @@ def main() -> None:
+     parser.add_argument(
+         "--seed", type=int, default=42,
+     )
++    parser.add_argument(
++        "--stratify-by-source", action="store_true",
++        help="Draw community/random splits proportionally from each node's "
++             "'source' provenance (stamped by merge_datasets.py) so no single "
++             "source dominates val/test. No-op field-wise on unmerged data.",
++    )
+     parser.add_argument(
+         "--dry-run", action="store_true",
+         help="Print split counts without writing any files.",
+@@ -339,6 +440,7 @@ def main() -> None:
+         community_size_min=args.community_size_min,
+         community_size_max=args.community_size_max,
+         seed=args.seed,
++        stratify_by_source=args.stratify_by_source,
+     )
+ 
+     n = len(nodes)
+diff --git a/tests/data/test_split_graph.py b/tests/data/test_split_graph.py
+index cb6c491..8c78d97 100644
+--- a/tests/data/test_split_graph.py
++++ b/tests/data/test_split_graph.py
+@@ -240,3 +240,67 @@ def test_graphindex_can_load_split_dir(tmp_path):
+     train_dir = dataset_dir / "splits" / "train"
+     graph = GraphIndex(train_dir)
+     assert len(graph) == len(split_map["train"])
++
++
++# ---------------------------------------------------------------------------
++# Source-stratified split tests (merge_datasets provenance)
++# ---------------------------------------------------------------------------
++
++def _two_source_clusters(cluster_size: int, n_per_source: int) -> list:
++    """n_per_source cliques tagged source 'a' then the same for source 'b'.
++
++    Sources are disjoint (no cross-source edges), so a fair stratified split
++    must draw community nodes from BOTH, not just the larger/denser one.
++    """
++    nodes = []
++    idx = 0
++    for source, count in (("a", n_per_source), ("b", n_per_source)):
++        for _ in range(count):
++            cluster_ids = list(range(idx, idx + cluster_size))
++            for i in cluster_ids:
++                nodes.append({
++                    "normed_identifier": str(i),
++                    "raw_identifier": str(i),
++                    "source": source,
++                    "outgoing": [str(j) for j in cluster_ids if j != i],
++                    "incoming": [str(j) for j in cluster_ids if j != i],
++                    "tok_shard_idx": 0,
++                    "tok_offset_bytes": i * 10,
++                    "tok_len": 5,
++                })
++            idx += cluster_size
++    return nodes
++
++
++def test_stratified_all_assigned_and_disjoint(tmp_path):
++    nodes = _two_source_clusters(cluster_size=100, n_per_source=4)
++    split_map, _, _ = _run_assign(
++        tmp_path, nodes, stratify_by_source=True,
++        val_frac=0.05, test_frac=0.05, community_size_min=50,
++    )
++    total = sum(len(v) for v in split_map.values())
++    assert total == len(nodes)
++    sets = [set(v) for v in split_map.values()]
++    for i, s1 in enumerate(sets):
++        for j, s2 in enumerate(sets):
++            if i != j:
++                assert s1.isdisjoint(s2)
++
++
++def test_stratified_community_draws_from_both_sources(tmp_path):
++    nodes = _two_source_clusters(cluster_size=100, n_per_source=4)
++    split_map, dataset_dir, loaded = _run_assign(
++        tmp_path, nodes, stratify_by_source=True,
++        val_frac=0.05, test_frac=0.05, community_size_min=50,
++    )
++    _, normed_ids, _, _, _ = loaded
++    # Map each community node back to its source.
++    src_of = {n["normed_identifier"]: n["source"] for n in nodes}
++    comm_sources = {
++        src_of[normed_ids[idx]]
++        for split in ("val_community", "test_community")
++        for idx in split_map[split]
++    }
++    assert comm_sources == {"a", "b"}, (
++        "stratified community split must include both sources"
++    )
+
+diff --git a/data/merge_datasets.py b/data/merge_datasets.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/merge_datasets.py
+@@ -0,0 +1,391 @@
++"""
++data/merge_datasets.py — union N pretokenized dataset dirs into one artifact.
++
++Each input is a self-contained pretokenized dataset (as produced by
++data/pretokenize.py and friends): a metadata.json, a tokenized_graph.jsonl, and
++one or more shard_*.bin token files. This script merges several of them into a
++single directory that is byte-compatible with data.dataset.GraphIndex, so every
++downstream stage (split_graph.py, epoch_precompute.py, training) runs on the
++merged dir unchanged.
++
++Why this works without re-tokenizing anything:
++
++  * Token offsets are shard-relative. ``tok_offset_bytes`` is a byte offset into
++    a node's OWN shard file (past the 1024-byte / 256*int32 header). If we keep
++    each source shard intact and only renumber ``tok_shard_idx``, every offset
++    stays valid — no shard byte-rewriting.
++  * Cross-dataset edges are already latent. build_graph.py keeps every
++    ``outgoing`` target, including ones that dangle within a single source; only
++    ``incoming`` is a reverse index restricted to existing nodes. So merging is:
++    union the nodes, then recompute ``incoming`` over the union — cross-source
++    links light up for free. (GraphIndex.neighbors_out already skips unknown
++    targets, so leftover dangling ``outgoing`` entries are harmless.)
++
++Collisions: when the same normed_identifier appears in more than one input, the
++higher-priority source wins (see --priority). The losing node's shard bytes stay
++on disk as harmless dead space; only its graph entry is dropped.
++
++Provenance: every merged node gets a ``source`` field set to its input's tag.
++This drives source-stratified splitting (split_graph.py --stratify-by-source)
++and, eventually, source-aware pack partitioning for a mixed
++wiki+thestack+arxiv corpus.
++
++Usage:
++    python data/merge_datasets.py \\
++        --inputs enwiki=/fss-data/.../enwiki simplewiki=/fss-data/.../simplewiki \\
++        --output /fss-data/.../pretokenized_datasets/wiki_merged \\
++        --priority enwiki,simplewiki \\
++        --shard-mode hardlink
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import logging
++import os
++import shutil
++from pathlib import Path
++from typing import Dict, List, Tuple
++
++logger = logging.getLogger(__name__)
++
++SHARD_MODES = ("hardlink", "symlink", "copy")
++
++
++# ---------------------------------------------------------------------------
++# Input parsing
++# ---------------------------------------------------------------------------
++
++def _parse_inputs(pairs: List[str]) -> List[Tuple[str, Path]]:
++    """Parse ``tag=dir`` CLI pairs into an ordered [(tag, Path), ...] list.
++
++    Order is preserved and used as the default collision priority. Duplicate
++    tags are rejected (the tag is the provenance label and must be unique).
++    """
++    inputs: List[Tuple[str, Path]] = []
++    seen: set[str] = set()
++    for pair in pairs:
++        if "=" not in pair:
++            raise ValueError(
++                f"--inputs entry {pair!r} must be of the form tag=dir"
++            )
++        tag, dir_str = pair.split("=", 1)
++        tag = tag.strip()
++        if not tag:
++            raise ValueError(f"--inputs entry {pair!r} has an empty tag")
++        if tag in seen:
++            raise ValueError(f"Duplicate input tag {tag!r}")
++        seen.add(tag)
++        inputs.append((tag, Path(dir_str.strip())))
++    if not inputs:
++        raise ValueError("No --inputs provided")
++    return inputs
++
++
++def _resolve_priority(priority_arg: str | None, tags: List[str]) -> List[str]:
++    """Return the tag order (highest priority first) for collision resolution.
++
++    Defaults to input order. When --priority is given it must be a permutation
++    of the input tags (every tag present exactly once) so the ordering is
++    unambiguous.
++    """
++    if not priority_arg:
++        return list(tags)
++    order = [t.strip() for t in priority_arg.split(",") if t.strip()]
++    if sorted(order) != sorted(tags):
++        raise ValueError(
++            f"--priority {order} must be a permutation of the input tags {tags}"
++        )
++    return order
++
++
++# ---------------------------------------------------------------------------
++# Loading
++# ---------------------------------------------------------------------------
++
++def _load_dataset(dataset_dir: Path) -> Tuple[dict, List[dict]]:
++    """Load (metadata, nodes) from a pretokenized dataset directory."""
++    meta_path = dataset_dir / "metadata.json"
++    graph_path = dataset_dir / "tokenized_graph.jsonl"
++    if not meta_path.exists():
++        raise FileNotFoundError(f"metadata.json not found in {dataset_dir}")
++    if not graph_path.exists():
++        raise FileNotFoundError(f"tokenized_graph.jsonl not found in {dataset_dir}")
++
++    with open(meta_path, encoding="utf-8") as f:
++        metadata = json.load(f)
++
++    nodes: List[dict] = []
++    with open(graph_path, encoding="utf-8") as f:
++        for line in f:
++            line = line.strip()
++            if line:
++                nodes.append(json.loads(line))
++    return metadata, nodes
++
++
++# ---------------------------------------------------------------------------
++# Shard materialization
++# ---------------------------------------------------------------------------
++
++def _place_shard(src: Path, dst: Path, mode: str) -> None:
++    """Materialize a single shard file at ``dst`` referencing ``src``.
++
++    hardlink → falls back to copy across filesystems (EXDEV).
++    symlink   → absolute symlink to the source.
++    copy      → physical byte copy.
++    """
++    if dst.exists() or dst.is_symlink():
++        dst.unlink()
++    if mode == "hardlink":
++        try:
++            os.link(src, dst)
++        except OSError as e:
++            # EXDEV: cross-device link not permitted → fall back to a copy.
++            logger.warning("hardlink %s → %s failed (%s); copying instead", src, dst, e)
++            shutil.copy2(src, dst)
++    elif mode == "symlink":
++        os.symlink(src.resolve(), dst)
++    elif mode == "copy":
++        shutil.copy2(src, dst)
++    else:
++        raise ValueError(f"Unknown shard mode: {mode!r}")
++
++
++def _materialize_shards(
++    inputs: List[Tuple[str, Path]],
++    input_metas: Dict[str, dict],
++    output_dir: Path,
++    mode: str,
++) -> Tuple[Dict[str, Dict[int, int]], List[str]]:
++    """Materialize every input's shards into ``output_dir`` with global names.
++
++    Shards are laid out in INPUT order (not priority order) so the on-disk
++    numbering is stable/readable; collision resolution happens separately at the
++    node level and does not depend on shard placement.
++
++    Returns:
++        shard_remap: tag -> {local_shard_idx -> global_shard_idx}
++        shard_filenames: ordered list of global shard basenames for metadata
++    """
++    shard_remap: Dict[str, Dict[int, int]] = {}
++    shard_filenames: List[str] = []
++    global_idx = 0
++
++    for tag, src_dir in inputs:
++        local_names = input_metas[tag]["shard_filenames"]
++        remap: Dict[int, int] = {}
++        for local_idx, local_name in enumerate(local_names):
++            src = src_dir / local_name
++            if not src.exists():
++                raise FileNotFoundError(f"Shard {src} referenced by {tag} not found")
++            global_name = f"shard_{global_idx:06d}.bin"
++            _place_shard(src, output_dir / global_name, mode)
++            remap[local_idx] = global_idx
++            shard_filenames.append(global_name)
++            global_idx += 1
++        shard_remap[tag] = remap
++        logger.info("Materialized %d shard(s) from %s (%s)", len(local_names), tag, mode)
++
++    return shard_remap, shard_filenames
++
++
++# ---------------------------------------------------------------------------
++# Node union + edge recompute
++# ---------------------------------------------------------------------------
++
++def merge_nodes(
++    inputs: List[Tuple[str, Path]],
++    input_nodes: Dict[str, List[dict]],
++    priority: List[str],
++    shard_remap: Dict[str, Dict[int, int]],
++) -> Tuple[List[dict], Dict[str, int]]:
++    """Union nodes across inputs by priority and recompute incoming edges.
++
++    Iterates sources highest-priority first; a normed_identifier already claimed
++    by a higher-priority source is skipped (that source wins the collision).
++    Each surviving node gets its ``tok_shard_idx`` remapped to the global index
++    and a ``source`` provenance field stamped on.
++
++    Returns:
++        merged: list of node dicts (insertion order = priority, then file order)
++        collisions: tag -> count of nodes dropped because a higher-priority
++            source already had that id
++    """
++    merged: Dict[str, dict] = {}
++    collisions: Dict[str, int] = {tag: 0 for tag, _ in inputs}
++
++    for tag in priority:
++        remap = shard_remap[tag]
++        for node in input_nodes[tag]:
++            nid = node["normed_identifier"]
++            if nid in merged:
++                collisions[tag] += 1
++                continue
++            node = dict(node)  # don't mutate the loaded copy
++            local_shard = node["tok_shard_idx"]
++            if local_shard not in remap:
++                raise ValueError(
++                    f"Node {nid!r} from {tag} has tok_shard_idx={local_shard} "
++                    f"outside that source's shard range"
++                )
++            node["tok_shard_idx"] = remap[local_shard]
++            node["source"] = tag
++            merged[nid] = node
++
++    # Recompute incoming over the union. Clear first so we never double-count or
++    # carry stale within-source reverse edges; dangling outgoing targets (not in
++    # the union) are left in place — harmless, GraphIndex skips them.
++    for node in merged.values():
++        node["incoming"] = []
++    for src_nid, node in merged.items():
++        for tgt_nid in node.get("outgoing", []):
++            tgt = merged.get(tgt_nid)
++            if tgt is not None:
++                tgt["incoming"].append(src_nid)
++
++    # Sort each incoming list for determinism (matches build_graph.py's sorted output).
++    for node in merged.values():
++        node["incoming"].sort()
++
++    return list(merged.values()), collisions
++
++
++# ---------------------------------------------------------------------------
++# Orchestration
++# ---------------------------------------------------------------------------
++
++def merge_datasets(
++    inputs: List[Tuple[str, Path]],
++    output_dir: Path,
++    priority: List[str],
++    shard_mode: str,
++) -> dict:
++    """Merge the given inputs into ``output_dir``. Returns the written metadata."""
++    input_metas: Dict[str, dict] = {}
++    input_nodes: Dict[str, List[dict]] = {}
++    for tag, src_dir in inputs:
++        meta, nodes = _load_dataset(src_dir)
++        input_metas[tag] = meta
++        input_nodes[tag] = nodes
++        logger.info("Loaded %s: %d nodes, %d shard(s)", tag, len(nodes),
++                    len(meta.get("shard_filenames", [])))
++
++    # --- Homogeneity check (hard fail): tokenizer + dtype must match ---------
++    # Token ids from different tokenizers/dtypes are incomparable; a merged
++    # corpus with mixed encodings is silently corrupt, so this must abort.
++    tokenizers = {input_metas[t]["tokenizer"] for t, _ in inputs}
++    dtypes = {input_metas[t]["dtype_str"] for t, _ in inputs}
++    if len(tokenizers) != 1:
++        raise ValueError(f"Inputs use different tokenizers: {tokenizers}")
++    if len(dtypes) != 1:
++        raise ValueError(f"Inputs use different token dtypes: {dtypes}")
++    tokenizer = tokenizers.pop()
++    dtype_str = dtypes.pop()
++
++    output_dir.mkdir(parents=True, exist_ok=True)
++
++    shard_remap, shard_filenames = _materialize_shards(
++        inputs, input_metas, output_dir, shard_mode
++    )
++
++    merged_nodes, collisions = merge_nodes(inputs, input_nodes, priority, shard_remap)
++
++    # --- Per-source counts (post-collision) for the manifest -----------------
++    source_counts: Dict[str, int] = {tag: 0 for tag, _ in inputs}
++    for node in merged_nodes:
++        source_counts[node["source"]] += 1
++
++    # --- Write tokenized_graph.jsonl -----------------------------------------
++    graph_path = output_dir / "tokenized_graph.jsonl"
++    with open(graph_path, "w", encoding="utf-8") as f:
++        for node in merged_nodes:
++            f.write(json.dumps(node) + "\n")
++
++    # --- Write metadata.json -------------------------------------------------
++    metadata = {
++        "tokenizer": tokenizer,
++        "dtype_str": dtype_str,
++        "shard_filenames": shard_filenames,
++        "merged_from": {
++            "priority": priority,
++            "shard_mode": shard_mode,
++            "sources": [
++                {
++                    "tag": tag,
++                    "dir": str(src_dir.resolve()),
++                    "nodes_in": len(input_nodes[tag]),
++                    "nodes_kept": source_counts[tag],
++                    "nodes_dropped_to_collision": collisions[tag],
++                }
++                for tag, src_dir in inputs
++            ],
++            "total_nodes": len(merged_nodes),
++        },
++    }
++    with open(output_dir / "metadata.json", "w", encoding="utf-8") as f:
++        json.dump(metadata, f, indent=4)
++
++    total_dropped = sum(collisions.values())
++    logger.info(
++        "Merged %d nodes across %d sources → %s (%d dropped to collisions)",
++        len(merged_nodes), len(inputs), output_dir, total_dropped,
++    )
++    for tag, _ in inputs:
++        logger.info(
++            "  %-16s kept=%d dropped=%d",
++            tag, source_counts[tag], collisions[tag],
++        )
++    return metadata
++
++
++# ---------------------------------------------------------------------------
++# CLI
++# ---------------------------------------------------------------------------
++
++def main() -> None:
++    logging.basicConfig(
++        level=logging.INFO,
++        format="%(asctime)s  %(levelname)-8s  %(message)s",
++    )
++
++    parser = argparse.ArgumentParser(
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    parser.add_argument(
++        "--inputs", nargs="+", required=True, metavar="TAG=DIR",
++        help="Input datasets as tag=dir pairs. The tag becomes each node's "
++             "'source' provenance field and (by default) the collision priority.",
++    )
++    parser.add_argument(
++        "--output", required=True, type=Path,
++        help="Output directory for the merged dataset.",
++    )
++    parser.add_argument(
++        "--priority", default=None,
++        help="Comma-separated tag order, highest priority first (wins id "
++             "collisions). Must be a permutation of the input tags. "
++             "Defaults to --inputs order.",
++    )
++    parser.add_argument(
++        "--shard-mode", default="hardlink", choices=SHARD_MODES,
++        help="How to reference source shards in the merged dir (default: hardlink).",
++    )
++    args = parser.parse_args()
++
++    inputs = _parse_inputs(args.inputs)
++    tags = [tag for tag, _ in inputs]
++    priority = _resolve_priority(args.priority, tags)
++
++    merge_datasets(
++        inputs=inputs,
++        output_dir=args.output,
++        priority=priority,
++        shard_mode=args.shard_mode,
++    )
++
++
++if __name__ == "__main__":
++    main()
++
+
+diff --git a/downnode_rank_wrapper.sh b/downnode_rank_wrapper.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/downnode_rank_wrapper.sh
+@@ -0,0 +1,46 @@
++#!/bin/bash
++# Per-rank wrapper invoked by torchrun.
++#
++# Compile-cache strategy (CLAUDE.md "Multi-rank runs need a pre-warmed compile
++# cache"): all ranks of a run share ONE cache dir, NOT per-rank dirs.  With
++# TORCHINDUCTOR_COMPILE_THREADS=1 (set by launch_downnode.sh) inductor/triton
++# take a FileLock per cache key, so exactly one rank compiles each kernel and
++# the others block on the lock then read the artifact.  Per-rank dirs instead
++# make all N ranks cold-compile the SAME kernels concurrently — which deadlocks
++# the heavy custom cross-doc-link (BIM/FlexAttention) kernel (observed: rank0
++# idle while ranks1-3 spin forever in compile).  doc_causal/doc_concatenated
++# (lighter varlen kernels) tolerated per-rank dirs; cross_doc did not.
++#
++# Cache lives on /fss-data and is keyed by RUN_TAG so it persists across runs
++# (a second run of the same tag is a warm cache hit = fast startup) but distinct
++# configs don't collide.
++set -euo pipefail
++REPO=/fss/evin_t/tagseq2tagseq
++RUN_TAG="$1"; shift
++
++# NODE-LOCAL shared cache (/tmp = local ext4), shared by this node's 4 ranks.
++# Must NOT be on /fss-data: that is NFS, and inductor/triton FileLocks taken by
++# 3 nodes x 4 ranks = 12 procs concurrently on one NFS server DEADLOCK (observed:
++# the node that grabs the NFS lock first compiles; the others' rank0 freezes
++# while ranks1-3 spin forever).  Node-local /tmp gives reliable within-node
++# FileLock serialization (1 rank compiles each kernel, the node's other 3 read)
++# with ZERO cross-node lock contention.  Cost: each node compiles independently
++# (no cache reuse across nodes) — fine, 3 parallel local compiles beats a deadlock.
++SHARED_CACHE=/tmp/ts2ts_compile_cache_${RUN_TAG}
++export TORCHINDUCTOR_CACHE_DIR=${SHARED_CACHE}/inductor
++export TRITON_CACHE_DIR=${SHARED_CACHE}/triton
++mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
++
++# main.py installs no console log handler, so logger.info (graph load, compile,
++# cache-vs-mock decision) is invisible by default.  Force INFO logging to stderr
++# so down-node runs are observable, then exec main.py via runpy.
++export PYTHONUNBUFFERED=1
++exec "$REPO/.venv/bin/python" -u -c "
++import logging, sys, runpy
++logging.basicConfig(level=logging.INFO,
++                    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
++                    stream=sys.stderr)
++sys.argv = ['main.py'] + sys.argv[1:]
++runpy.run_path('$REPO/main.py', run_name='__main__')
++" "$@"
++
+
+diff --git a/launch_downnode.sh b/launch_downnode.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/launch_downnode.sh
+@@ -0,0 +1,74 @@
++#!/bin/bash
++# Launch a torchrun training job on a SLURM-detached "down" node
++# (GPU-269/423/694 — broken 8th GPU, not in SLURM, ssh-only).
++#
++# Parameterized so multiple jobs can share a node on disjoint GPU sets:
++#   thestack : 4 GPUs (0-3) x accum 2  = 262144 tok/step
++#   arxiv    : 2 GPUs      x accum 4   = 262144 tok/step
++#   wiki     : 1 GPU       x accum 8   = 262144 tok/step
++#
++# Usage (run ON the node):
++#   launch_downnode.sh <config> <run_tag> <gpus> <accum> <max_opt_steps> [extra main.py args...]
++# where <gpus> is a CUDA_VISIBLE_DEVICES list, e.g. "0,1,2,3" or "4,5" or "6".
++# Back-compat: if <gpus>/<accum>/<max_opt_steps> omitted → thestack defaults
++# (0,1,2,3 / 2 / 27488).
++set -euo pipefail
++
++REPO=/fss/evin_t/tagseq2tagseq
++VENV=$REPO/.venv
++ART=/fss-data/evin_t/tagseq2tagseq_artifacts
++
++CONFIG="$1"; shift
++RUN_TAG="$1"; shift
++GPUS="${1:-0,1,2,3}"; [ $# -gt 0 ] && shift || true
++ACCUM="${1:-2}";      [ $# -gt 0 ] && shift || true
++MAX_STEPS="${1:-27488}"; [ $# -gt 0 ] && shift || true
++EXTRA_ARGS="$@"
++
++# nproc = number of GPUs in the list
++NPROC=$(awk -F',' '{print NF}' <<< "$GPUS")
++
++cd "$REPO"
++
++# --- env: replicate launch_slurm.py's critical settings ---
++export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
++export PYTORCH_ALLOC_CONF="expandable_segments:True"
++export TORCH_DIST_TIMEOUT_SECONDS=1800
++export NCCL_TIMEOUT=1800
++# Single-node intra-host: NVLink, no IB needed.
++# Prevent concurrent-compile deadlock (CLAUDE.md): synchronous in-process compile.
++export TORCHINDUCTOR_COMPILE_THREADS=1
++export TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0
++# Compile cache is a NODE-LOCAL shared dir keyed by RUN_TAG (set in
++# downnode_rank_wrapper.sh) — distinct RUN_TAGs get distinct caches, so jobs
++# sharing a node do not collide.
++
++export CUDA_VISIBLE_DEVICES="$GPUS"
++
++LOGDIR=$ART/pipeline_logs
++mkdir -p "$LOGDIR"
++LOG=$LOGDIR/downnode_${RUN_TAG}_$(hostname).log
++
++TOK_PER_STEP=$(( NPROC * ACCUM * 32768 ))
++echo "[launch_downnode] host=$(hostname) config=$CONFIG tag=$RUN_TAG gpus=$GPUS nproc=$NPROC accum=$ACCUM max_steps=$MAX_STEPS log=$LOG"
++echo "[launch_downnode] $NPROC GPUs x accum_steps=$ACCUM x 32768 = $TOK_PER_STEP tokens/step"
++
++# Random-ish port so jobs sharing a node don't clash on the rendezvous port.
++PORT=$(( 29500 + (RANDOM % 6000) ))
++
++nohup "$VENV/bin/torchrun" \
++    --standalone \
++    --nnodes=1 \
++    --nproc_per_node=$NPROC \
++    --master_port=$PORT \
++    --no-python \
++    "$REPO/downnode_rank_wrapper.sh" "$RUN_TAG" \
++    --config "$CONFIG" \
++    --train_loop.max_optimizer_steps $MAX_STEPS \
++    --train_loop.atomic_feature_kwargs.accum_steps $ACCUM \
++    $EXTRA_ARGS \
++    > "$LOG" 2>&1 &
++
++echo "[launch_downnode] PID=$! LOG=$LOG"
++echo "$LOG"
++
+
+diff --git a/scripts/monitor_training.sh b/scripts/monitor_training.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/monitor_training.sh
+@@ -0,0 +1,46 @@
++#!/bin/bash
++# One-shot status of the in-progress down-node training jobs + the wiki-merge
++# finalize watcher. Reads logs only (cheap); does not ssh unless --gpu is passed.
++#
++# Usage: monitor_training.sh [--gpu]
++set -uo pipefail
++PLOG=/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs
++R=/fss/evin_t/tagseq2tagseq/runs
++
++# tag | node | config | run_dir
++JOBS=(
++  "dc269|GPU-269|thestack_doc_causal|20260630_193825"
++  "dcc694|GPU-694|thestack_doc_concatenated|20260630_194919"
++  "tsdclink269|GPU-269|thestack_doc_concat_link|20260702_010558"
++  "arxdc269|GPU-269|arxiv_doc_causal|20260701_170244"
++  "arxdcc694|GPU-694|arxiv_doc_concatenated|20260701_170434"
++)
++
++printf "%-14s %-8s %-26s %-10s %-14s %s\n" TAG NODE CONFIG STEP "LOSS" STATUS
++for j in "${JOBS[@]}"; do
++  IFS='|' read -r tag node cfg run <<< "$j"
++  L=$(ls "$PLOG"/downnode_${tag}_GPU-*.log 2>/dev/null | head -1)
++  last=$(tr '\r' '\n' < "$L" 2>/dev/null | grep -oE "Training: [0-9]+it \[[^]]*loss=[0-9.]+\]" | tail -1)
++  step=$(grep -oE "Training: [0-9]+it" <<< "$last" | grep -oE "[0-9]+")
++  loss=$(grep -oE "loss=[0-9.]+" <<< "$last" | grep -oE "[0-9.]+$")
++  # done markers / errors
++  status="running"
++  if tr '\r' '\n' < "$L" 2>/dev/null | grep -qiE "Training complete|max_optimizer_steps reached|Eval results written"; then status="DONE"; fi
++  if tr '\r' '\n' < "$L" 2>/dev/null | tail -200 | grep -qiE "traceback|CUDA error|out of memory|NCCL.*timeout"; then status="ERROR?"; fi
++  ck=$R/$run/checkpoints/best_model.pt
++  ckage=$([ -f "$ck" ] && echo "ck $(( ( $(date +%s) - $(stat -c%Y "$ck") ) / 60 ))m" || echo "no-ck")
++  printf "%-14s %-8s %-26s %-10s %-14s %s %s\n" "$tag" "$node" "$cfg" "${step:-?}" "${loss:-?}" "$status" "$ckage"
++done
++
++echo
++echo "--- wiki merge finalize watcher ---"
++tail -1 "$PLOG"/../wiki_multi/logs/_finalize.log 2>/dev/null || echo "(no finalize log)"
++
++if [ "${1:-}" = "--gpu" ]; then
++  echo
++  for N in GPU-269 GPU-423 GPU-694; do
++    echo "--- $N GPUs ---"
++    ssh -o BatchMode=yes -o ConnectTimeout=8 "$N" 'nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader' 2>&1 | paste -sd' | '
++  done
++fi
++
+
+diff --git a/scripts/wiki_dump_pipeline.sh b/scripts/wiki_dump_pipeline.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/wiki_dump_pipeline.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++# Per-dump wiki pipeline: extract → build_graph → pretokenize into a per-dump
++# pretokenized dataset dir. Idempotent: each stage is skipped if its output
++# marker already exists, so a killed run can be re-launched safely.
++#
++# Usage: wiki_dump_pipeline.sh <tag> <dump.json.gz> <procs>
++set -uo pipefail
++
++TAG="$1"
++DUMP="$2"
++PROCS="${3:-120}"
++
++REPO=/fss/evin_t/tagseq2tagseq
++ROOT=/fss-data/evin_t/tagseq2tagseq_artifacts/wiki_multi
++EXTRACT_DIR="$ROOT/extracted/$TAG"
++PRETOK_DIR=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_$TAG
++PY=$REPO/.venv/bin/python
++
++export CUDA_MODULE_LOADING=LAZY
++cd "$REPO" || exit 1
++mkdir -p "$EXTRACT_DIR"
++
++echo "[$TAG $(date +%T)] === START on $(hostname) (procs=$PROCS) ==="
++
++# --- Stage 1: extract markdown ------------------------------------------------
++if [ -f "$EXTRACT_DIR/.extract_done" ]; then
++  echo "[$TAG] stage1 extract: already done, skipping"
++else
++  echo "[$TAG $(date +%T)] stage1 extract → $EXTRACT_DIR"
++  $PY -m data.wiki_graph_extractor.dump_extractor "$DUMP" -o "$EXTRACT_DIR" -p "$PROCS" \
++    || { echo "[$TAG] EXTRACT FAILED"; exit 1; }
++  touch "$EXTRACT_DIR/.extract_done"
++fi
++
++# --- Stage 2: build link graph ------------------------------------------------
++if [ -f "$EXTRACT_DIR/graph.jsonl" ]; then
++  echo "[$TAG] stage2 build_graph: graph.jsonl exists, skipping"
++else
++  echo "[$TAG $(date +%T)] stage2 build_graph"
++  $PY -m data.wiki_graph_extractor.build_graph "$EXTRACT_DIR" -p "$PROCS" \
++    || { echo "[$TAG] BUILD_GRAPH FAILED"; exit 1; }
++fi
++
++# --- Stage 3: pretokenize -----------------------------------------------------
++if [ -f "$PRETOK_DIR/metadata.json" ]; then
++  echo "[$TAG] stage3 pretokenize: metadata.json exists, skipping"
++else
++  echo "[$TAG $(date +%T)] stage3 pretokenize → $PRETOK_DIR"
++  # ReproducibilityManager uses -o directly and refuses a dir that already has a
++  # 'reproducibility' folder, so clear a partial attempt first.
++  rm -rf "$PRETOK_DIR"
++  $PY -m data.pretokenize "$EXTRACT_DIR" "$EXTRACT_DIR/graph.jsonl" \
++    -o "$PRETOK_DIR" --tokenizer-name gpt2 --shard-size-gb 2.0 -p "$PROCS" \
++    || { echo "[$TAG] PRETOKENIZE FAILED"; exit 1; }
++fi
++
++echo "[$TAG $(date +%T)] === DONE. nodes=$(wc -l < "$PRETOK_DIR/tokenized_graph.jsonl") ==="
++
+
+diff --git a/scripts/wiki_merge_finalize.sh b/scripts/wiki_merge_finalize.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/wiki_merge_finalize.sh
+@@ -0,0 +1,83 @@
++#!/bin/bash
++# Waits for all 8 per-dump wiki datasets to finish pretokenizing, then runs the
++# downstream pipeline: merge (stage 3.5) → split (stage 4, source-stratified) →
++# precompute epoch_0 (stage 5). Idempotent per stage. Meant to run detached.
++set -uo pipefail
++
++REPO=/fss/evin_t/tagseq2tagseq
++PY=$REPO/.venv/bin/python
++ROOT=/fss-data/evin_t/tagseq2tagseq_artifacts
++PT=$ROOT/pretokenized_datasets
++MERGED=$PT/wiki_merged
++SCHED=$ROOT/schedules/wiki_merged_bfs
++LOG=$ROOT/wiki_multi/logs/_finalize.log
++
++cd "$REPO" || exit 1
++exec >>"$LOG" 2>&1
++echo "[finalize $(date +%T)] waiting for all 8 dumps to pretokenize..."
++
++# Priority: more-useful/curated wikis win id collisions over less-useful ones.
++# enwikisource (full texts) and enwiktionary (definitions) are lowest.
++TAGS="simplewiki enwikinews enwikibooks enwikivoyage enwikiquote enwikiversity enwikisource enwiktionary"
++PRIORITY="simplewiki,enwikivoyage,enwikibooks,enwikiquote,enwikiversity,enwikinews,enwikisource,enwiktionary"
++
++# --- wait for all pretok metadata.json ---------------------------------------
++while true; do
++  missing=""
++  for t in $TAGS; do
++    [ -f "$PT/wiki_$t/metadata.json" ] || missing="$missing $t"
++  done
++  [ -z "$missing" ] && break
++  echo "[finalize $(date +%T)] still waiting for:$missing"
++  sleep 60
++done
++echo "[finalize $(date +%T)] all 8 dumps ready."
++
++# --- Stage 3.5: merge --------------------------------------------------------
++if [ -f "$MERGED/metadata.json" ]; then
++  echo "[finalize] merge already done, skipping"
++else
++  echo "[finalize $(date +%T)] merging → $MERGED"
++  INPUTS=""
++  for t in $TAGS; do INPUTS="$INPUTS $t=$PT/wiki_$t"; done
++  $PY $REPO/data/merge_datasets.py \
++    --inputs $INPUTS \
++    --output "$MERGED" \
++    --priority "$PRIORITY" \
++    --shard-mode hardlink || { echo "[finalize] MERGE FAILED"; exit 1; }
++fi
++
++# --- Stage 4: source-stratified split ----------------------------------------
++if [ -d "$MERGED/splits/train" ]; then
++  echo "[finalize] split already done, skipping"
++else
++  echo "[finalize $(date +%T)] splitting (source-stratified)"
++  $PY $REPO/data/split_graph.py \
++    --dataset-dir "$MERGED" \
++    --stratify-by-source \
++    --seed 42 || { echo "[finalize] SPLIT FAILED"; exit 1; }
++fi
++
++# --- Stage 5: precompute epoch_0 (mirror simplewiki schedule params) ---------
++if [ -f "$SCHED/epoch_0/packs.parquet" ]; then
++  echo "[finalize] precompute already done, skipping"
++else
++  echo "[finalize $(date +%T)] precomputing epoch_0 → $SCHED"
++  $PY $REPO/precompute_epochs.py \
++    --dataset-dir "$MERGED/splits/train" \
++    --output-dir "$SCHED" \
++    --n-epochs 1 \
++    --strategy bfs \
++    --local-seq-len 32768 \
++    --n-buckets 32 \
++    --n-workers 16 \
++    --seed 42 \
++    --link-detector markdown \
++    --layout-policy stochastic_identifier_prefix \
++    --max-grants 256 \
++    --device cpu || { echo "[finalize] PRECOMPUTE FAILED"; exit 1; }
++fi
++
++echo "[finalize $(date +%T)] === PIPELINE COMPLETE ==="
++echo "[finalize] merged nodes=$(wc -l < "$MERGED/tokenized_graph.jsonl")"
++
+
+diff --git a/tests/data/test_merge_datasets.py b/tests/data/test_merge_datasets.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/tests/data/test_merge_datasets.py
+@@ -0,0 +1,276 @@
++"""Tests for data/merge_datasets.py.
++
++Builds small real pretokenized datasets on disk (real shard headers + token
++bytes), merges them, and verifies the merged artifact both structurally and via
++a round-trip token read through GraphIndex/PretokShardedBackend — the true test
++that shard remapping preserved every offset.
++"""
++import json
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from tunalab.pretokenized_data.shard_io import BinaryShardIO
++
++from data.dataset import GraphIndex, PretokShardedBackend
++from data.merge_datasets import (
++    _parse_inputs,
++    _resolve_priority,
++    merge_datasets,
++    merge_nodes,
++)
++
++
++# ---------------------------------------------------------------------------
++# Fixtures: write a real pretokenized dataset with correct headers + offsets
++# ---------------------------------------------------------------------------
++
++HEADER_BYTES = 256 * 4
++
++
++def _write_dataset(
++    dataset_dir: Path,
++    docs: dict,
++    outgoing: dict | None = None,
++    tokenizer: str = "gpt2",
++    dtype_str: str = "uint16",
++) -> None:
++    """Write a one-shard pretokenized dataset.
++
++    docs: normed_id -> list[int] tokens. Nodes are laid out contiguously in a
++    single shard in dict order; offsets/lengths computed so a round-trip read
++    returns exactly the given tokens.
++    outgoing: normed_id -> list[normed_id] (defaults to empty).
++    """
++    outgoing = outgoing or {}
++    dtype = np.dtype(dtype_str)
++    dataset_dir.mkdir(parents=True, exist_ok=True)
++
++    # Concatenate all token arrays into one payload; record per-doc offsets.
++    payload = []
++    node_meta = {}
++    offset = HEADER_BYTES
++    for nid, toks in docs.items():
++        arr = np.asarray(toks, dtype=dtype)
++        node_meta[nid] = {"tok_shard_idx": 0, "tok_offset_bytes": offset, "tok_len": len(arr)}
++        payload.append(arr)
++        offset += arr.nbytes
++
++    all_toks = (
++        np.concatenate(payload) if payload else np.array([], dtype=dtype)
++    )
++    BinaryShardIO.write_datafile(str(dataset_dir / "shard_000000.bin"), all_toks)
++
++    with open(dataset_dir / "tokenized_graph.jsonl", "w", encoding="utf-8") as f:
++        for nid, toks in docs.items():
++            node = {
++                "normed_identifier": nid,
++                "raw_identifier": nid,
++                "char_count": len(nid),
++                "outgoing": sorted(outgoing.get(nid, [])),
++                "incoming": [],
++                **node_meta[nid],
++            }
++            f.write(json.dumps(node) + "\n")
++
++    with open(dataset_dir / "metadata.json", "w", encoding="utf-8") as f:
++        json.dump(
++            {"tokenizer": tokenizer, "dtype_str": dtype_str,
++             "shard_filenames": ["shard_000000.bin"]},
++            f,
++        )
++
++
++def _read_tokens(dataset_dir: Path, nid: str) -> list[int]:
++    idx = GraphIndex(dataset_dir)
++    backend = PretokShardedBackend(idx)
++    return list(backend.get_tokens(nid))
++
++
++# ---------------------------------------------------------------------------
++# CLI arg parsing
++# ---------------------------------------------------------------------------
++
++def test_parse_inputs_ok():
++    inputs = _parse_inputs(["a=/x/a", "b=/y/b"])
++    assert [t for t, _ in inputs] == ["a", "b"]
++    assert str(inputs[0][1]) == "/x/a"
++
++
++def test_parse_inputs_rejects_bad_and_dupes():
++    with pytest.raises(ValueError):
++        _parse_inputs(["noequals"])
++    with pytest.raises(ValueError):
++        _parse_inputs(["a=/x", "a=/y"])
++    with pytest.raises(ValueError):
++        _parse_inputs([])
++
++
++def test_resolve_priority():
++    assert _resolve_priority(None, ["a", "b"]) == ["a", "b"]
++    assert _resolve_priority("b,a", ["a", "b"]) == ["b", "a"]
++    with pytest.raises(ValueError):
++        _resolve_priority("a", ["a", "b"])       # missing b
++    with pytest.raises(ValueError):
++        _resolve_priority("a,b,c", ["a", "b"])   # extra c
++
++
++# ---------------------------------------------------------------------------
++# End-to-end merge
++# ---------------------------------------------------------------------------
++
++def test_merge_roundtrip_tokens_and_shard_remap(tmp_path):
++    """Tokens read back correctly after shard renumbering across two inputs."""
++    a = tmp_path / "a"
++    b = tmp_path / "b"
++    _write_dataset(a, {"a1": [1, 2, 3], "a2": [4, 5]})
++    _write_dataset(b, {"b1": [10, 11, 12, 13], "b2": [20]})
++
++    out = tmp_path / "merged"
++    merge_datasets(
++        inputs=[("dsa", a), ("dsb", b)],
++        output_dir=out,
++        priority=["dsa", "dsb"],
++        shard_mode="hardlink",
++    )
++
++    meta = json.loads((out / "metadata.json").read_text())
++    # Two inputs × one shard each → two globally-numbered shards.
++    assert meta["shard_filenames"] == ["shard_000000.bin", "shard_000001.bin"]
++
++    # dsb's nodes must now point at global shard 1, and read back correctly.
++    assert _read_tokens(out, "a1") == [1, 2, 3]
++    assert _read_tokens(out, "a2") == [4, 5]
++    assert _read_tokens(out, "b1") == [10, 11, 12, 13]
++    assert _read_tokens(out, "b2") == [20]
++
++    idx = GraphIndex(out)
++    assert idx.get_node("b1")["tok_shard_idx"] == 1
++    assert idx.get_node("b1")["source"] == "dsb"
++    assert idx.get_node("a1")["source"] == "dsa"
++
++
++def test_collision_priority_and_provenance(tmp_path):
++    """Higher-priority source wins a shared id; loser is dropped from the graph."""
++    a = tmp_path / "a"
++    b = tmp_path / "b"
++    # "shared" exists in both, with different tokens.
++    _write_dataset(a, {"shared": [1, 1, 1], "a_only": [2]})
++    _write_dataset(b, {"shared": [9, 9], "b_only": [3]})
++
++    out = tmp_path / "merged"
++    meta = merge_datasets(
++        inputs=[("hi", a), ("lo", b)],
++        output_dir=out,
++        priority=["hi", "lo"],
++        shard_mode="copy",
++    )
++
++    idx = GraphIndex(out)
++    # hi wins: shared is hi's, with hi's tokens.
++    assert idx.get_node("shared")["source"] == "hi"
++    assert _read_tokens(out, "shared") == [1, 1, 1]
++    assert len(idx) == 3  # shared + a_only + b_only
++
++    srcs = {s["tag"]: s for s in meta["merged_from"]["sources"]}
++    assert srcs["lo"]["nodes_dropped_to_collision"] == 1
++    assert srcs["hi"]["nodes_dropped_to_collision"] == 0
++    assert srcs["lo"]["nodes_kept"] == 1
++
++
++def test_reverse_priority_flips_winner(tmp_path):
++    a = tmp_path / "a"
++    b = tmp_path / "b"
++    _write_dataset(a, {"shared": [1, 1, 1]})
++    _write_dataset(b, {"shared": [9, 9]})
++
++    out = tmp_path / "merged"
++    merge_datasets(
++        inputs=[("hi", a), ("lo", b)],
++        output_dir=out,
++        priority=["lo", "hi"],   # lo now wins
++        shard_mode="hardlink",
++    )
++    idx = GraphIndex(out)
++    assert idx.get_node("shared")["source"] == "lo"
++    assert _read_tokens(out, "shared") == [9, 9]
++
++
++def test_cross_source_edges_light_up(tmp_path):
++    """An outgoing link that dangled within one source resolves after merge."""
++    a = tmp_path / "a"
++    b = tmp_path / "b"
++    # a1 links to b1 (dangling within a); b1 links back to a1 (dangling within b).
++    _write_dataset(a, {"a1": [1]}, outgoing={"a1": ["b1"]})
++    _write_dataset(b, {"b1": [2]}, outgoing={"b1": ["a1"]})
++
++    out = tmp_path / "merged"
++    merge_datasets(
++        inputs=[("dsa", a), ("dsb", b)],
++        output_dir=out,
++        priority=["dsa", "dsb"],
++        shard_mode="hardlink",
++    )
++    idx = GraphIndex(out)
++    # Reverse edges now exist across sources.
++    assert idx.get_node("b1")["incoming"] == ["a1"]
++    assert idx.get_node("a1")["incoming"] == ["b1"]
++    # neighbors_out resolves across sources.
++    a1_id = idx.get_id("a1")
++    b1_id = idx.get_id("b1")
++    assert b1_id in idx.neighbors_out(a1_id)
++
++
++def test_incoming_recomputed_not_double_counted(tmp_path):
++    """Pre-existing incoming lists are cleared and rebuilt, not appended to."""
++    a = tmp_path / "a"
++    _write_dataset(a, {"x": [1], "y": [2]}, outgoing={"x": ["y"]})
++    # Manually inject a stale/duplicate incoming on y to prove it gets cleared.
++    graph_path = a / "tokenized_graph.jsonl"
++    lines = [json.loads(l) for l in graph_path.read_text().splitlines()]
++    for n in lines:
++        if n["normed_identifier"] == "y":
++            n["incoming"] = ["x", "x", "bogus"]
++    graph_path.write_text("\n".join(json.dumps(n) for n in lines))
++
++    out = tmp_path / "merged"
++    merge_datasets(inputs=[("dsa", a)], output_dir=out,
++                   priority=["dsa"], shard_mode="copy")
++    idx = GraphIndex(out)
++    assert idx.get_node("y")["incoming"] == ["x"]  # deduped-by-recompute, no bogus
++
++
++def test_tokenizer_mismatch_aborts(tmp_path):
++    a = tmp_path / "a"
++    b = tmp_path / "b"
++    _write_dataset(a, {"a1": [1]}, tokenizer="gpt2")
++    _write_dataset(b, {"b1": [2]}, tokenizer="cl100k_base")
++    with pytest.raises(ValueError, match="tokenizer"):
++        merge_datasets(inputs=[("dsa", a), ("dsb", b)],
++                       output_dir=tmp_path / "m", priority=["dsa", "dsb"],
++                       shard_mode="copy")
++
++
++def test_dtype_mismatch_aborts(tmp_path):
++    a = tmp_path / "a"
++    b = tmp_path / "b"
++    _write_dataset(a, {"a1": [1]}, dtype_str="uint16")
++    _write_dataset(b, {"b1": [2]}, dtype_str="uint32")
++    with pytest.raises(ValueError, match="dtype"):
++        merge_datasets(inputs=[("dsa", a), ("dsb", b)],
++                       output_dir=tmp_path / "m", priority=["dsa", "dsb"],
++                       shard_mode="copy")
++
++
++def test_hardlink_shares_inode(tmp_path):
++    """hardlink mode must not copy bytes: merged shard shares the source inode."""
++    a = tmp_path / "a"
++    _write_dataset(a, {"a1": [1, 2, 3]})
++    out = tmp_path / "merged"
++    merge_datasets(inputs=[("dsa", a)], output_dir=out,
++                   priority=["dsa"], shard_mode="hardlink")
++    src_stat = (a / "shard_000000.bin").stat()
++    dst_stat = (out / "shard_000000.bin").stat()
++    assert src_stat.st_ino == dst_stat.st_ino
++
+
+diff --git a/watch_upgrade_node.sh b/watch_upgrade_node.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/watch_upgrade_node.sh
+@@ -0,0 +1,80 @@
++#!/bin/bash
++# Generalized: watch a node's thestack job; when it completes (frees GPUs 0-3),
++# STAGGER-upgrade that node's arxiv job (2→4 GPU) and, if present & still running,
++# its doc_concat_link job (1→2 GPU). Both keep 262144 tok/step (packs/step stays 8)
++# so max_optimizer_steps is unchanged; both resume from checkpoint.
++#
++# Usage:
++#   watch_upgrade_node.sh <NODE> <TS_TAG> <ARX_TAG> <ARX_CONFIG> <ARX_MAXSTEPS> \
++#                         [<DCL_TAG> <DCL_CONFIG> <DCL_MAXSTEPS>]
++# The DCL_* args are optional — omit to skip the doc_concat_link upgrade
++# (e.g. GPU-694 whose dclink is the already-finished wiki job).
++set -uo pipefail
++NODE=$1; TS_TAG=$2; ARX_TAG=$3; ARX_CFG=$4; ARX_MAX=$5
++DCL_TAG=${6:-}; DCL_CFG=${7:-}; DCL_MAX=${8:-}
++REPO=/fss/evin_t/tagseq2tagseq
++PLOG=/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs
++TS_LOG=$PLOG/downnode_${TS_TAG}_${NODE}.log
++ARX_LOG=$PLOG/downnode_${ARX_TAG}_${NODE}.log
++
++rd_of() { grep -oE "runs/[0-9_]+" "$1" 2>/dev/null | head -1; }
++wait_step1() {  # wait until log $1 shows any training step (or done marker)
++  while true; do
++    grep -qiE "Training complete|Eval results written|max_optimizer_steps reached" "$1" 2>/dev/null && return 0
++    local s=$(tr '\r' '\n' < "$1" 2>/dev/null | grep -oE 'Training: [0-9]+it' | tail -1 | grep -oE '[0-9]+')
++    [ -n "$s" ] && [ "$s" -ge 1 ] && return 0
++    sleep 60
++  done
++}
++
++echo "[upg $NODE] waiting for thestack $TS_TAG >= 27488 ..."
++while true; do
++  grep -qiE "Training complete|Eval results written|max_optimizer_steps reached" "$TS_LOG" 2>/dev/null && { echo "[upg $NODE] done marker"; break; }
++  step=$(tr '\r' '\n' < "$TS_LOG" 2>/dev/null | grep -oE 'Training: [0-9]+it' | tail -1 | grep -oE '[0-9]+')
++  [ -n "$step" ] && [ "$step" -ge 27488 ] && { echo "[upg $NODE] step $step >= 27488"; break; }
++  sleep 120
++done
++echo "[upg $NODE] thestack $TS_TAG finished $(date). Upgrading."
++sleep 30
++
++ARX_RD=$(rd_of "$ARX_LOG"); ARX_CK=$REPO/$ARX_RD/checkpoints/best_model.pt
++[ -f "$ARX_CK" ] || { echo "[upg $NODE] ERROR: no arxiv ckpt ($ARX_CK); abort"; exit 1; }
++
++DCL_RD=""; DCL_CK=""
++if [ -n "$DCL_TAG" ]; then
++  DCL_LOG=$PLOG/downnode_${DCL_TAG}_${NODE}.log
++  DCL_RD=$(rd_of "$DCL_LOG"); DCL_CK=$REPO/$DCL_RD/checkpoints/best_model.pt
++  # only upgrade dclink if it's still running (has a live proc) and has a ckpt
++  if ! ssh -o BatchMode=yes $NODE "pgrep -f '$DCL_TAG' >/dev/null" 2>/dev/null; then
++    echo "[upg $NODE] dclink $DCL_TAG not running (finished?) — skipping its upgrade"; DCL_TAG=""
++  elif [ ! -f "$DCL_CK" ]; then
++    echo "[upg $NODE] dclink $DCL_TAG has no ckpt — skipping its upgrade"; DCL_TAG=""
++  fi
++fi
++
++# kill old arxiv (+dclink if upgrading) by run-tag match
++ssh -o BatchMode=yes $NODE "
++  for tag in $ARX_TAG ${DCL_TAG:-__none__}; do
++    for p in \$(nvidia-smi --query-compute-apps=pid --format=csv,noheader); do
++      tr '\0' ' ' < /proc/\$p/cmdline 2>/dev/null | grep -q \"\$tag\" && kill -9 \$p 2>/dev/null
++    done
++    pkill -9 -f \"\$tag\" 2>/dev/null
++  done
++  sleep 6
++  echo '[upg $NODE] post-kill mem:' \$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader | paste -sd' | ' -)
++" 2>&1
++sleep 10
++
++# STAGGER 1: arxiv → 4 GPU (0,1,2,3) accum2
++echo "[upg $NODE] launch arxiv $ARX_TAG 4-GPU (resume)"
++ssh -o BatchMode=yes $NODE "$REPO/launch_downnode.sh $ARX_CFG ${ARX_TAG}_4gpu 0,1,2,3 2 $ARX_MAX --resume-from $ARX_RD/checkpoints/best_model.pt" 2>&1
++echo "[upg $NODE] waiting for arxiv 4-GPU first step before staggering dclink..."
++wait_step1 "$PLOG/downnode_${ARX_TAG}_4gpu_${NODE}.log"
++
++# STAGGER 2: dclink → 2 GPU (4,5) accum4  (if applicable)
++if [ -n "$DCL_TAG" ]; then
++  echo "[upg $NODE] launch dclink $DCL_TAG 2-GPU (resume)"
++  ssh -o BatchMode=yes $NODE "$REPO/launch_downnode.sh $DCL_CFG ${DCL_TAG}_2gpu 4,5 4 $DCL_MAX --resume-from $DCL_RD/checkpoints/best_model.pt" 2>&1
++fi
++echo "[upg $NODE] UPGRADES DONE $(date). arxiv=4GPU$( [ -n "$DCL_TAG" ] && echo ', dclink=2GPU')."
++

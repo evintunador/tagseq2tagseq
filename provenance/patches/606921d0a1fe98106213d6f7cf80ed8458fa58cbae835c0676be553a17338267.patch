@@ -1,0 +1,90 @@
+diff --git a/configs/thestack_cross_doc.yaml b/configs/thestack_cross_doc.yaml
+index 120724c..4aad433 100644
+--- a/configs/thestack_cross_doc.yaml
++++ b/configs/thestack_cross_doc.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'identifier_prefix_eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true
+diff --git a/configs/thestack_doc_causal.yaml b/configs/thestack_doc_causal.yaml
+index ac5f61d..ede4b7d 100644
+--- a/configs/thestack_doc_causal.yaml
++++ b/configs/thestack_doc_causal.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true
+diff --git a/configs/thestack_doc_concatenated.yaml b/configs/thestack_doc_concatenated.yaml
+index c0281f1..06aea30 100644
+--- a/configs/thestack_doc_concatenated.yaml
++++ b/configs/thestack_doc_concatenated.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true

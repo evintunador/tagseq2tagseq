@@ -1,0 +1,942 @@
+diff --git a/data/bucketed_pack_dataset.py b/data/bucketed_pack_dataset.py
+index 74824d3..5fdcce9 100644
+--- a/data/bucketed_pack_dataset.py
++++ b/data/bucketed_pack_dataset.py
+@@ -30,7 +30,7 @@ from torch.utils.data import IterableDataset
+ from data.collate import build_packed_batch
+ from data.dataset import GraphIndex, PretokShardedBackend
+ from data.epoch_precompute import PackRecord, _record_to_placements, _table_to_records
+-from data.layout import DocLayoutPolicy
++from data.layout import DocLayoutPolicy, make_layout_policy
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -81,6 +81,7 @@ class BucketedPackDataset(IterableDataset):
+         rank: int,
+         world_size: int,
+         start_state: Optional[BucketState] = None,
++        encode_fn=None,
+     ) -> None:
+         super().__init__()
+         self.epoch_dirs = epoch_dirs
+@@ -90,6 +91,16 @@ class BucketedPackDataset(IterableDataset):
+         self.rank = rank
+         self.world_size = world_size
+ 
++        # Per-pack layout support (mixed-source corpora): packs may carry a
++        # layout_name naming the DocLayoutPolicy they were budgeted under.
++        # _materialize resolves each name to a policy through this cache so one
++        # dataset can serve packs decorated with different layouts (e.g. arxiv's
++        # latex_comment card vs wiki's identifier card).  encode_fn is needed to
++        # build prefix layouts on demand; if not passed, derive it from the
++        # default layout (all prefix policies stash their tokeniser as ._encode).
++        self._encode_fn = encode_fn or getattr(layout, "_encode", None)
++        self._layout_cache: Dict[str, DocLayoutPolicy] = {"": layout}
++
+         # State tracks position across calls to __iter__
+         if start_state is not None:
+             self._epoch_idx = start_state.epoch_idx
+@@ -100,9 +111,34 @@ class BucketedPackDataset(IterableDataset):
+             self._global_accum_step = 0
+             self._bucket_consumed = {}
+ 
+-        # Signal initial epoch to stochastic layout policies.
+-        if hasattr(self.layout, 'set_epoch'):
+-            self.layout.set_epoch(self._epoch_idx)
++        # Signal initial epoch to every cached stochastic layout policy.
++        self._set_epoch_all(self._epoch_idx)
++
++    def _set_epoch_all(self, epoch_idx: int) -> None:
++        """Fan the epoch counter out to every cached layout policy.
++
++        The stochastic prefix layouts flip a per-(doc, epoch) coin, so each
++        cached policy — not just the default — must see the current epoch or
++        its coin would freeze at epoch 0 while others advance.
++        """
++        for pol in self._layout_cache.values():
++            if hasattr(pol, "set_epoch"):
++                pol.set_epoch(epoch_idx)
++
++    def _get_layout(self, layout_name: str) -> DocLayoutPolicy:
++        """Resolve a pack's layout_name to a policy, building+caching on first use.
++
++        Empty name → the default layout (single-source epochs). A newly built
++        policy is immediately advanced to the current epoch so its stochastic
++        coin is in sync with the rest.
++        """
++        pol = self._layout_cache.get(layout_name)
++        if pol is None:
++            pol = make_layout_policy(layout_name, encode_fn=self._encode_fn)
++            if hasattr(pol, "set_epoch"):
++                pol.set_epoch(self._epoch_idx)
++            self._layout_cache[layout_name] = pol
++        return pol
+ 
+     # ------------------------------------------------------------------
+ 
+@@ -172,8 +208,7 @@ class BucketedPackDataset(IterableDataset):
+ 
+             # Epoch exhausted — advance to next
+             self._epoch_idx += 1
+-            if hasattr(self.layout, 'set_epoch'):
+-                self.layout.set_epoch(self._epoch_idx)
++            self._set_epoch_all(self._epoch_idx)
+             self._global_accum_step = 0
+             self._bucket_consumed = {}
+ 
+@@ -193,18 +228,20 @@ class BucketedPackDataset(IterableDataset):
+     def _materialize(self, pack: PackRecord) -> Dict[str, Any]:
+         """Reconstruct a full batch dict from a PackRecord."""
+         placements = _record_to_placements(pack)
+-        batch = build_packed_batch(self.graph, self.backend, self.layout, placements)
++        layout = self._get_layout(getattr(pack, "layout_name", ""))
++        batch = build_packed_batch(self.graph, self.backend, layout, placements)
+         T = batch["tokens"].shape[-1]
+         budget = getattr(self, '_token_budget', None)
+         if budget is not None and T != budget:
+             import logging as _logging
+             _logging.getLogger(__name__).error(
+-                "Materialized pack has T=%d, expected token_budget=%d. "
++                "Materialized pack has T=%d, expected token_budget=%d (layout=%r). "
+                 "Re-run precompute_epochs.py to regenerate packs at the correct length.",
+-                T, budget,
++                T, budget, getattr(pack, "layout_name", ""),
+             )
+             raise AssertionError(
+-                f"Materialized pack has T={T}, expected token_budget={budget}. "
++                f"Materialized pack has T={T}, expected token_budget={budget} "
++                f"(layout={getattr(pack, 'layout_name', '')!r}). "
+                 "Re-run precompute_epochs.py to regenerate packs at the correct length."
+             )
+         batch["link_to_target"] = dict(
+diff --git a/data/epoch_precompute.py b/data/epoch_precompute.py
+index c17c05e..b4adba8 100644
+--- a/data/epoch_precompute.py
++++ b/data/epoch_precompute.py
+@@ -81,6 +81,11 @@ class PackRecord:
+     component_ids:       List[int] = field(default_factory=list)  # connected-component id per doc
+     kv_block_count:      int = -1           # filled by GPU pass
+     bucket_id:           int = -1           # filled by bucketing
++    layout_name:         str = ""           # DocLayoutPolicy name this pack was
++                                            # budgeted under; "" = use the loader's
++                                            # default layout (single-source epochs).
++                                            # Set by merge_packs.py for mixed corpora
++                                            # where each source has its own layout.
+ 
+ 
+ def _record_to_placements(record: PackRecord) -> List[DocPlacement]:
+@@ -530,6 +535,7 @@ def _records_to_table(records: List[PackRecord]) -> pa.Table:
+             pa.list_(pa.list_(pa.int32())),
+         ),
+         "component_ids":       pa.array([r.component_ids       for r in records], pa.list_(pa.int32())),
++        "layout_name":         pa.array([r.layout_name         for r in records], pa.string()),
+     })
+ 
+ 
+@@ -540,6 +546,10 @@ def _table_to_records(table: pa.Table) -> List[PackRecord]:
+     # column; leave it empty so _record_to_placements falls back to per-doc
+     # components (doc_concatenated degenerates to doc_causal).
+     has_components = "component_ids" in cols
++    # Back-compat: parquet written before layout_name existed lacks the column;
++    # default to "" so BucketedPackDataset uses its single default layout (the
++    # correct behaviour for every single-source epoch).
++    has_layout = "layout_name" in cols
+     return [
+         PackRecord(
+             pack_id=int(cols["pack_id"][i]),
+@@ -554,6 +564,7 @@ def _table_to_records(table: pa.Table) -> List[PackRecord]:
+                                  for row in cols["link_target_doc_ids"][i]],
+             component_ids=([int(x) for x in cols["component_ids"][i]]
+                            if has_components else []),
++            layout_name=(str(cols["layout_name"][i]) if has_layout else ""),
+         )
+         for i in range(n)
+     ]
+@@ -665,6 +676,12 @@ class EpochPrecomputer:
+             w.join()
+         logger.info("Workers done. Generated %d packs.", len(records))
+ 
++        # Stamp the layout each pack was budgeted under so any consumer (incl.
++        # a mixed-corpus BucketedPackDataset) can re-apply the correct decoration
++        # without a mismatch. Single-source runs get a uniform value; harmless.
++        for r in records:
++            r.layout_name = self.layout_policy_name
++
+         # 3. GPU pass: fill kv_block_count (skip if analytical method used in workers)
+         if self.use_analytical:
+             logger.info("Skipping GPU pass (kv_block_count already computed analytically).")
+diff --git a/data/layout.py b/data/layout.py
+index 00a2d78..d5599ca 100644
+--- a/data/layout.py
++++ b/data/layout.py
+@@ -373,3 +373,40 @@ def make_layout_policy(
+         "'identifier_prefix_eos', 'stochastic_identifier_prefix', "
+         "'latex_comment_prefix', 'stochastic_latex_comment_prefix'."
+     )
++
++
++# ---------------------------------------------------------------------------
++# Detector -> inference layout mapping
++# ---------------------------------------------------------------------------
++#
++# For a mixed-corpus model there is no single inference layout: a \cite prompt
++# must use arxiv's latex-comment card, a markdown prompt the identifier card.
++# The DETERMINISTIC inference-time layout is a clean function of the link
++# detector, so eval can pick the correct layout per benchmark from the detector
++# the benchmark implies (Tier-1 per-benchmark inference).  These pin the
++# DETERMINISTIC variants (the stochastic coin is a training-only device); they
++# mirror the inference_layout_policy fields in the per-source configs.
++_DETECTOR_INFERENCE_LAYOUT = {
++    "python":   "identifier_prefix_eos",
++    "markdown": "identifier_prefix_eos",
++    "arxiv":    "latex_comment_prefix",
++    "null":     "eos",
++}
++
++
++def inference_layout_for_detector(detector_name: Optional[str]) -> str:
++    """Return the deterministic inference layout name for a link detector.
++
++    ``None`` (no detector, e.g. doc_causal / edgeless) maps to ``"eos"``.
++    Raises on an unknown detector so a new detector can't silently fall back to
++    a wrong layout.
++    """
++    if detector_name is None:
++        return "eos"
++    try:
++        return _DETECTOR_INFERENCE_LAYOUT[detector_name]
++    except KeyError as exc:
++        raise ValueError(
++            f"No inference layout mapping for link detector {detector_name!r}. "
++            f"Known: {sorted(_DETECTOR_INFERENCE_LAYOUT)}."
++        ) from exc
+diff --git a/eval_checkpoints.py b/eval_checkpoints.py
+index 94912d0..4ddd5ce 100644
+--- a/eval_checkpoints.py
++++ b/eval_checkpoints.py
+@@ -203,6 +203,35 @@ _MULTI_DOC_MASK_TYPES = frozenset({
+     "doc_concatenated",
+ })
+ 
++# Benchmark -> link detector it REQUIRES (Tier-1 per-benchmark inference for a
++# mixed-corpus model). A cross-doc benchmark asserts its detector type at
++# runtime (e.g. run_repobench_cross_doc requires PythonImportDetector), so on a
++# merged model — which has no single training detector — each such benchmark
++# must be evaluated with an inference model built for ITS detector. Benchmarks
++# absent from this map imply no detector (None -> eos inference layout): the
++# perplexity / single-doc suites that never resolve links. The inference layout
++# for each detector is derived via data.layout.inference_layout_for_detector.
++_BENCHMARK_LINK_DETECTOR = {
++    "repobench_cross_doc": "python",
++    "hotpotqa_cross_doc":  "markdown",
++    # Annotated NLP benchmarks inject markdown links via MarkdownPromptAnnotator.
++    "wiki_qa":             "markdown",
++    "hotpotqa":            "markdown",
++    # arxiv has no dedicated cross-doc benchmark yet; its perplexity evals run
++    # detector-free. Add arxiv-cite benchmarks here when they land.
++}
++
++
++def detector_for_benchmark(spec: dict) -> Optional[str]:
++    """Return the link-detector name a benchmark needs, or None.
++
++    ``annotated`` in a benchmark's conditions forces the markdown annotator path
++    regardless of the base benchmark, so those always need the markdown detector.
++    """
++    if "annotated" in (spec.get("conditions") or []):
++        return "markdown"
++    return _BENCHMARK_LINK_DETECTOR.get(spec.get("name"))
++
+ _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
+     "baseline": {
+         "mask_type":               "doc_causal",
+diff --git a/main.py b/main.py
+index ee0d0bc..c138961 100644
+--- a/main.py
++++ b/main.py
+@@ -1088,15 +1088,46 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+     # Both use a fresh inference model with attention_backend='flex' + torch.compile
+     # so they run fast regardless of the training attention backend.
+     # -------------------------------------------------------------------------
+-    if dist.is_main_process:
+-        training_module_unwrapped = model.module if dist.is_distributed else model
+-        _flex_inference_model = _build_inference_model(
++    # Tier-1 per-benchmark inference: a merged corpus has no single link
++    # detector, and each cross-doc benchmark asserts its own detector type. Build
++    # (and cache) one inference model per detector name; its inference layout is
++    # derived from the detector via inference_layout_for_detector. detector_name
++    # None reuses the config's default detector + inference layout (the single-
++    # source case, fully back-compatible).
++    from data.layout import inference_layout_for_detector as _infer_layout_for
++    training_module_unwrapped = model.module if dist.is_distributed else model
++    _inference_model_cache: Dict[Any, Any] = {}
++
++    def _get_inference_model(detector_name):
++        """Return a cached flex inference model wired for ``detector_name``.
++
++        None → the config's default detector + inference layout. A named detector
++        gets a freshly-built detector and the deterministic layout that matches it.
++        """
++        if detector_name in _inference_model_cache:
++            return _inference_model_cache[detector_name]
++        if detector_name is None:
++            _det = detector
++            _inf_layout = inference_layout_policy
++        else:
++            _det = make_link_detector(detector_name, enc.decode)
++            _inf_layout = make_layout_policy(
++                _infer_layout_for(detector_name), encode_fn=enc.encode_ordinary
++            )
++        _m = _build_inference_model(
+             training_module_unwrapped=training_module_unwrapped,
+-            cfg=cfg, enc=enc, detector=detector,
++            cfg=cfg, enc=enc, detector=_det,
+             training_layout_policy=layout_policy,
+-            inference_layout_policy=inference_layout_policy,
++            inference_layout_policy=_inf_layout,
+             device=str(dist.device),
+         )
++        _inference_model_cache[detector_name] = _m
++        return _m
++
++    if dist.is_main_process:
++        # Default inference model (config detector) — the fallback used by
++        # perplexity/split evals and by benchmarks with no implied detector.
++        _flex_inference_model = _get_inference_model(None)
+ 
+         _run_generation_demo(
+             training_module=training_module_unwrapped,
+@@ -1179,13 +1210,36 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+                     _bench = "community_pack_perplexity" if "community" in _name else "held_out_perplexity"
+                     _run_split_eval(_name, _path, _bench)
+ 
+-                # Additional benchmarks from eval.benchmarks in YAML.
+-                eval_results = run_benchmarks_on_model(
+-                    model=_flex_inference_model,
+-                    dataset_dir=dataset_dir_str,
+-                    eval_cfg=eval_cfg,
+-                    device=str(dist.device),
+-                )
++                # Additional benchmarks from eval.benchmarks in YAML. Group by the
++                # detector each benchmark implies (Tier-1), and run each group on
++                # an inference model wired for that detector + its layout. Groups
++                # with no implied detector (None) use the config default model.
++                from eval_checkpoints import detector_for_benchmark
++                _bench_groups: Dict[Any, list] = {}
++                for _spec in eval_cfg.get("benchmarks", []):
++                    _det_name = detector_for_benchmark(_spec)
++                    _bench_groups.setdefault(_det_name, []).append(_spec)
++
++                eval_results: Dict[str, Any] = {}
++                for _det_name, _specs in _bench_groups.items():
++                    _grp_model = _get_inference_model(_det_name)
++                    if _grp_model is None:
++                        logger.warning(
++                            "Skipping %d benchmark(s) for detector=%r: inference "
++                            "model unavailable.", len(_specs), _det_name,
++                        )
++                        continue
++                    _grp_model.eval()
++                    _grp_cfg = {**eval_cfg, "benchmarks": _specs}
++                    logger.info("Post-training eval: %d benchmark(s) with detector=%r",
++                                len(_specs), _det_name)
++                    _grp_results = run_benchmarks_on_model(
++                        model=_grp_model,
++                        dataset_dir=dataset_dir_str,
++                        eval_cfg=_grp_cfg,
++                        device=str(dist.device),
++                    )
++                    eval_results.update(_grp_results)
+                 eval_results.update(_split_results)
+ 
+                 eval_path = os.path.join(rep.output_dir, "eval_results.json")
+
+diff --git a/configs/merged_all_cross_doc.yaml b/configs/merged_all_cross_doc.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/merged_all_cross_doc.yaml
+@@ -0,0 +1,126 @@
++# Merged all-links corpus: wiki(markdown) + thestack(python) + arxiv(cite) +
++# fineweb(edgeless), ~16.44B tokens, 20% edgeless. Trains one model on every link
++# type. Packs are WITHIN-source (precomputed per source, balanced + re-bucketed
++# by data/merge_packs.py); each pack carries its own layout_name so a single
++# BucketedPackDataset decorates arxiv with the latex card and the rest with the
++# identifier card. See memory [[merged-corpus-build]].
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'   # default/fallback; per-pack layout_name overrides
++  inference_layout_policy: 'identifier_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all/epoch_0
++
++  # Per-source val: kept SEPARATE (not merged) for a per-link-type signal.
++  # Precomputed (not live) so packs carry baked per-source links + layout_name —
++  # correct regardless of the model's single config detector. val_dirs supplies
++  # each loader's graph; val_epoch_dirs supplies its packs (doc_ids index into
++  # that source's val graph). fineweb is edgeless → val_random only.
++  val_dirs:
++    wiki_community:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    wiki_random:       /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++    stack_community:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    stack_random:      /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
++    arxiv_community:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    arxiv_random:      /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
++    fineweb_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/fineweb_39b/splits/val_random
++  val_epoch_dirs:
++    wiki_community:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_val/val_community/epoch_0]
++    wiki_random:     [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_val/val_random/epoch_0]
++    stack_community: [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/stack_val/val_community/epoch_0]
++    stack_random:    [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/stack_val/val_random/epoch_0]
++    arxiv_community: [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_val/val_community/epoch_0]
++    arxiv_random:    [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_val/val_random/epoch_0]
++    fineweb_random:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/fineweb_val/val_random/epoch_0]
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  # NB: with precomputed packs the training mask uses each pack's baked
++  # link_to_target and NEVER calls this detector (cross_doc_mask.py only
++  # re-detects when link_to_target is None). It is retained for the value passed
++  # to to_inference_model; eval picks the correct per-benchmark detector (Tier-1).
++  link_detector: 'markdown'
++  max_grants: 256   # matches the max_grants the wiki/stack/arxiv schedules were bucketed with
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # BucketedPackDataset terminates naturally at epoch end
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1   # set for the real run to hit 0.5M tok/step given world_size
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    # markdown-detector group (Tier-1): wiki-flavoured cross-doc
++    - {name: wiki_qa,            conditions: [doceval, annotated]}
++    - {name: hotpotqa,           conditions: [doceval]}
++    - {name: hotpotqa_cross_doc, conditions: [experimental]}
++    # python-detector group (Tier-1): code cross-doc
++    - {name: repobench_cross_doc, conditions: [experimental]}
++    # detector-free general NLP
++    - {name: hellaswag,          conditions: [doceval]}
++    - {name: boolq,              conditions: [doceval]}
++    - {name: openbookqa,         conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++  link_fuzzy_match: true
++  link_fuzzy_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++  link_ed_threshold: 0.2
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# NOTE: do NOT lower max_seq_len — the precomputed packs are token_budget=32768
++# and BucketedPackDataset asserts materialized T==32768 (RoPE also asserts at
++# 32k). Shrink the MODEL and step counts only; keep the 32k sequence length.
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/merged_all_doc_causal.yaml b/configs/merged_all_doc_causal.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/merged_all_doc_causal.yaml
+@@ -0,0 +1,107 @@
++# Merged all-links corpus — doc_causal BASELINE (FLOP/data-matched control for
++# merged_all_cross_doc.yaml). Same corpus, same precomputed packs, same per-source
++# val; the ONLY change is mask_type: doc_causal, which ignores cross-doc links
++# entirely (each doc attends causally within itself). Per-pack layout_name still
++# applies. See memory [[merged-corpus-build]].
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'   # default/fallback; per-pack layout_name overrides
++  inference_layout_policy: 'identifier_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all/epoch_0
++  val_dirs:
++    wiki_community:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    wiki_random:       /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++    stack_community:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    stack_random:      /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
++    arxiv_community:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    arxiv_random:      /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
++    fineweb_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/fineweb_39b/splits/val_random
++  val_epoch_dirs:
++    wiki_community:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_val/val_community/epoch_0]
++    wiki_random:     [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_val/val_random/epoch_0]
++    stack_community: [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/stack_val/val_community/epoch_0]
++    stack_random:    [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/stack_val/val_random/epoch_0]
++    arxiv_community: [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_val/val_community/epoch_0]
++    arxiv_random:    [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_val/val_random/epoch_0]
++    fineweb_random:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/fineweb_val/val_random/epoch_0]
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  # No link_detector / max_grants: doc_causal never resolves links.
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # BucketedPackDataset terminates naturally at epoch end
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1   # set for the real run to hit 0.5M tok/step given world_size
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,                   conditions: [doceval]}
++    - {name: hotpotqa,                  conditions: [doceval]}
++    - {name: repobench,                 conditions: [doceval]}
++    - {name: hellaswag,                 conditions: [doceval]}
++    - {name: boolq,                     conditions: [doceval]}
++    - {name: openbookqa,                conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# NOTE: do NOT lower max_seq_len — packs are token_budget=32768 and
++# BucketedPackDataset asserts materialized T==32768 (RoPE also asserts at 32k).
++# Shrink the MODEL and step counts only; keep the 32k sequence length.
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/data/merge_packs.py b/data/merge_packs.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/merge_packs.py
+@@ -0,0 +1,298 @@
++"""
++data/merge_packs.py — balance + remap N per-source precomputed schedules into a
++single multi-dataset epoch, then re-bucket the union for density-balanced DDP.
++
++Motivation
++----------
++Each source (wiki/thestack/arxiv/fineweb) is precomputed INDEPENDENTLY by
++precompute_epochs.py, because EpochPrecomputer bakes in one link_detector +
++layout_policy per run and dispatches its worker-partitioner off node 0's
++identifier — neither survives a heterogeneous merged graph.  Since we train on
++WITHIN-source packs (a pack never mixes sources), a per-source schedule over
++that source's own ``splits/train`` graph produces byte-identical packs to what a
++merged-graph run would, so we reuse the existing schedules verbatim.
++
++This tool assembles them into one trainable epoch:
++
++  1. Balance   — select a target number of packs per source, drawn EVENLY across
++                 that source's density buckets, so the subsample preserves the
++                 source's kv_block_count distribution (not a first-N / density-
++                 core-biased cut).
++  2. Remap     — a pack's ``doc_ids`` index into its source's splits/train graph.
++                 Rewrite them to index into the MERGED train graph, matching by
++                 ``normed_identifier`` (doc_id == line index in
++                 tokenized_graph.jsonl, so both maps are built by a cheap linear
++                 read — no GraphIndex construction).  ``link_target_doc_ids`` are
++                 remapped the same way.
++  3. Concat    — union all remapped records, assign globally-unique pack_ids.
++  4. Re-bucket — recompute equal-count quantile buckets over the UNION via
++                 _assign_buckets, because bucket B in one source is not the same
++                 density as bucket B in another; DDP load-balancing needs buckets
++                 that are quantiles over the packs actually trained.
++
++The merged train graph (whose doc_ids the output references) must be produced by
++merging each source's ``splits/train`` dir with data/merge_datasets.py FIRST, so
++split membership is PRESERVED (never recomputed — recomputing would reshuffle
++train/val/test and leak held-out nodes into training packs).
++
++Usage
++-----
++    python data/merge_packs.py \\
++        --merged-train-dir /fss-data/.../pretokenized_datasets/merged_all/splits/train \\
++        --source wiki=/fss-data/.../wiki_merged/splits/train=/fss-data/.../schedules/wiki_merged_bfs/epoch_0=all \\
++        --source stack=/fss-data/.../thestack/splits/train=/fss-data/.../schedules/thestack_bfs/epoch_0=all \\
++        --source arxiv=/fss-data/.../arxiv/splits/train=/fss-data/.../schedules/arxiv_bfs/epoch_0=152600 \\
++        --source fineweb=/fss-data/.../fineweb_39b/splits/train=/fss-data/.../schedules/fineweb_bfs/epoch_0=100300 \\
++        --output /fss-data/.../pretokenized_datasets/merged_all/epoch_0 \\
++        --n-buckets 32 --seed 42
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import logging
++import random
++from pathlib import Path
++from typing import Dict, List, Tuple
++
++import pyarrow.parquet as pq
++
++from data.epoch_precompute import (
++    PackRecord,
++    _assign_buckets,
++    _records_to_table,
++    _table_to_records,
++)
++
++logger = logging.getLogger(__name__)
++
++
++# ---------------------------------------------------------------------------
++# doc_id <-> normed_identifier maps (doc_id == line index; no GraphIndex load)
++# ---------------------------------------------------------------------------
++
++def _read_normed_ids(graph_dir: Path) -> List[str]:
++    """Return normed_identifiers in doc_id order (line order of the jsonl)."""
++    path = graph_dir / "tokenized_graph.jsonl"
++    if not path.exists():
++        raise FileNotFoundError(f"tokenized_graph.jsonl not found in {graph_dir}")
++    ids: List[str] = []
++    with open(path, encoding="utf-8") as f:
++        for line in f:
++            line = line.strip()
++            if line:
++                ids.append(json.loads(line)["normed_identifier"])
++    return ids
++
++
++def _build_remap(source_train_dir: Path, merged_nid_to_id: Dict[str, int]) -> Dict[int, int]:
++    """source_train_doc_id -> merged_train_doc_id, via normed_identifier."""
++    source_ids = _read_normed_ids(source_train_dir)
++    remap: Dict[int, int] = {}
++    missing = 0
++    for src_doc_id, nid in enumerate(source_ids):
++        merged_id = merged_nid_to_id.get(nid)
++        if merged_id is None:
++            missing += 1
++            continue
++        remap[src_doc_id] = merged_id
++    if missing:
++        # A source-train node absent from the merged-train graph means the merge
++        # dropped it (id collision) — every pack referencing it would orphan.
++        raise ValueError(
++            f"{missing} nodes in {source_train_dir} are absent from the merged "
++            f"train graph (collision drop?). Packs cannot be safely remapped."
++        )
++    return remap
++
++
++# ---------------------------------------------------------------------------
++# Balancing: select target packs evenly across a source's density buckets
++# ---------------------------------------------------------------------------
++
++def _select_balanced(records: List[PackRecord], target: int, seed: int) -> List[PackRecord]:
++    """Select ``target`` records spread evenly across their bucket_ids.
++
++    Preserves the source's density distribution: within each bucket we shuffle
++    and take a proportional share.  ``target`` >= len(records) returns all.
++    """
++    if target >= len(records):
++        return list(records)
++
++    by_bucket: Dict[int, List[PackRecord]] = {}
++    for r in records:
++        by_bucket.setdefault(r.bucket_id, []).append(r)
++
++    rng = random.Random(seed)
++    for b in by_bucket:
++        rng.shuffle(by_bucket[b])
++
++    n_total = len(records)
++    # Largest-remainder apportionment: each bucket's base quota is floor of its
++    # proportional share; leftover picks go to the largest fractional remainders
++    # (capped by what each bucket actually has).
++    taken: Dict[int, int] = {}
++    remainders: List[Tuple[float, int]] = []
++    for b, recs in by_bucket.items():
++        exact = target * len(recs) / n_total
++        base = min(int(exact), len(recs))
++        taken[b] = base
++        remainders.append((exact - int(exact), b))
++
++    shortfall = target - sum(taken.values())
++    # Buckets with unpicked records, largest fractional remainder first.
++    remainders.sort(reverse=True)
++    for _, b in remainders:
++        if shortfall <= 0:
++            break
++        room = len(by_bucket[b]) - taken[b]
++        add = min(room, shortfall)
++        taken[b] += add
++        shortfall -= add
++
++    selected: List[PackRecord] = []
++    for b, recs in by_bucket.items():
++        selected.extend(recs[:taken[b]])
++    return selected
++
++
++# ---------------------------------------------------------------------------
++# Source spec parsing: tag=train_dir=schedule_dir=target
++# ---------------------------------------------------------------------------
++
++def _parse_source(spec: str) -> Tuple[str, Path, Path, str]:
++    parts = spec.split("=")
++    if len(parts) != 4:
++        raise ValueError(
++            f"--source {spec!r} must be tag=train_dir=schedule_epoch_dir=target "
++            f"(target is an int or 'all')"
++        )
++    tag, train_dir, sched_dir, target = parts
++    return tag.strip(), Path(train_dir.strip()), Path(sched_dir.strip()), target.strip()
++
++
++# ---------------------------------------------------------------------------
++# Orchestration
++# ---------------------------------------------------------------------------
++
++def merge_packs(
++    merged_train_dir: Path,
++    sources: List[Tuple[str, Path, Path, str]],
++    output_dir: Path,
++    n_buckets: int,
++    seed: int,
++    token_budget: int,
++) -> dict:
++    logger.info("Reading merged train graph node ids from %s", merged_train_dir)
++    merged_ids = _read_normed_ids(merged_train_dir)
++    merged_nid_to_id = {nid: i for i, nid in enumerate(merged_ids)}
++    logger.info("Merged train graph: %d nodes", len(merged_ids))
++
++    all_records: List[PackRecord] = []
++    manifest_sources = []
++    pack_id_base = 0
++
++    for tag, train_dir, sched_dir, target in sources:
++        parquet = sched_dir / "packs.parquet"
++        table = pq.read_table(str(parquet))
++        recs = _table_to_records(table)
++
++        # Auto-read the layout this source's packs were budgeted under. The
++        # schedule metadata is the source of truth: build_packed_batch re-applies
++        # the layout's prefix/suffix at materialization, and the sampler budgeted
++        # each pack to token_budget INCLUDING that prefix, so a mismatched layout
++        # yields T != token_budget and crashes _materialize. Stamping the actual
++        # per-source layout lets one BucketedPackDataset materialize a mixed corpus.
++        sched_meta = json.loads((sched_dir / "metadata.json").read_text())
++        source_layout = sched_meta.get("layout_policy", "")
++        logger.info("%s: loaded %d packs from %s (layout=%r)",
++                    tag, len(recs), parquet, source_layout)
++
++        # Balance
++        if target == "all":
++            chosen = recs
++        else:
++            chosen = _select_balanced(recs, int(target), seed)
++        logger.info("%s: selected %d / %d packs", tag, len(chosen), len(recs))
++
++        # Remap doc_ids source-train -> merged-train
++        remap = _build_remap(train_dir, merged_nid_to_id)
++        for r in chosen:
++            r.doc_ids = [remap[d] for d in r.doc_ids]
++            r.link_target_doc_ids = [[remap[d] for d in tgts]
++                                     for tgts in r.link_target_doc_ids]
++            r.pack_id = pack_id_base
++            r.layout_name = source_layout
++            pack_id_base += 1
++        all_records.extend(chosen)
++
++        manifest_sources.append({
++            "tag": tag,
++            "train_dir": str(train_dir),
++            "schedule_dir": str(sched_dir),
++            "layout_policy": source_layout,
++            "packs_available": len(recs),
++            "packs_selected": len(chosen),
++            "target": target,
++            "tokens_est": len(chosen) * token_budget,
++        })
++
++    logger.info("Union: %d packs across %d sources", len(all_records), len(sources))
++
++    # Re-bucket over the union so buckets are quantiles over trained packs.
++    _assign_buckets(all_records, n_buckets)
++    all_records.sort(key=lambda r: (r.bucket_id, r.pack_id))
++
++    output_dir.mkdir(parents=True, exist_ok=True)
++    pq.write_table(_records_to_table(all_records),
++                   str(output_dir / "packs.parquet"), compression="snappy")
++
++    metadata = {
++        "n_buckets": n_buckets,
++        "n_packs": len(all_records),
++        "token_budget": token_budget,
++        "strategy": "merged",
++        "seed": seed,
++        "epoch_idx": 0,
++        "kv_method": "analytical",
++        "link_detector": "per_source",
++        "layout_policy": "per_source",
++        "merged_train_dir": str(merged_train_dir),
++        "sources": manifest_sources,
++        "total_tokens_est": len(all_records) * token_budget,
++    }
++    with open(output_dir / "metadata.json", "w") as f:
++        json.dump(metadata, f, indent=2)
++
++    logger.info("Wrote %d packs (%d buckets) → %s (~%.2fB tokens)",
++                len(all_records), n_buckets, output_dir,
++                len(all_records) * token_budget / 1e9)
++    return metadata
++
++
++def main() -> None:
++    logging.basicConfig(level=logging.INFO,
++                        format="%(asctime)s  %(levelname)-8s  %(message)s")
++    p = argparse.ArgumentParser(description=__doc__,
++                                formatter_class=argparse.RawDescriptionHelpFormatter)
++    p.add_argument("--merged-train-dir", required=True, type=Path,
++                   help="Merged train graph (produced by merge_datasets over each "
++                        "source's splits/train). Output doc_ids index into this.")
++    p.add_argument("--source", action="append", required=True, dest="sources",
++                   metavar="TAG=TRAIN_DIR=SCHED_EPOCH_DIR=TARGET",
++                   help="Repeatable. TARGET is an int (#packs) or 'all'.")
++    p.add_argument("--output", required=True, type=Path,
++                   help="Output epoch dir (writes packs.parquet + metadata.json).")
++    p.add_argument("--n-buckets", type=int, default=32)
++    p.add_argument("--seed", type=int, default=42)
++    p.add_argument("--token-budget", type=int, default=32768)
++    args = p.parse_args()
++
++    sources = [_parse_source(s) for s in args.sources]
++    merge_packs(args.merged_train_dir, sources, args.output,
++                args.n_buckets, args.seed, args.token_budget)
++
++
++if __name__ == "__main__":
++    main()
++
+
+diff --git a/scripts/precompute_merged_val.sh b/scripts/precompute_merged_val.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/precompute_merged_val.sh
+@@ -0,0 +1,31 @@
++#!/usr/bin/env bash
++# Precompute per-source val schedules for the merged_all run.
++# Each val loader is single-source (its own splits/val_* graph + own detector +
++# own layout), so packs carry correct baked link_to_target + layout_name and the
++# mask never depends on the merged model's (ambiguous) config detector.
++# fineweb is edgeless -> only val_random (val_community is empty).
++set -euo pipefail
++P=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets
++S=/fss-data/evin_t/tagseq2tagseq_artifacts/schedules
++cd /fss/evin_t/tagseq2tagseq
++
++run() {  # source_dir schedule_tag detector layout split
++  local sdir="$1" tag="$2" det="$3" lay="$4" split="$5"
++  echo "=== precompute $tag/$split (detector=$det layout=$lay) ==="
++  python precompute_epochs.py \
++    --dataset-dir "$P/$sdir/splits/$split" \
++    --output-dir "$S/${tag}_val/${split}" \
++    --n-epochs 1 --strategy bfs --local-seq-len 32768 --n-buckets 32 --n-workers 8 \
++    --seed 42 --link-detector "$det" --layout-policy "$lay" \
++    --device cuda:0 --log-level WARNING
++}
++
++for split in val_community val_random; do
++  run wiki_merged wiki markdown stochastic_identifier_prefix     "$split"
++  run thestack    stack python   stochastic_identifier_prefix     "$split"
++  run arxiv       arxiv arxiv    stochastic_latex_comment_prefix  "$split"
++done
++# fineweb: edgeless, only val_random
++run fineweb_39b   fineweb null   stochastic_identifier_prefix     val_random
++echo "ALL VAL PRECOMPUTE DONE"
++

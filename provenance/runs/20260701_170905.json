@@ -1,0 +1,340 @@
+{
+  "schema_version": 1,
+  "run_id": "20260701_170905",
+  "naming_convention": "bare",
+  "source_run_dirs": [
+    "/fss/evin_t/tagseq2tagseq/runs/20260701_170905"
+  ],
+  "run_dir_exists": true,
+  "warnings": [],
+  "reproduce": {
+    "commit_hash": "4bf207fd6b84ef6904fb854fd9336af1599a2107",
+    "branch": "main",
+    "remote_url": "https://github.com/evintunador/tagseq2tagseq.git",
+    "github_url": "https://github.com/evintunador/tagseq2tagseq/commit/4bf207fd6b84ef6904fb854fd9336af1599a2107",
+    "git_is_dirty": true,
+    "patch": {
+      "hash": "5966cd64cffe0ef55797c50496f0aa274f924f16fe2e6f95fc0fcaaffaeab725",
+      "path": "provenance/patches/5966cd64cffe0ef55797c50496f0aa274f924f16fe2e6f95fc0fcaaffaeab725.patch",
+      "bytes": 52628
+    },
+    "config_path": "configs/simplewiki_doc_concatenated.yaml",
+    "cli_overrides": {
+      "train_loop.max_optimizer_steps": "311",
+      "train_loop.atomic_feature_kwargs.accum_steps": "8"
+    },
+    "python_version": "3.13.2",
+    "torch_version": "2.10.0",
+    "torch_cuda_version": "12.8",
+    "cudnn_version": 91900,
+    "nvidia_driver_version": "560.35.03",
+    "slurm_job_id": null
+  },
+  "environment": {
+    "gpu_model": "NVIDIA A100-SXM4-80GB",
+    "gpu_count": 1,
+    "world_size": 1,
+    "os_release": "5.15.0-122-generic"
+  },
+  "hyperparameters": {
+    "data": {
+      "dataset_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki",
+      "strategy": "bfs",
+      "layout_policy": "stochastic_identifier_prefix",
+      "inference_layout_policy": "eos",
+      "order_mode": "prefer_targets_first",
+      "doc_budget": null,
+      "train_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/train",
+      "epoch_dirs": "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/simplewiki_bfs/epoch_0",
+      "val_dirs": {
+        "val_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_community",
+        "val_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_random"
+      },
+      "test_dirs": {
+        "test_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_community",
+        "test_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_random"
+      }
+    },
+    "model": {
+      "compile": true,
+      "compile_mode": "default",
+      "attention_backend": "triton",
+      "inference_attention_backend": "flex",
+      "mask_type": "doc_concatenated",
+      "activation_checkpointing": false,
+      "model_dim": 1024,
+      "num_layers": 24,
+      "num_heads": 8,
+      "max_seq_len": 32768,
+      "drop_path_rate": 0.0,
+      "fp8": false,
+      "weight_tying": true,
+      "untie_at_frac": 0.667,
+      "ignore_index": -100,
+      "dtype": "bfloat16",
+      "logit_softcap": 30.0,
+      "mtp_extra_weights": [
+        0.5,
+        0.25
+      ],
+      "mtp_decay_steps": 0,
+      "ve_layers": [
+        1,
+        2,
+        21,
+        22,
+        23
+      ],
+      "shared_ve_bank": false
+    },
+    "optimizer": {
+      "type": "muon",
+      "muon_wd": 1.2,
+      "adamw_wd": 0.005,
+      "momentum": 0.95,
+      "muon_beta2": 0.95,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "muon_lr": 0.001,
+      "adamw_lr": 1e-05,
+      "muon_momentum_warmup_steps": 300,
+      "adamw_embed_beta1": 0.5
+    },
+    "train_loop": {
+      "epochs": 1,
+      "max_optimizer_steps": 311,
+      "warmup_steps": 300,
+      "cooldown_frac": 0.4,
+      "min_lr_ratio": 0.1,
+      "val_steps": 20,
+      "val_interval": 100,
+      "atomic_feature_kwargs": {
+        "norm_clip_value": 1.0,
+        "accum_steps": 8
+      }
+    },
+    "seed": 42,
+    "eval": {
+      "run_on_completion": true,
+      "benchmarks": [
+        {
+          "name": "held_out_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "community_pack_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "wiki_qa",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "hellaswag",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "boolq",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "openbookqa",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "hotpotqa",
+          "conditions": [
+            "doceval"
+          ]
+        }
+      ],
+      "max_docs": 500,
+      "annotator_corpus": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki",
+      "annotator_mode": "corpus_only",
+      "annotator_strategies": [
+        "exact",
+        "norm",
+        "word_overlap_ordered",
+        "edit_distance"
+      ]
+    }
+  },
+  "hyperparameters_sha256": "25adc42c36fe52d6599d685e5bef1b68ee6feb87eb85e7e74260d64af5c813ba",
+  "timestamps": {
+    "run_started": "2026-07-01T17:09:05",
+    "slurm_start_time": null,
+    "slurm_end_time": null
+  },
+  "eval": {
+    "present": true,
+    "eval_results_sha256": "302309bea1f5fe885886e7cb33dc06934d8252772e0be8ae01c8a9e8769cb7a2",
+    "metrics": {
+      "held_out_perplexity/baseline": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 402.02414221191407,
+        "perplexity": 3.9524515460012087e+174,
+        "nll_ci_low": 399.9519670791626,
+        "nll_ci_high": 404.3680235275268,
+        "perplexity_ci_low": 4.976595343132475e+173,
+        "perplexity_ci_high": 4.11908995217737e+175
+      },
+      "community_pack_perplexity/baseline": {
+        "split": "val_community",
+        "n_packs": 441,
+        "mean_nll_cross_doc": 400.02592783055564,
+        "mean_nll_baseline": 400.02936093714476,
+        "mean_delta": 0.0034331065890820683,
+        "delta_ci_low": -0.02202905730093372,
+        "delta_ci_high": 0.02412958198602941,
+        "cross_doc_ci_low": 399.09325908742113,
+        "cross_doc_ci_high": 400.9813616040444,
+        "baseline_ci_low": 399.0738297398299,
+        "baseline_ci_high": 400.96868317053384
+      },
+      "community_pack_perplexity/experimental": {
+        "split": "val_community",
+        "n_packs": 441,
+        "mean_nll_cross_doc": 400.02592783055564,
+        "mean_nll_baseline": 400.02936093714476,
+        "mean_delta": 0.0034331065890820683,
+        "delta_ci_low": -0.018009882764347476,
+        "delta_ci_high": 0.02483516656038423,
+        "cross_doc_ci_low": 399.08705305504265,
+        "cross_doc_ci_high": 400.9442315980827,
+        "baseline_ci_low": 399.04706956867966,
+        "baseline_ci_high": 400.9909742769825
+      },
+      "wiki_qa/doceval": {
+        "accuracy": 0.16666666666666666,
+        "accuracy_ci": [
+          0.10317460317460317,
+          0.23035714285714268
+        ],
+        "total_examples": 126
+      },
+      "hellaswag/doceval": {
+        "accuracy": 0.215,
+        "accuracy_ci": [
+          0.16,
+          0.2701249999999999
+        ],
+        "total_examples": 200
+      },
+      "boolq/doceval": {
+        "accuracy": 0.502,
+        "accuracy_ci": [
+          0.458,
+          0.54205
+        ],
+        "total_examples": 500
+      },
+      "openbookqa/doceval": {
+        "accuracy": 0.182,
+        "accuracy_ci": [
+          0.15,
+          0.216
+        ],
+        "total_examples": 500
+      },
+      "hotpotqa/doceval": {
+        "perplexity": 2.0991178580533716e+204,
+        "average_nll": 470.46887615966796,
+        "total_examples": 500,
+        "n_skipped_no_corpus": 0,
+        "n_bridge": 404,
+        "n_comparison": 96
+      },
+      "community_pack_perplexity/baseline__val_community": {
+        "split": "val_community",
+        "n_packs": 441,
+        "mean_nll_cross_doc": 400.02592783055564,
+        "mean_nll_baseline": 400.02936093714476,
+        "mean_delta": 0.0034331065890820683,
+        "delta_ci_low": -0.02103542096960927,
+        "delta_ci_high": 0.02517002389170031,
+        "cross_doc_ci_low": 399.12676418177966,
+        "cross_doc_ci_high": 401.0178607730524,
+        "baseline_ci_low": 399.0845448471089,
+        "baseline_ci_high": 400.96756582130973
+      },
+      "community_pack_perplexity/experimental__val_community": {
+        "split": "val_community",
+        "n_packs": 441,
+        "mean_nll_cross_doc": 400.02592783055564,
+        "mean_nll_baseline": 400.02936093714476,
+        "mean_delta": 0.0034331065890820683,
+        "delta_ci_low": -0.02072336170743534,
+        "delta_ci_high": 0.02489746241801157,
+        "cross_doc_ci_low": 399.1042954928603,
+        "cross_doc_ci_high": 400.96151926016506,
+        "baseline_ci_low": 399.06067345267195,
+        "baseline_ci_high": 400.94967861210984
+      },
+      "held_out_perplexity/baseline__val_random": {
+        "split": "all",
+        "num_docs": 499,
+        "mean_nll": 403.76520680521196,
+        "perplexity": 2.2542459600632032e+175,
+        "nll_ci_low": 401.3568727390083,
+        "nll_ci_high": 406.1319975323572,
+        "perplexity_ci_low": 2.02803340613076e+174,
+        "perplexity_ci_high": 2.4037287208596337e+176
+      },
+      "community_pack_perplexity/baseline__test_community": {
+        "split": "test_community",
+        "n_packs": 395,
+        "mean_nll_cross_doc": 403.25260520478736,
+        "mean_nll_baseline": 403.15326833840675,
+        "mean_delta": -0.09933686638061752,
+        "delta_ci_low": -0.1328978413670314,
+        "delta_ci_high": -0.06504394773050311,
+        "cross_doc_ci_low": 401.9266307854322,
+        "cross_doc_ci_high": 404.52584121131565,
+        "baseline_ci_low": 401.753400288541,
+        "baseline_ci_high": 404.4200581596687
+      },
+      "community_pack_perplexity/experimental__test_community": {
+        "split": "test_community",
+        "n_packs": 395,
+        "mean_nll_cross_doc": 403.25260520478736,
+        "mean_nll_baseline": 403.15326833840675,
+        "mean_delta": -0.09933686638061752,
+        "delta_ci_low": -0.13801199493827454,
+        "delta_ci_high": -0.06583724752024979,
+        "cross_doc_ci_low": 401.9196307938778,
+        "cross_doc_ci_high": 404.54378192661807,
+        "baseline_ci_low": 401.88701703957327,
+        "baseline_ci_high": 404.4392544460486
+      },
+      "held_out_perplexity/baseline__test_random": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 404.78583529663086,
+        "perplexity": 6.2553933189718136e+175,
+        "nll_ci_low": 402.1076007461548,
+        "nll_ci_high": 407.24555409698485,
+        "perplexity_ci_low": 4.2964734795905815e+174,
+        "perplexity_ci_high": 7.319761386965341e+176
+      }
+    },
+    "eval_source_files": [
+      "eval_results.json"
+    ]
+  },
+  "distilled_at": "2026-08-19T20:41:36Z"
+}

@@ -1,0 +1,3672 @@
+diff --git a/RESULTS.md b/RESULTS.md
+index b815fa8..c79b961 100644
+--- a/RESULTS.md
++++ b/RESULTS.md
+@@ -5,6 +5,35 @@ Benchmark & held-out performance for the current model ablation: **4 datasets ×
+ hasn't been run yet, `n/a` where the benchmark/condition doesn't apply to that
+ model.
+ 
++## LR RETUNE MILESTONE (2026-07-16) — first above-chance wiki model
++
++The 2026-07-01..07 runs were undertrained + LR-mis-tuned (all at chance; see
++below). An 8-point muon_lr sweep on **wiki_merged / doc_causal** (VE banks OFF,
++4-epoch data-repeat = ~14.5k steps / ~3.8B tok, cooldown + untie now actually
++firing) found the inherited `muon_lr=0.001` was ~3× too low. **Final val_loss
++U-curve bottoms at muon_lr≈0.003** (basin 0.002–0.004 within 0.03, noise-tight);
++0.001 was 2nd-worst. adamw_lr scaled at muon_lr×0.01.
++
++Winner (muon_lr=0.003, fully trained to step 14438, `doceval`, max_docs=1000):
++
++| metric | value | chance | verdict |
++|--------|:-----:|:------:|---------|
++| held_out perplexity | **ppl 4.00 / nll 1.387** | — | vs old undertrained ppl ~124–137 |
++| hellaswag | **0.333** [.304,.361] | 0.25 | ✅ **above chance** (CI clears) |
++| arc_easy | **0.333** [.305,.363] | 0.25 | ✅ **above chance** (CI clears) |
++| piqa | 0.524 [.492,.554] | 0.50 | ≈ chance |
++| winogrande | 0.509 [.479,.539] | 0.50 | ≈ chance |
++| openbookqa | 0.216 [.182,.252] | 0.25 | ≈ chance |
++| boolq | 0.387 [.355,.417] | 0.50 | below (yes/no likelihood-scoring artifact) |
++
++First wiki model **statistically above chance** (hellaswag + arc_easy) — the old
++ablation was indistinguishable from chance on everything. Config: 1024d/24L/8H,
++`ve_layers: []`, `weight_tying:true` + `untie_at_frac:0.667`, cooldown_frac 0.4,
++min_lr_ratio 0.1. Run dir `runs/20260715_232111...` (job 45065). Pending: seed-43
++replica + doc_concatenated LR-transfer confirm; then a weight-decay sweep at 0.003.
++
++---
++
+ > Last updated: 2026-07-13. All numbers below regenerated in a full 12-model
+ > re-sweep on the verified-sound eval path (max_docs=2000, seed=0, `doceval`
+ > condition for single-doc benchmarks, `experimental` for cross-doc/community).
+diff --git a/scripts/sweep_yield_watcher.sh b/scripts/sweep_yield_watcher.sh
+index 7075c93..e4d36c6 100755
+--- a/scripts/sweep_yield_watcher.sh
++++ b/scripts/sweep_yield_watcher.sh
+@@ -15,18 +15,31 @@
+ # unit-tested offline with no SLURM calls. The main loop only adds polling + the
+ # real `scancel` + notifications.
+ #
++# ALSO auto-RESUMES yielded jobs: when this watcher kills a run for a coworker, it
++# records (run_dir, config) to a ledger. On later polls, if a node has been idle
++# for >= IDLE_RELAUNCH_MIN minutes (default 30) AND nobody is waiting, it relaunches
++# a yielded job with --resume-from <run_dir>/checkpoints/latest.pt (exact Muon+AdamW
++# + dataset-position resume), or fresh if no checkpoint. The 30-min idle gate avoids
++# racing a coworker who is rapidly cycling failing/short debug jobs on a node.
++#
+ # Usage:
+ #   nohup scripts/sweep_yield_watcher.sh >> <log> 2>&1 &     # run the watcher
+ #   scripts/sweep_yield_watcher.sh --selftest                # run offline tests
+ # Env: POLL_SECS (120), JOB_NAME_PREFIX (ts2ts_), ME (default $USER),
+-#      MAX_KILL (safety ceiling per episode, default 8).
++#      MAX_KILL (8), IDLE_RELAUNCH_MIN (30), AUTO_RELAUNCH (1; set 0 to disable).
+ set -uo pipefail
+ 
+ ME_DEFAULT="${USER:-evin_t}"
+ POLL_SECS="${POLL_SECS:-120}"
+ PREFIX="${JOB_NAME_PREFIX:-ts2ts_}"
+ MAX_KILL="${MAX_KILL:-8}"
++IDLE_RELAUNCH_MIN="${IDLE_RELAUNCH_MIN:-30}"
++AUTO_RELAUNCH="${AUTO_RELAUNCH:-1}"
++REPO="/fss/evin_t/tagseq2tagseq"
+ NOTIFY="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/SWEEP_YIELD_NOTIFY.log"
++STATE_DIR="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/watcher_state"
++YIELD_LEDGER="$STATE_DIR/yielded_jobs.tsv"        # run_dir<TAB>config<TAB>killed_epoch<TAB>status
++IDLE_SINCE="$STATE_DIR/node_idle_since.tsv"        # node<TAB>first_idle_epoch
+ 
+ # --- PURE DECISION FUNCTION -------------------------------------------------
+ # Input (stdin): lines "USER|STATE|REASON|NODES|JOBID|NAME" (squeue -o "%u|%T|%r|%D|%i|%j").
+@@ -37,7 +50,8 @@ NOTIFY="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/SWEEP_YIELD_NOTIF
+ # Also prints, to stderr, a human summary line prefixed "SUMMARY:".
+ decide_cancellations() {
+   local me="$1" prefix="$2" max_kill="$3"
+-  awk -F'|' -v me="$me" -v prefix="$prefix" -v maxkill="$max_kill" '
++  local idle="${4:-0}"
++  awk -F'|' -v me="$me" -v prefix="$prefix" -v maxkill="$max_kill" -v idle="$idle" '
+     function elapsed_to_secs(e,   n,a) {
+       n = split(e, a, /[-:]/)
+       if (n==4) return ((a[1]*24+a[2])*60+a[3])*60+a[4]
+@@ -62,21 +76,53 @@ decide_cancellations() {
+     }
+     END {
+       if (demand<=0) { print "SUMMARY: no blocked waiters; no action" > "/dev/stderr"; exit 0 }
+-      if (n_mine<=0) { printf("SUMMARY: %d node(s) demanded by%s but I have no %s jobs to yield\n", demand, waiters, prefix) > "/dev/stderr"; exit 0 }
++      # A pending job can be blocked while idle nodes exist (scheduler just has not
++      # placed it yet, or reservation/backfill timing). Do NOT kill for demand the
++      # cluster can already satisfy: net_demand = demand - idle_nodes_available.
++      net = demand - idle
++      if (net<=0) {
++        printf("SUMMARY: %d node(s) demanded by%s but %d idle node(s) available (net %d) -> no action (scheduler will place them)\n", demand, waiters, idle, net) > "/dev/stderr"
++        exit 0
++      }
++      if (n_mine<=0) { printf("SUMMARY: net %d node(s) demanded by%s (demand %d - idle %d) but I have no %s jobs to yield\n", net, waiters, demand, idle, prefix) > "/dev/stderr"; exit 0 }
+       # sort my jobs youngest-first (ascending elapsed) via simple insertion sort on index
+       for (i=1;i<=n_mine;i++) ord[i]=i
+       for (i=2;i<=n_mine;i++){ key=ord[i]; j=i-1; while(j>=1 && mine_secs[ord[j]]>mine_secs[key]){ord[j+1]=ord[j];j--} ord[j+1]=key }
+       freed=0; killed=0
+-      for (i=1;i<=n_mine && freed<demand && killed<maxkill;i++){
++      for (i=1;i<=n_mine && freed<net && killed<maxkill;i++){
+         k=ord[i]
+         print mine_jid[k]                      # <-- job to cancel (stdout)
+         freed += mine_nodes[k]; killed++
+       }
+-      printf("SUMMARY: %d node(s) demanded by%s -> cancelling %d youngest sweep job(s) freeing %d node(s)\n", demand, waiters, killed, freed) > "/dev/stderr"
++      printf("SUMMARY: net %d node(s) needed (demand %d - idle %d) by%s -> cancelling %d youngest sweep job(s) freeing %d node(s)\n", net, demand, idle, waiters, killed, freed) > "/dev/stderr"
+     }
+   '
+ }
+ 
++# --- PURE: which nodes have been idle long enough to safely relaunch on? -----
++# Args: $1=now_epoch, $2=min_idle_secs.
++# stdin: current idle-since ledger lines "node<TAB>first_idle_epoch".
++# stdout: nodes whose (now - first_idle_epoch) >= min_idle_secs, one per line.
++qualified_idle_nodes() {
++  local now="$1" min_secs="$2"
++  awk -F'\t' -v now="$now" -v m="$min_secs" '
++    NF>=2 && (now - $2) >= m { print $1 }'
++}
++
++# --- PURE: update idle-since ledger given the current idle-node set ----------
++# Args: $1=now_epoch. stdin line 1: space-separated CURRENT idle nodes.
++#       remaining stdin lines: existing ledger "node<TAB>epoch".
++# stdout: new ledger — nodes still idle keep their original first_idle_epoch;
++#         newly-idle nodes get `now`; no-longer-idle nodes are dropped.
++update_idle_ledger() {
++  local now="$1"
++  awk -F'\t' -v now="$now" '
++    NR==1 { n=split($0, cur, /[ ]+/); for(i=1;i<=n;i++) if(cur[i]!="") isidle[cur[i]]=1; next }
++    NF>=2 { since[$1]=$2 }
++    END { for (nd in isidle) print nd "\t" (since[nd] ? since[nd] : now) }
++  '
++}
++
+ # --- offline self-test ------------------------------------------------------
+ run_selftest() {
+   local pass=0 fail=0
+@@ -132,6 +178,38 @@ run_selftest() {
+     'dawei_gui|PENDING|Resources|1|45099|mic_wait|0:00' \
+     | decide_cancellations evin_t ts2ts_ 8 2>/dev/null)"
+   _check "G other-prefix-protected" "45048" "$G"
++  # Scenario H: waiter needs 2 but 2 idle nodes exist -> net 0 -> NO kill
++  local H; H="$(printf '%s\n' \
++    'evin_t|RUNNING|None|1|45048|ts2ts_a|30:00' \
++    'evin_t|RUNNING|None|1|45052|ts2ts_b|0:28' \
++    'dawei_gui|PENDING|Resources|2|45099|mic_wait|0:00' \
++    | decide_cancellations evin_t ts2ts_ 8 2 2>/dev/null)"
++  _check "H idle-covers-demand-no-kill" "" "$H"
++  # Scenario I: waiter needs 3, 1 idle -> net 2 -> kill 2 youngest
++  local I; I="$(printf '%s\n' \
++    'evin_t|RUNNING|None|1|45048|ts2ts_a|30:00' \
++    'evin_t|RUNNING|None|1|45052|ts2ts_b|0:28' \
++    'evin_t|RUNNING|None|1|45055|ts2ts_c|5:00' \
++    'dawei_gui|PENDING|Resources|3|45099|mic_wait|0:00' \
++    | decide_cancellations evin_t ts2ts_ 8 1 2>/dev/null)"
++  _check "I partial-idle-net2" "45052 45055" "$I"
++  # Scenario J: waiter is a self-dependency (their own job chain) -> Dependency reason -> ignore
++  local J; J="$(printf '%s\n' \
++    'evin_t|RUNNING|None|1|45048|ts2ts_a|30:00' \
++    'dawei_gui|PENDING|Dependency|4|45099|mic_afterok|0:00' \
++    | decide_cancellations evin_t ts2ts_ 8 0 2>/dev/null)"
++  _check "J dependency-blocked-ignored" "" "$J"
++  # Scenario K: idle-duration gate. now=1000, min=1800s(30m). Node idle 40m qualifies, 10m doesn't.
++  local TAB; TAB="$(printf '\t')"
++  local K; K="$(printf "GPU-A${TAB}%s\nGPU-B${TAB}%s\n" "$((1000-2400))" "$((1000-600))" \
++    | qualified_idle_nodes 1000 1800)"
++  _check "K idle>=30min-only" "GPU-A" "$K"
++  # Scenario L: idle-ledger update. current idle = "GPU-A GPU-C"; GPU-A was idle since 500,
++  #   GPU-B (now gone) dropped, GPU-C newly idle -> gets `now`=1000.
++  local L; L="$(printf "GPU-A GPU-C\nGPU-A${TAB}500\nGPU-B${TAB}400\n" | update_idle_ledger 1000 | sort)"
++  local Lexp="GPU-A${TAB}500
++GPU-C${TAB}1000"
++  if [ "$L" = "$Lexp" ]; then echo "PASS: L idle-ledger-carryover"; pass=$((pass+1)); else echo "FAIL: L idle-ledger  got=[$L]"; fail=$((fail+1)); fi
+   echo "---- selftest: $pass passed, $fail failed ----"
+   [ "$fail" -eq 0 ]
+ }
+@@ -140,26 +218,105 @@ run_selftest() {
+ ts() { date '+%Y-%m-%d %H:%M:%S'; }
+ note() { echo "[$(ts)] $*"; echo "[$(ts)] $*" >> "$NOTIFY"; }
+ 
++# Map a running job id -> "run_dir<TAB>config". Job name is ts2ts_<rundirbase>;
++# config comes from that run's reproducibility/run_invocation.json (argv --config).
++job_to_rundir_config() {
++  local jid="$1"
++  local name; name="$(squeue -h -j "$jid" -o '%j' 2>/dev/null)"
++  [ -z "$name" ] && return 1
++  local rundir="$REPO/runs/${name#${PREFIX}}"
++  [ -d "$rundir" ] || return 1
++  local inv; inv="$(find "$rundir/reproducibility" -name run_invocation.json 2>/dev/null | head -1)"
++  local cfg=""
++  [ -n "$inv" ] && cfg="$(python3 -c "import json,sys; a=json.load(open('$inv'))['argv']; print(a[a.index('--config')+1] if '--config' in a else '')" 2>/dev/null)"
++  printf '%s\t%s\n' "$rundir" "$cfg"
++}
++
++# Relaunch one yielded job on a given clean node, resuming if a checkpoint exists.
++relaunch_yielded() {
++  local rundir="$1" cfg="$2" node="$3"
++  [ -z "$cfg" ] && { note "  relaunch SKIP ($rundir): no config recorded"; return 1; }
++  local ck="$rundir/checkpoints/latest.pt"
++  local resume_args=""
++  if [ -f "$ck" ]; then resume_args="--resume-from $ck"; fi
++  local tag; tag="$(basename "$cfg" .yaml)"
++  note "  RELAUNCH $tag on $node $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")"
++  TS2TS_SHARED_COMPILE_CACHE="/tmp/ts2ts_relaunch_$(basename "$rundir")" \
++    "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node 8 \
++    --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args \
++    >> "$STATE_DIR/relaunch.log" 2>&1
++}
++
+ if [ "${1:-}" = "--selftest" ]; then run_selftest; exit $?; fi
+ 
+ ME="${ME:-$ME_DEFAULT}"
+-mkdir -p "$(dirname "$NOTIFY")"
+-note "yield-watcher started (me=$ME, poll=${POLL_SECS}s, prefix=$PREFIX, max_kill=$MAX_KILL)"
++mkdir -p "$STATE_DIR"
++touch "$YIELD_LEDGER" "$IDLE_SINCE"
++note "yield-watcher started (me=$ME, poll=${POLL_SECS}s, max_kill=$MAX_KILL, idle_relaunch_min=$IDLE_RELAUNCH_MIN, auto_relaunch=$AUTO_RELAUNCH)"
+ 
++prev_had_net=0   # was there unmet net demand on the PREVIOUS poll? (persistence gate)
+ while true; do
++  now="$(date +%s)"
+   snapshot="$(squeue -h -o '%u|%T|%r|%D|%i|%j|%M' 2>/dev/null)"
+-  # decide_cancellations wants USER|STATE|REASON|NODES|JOBID|NAME|ELAPSED (7 fields)
+-  to_kill="$(printf '%s\n' "$snapshot" | decide_cancellations "$ME" "$PREFIX" "$MAX_KILL" 2> >(grep '^SUMMARY:' >&2))"
+-  summary="$(printf '%s\n' "$snapshot" | decide_cancellations "$ME" "$PREFIX" "$MAX_KILL" 2>&1 >/dev/null | grep '^SUMMARY:')"
++  idle_nodes="$(sinfo -h -t idle -o '%n' -p compute 2>/dev/null | grep -vE 'GPU-954|GPU-749' | tr '\n' ' ')"
++  idle="$(echo "$idle_nodes" | wc -w)"
++
++  # ---- YIELD (kill) logic ----
++  to_kill="$(printf '%s\n' "$snapshot" | decide_cancellations "$ME" "$PREFIX" "$MAX_KILL" "$idle" 2>/dev/null)"
++  summary="$(printf '%s\n' "$snapshot" | decide_cancellations "$ME" "$PREFIX" "$MAX_KILL" "$idle" 2>&1 >/dev/null | grep '^SUMMARY:')"
++  someone_waiting=0; [ -n "$to_kill" ] && someone_waiting=1
+   if [ -n "$to_kill" ]; then
+-    note "$summary"
+-    while read -r jid; do
+-      [ -z "$jid" ] && continue
+-      note "  scancel $jid (yielding to waiter; resumable from latest.pt)"
+-      scancel "$jid" 2>/dev/null
+-    done <<< "$to_kill"
+-    note "  remaining sweep jobs: $(squeue -h -u "$ME" -t RUNNING -o '%i' 2>/dev/null | tr '\n' ' ')"
+-    sleep $(( POLL_SECS * 3 ))   # back off so the waiter can schedule
++    if [ "$prev_had_net" -eq 1 ]; then
++      note "$summary"
++      while read -r jid; do
++        [ -z "$jid" ] && continue
++        # Record run_dir + config to the ledger BEFORE scancel (squeue still knows the job).
++        rc="$(job_to_rundir_config "$jid" 2>/dev/null)"
++        note "  scancel $jid (yielding; will auto-resume when a node is idle >= ${IDLE_RELAUNCH_MIN}min)"
++        scancel "$jid" 2>/dev/null
++        [ -n "$rc" ] && printf '%s\t%s\tyielded\n' "$rc" "$now" >> "$YIELD_LEDGER"
++      done <<< "$to_kill"
++      note "  remaining sweep jobs: $(squeue -h -u "$ME" -t RUNNING -o '%i' 2>/dev/null | tr '\n' ' ')"
++      prev_had_net=0
++      sleep $(( POLL_SECS * 3 ))
++      continue
++    else
++      note "unmet demand detected (idle=$idle); confirming persistence before yielding. [$summary]"
++      prev_had_net=1
++    fi
++  else
++    prev_had_net=0
+   fi
++
++  # ---- RELAUNCH logic: only when NOBODY is waiting, on nodes idle >= threshold ----
++  # Update the idle-duration ledger (carry forward first-idle timestamps).
++  new_ledger="$(printf '%s\n' "$idle_nodes"; cat "$IDLE_SINCE" 2>/dev/null)"
++  printf '%s\n' "$new_ledger" | update_idle_ledger "$now" > "$IDLE_SINCE.tmp" && mv "$IDLE_SINCE.tmp" "$IDLE_SINCE"
++
++  if [ "$AUTO_RELAUNCH" = "1" ] && [ "$someone_waiting" -eq 0 ]; then
++    min_secs=$(( IDLE_RELAUNCH_MIN * 60 ))
++    ready_nodes="$(qualified_idle_nodes "$now" "$min_secs" < "$IDLE_SINCE" | tr '\n' ' ')"
++    pending_yield="$(awk -F'\t' '$4=="yielded"' "$YIELD_LEDGER" 2>/dev/null)"
++    if [ -n "$ready_nodes" ] && [ -n "$pending_yield" ]; then
++      for node in $ready_nodes; do
++        # take the oldest un-relaunched yielded job
++        line="$(awk -F'\t' '$4=="yielded"{print; exit}' "$YIELD_LEDGER" 2>/dev/null)"
++        [ -z "$line" ] && break
++        rundir="$(echo "$line" | cut -f1)"; cfg="$(echo "$line" | cut -f2)"
++        # preflight the node (GPU0 empty + NFS) before using it
++        if "$REPO/scripts/preflight_node.sh" "$node" >/dev/null 2>&1; then
++          if relaunch_yielded "$rundir" "$cfg" "$node"; then
++            # mark this ledger line relaunched (first match only)
++            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="relaunched"; done=1} {print $1"\t"$2"\t"$3"\t"$4}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
++            # reset that node's idle clock so we don't reuse it next poll
++            grep -v "^${node}	" "$IDLE_SINCE" > "$IDLE_SINCE.tmp" 2>/dev/null; mv "$IDLE_SINCE.tmp" "$IDLE_SINCE"
++          fi
++        else
++          note "  relaunch SKIP: $node failed preflight (GPU0 busy or NFS)"
++        fi
++      done
++    fi
++  fi
++
+   sleep "$POLL_SECS"
+ done
+
+diff --git a/TUNING_LESSONS.md b/TUNING_LESSONS.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/TUNING_LESSONS.md
+@@ -0,0 +1,78 @@
++# Tuning & Infra Lessons (wiki_merged / arxiv retune, 2026-07-15 → ongoing)
++
++Running log of what we learned retuning hyperparameters and running the mask/traversal
++ablations. Keep appending. Detailed run-by-run log: `/fss-data/.../pipeline_logs/lrsweep_runmap.txt`.
++
++## Final tuned config (wiki_merged, 1024d/24L, 4-epoch ≈ 3.8B tok)
++- **muon_lr = 0.003** (inherited 0.001 was ~3× too low)
++- **muon_wd = 0.1** (inherited 1.2 was ~12× too high — the single biggest gain)
++- **adamw_lr = muon_lr × 0.01 = 3e-5**; adamw_wd = 0.005 (untouched)
++- **ve_layers = []** (VE OFF on wiki — see below)
++- cooldown_frac 0.4, min_lr_ratio 0.1, warmup 300, untie_at_frac 0.667
++- Result: val_loss 2.42 (was ~4.9 undertrained); ppl ~4.0; hellaswag + arc_easy above chance.
++
++## Hyperparameter findings
++- **LR is a broad basin, WD is the sharp knob.** LR final-val: 0.0015=2.59, 0.002=2.56,
++  0.003=2.55(best), 0.004=2.57, 0.006=2.60 @ old WD — flat, ~0.03 spread. WD is a clean
++  U with a real minimum: {0.05:2.433, 0.1:2.424, 0.15:2.430, 0.2:2.433, 0.3:2.439,
++  0.6:2.470, 1.2:2.548, 2.4:2.669}. WD tuning beat LR tuning by ~4×.
++- **LR optimum is WD-robust.** Re-measured LR basin at WD=0.3: optimum stayed 0.003, but the
++  basin got STEEPER on the low side (0.002→2.573). So low WD = more LR-sensitive below opt,
++  but the peak doesn't move. => tune LR once, don't re-tune per WD.
++- **Ranking reshuffles after cooldown/untie — never lock a winner mid-training.** At step
++  4.5k the LR leader was 0.004; by full cooldown (14.4k) it was 0.003, and 0.0015 (a
++  mid-training laggard) rose to mid-pack. ALWAYS compare at a COMMON step, and only lock on
++  FINAL (post-cooldown) val. Mid-training rankings are contaminated by launch-timing (a run
++  further into cooldown looks artificially better).
++- **Value embeddings (VE) are data-gated.** VE = 258M params (42% of model). On wiki (1.36B
++  tok, data-starved) VE-off slightly BEAT VE-on AND was ~4% faster → keep OFF. On arxiv (38B
++  tok) veoff/veon CONVERGED (2.214 vs 2.225 @13k) → VE ~neutral, closing the gap with more
++  data as predicted. Rule: VE needs a data-rich regime to pay for its params.
++- **Chinchilla framing drove model-size choices.** wiki 1.36B tok ÷ 611M params (VE-on) ≈ 2
++  tok/param (10× under-fed) → dropped VE to ~350M. arxiv 38B tok → even VE-on is Chinchilla-
++  sufficient at <1 epoch, so arxiv uses a fixed 15k-step (~3.9B tok) budget, not full epochs
++  (1 arxiv epoch = 84k steps = 4.5 days).
++
++## THE config-bug that started it all
++`max_optimizer_steps: null` in the wiki configs SILENTLY DISABLED both LR cooldown AND the
++untie split (main.py ~955-969: both gated on max_steps being set). So every pre-2026-07-15
++wiki run trained at CONSTANT LR, no decay, never untied → guaranteed flat late-loss. Fixed
++by auto-deriving max_optimizer_steps from epoch_dirs n_packs (main.py ~586). ALWAYS verify
++"Auto-derived max_optimizer_steps=… Enables LR cooldown + untie" appears in the log.
++- Minor residual: derived count (14507) is ~70 more than actual packs → runs exit with a
++  benign `RuntimeError: epoch dirs exhausted` at step 14438 (99.5%). Training/ckpts/val all
++  COMPLETE and valid — it's cosmetic. TODO: floor the derived count to the true pack total.
++
++## Cluster / infra lessons (this is a SHARED cluster — ExclusiveUser=NO)
++- **The "submitit DDP hang" was a rank-0 CUDA OOM from a GPU-0 co-tenant, masked by a
++  reproducibility barrier** — NOT a launcher/NCCL/compile bug. Chased fabric/IB/cgroup/liger
++  for a day; all red herrings. Fix landed (loud-fail barrier + INFO logging + compile-warmup).
++  ALWAYS preflight GPU-0 empty before launching (scripts/preflight_node.sh).
++- **Preflight must check NFS too.** GPU-954 has broken /fss-data NFS → a run there dies in
++  ~77s with "Dataset directory not found". GPU-749 failed the compile-warmup desync twice
++  (avoid). preflight_node.sh checks BOTH GPU-0-empty AND dataset-visible.
++- **Compile cache: node-local /tmp, NOT /fss-data (NFS).** N ranks taking FileLocks on an NFS
++  cache deadlock. Node-local /tmp serializes correctly (rank0 compiles, others read).
++- **liger_kernel** was a broken editable install (source dir deleted); FusedLinearCELoss hard-
++  requires it. Reinstalled from PyPI (pinned nccl back to 2.28.9 after it downgraded).
++- **compile warmup desync is intermittent (~15-20%)** even with the broadcast-batch fix; it
++  fails LOUD at step 0 (good) → just relaunch on a fresh node/cache.
++
++## Yield-watcher (scripts/sweep_yield_watcher.sh) — courtesy daemon
++- Kills OUR ts2ts_ jobs (project-scoped, NOT all my jobs) youngest-first when another user is
++  PENDING/blocked, sized to net demand = their_demand − idle_nodes (don't kill for capacity
++  that already exists), gated on 2-poll persistence (ignore transient/about-to-schedule).
++- IGNORES Dependency-blocked pending (their own job chain, not waiting for nodes).
++- AUTO-RESUMES yielded jobs from latest.pt when a node has been idle ≥30 min (avoids racing a
++  coworker cycling short debug jobs). Records run_dir+config to a ledger on kill.
++- 12 offline self-tests + live-validated (real scancel + a real 03:23 auto-relaunch).
++- RELAUNCH RULE (also when doing it by hand): if a killed run has a meaningful latest.pt,
++  relaunch with `--resume-from <run>/checkpoints/latest.pt` — do NOT restart from scratch.
++
++## Eval notes
++- boolq consistently scores BELOW 0.50 and openbookqa near/below chance — likelihood-scoring
++  artifacts common at this scale, NOT model failure (perplexity confirms the model is sound).
++- 4-choice tasks (hellaswag, arc_easy) show real above-chance signal first; 2-choice
++  (winogrande, piqa) sit near 0.50 longest.
++- Eval on a local dev-node GPU (separate from the SLURM training fleet) so it doesn't contend.
++
+
+diff --git a/configs/arxiv_sweep/arxiv_veoff_cdl_wd0p3.yaml b/configs/arxiv_sweep/arxiv_veoff_cdl_wd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/arxiv_sweep/arxiv_veoff_cdl_wd0p3.yaml
+@@ -0,0 +1,94 @@
++# ARXIV SWEEP — veoff_cdl_wd0p3: mask=cross_doc_link ve=off muon_lr=0.003 muon_wd=0.3, 15000 steps.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  strategy: 'bfs'
++  layout_policy: 'stochastic_latex_comment_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'arxiv'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000   # fixed budget ~3.9B tok (<1 arxiv epoch); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/arxiv_sweep/arxiv_veoff_concat_wd0p3.yaml b/configs/arxiv_sweep/arxiv_veoff_concat_wd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/arxiv_sweep/arxiv_veoff_concat_wd0p3.yaml
+@@ -0,0 +1,93 @@
++# ARXIV MASK — doc_concatenated @ veoff/LR0.003/wd0.3, 15k steps.
++# ARXIV SWEEP — veoff_dc_wd0p3: mask=doc_causal ve=off muon_lr=0.003 muon_wd=0.3, 15000 steps.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  strategy: 'bfs'
++  layout_policy: 'stochastic_latex_comment_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_concatenated'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000   # fixed budget ~3.9B tok (<1 arxiv epoch); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/arxiv_sweep/arxiv_veoff_concatlink_wd0p3.yaml b/configs/arxiv_sweep/arxiv_veoff_concatlink_wd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/arxiv_sweep/arxiv_veoff_concatlink_wd0p3.yaml
+@@ -0,0 +1,95 @@
++# ARXIV MASK — doc_concat_link @ veoff/LR0.003/wd0.3, 15k steps.
++# ARXIV SWEEP — veoff_dc_wd0p3: mask=doc_causal ve=off muon_lr=0.003 muon_wd=0.3, 15000 steps.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  strategy: 'bfs'
++  layout_policy: 'stochastic_latex_comment_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_concat_link'
++  link_detector: 'arxiv'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000   # fixed budget ~3.9B tok (<1 arxiv epoch); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/arxiv_sweep/arxiv_veoff_dc_wd0p3.yaml b/configs/arxiv_sweep/arxiv_veoff_dc_wd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/arxiv_sweep/arxiv_veoff_dc_wd0p3.yaml
+@@ -0,0 +1,92 @@
++# ARXIV SWEEP — veoff_dc_wd0p3: mask=doc_causal ve=off muon_lr=0.003 muon_wd=0.3, 15000 steps.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  strategy: 'bfs'
++  layout_policy: 'stochastic_latex_comment_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000   # fixed budget ~3.9B tok (<1 arxiv epoch); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/arxiv_sweep/arxiv_veoff_dc_wd0p6.yaml b/configs/arxiv_sweep/arxiv_veoff_dc_wd0p6.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/arxiv_sweep/arxiv_veoff_dc_wd0p6.yaml
+@@ -0,0 +1,92 @@
++# ARXIV SWEEP — veoff_dc_wd0p6: mask=doc_causal ve=off muon_lr=0.003 muon_wd=0.6, 15000 steps.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  strategy: 'bfs'
++  layout_policy: 'stochastic_latex_comment_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.6
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000   # fixed budget ~3.9B tok (<1 arxiv epoch); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/arxiv_sweep/arxiv_veon_dc_wd0p3.yaml b/configs/arxiv_sweep/arxiv_veon_dc_wd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/arxiv_sweep/arxiv_veon_dc_wd0p3.yaml
+@@ -0,0 +1,92 @@
++# ARXIV SWEEP — veon_dc_wd0p3: mask=doc_causal ve=on muon_lr=0.003 muon_wd=0.3, 15000 steps.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  strategy: 'bfs'
++  layout_policy: 'stochastic_latex_comment_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000   # fixed budget ~3.9B tok (<1 arxiv epoch); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lr_at_wd0p3/wiki_lr0p002_wd0p3.yaml b/configs/lr_at_wd0p3/wiki_lr0p002_wd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lr_at_wd0p3/wiki_lr0p002_wd0p3.yaml
+@@ -0,0 +1,98 @@
++# LR-BASIN @ WD0.3 — muon_lr=0.002, muon_wd=0.3, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.002
++  adamw_lr: 2e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lr_at_wd0p3/wiki_lr0p004_wd0p3.yaml b/configs/lr_at_wd0p3/wiki_lr0p004_wd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lr_at_wd0p3/wiki_lr0p004_wd0p3.yaml
+@@ -0,0 +1,98 @@
++# LR-BASIN @ WD0.3 — muon_lr=0.004, muon_wd=0.3, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.004
++  adamw_lr: 4e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lr_at_wd0p3/wiki_lr0p006_wd0p3.yaml b/configs/lr_at_wd0p3/wiki_lr0p006_wd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lr_at_wd0p3/wiki_lr0p006_wd0p3.yaml
+@@ -0,0 +1,98 @@
++# LR-BASIN @ WD0.3 — muon_lr=0.006, muon_wd=0.3, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.006
++  adamw_lr: 6e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lrsweep_docconcat/wiki_dc_muon0p0015.yaml b/configs/lrsweep_docconcat/wiki_dc_muon0p0015.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lrsweep_docconcat/wiki_dc_muon0p0015.yaml
+@@ -0,0 +1,98 @@
++# LR-TRANSFER CONFIRM (doc_concatenated) — muon_lr=0.0015, VE off, 4-epoch.
++# muon_lr=0.0015, adamw_lr=1.5e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_concatenated'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.0015
++  adamw_lr: 1.5e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lrsweep_docconcat/wiki_dc_muon0p002.yaml b/configs/lrsweep_docconcat/wiki_dc_muon0p002.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lrsweep_docconcat/wiki_dc_muon0p002.yaml
+@@ -0,0 +1,98 @@
++# LR-TRANSFER CONFIRM (doc_concatenated) — muon_lr=0.002, VE off, 4-epoch.
++# muon_lr=0.002, adamw_lr=2e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_concatenated'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.002
++  adamw_lr: 2e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lrsweep_docconcat/wiki_dc_muon0p003.yaml b/configs/lrsweep_docconcat/wiki_dc_muon0p003.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lrsweep_docconcat/wiki_dc_muon0p003.yaml
+@@ -0,0 +1,98 @@
++# LR-TRANSFER CONFIRM (doc_concatenated) — muon_lr=0.003, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_concatenated'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lrsweep_veon/wiki_veon_muon0p0015.yaml b/configs/lrsweep_veon/wiki_veon_muon0p0015.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lrsweep_veon/wiki_veon_muon0p0015.yaml
+@@ -0,0 +1,98 @@
++# VE-ON LR-TRANSFER CONFIRM — muon_lr from 0p0015, ve_layers restored, doc_causal, 4-epoch.
++# muon_lr=0.0015, adamw_lr=1.5e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]   # VE banks ON (matches pre-existing ablation configs)
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.0015
++  adamw_lr: 1.5e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lrsweep_veon/wiki_veon_muon0p002.yaml b/configs/lrsweep_veon/wiki_veon_muon0p002.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lrsweep_veon/wiki_veon_muon0p002.yaml
+@@ -0,0 +1,98 @@
++# VE-ON LR-TRANSFER CONFIRM — muon_lr from 0p002, ve_layers restored, doc_causal, 4-epoch.
++# muon_lr=0.002, adamw_lr=2e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]   # VE banks ON (matches pre-existing ablation configs)
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.002
++  adamw_lr: 2e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/lrsweep_veon/wiki_veon_muon0p003.yaml b/configs/lrsweep_veon/wiki_veon_muon0p003.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/lrsweep_veon/wiki_veon_muon0p003.yaml
+@@ -0,0 +1,98 @@
++# VE-ON LR-TRANSFER CONFIRM — muon_lr from 0p003, ve_layers restored, doc_causal, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]   # VE banks ON (matches pre-existing ablation configs)
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sched_probe/wiki_minlr0p0.yaml b/configs/sched_probe/wiki_minlr0p0.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sched_probe/wiki_minlr0p0.yaml
+@@ -0,0 +1,99 @@
++# SCHED PROBE — min_lr_ratio=0.0 (default 0.1) @ best (LR0.003/WD0.3/VE-off/4ep, doc_causal).
++# WD SWEEP (muon_wd=0.3) at winning muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.0
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sched_probe/wiki_minlr0p2.yaml b/configs/sched_probe/wiki_minlr0p2.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sched_probe/wiki_minlr0p2.yaml
+@@ -0,0 +1,99 @@
++# SCHED PROBE — min_lr_ratio=0.2 (default 0.1) @ best (LR0.003/WD0.3/VE-off/4ep, doc_causal).
++# WD SWEEP (muon_wd=0.3) at winning muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.2
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wdsweep/wiki_muonwd0p05.yaml b/configs/wdsweep/wiki_muonwd0p05.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wdsweep/wiki_muonwd0p05.yaml
+@@ -0,0 +1,98 @@
++# WD SWEEP LOW-EXT (muon_wd=0.05) at muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.05             # WD SWEEP (low extension)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wdsweep/wiki_muonwd0p1.yaml b/configs/wdsweep/wiki_muonwd0p1.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wdsweep/wiki_muonwd0p1.yaml
+@@ -0,0 +1,98 @@
++# WD SWEEP LOW-EXT (muon_wd=0.1) at muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1             # WD SWEEP (low extension)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wdsweep/wiki_muonwd0p15.yaml b/configs/wdsweep/wiki_muonwd0p15.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wdsweep/wiki_muonwd0p15.yaml
+@@ -0,0 +1,98 @@
++# WD SWEEP LOW-EXT (muon_wd=0.15) at muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.15             # WD SWEEP (low extension)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wdsweep/wiki_muonwd0p2.yaml b/configs/wdsweep/wiki_muonwd0p2.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wdsweep/wiki_muonwd0p2.yaml
+@@ -0,0 +1,98 @@
++# WD SWEEP LOW-EXT (muon_wd=0.2) at muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.2             # WD SWEEP (low extension)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wdsweep/wiki_muonwd0p3.yaml b/configs/wdsweep/wiki_muonwd0p3.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wdsweep/wiki_muonwd0p3.yaml
+@@ -0,0 +1,98 @@
++# WD SWEEP (muon_wd=0.3) at winning muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wdsweep/wiki_muonwd0p6.yaml b/configs/wdsweep/wiki_muonwd0p6.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wdsweep/wiki_muonwd0p6.yaml
+@@ -0,0 +1,98 @@
++# WD SWEEP (muon_wd=0.6) at winning muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.6             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wdsweep/wiki_muonwd1p2.yaml b/configs/wdsweep/wiki_muonwd1p2.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wdsweep/wiki_muonwd1p2.yaml
+@@ -0,0 +1,98 @@
++# WD SWEEP (muon_wd=1.2) at winning muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wdsweep/wiki_muonwd2p4.yaml b/configs/wdsweep/wiki_muonwd2p4.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wdsweep/wiki_muonwd2p4.yaml
+@@ -0,0 +1,98 @@
++# WD SWEEP (muon_wd=2.4) at winning muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 2.4             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wiki_crossdoc_best.yaml b/configs/wiki_crossdoc_best.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_crossdoc_best.yaml
+@@ -0,0 +1,100 @@
++# WIKI CROSS-DOC — best config (LR0.003, muon_wd0.3, VE off, 4-epoch), cross_doc_link mask.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wiki_docconcat_best.yaml b/configs/wiki_docconcat_best.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_docconcat_best.yaml
+@@ -0,0 +1,99 @@
++# WIKI MASK ABLATION — doc_concatenated @ best (LR0.003/WD0.3/VE-off/4ep).
++# WD SWEEP (muon_wd=0.3) at winning muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_concatenated'
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wiki_docconcatlink_best.yaml b/configs/wiki_docconcatlink_best.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_docconcatlink_best.yaml
+@@ -0,0 +1,101 @@
++# WIKI MASK ABLATION — doc_concat_link @ best (LR0.003/WD0.3/VE-off/4ep).
++# WD SWEEP (muon_wd=0.3) at winning muon_lr=0.003, doc_causal, VE off, 4-epoch.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_bfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_concat_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/docs/multilang_code_datasets_DESIGN.md b/docs/multilang_code_datasets_DESIGN.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/docs/multilang_code_datasets_DESIGN.md
+@@ -0,0 +1,360 @@
++# Multi-language code datasets — design doc (stage 1 of 4)
++
++Status: **DRAFT for review**. Author: Claude. Date: 2026-07-17.
++
++Plan (agreed): **spec/design → harness → one pilot language → fan-out**, each stage
++possibly handed to a fresh session. This doc is the spec. Nothing here is built yet.
++
++---
++
++## 0. Goal
++
++Extend the graph-structured code corpus beyond the Python subset of The Stack to
++additional programming languages, so we can train the cross-doc-link model on
++richer, multi-language code graphs. The hard requirement: **the pipeline that
++turns a new language's imports into graph edges must be un-gameable and produce
++verifiably high-quality data**, confirmed ultimately by a human reading the actual
++decoded content of packed batches.
++
++---
++
++## 1. How the existing Python pipeline works (shared background)
++
++A "link" is an intra-repo, file→file dependency edge. `import` → directed edge
++from the importing file-node to the imported file-node **within the same repo**.
++Nodes are keyed `owner/repo:path/to/file.py`; edges live as `outgoing`/`incoming`
++adjacency lists on each node in `tokenized_graph.jsonl`.
++
++The edge becomes attention through **three stages that must agree on one string
++key** — this agreement *is* the contract:
++
++1. **Build time** — `data/github_graph_extractor/{build_graph_streaming.py,extract.py}`.
++   Python-specific regexes extract imports; a hard-coded stdlib/3rd-party denylist
++   skips external imports; `module_path → candidate file path` resolution (with
++   `__init__.py` package semantics) picks the target file inside the repo.
++2. **Train / inference time** — `model/graph_traversal/python_import_detector.py`,
++   a `LinkDetector`. It **re-detects links from tokens** (not from the raw graph),
++   emitting `LinkInfo(link_end_pos, target_str)`. `index_doc_span(span)` produces
++   the corpus lookup key. The *only* thing that makes resolution work is that
++   `target_str` and `index_doc_span` live in the **same string space** (Python
++   strips the repo prefix so bare `utils/helpers.py` matches node
++   `owner/repo:utils/helpers.py`).
++3. **Mask** — `model/graph_traversal/cross_doc_mask.py`. Each resolved
++   `(link_pos → target_doc_id)` co-packed in one sequence becomes a grant
++   rectangle `[link_pos : source_end] × [target_start : target_end]`, OR-ed into
++   the predicate `causal & (same_doc | in_grant)`.
++
++**Single-repo constraint (Python):** because Python import strings say *what* not
++*where* (`import utils` — which file?), and bare paths like `setup.py` recur across
++repos, a Python corpus must contain **exactly one repo** or link targets are
++ambiguous. `data/make_repo_corpus.py` carves one repo out of a pretokenized dataset.
++
++### The `LinkDetector` contract a new language must satisfy
++(from `model/graph_traversal/link_detector.py`)
++
++```python
++class LinkInfo(NamedTuple):
++    link_end_pos: int   # EXCLUSIVE token pos just after the reference; grant starts here
++    target_str: str     # decoded target identifier; matched against index_doc_span(span)
++
++class LinkDetector(Protocol):
++    def __init__(self, decode_fn: Callable[[List[int]], str]): ...
++    def detect_links(self, input_ids: torch.Tensor) -> List[LinkInfo]: ...   # 1-D [seq_len]
++    def index_doc_span(self, span: Any) -> str: ...                          # corpus lookup key
++    # optional: detect_links_for_doc(span_tokens, raw_identifier) -> List[LinkInfo]
++    #           (span-local positions; used by Python for relative imports)
++```
++
++### The ~5 touch-points to add a language `<lang>`
++1. `data/document_sources.py` — a `DocumentSource` yielding `(normed_id, content)`.
++2. `data/pretokenize_<lang>.py` — thin wrapper picking that source (mirrors
++   `pretokenize_stack.py`).
++3. Graph extraction — language-specific import extraction + module→file resolution
++   (new module under `data/<lang>_graph_extractor/` or a parametrized extractor).
++4. `model/graph_traversal/<lang>_..._detector.py` — a `LinkDetector`, plus one
++   entry each in `make_link_detector` and `LINK_DETECTOR_NAMES`
++   (`link_detector.py:75,95`).
++5. `data/layout.py` — one entry in `_DETECTOR_INFERENCE_LAYOUT`
++   (`inference_layout_for_detector` raises on unknown detectors, so this can't be
++   silently skipped).
++
++Reused **unchanged**, language-agnostic: the sharding/writer core
++(`data/pretokenize.py`), `data.dataset.GraphIndex`/`PretokShardedBackend`,
++`data/split_graph.py`, `data/make_repo_corpus.py`, all of `cross_doc_mask.py` and
++the mask kernels.
++
++---
++
++## 2. The reward-hacking problem, precisely
++
++Any single scalar we might optimize is gameable:
++
++| Naive metric | The hack that scores perfectly | What it produces |
++|---|---|---|
++| link **resolution rate** (`resolved/detected`) | emit only links you're sure resolve; emit nothing → 0/0 | sparse or empty graph, "100%" |
++| **edge count** | emit every plausible pair | dense garbage graph, hallucinated edges |
++| detector==extractor **agreement** | same agent authors both → shared blind spot passes | subtly wrong, self-consistent |
++
++The defense is **precision AND recall measured against an independent oracle the
++implementing agent did not author**, plus structural invariants, plus a mandatory
++human read of real batch content. No single number; a panel that closes each hack.
++
++### Two axes: DETECTION vs. RESOLUTION (the key distinction)
++Turning an import into an edge is two steps, validated by **different** oracles:
++
++- **Detection** — find the import and extract its target *string* (`"github.com/x/y/pkg"`).
++  "What does this file import?"
++- **Resolution** — map that string to the *right* node in the corpus. "Which
++  document does it point to?"
++
++Tree-sitter answers **detection only** — it parses syntax and knows nothing about
++the corpus, so it cannot say whether a target string resolves, or resolves
++*correctly*. Resolution is the harder, more dangerous axis: a **mis-resolved** link
++is a false edge in the training graph — arguably worse than a missing one. So each
++axis needs its own oracle.
++
++### Are the LLMs allowed to use tree-sitter? YES — and it's not circular
++Language agents **should** use tree-sitter for the build-time extractor (hand-rolled
++regex like the old Python code would be a worse wheel). The apparent circularity
++(oracle = tree-sitter, impl = tree-sitter) is not a real hole:
++1. The oracle grades on **random real Stack files the agent doesn't curate** — you
++   can't teach-to-the-test when the test set is 50 unseen files.
++2. **We author and freeze the oracle's tree-sitter query ourselves**, independently
++   of the agent's; a query that misses an import form disagrees on real files.
++3. The genuinely independent checks are **resolution** and the **token-space runtime
++   detector** — neither is tree-sitter (the detector only has tokens, so it's a real
++   second implementation).
++
++### Layered oracle (strongest → broadest)
++| Axis | Oracle | Coverage |
++|---|---|---|
++| Detection (find imports) | frozen tree-sitter query (ours) on random real files | strong, near-complete |
++| Resolution (string → right node) | **language toolchain** (`go list`/`go/packages`, `cargo metadata`, `javac -Xlint`) on a *buildable* subset | gold, but narrow — Stack files rarely build standalone |
++| Resolution (broad) | hand-labeled fixture repos + structural invariants (target exists, no dangling, no self-link, identifier round-trip self-consistent) | broad, shallow |
++| Both, final | human sample-dump spot-check of `(import → resolved target)` pairs | judgment |
++
++**Honest limitation:** resolution precision/recall cannot be fully auto-oracle'd on
++arbitrary Stack code without the toolchain, and the toolchain needs buildable code.
++So resolution leans on fixtures + invariants + the human gate more than detection
++does. This is called out, not papered over.
++
++Tree-sitter is a **new dependency** (`tree_sitter` + per-language grammar wheels;
++none currently installed — verified). Where a grammar is weak, fall back to the
++language toolchain or hand-labeled fixtures and say so explicitly.
++
++---
++
++## 3. The test harness (stage 2) — what gets built
++
++A **frozen, language-agnostic conformance harness** that grades a language
++implementation. "Frozen" = the harness is written and reviewed BEFORE any language
++agent runs, lives behind tests, and an implementing agent may not modify it (only
++add a small per-language adapter that declares fixtures + the tree-sitter grammar
++name). This is what makes the gate un-gameable.
++
++### 3a. Per-language conformance suite (automated, checkpoint-free)
++Two scoring blocks, one per axis (§2), on a held sample of real files from that
++language's Stack subset:
++
++**DETECTION block** (oracle = frozen tree-sitter query):
++1. **Extractor vs. tree-sitter** — precision/recall of the build-time extractor's
++   import strings vs. tree-sitter's import set on the raw source text. Draft gate:
++   recall ≥ 0.90, precision ≥ 0.95. Report exact false-pos / false-neg examples.
++2. **Runtime detector vs. tree-sitter** — same, for `detect_links` on decoded
++   tokens. This is the genuinely-independent second implementation (token-space, no
++   tree-sitter). Both stages checked against the third-party oracle → closes the
++   shared-blind-spot hole.
++
++**RESOLUTION block** (oracle = toolchain on buildable subset + fixtures + invariants):
++3. **Resolution correctness on fixtures** — hand-labeled fixture repos with known
++   ground-truth edges; score precision/recall of `(target_str → resolved node)`
++   against the labels. This is the axis tree-sitter CANNOT check.
++4. **Toolchain cross-check (where buildable)** — on the subset of fixture/Stack code
++   that actually builds, compare resolved edges to the language toolchain's own
++   dependency output (`go list`/`go/packages`, etc.). Gold standard, narrow coverage.
++5. **Structural invariants** (cheap, always on):
++   - no self-links; every `outgoing` target exists as a node (no dangling edges);
++   - `link_end_pos` lands in decoded text immediately after the real import
++     statement (spot-verified by re-decoding around the position);
++   - DAG guard honored; `index_doc_span(node)` and `detect_links` `target_str`
++     occupy the same string space (round-trip: every real edge's target key is
++     reachable from some emitted `target_str`).
++6. **Resolvability audit** — fraction of emitted `target_str` that resolve via
++   `PretokCorpus._resolve_target`, reported ALONGSIDE precision/recall (never
++   alone), plus degree distribution, dangling rate, isolated-node fraction.
++
++### 3b. General dataset auditor (fills a real gap; reusable for Python too)
++A checkpoint-free CLI that points at any built `pretokenized_datasets/<name>` dir
++and reports: node/edge counts, out/in-degree distribution, dangling-edge rate,
++self-link rate, isolated-node fraction, and resolvability of a sampled set of
++detected links. This does not exist today (extractor stats are build-time only and
++per-dataset bespoke). It doubles as the Python-corpus sanity check.
++
++### 3c. Link sample-dump tool (feeds the human gate)
++A CLI that prints N random `(source doc, detected link surface text, resolved
++target identifier, target snippet)` tuples from a built dataset — no model needed.
++Complements `demo_traversal.py` (in-batch connectivity) and
++`visualize_llm_input.py` (per-doc layout + detected links). This is the artifact a
++human skims to confirm links point where they claim.
++
++### 3d. Mandatory human visual gate (final, non-automatable)
++For each language, before its data is accepted, a human runs
++`visualize_llm_input.py` / `visualize_epoch.py` on real packed batches and reads
++the decoded content: do the linked docs actually co-pack, does the link surface
++text sit where the tool says, does the target doc make sense as the import target?
++The harness produces a ready-to-review artifact bundle; a human signs off. **No
++language ships on green automated metrics alone.**
++
++---
++
++## 4. Language plan
++
++Ranked by how cleanly intra-repo file→file resolution maps onto the model.
++
++### Pilot: **Go** (stage 3)
++- Import strings are **globally unique by design**: modern Go (module mode,
++  universal since ~2019) has **no relative imports** — even a same-repo sibling
++  package is imported by its full module-qualified path
++  (`import "github.com/owner/repo/internal/foo"`). The string is a namespace
++  declared in `go.mod`; nothing hits the network at parse time. "Global" = the
++  string is globally unique, not a live fetch.
++- **Single-repo resolution** = strip the `go.mod` module prefix, remainder is the
++  package dir. **Multi-repo** = the full string is already the unique key, no strip.
++- **Enables multi-repo corpora** (cross-repo edges), since paths never collide.
++  This removes Python's single-repo eval bottleneck and yields a much denser graph.
++- **PILOT DECISION — package vs. file nodes.** A Go import points to a *package*
++  (a directory of many `.go` files), but the current model has *file*-nodes
++  (Python: import ≈ one file). Options: (a) fan one import out to an edge per file
++  in the target package, or (b) make **packages the node unit for Go** (concatenate
++  a package's files into one node). This does not exist in the Python model and must
++  be decided in the pilot. Leaning (b) — cleaner mapping, matches Go's own unit of
++  import — but it changes what a "document" is for code.
++- Best possible showcase and lowest-risk template for the fan-out.
++
++### Then, in order
++- **Java / Kotlin** — `package` == directory; imports are fully-qualified class
++  names (`com.google.common.collect.ImmutableList`) mapping deterministically to a
++  file path, near-globally-unique → also **multi-repo capable**.
++- **Rust** — `mod`/`use` tree rooted at the crate; needs mod-declaration graph
++  walking (not pure path convention). **Single-repo.**
++- **TypeScript / JavaScript** (stretch) — relative imports (`./foo`) are clean and
++  common, but full resolution (index files, extension inference, `package.json`
++  exports, `node_modules`) is messy. **Single-repo**, relative imports only at
++  first; high volume in The Stack.
++
++### Corpus scope decision (per language) — RESOLVED
++Approach: **start single-repo (identical to Python, lowest risk), make multi-repo
++a configurable relaxation.** Confirmed that multi-repo is compatible with the
++existing precompute partitioner (see §7), so the relaxation is safe where import
++strings are globally unique.
++- **Multi-repo capable** (relax after pilot): Go & Java/Kotlin — unique import
++  strings make cross-repo edges unambiguous → denser graph, no single-repo carve.
++- **Single-repo only**: Rust and TS/JS relative imports (path-relative → ambiguous
++  across repos, same as Python).
++- Multi-repo requires the language's `index_doc_span` to key on the **globally
++  unique import string** (full module path), not a bare repo-relative path, AND the
++  precompute dispatcher fix in §7.
++
++---
++
++## 5. Fan-out plan (stage 4)
++
++Once harness + Go pilot are proven:
++- One implementation sub-agent per approved language, **each in its own git
++  worktree** (`isolation: worktree`), producing a **branch/PR** — not committing to
++  a shared tree. Rationale: the *shared* files agents must edit —
++  `link_detector.py`'s registry + `data/layout.py`'s map — are exactly where they'd
++  collide; isolation + PR review avoids conflicts and gives a per-language human
++  checkpoint that dovetails with the mandatory visual gate. (Per-language files —
++  each detector, `pretokenize_<lang>.py`, extractor module — don't overlap.)
++- Agent deliverable = the ~5 touch-points + a per-language harness adapter
++  (fixtures + grammar name) — **not** any change to harness scoring code.
++- Acceptance = harness green (detection + resolution precision/recall, invariants,
++  resolvability report) **AND** human visual sign-off on real batches, reviewed at
++  PR time.
++- Launch/build discipline per CLAUDE.md (stagger jobs; artifacts to `/fss-data`,
++  never `/fss` for bulk I/O).
++
++---
++
++## 6. Resolved decisions (from review 2026-07-17)
++1. **Tree-sitter dependency — APPROVED.** Add `tree_sitter` + per-language grammar
++   wheels to the env.
++2. **Thresholds — APPROVED** as draft: recall ≥ 0.90 / precision ≥ 0.95, tunable
++   per language. Recall denominator counts **only in-corpus targets** (external
++   deps legitimately don't resolve and are excluded).
++3. **Go data — none exists yet; downloader is trivially retargetable.** The Stack
++   record schema is fully language-agnostic (`lang`, `ext`, `max_stars_repo_name`,
++   `max_stars_repo_path`, `content`), organized by `data_dir="data/<lang>"`. The
++   current `download_sample.py` hardcodes `data/python`; getting Go = parametrize
++   that to `data/go`. `StackJSONLSource` barely changes. (Verified 2026-07-17.)
++   TODO before pilot: confirm Go volume + `go.mod` presence in the downloaded slice.
++4. **Extraction approach — RESOLVED: tree-sitter in three roles.** The two stages
++   already consume different representations, so there's no tokenization conflict:
++   - **Build-time extractor** consumes **raw source text** → use tree-sitter as the
++     extraction engine (replaces hand regexes; strictly more correct).
++   - **Runtime `LinkDetector`** consumes **tokens** (all it has at train time) →
++     keeps its own lightweight token-space logic; can't run tree-sitter directly.
++   - **Oracle** = tree-sitter, grading BOTH stages.
++   The runtime detector stays simple *because* it is the checked thing, not the
++   checker — testability preserved, extractor quality improved.
++5. **Multi-repo — start single-repo, relax later (configurable).** See §4 and §7.
++
++## 7. Precompute partitioner + multi-repo (investigated 2026-07-17)
++Verdict: **the Voronoi partitioner is structurally repo-agnostic; multi-repo code
++graphs are compatible with it.** Details, all in `data/epoch_precompute.py`:
++- Two partitioners: `_partition_repos` (round-robins whole repos to workers,
++  assumes edges stay in-repo — the single-repo path) and
++  `_partition_graph_communities` (multi-source BFS **Voronoi**, used by wiki/arxiv,
++  co-locates linked docs; **never inspects identifiers**, only `neighbors_out/in`).
++- A multi-repo code graph with cross-repo edges would partition **identically to
++  arxiv/wiki** under the Voronoi path — the worker view, component assignment,
++  bucketing, and parallel driver are all repo-agnostic.
++- **The one trap:** the dispatcher `_is_repo_partitioned` returns True whenever
++  identifiers contain `:` (which `owner/repo:path` does), so it would *mis-route* a
++  multi-repo corpus to `_partition_repos`, severing cross-repo edges and collapsing
++  packs toward `doc_causal`. **Fix is one line** — prefer the Voronoi path when
++  cross-repo edges exist (or key the heuristic on something better than `:`). No
++  algorithmic work; the Voronoi code is unchanged.
++
++## 8. Data-availability probe (run 2026-07-18)
++
++Streamed ~3000 files/language from `bigcode/the-stack-dedup` (per-language
++`data_dir`). **Python baseline** (from existing `graph_100M_stats.json`): 3.56M
++nodes, 6.3M internal edges, ~7.3 files/repo, avg out-degree 1.78, ~4.0 imports/file.
++
++| Lang | imports/file | % files w/imports | chars/file | local-ish imports |
++|---|---|---|---|---|
++| Go | ~7.6 | 92% | 7772 | (all module-qualified) |
++| Java | ~9.5 | 88% | 5820 | (all FQN) |
++| Rust | ~5.0 | 86% | 7500 | ~35% (`crate::`/`super::`/`mod`) |
++| TypeScript | ~4.0 | 83% | 3878 | ~48% (`./`,`../`) |
++| JavaScript | ~2.5 | 60% | 10019 | ~45% (`./`,`../`) |
++
++**Takeaways:**
++- **Go & Java have the richest import density** (7.6 / 9.5 imports/file, ~90% files
++  with imports) — both beat Python's ~4.0. Strong graph potential. Go confirmed as
++  the pilot.
++- **Rust/TS/JS**: only 35–48% of imports are local (intra-repo); the rest are
++  external deps that legitimately won't resolve — reinforces the §6.2 decision to
++  count only in-corpus targets in the recall denominator.
++- **METHODOLOGY CAVEAT:** streaming reads the dataset *head*, which is NOT
++  repo-ordered, so a stream window shows ~1.1 files/repo — this is a **sampling
++  artifact and does NOT measure real co-location.** The pipeline hash-partitions the
++  *entire* dataset into repo buckets (Python's final graph averages ~7.3 files/repo).
++  Actual multi-file-repo density can only be measured after a full
++  `build_graph_streaming` pass. Import *density* and file *size* above ARE reliable
++  from streaming; repo co-location is NOT.
++- **`go.mod` files are sparse in a raw stream** (0 in first 4000) — expected, since
++  they're 1 per repo. The extractor must read the module prefix from `go.mod` when
++  present and fall back to a heuristic (longest common import prefix) when absent in
++  the sampled slice. Flag for the Go pilot.
++
++## 9. Companion task: Python re-implementation on the harness
++Once the harness exists, one agent **rewrites the existing Python extractor +
++detector to use tree-sitter** and pass the same conformance suite. Value: (a)
++validates the harness against a known-good language, (b) removes the last
++hand-regex extractor, (c) makes Python a peer of the new languages rather than a
++special case. This is a fan-out task like any other (own worktree + PR), but should
++run FIRST (or alongside Go) as the harness's reference conformance case.
++

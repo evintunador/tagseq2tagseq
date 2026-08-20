@@ -1,0 +1,467 @@
+diff --git a/TODOS.md b/TODOS.md
+index 88366d2..b7c39fa 100644
+--- a/TODOS.md
++++ b/TODOS.md
+@@ -228,6 +228,29 @@ discriminating cross-doc signal for Go/Java yet.
+   at them with the new benchmark in the eval list.
+ - Fold in TypeScript too if the TS dataset (built 2026-07-20) gets a sweep — same benchmark gap.
+ 
++### Self-built cross-doc code benchmark from test_community splits (future — filed 2026-07-23)
++External RepoBench only exists for Python + Java. For the other languages (Go, TS, Rust,
++Kotlin, Dart, Zig, JS) with no upstream cross-file benchmark, build one from our OWN
++held-out `test_community` splits (the import-graph neighborhoods we already carve). Two
++token-scope variants considered (human is most interested in these two):
++  1. **Import-dependent tokens only** — score ONLY tokens that actually use an
++     imported/cross-file symbol (identifiers resolved to the linked doc, or the line
++     following an import reference), not all body tokens. This is why the current
++     `community_pack_perplexity` is near-noise: it dilutes the cross-doc signal across
++     every body token of dense/predictable import neighborhoods. Restricting to the
++     import-consuming spans should recover a discriminating Δnll (this is the same token
++     scope RepoBench's "next_line" achieves, just carved from our own graph instead of an
++     external dataset).
++  3. **Whole-body on sparser communities** — keep whole-doc scoring but curate to
++     sparser / high-out-degree communities where each import carries more predictive
++     weight. Simplest change to the existing metric; may still be diluted.
++Both reuse `score_completion_with_context_docs` (already language-agnostic — takes any
++`link_detector`) + the per-language `test_community` split; no external dataset, no
++annotator/injection. Sequencing: do the external Java RepoBench port FIRST (below), then
++survey the internet for RepoBench-analogous cross-file datasets for the other languages
++that can be similarly hacked to expose import edges as cross-doc aux DocSpans; fall back
++to this self-built path only where none exist.
++
+ ### Better cross-doc benchmark for multi-language Stack models (future)
+ Once TheStack is expanded to all languages, extend the synthetic intra-repo benchmark
+ above to non-Python languages (e.g. JS/TS `require`/`import`, Ruby `require`).
+diff --git a/eval/nlp_benchmarks.py b/eval/nlp_benchmarks.py
+index 0c1bb17..efae785 100644
+--- a/eval/nlp_benchmarks.py
++++ b/eval/nlp_benchmarks.py
+@@ -23,7 +23,7 @@ Entry points (code):
+   run_codexglue_line_completion(model, max_examples, cache_dir, device) -> Dict[str, Any]
+   run_codexglue_code_to_text(model, max_examples, cache_dir, device)    -> Dict[str, Any]
+   run_repobench(model, split, max_examples, cache_dir, device)          -> Dict[str, Any]
+-  run_repobench_cross_doc(model, max_examples, cache_dir, device)       -> Dict[str, Any]
++  run_repobench_cross_doc(model, language, max_examples, cache_dir, device) -> Dict[str, Any]
+   run_humaneval_buggy(model, language, max_examples, cache_dir, device) -> Dict[str, Any]
+ 
+ All adapters share the same design:
+@@ -52,6 +52,7 @@ imported from tunalab at module load time.
+ 
+ import logging
+ import math as _math_module
++import re
+ import numpy as _np_module
+ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+ 
+@@ -912,8 +913,80 @@ def run_repobench(
+ 
+ # ─── RepoBench-C cross-doc-link variant ──────────────────────────────────────
+ 
++#: Per-language RepoBench-C configuration. RepoBench exists upstream for Python
++#: and Java only (``tianyang/repobench_{python,java}_v1.1``). Each entry names
++#: the HF repo and the link-detector class that must back the model for imports
++#: to resolve to cross-file snippets. Add a language here + an aux-identifier
++#: builder in ``_repobench_aux_identifier`` to extend coverage.
++_REPOBENCH_LANGUAGES: Dict[str, Dict[str, str]] = {
++    "python": {
++        "hf_repo":         "tianyang/repobench_python_v1.1",
++        "detector_module": "model.graph_traversal.python_import_detector",
++        "detector_class":  "PythonImportDetector",
++    },
++    "java": {
++        "hf_repo":         "tianyang/repobench_java_v1.1",
++        "detector_module": "model.graph_traversal.java_import_detector",
++        "detector_class":  "JavaImportDetector",
++    },
++}
++
++#: Java/Kotlin build source roots. A Java import is a package-qualified FQN
++#: (``com.foo.Bar``); the file path prefixes that FQN-path with a build source
++#: root (Maven/Gradle ``src/main/java/``, etc.). Stripping the root leaves the
++#: FQN path, which ``JavaImportDetector.index_doc_span`` dotifies back to the
++#: import FQN. Ordered most-specific first; the first marker present is stripped.
++_JAVA_SOURCE_ROOTS = (
++    "src/main/java/",
++    "src/test/java/",
++    "src/main/kotlin/",
++    "src/test/kotlin/",
++    "src/main/scala/",
++    "src/",
++)
++
++
++def _strip_java_source_root(path: str) -> str:
++    """Return the FQN-path portion of a Java file path (source root removed).
++
++    ``service-core/.../src/main/java/fun/isite/entity/SystemMenu.java`` ->
++    ``fun/isite/entity/SystemMenu.java``. Falls back to the path unchanged when
++    no known source root is present (the dotified key then simply won't match,
++    and that example falls back to flat scoring — no crash).
++    """
++    p = path.replace("\\", "/")
++    for marker in _JAVA_SOURCE_ROOTS:
++        idx = p.rfind(marker)
++        if idx != -1:
++            return p[idx + len(marker):]
++    return p
++
++
++def _repobench_aux_identifier(language: str, repo: str, path: str, snippet: str) -> str:
++    """Build the aux DocSpan ``raw_identifier`` for one cross-file snippet.
++
++    The identifier must be shaped so the language's ``index_doc_span`` produces
++    a key that exactly matches what its import detector emits as ``target_str``:
++
++    - **python**: import candidates are module *paths* (``pkg/module.py``), and
++      ``PythonImportDetector.index_doc_span`` just strips the ``repo:`` prefix,
++      so the snippet path is used verbatim.
++    - **java**: imports are dotted FQNs (``com.foo.Bar``) while snippet paths
++      carry a build source root (``.../src/main/java/com/foo/Bar.java``) that
++      would dotify to a non-matching key. RepoBench strips the ``package``
++      declaration from snippets, so the FQN is recovered from the path instead:
++      drop the source root, leaving ``com/foo/Bar.java`` which
++      ``JavaImportDetector.index_doc_span`` dotifies to ``com.foo.Bar``.
++    """
++    if language == "java":
++        return f"{repo}:{_strip_java_source_root(path)}"
++    # python (default): snippet path verbatim.
++    return f"{repo}:{path}"
++
++
+ def run_repobench_cross_doc(
+     model,
++    language: str = "python",
+     max_examples: Optional[int] = None,
+     cache_dir: Optional[str] = None,
+     device: str = "cuda",
+@@ -921,11 +994,16 @@ def run_repobench_cross_doc(
+     """RepoBench-C cross_file_first scored with cross-doc-link attention.
+ 
+     Packs each example's cross-file snippets as aux DocSpans preceding the
+-    primary file context. Uses PythonImportDetector to match each import
+-    statement in the primary doc to its specific snippet via the snippet's
+-    file path (precise matching — each import grants attention only to the
+-    snippet it actually imports). Requires a cross_doc_link model with a
+-    link_detector set.
++    primary file context. Uses the language's import detector to match each
++    import statement in the primary doc to its specific snippet (precise
++    matching — each import grants attention only to the snippet it actually
++    imports). Requires a cross_doc_link model whose ``link_detector`` matches
++    ``language`` (PythonImportDetector for python, JavaImportDetector for java).
++
++    RepoBench exists upstream for python and java only; see
++    ``_REPOBENCH_LANGUAGES``. Other languages have no RepoBench variant — use
++    ``community_pack_perplexity`` or a self-built cross-doc benchmark instead
++    (see TODOS.md).
+ 
+     Reports two perplexity figures for transparency:
+       - ``cross_doc_only``: only examples where an import link was detected
+@@ -936,6 +1014,8 @@ def run_repobench_cross_doc(
+     Args:
+         model: TS2TSModel in eval mode. Must have mask_type='cross_doc_link'
+             and link_detector set. Must have model.tokenizer set.
++        language: RepoBench language — one of ``_REPOBENCH_LANGUAGES`` keys
++            (``'python'`` or ``'java'``). Default ``'python'``.
+         max_examples: Limit number of examples (None = full split).
+         cache_dir: HuggingFace cache directory.
+         device: Device for token tensors.
+@@ -952,7 +1032,13 @@ def run_repobench_cross_doc(
+             "n_link_not_found":           int,
+         }
+     """
+-    _require_tokenizer(model, "RepoBench/cross_file_first (cross-doc)")
++    if language not in _REPOBENCH_LANGUAGES:
++        raise ValueError(
++            f"run_repobench_cross_doc language must be one of "
++            f"{sorted(_REPOBENCH_LANGUAGES)}, got {language!r}."
++        )
++    lang_cfg = _REPOBENCH_LANGUAGES[language]
++    _require_tokenizer(model, f"RepoBench/{language}/cross_file_first (cross-doc)")
+     if not hasattr(model, "mask_type") or model.mask_type != "cross_doc_link":
+         raise ValueError(
+             "run_repobench_cross_doc requires a cross_doc_link model. "
+@@ -963,27 +1049,30 @@ def run_repobench_cross_doc(
+             "run_repobench_cross_doc requires model.link_detector to be set. "
+             "Use to_inference_model(link_detector=...) or TS2TSModel.__init__."
+         )
+-    from model.graph_traversal.python_import_detector import PythonImportDetector
+-    if not isinstance(model.link_detector, PythonImportDetector):
++    import importlib
++    _det_cls = getattr(
++        importlib.import_module(lang_cfg["detector_module"]),
++        lang_cfg["detector_class"],
++    )
++    if not isinstance(model.link_detector, _det_cls):
+         raise ValueError(
+-            f"run_repobench_cross_doc requires a PythonImportDetector "
+-            f"(got {type(model.link_detector).__name__!r}). "
+-            "RepoBench is a Python dataset; other link detectors cannot match "
+-            "Python import statements to cross-file snippets. When support for "
+-            "additional programming languages is added, consider splitting this "
+-            "benchmark by language and matching each to its <Language>ImportDetector."
++            f"run_repobench_cross_doc(language={language!r}) requires a "
++            f"{lang_cfg['detector_class']} (got "
++            f"{type(model.link_detector).__name__!r}). The link detector must "
++            "match the benchmark language so import statements resolve to the "
++            "cross-file snippets."
+         )
+ 
+     from datasets import load_dataset as _load_dataset
+     raw = _load_dataset(
+-        "tianyang/repobench_python_v1.1",
++        lang_cfg["hf_repo"],
+         split="cross_file_first",
+         cache_dir=cache_dir or "data/.cache/repobench",
++        verification_mode="no_checks",  # upstream split-size metadata lags parquet
+     )
+ 
+     enc = _make_encoder(model.tokenizer)
+     link_detector = model.link_detector
+-    repo_name = None  # populated per-example below
+ 
+     # Per-example, in loop order: the cross-doc NLL (None if the link didn't
+     # fire) and the flat (context, completion) pair. The flat forwards are all
+@@ -1003,9 +1092,10 @@ def run_repobench_cross_doc(
+         context_items = ex.get("context", [])
+         repo = ex.get("repo_name", "repo")
+ 
+-        # raw_identifier "repo:path/to/file.py" — PythonImportDetector.index_doc_span
+-        # strips the repo prefix, so candidate paths produced by the import detector
+-        # (e.g. "pkg/module.py") match the path component of the identifier.
++        # aux raw_identifier is built per-language so index_doc_span yields the
++        # exact key the import detector emits: for python the snippet path
++        # verbatim; for java the FQN (from the snippet's package + class name)
++        # re-encoded as a source-root-relative path (see _repobench_aux_identifier).
+         aux_token_lists: List[List[int]] = []
+         aux_raw_identifiers: List[str] = []
+         for item in context_items:
+@@ -1014,11 +1104,13 @@ def run_repobench_cross_doc(
+             if not snippet.strip():
+                 continue
+             aux_token_lists.append(enc(snippet))
+-            aux_raw_identifiers.append(f"{repo}:{path}")
++            aux_raw_identifiers.append(
++                _repobench_aux_identifier(language, repo, path, snippet)
++            )
+ 
+         # import_statement contains the imports that reference the cross-file snippets;
+         # cropped_code is the file body starting after those imports. Concatenate so
+-        # PythonImportDetector can detect the relevant import positions in the sequence.
++        # the import detector can detect the relevant import positions in the sequence.
+         import_stmt    = ex.get("import_statement", "")
+         context_tokens = enc(import_stmt + "\n" + ex.get("cropped_code", ""))
+         completion_tokens = enc("\n" + next_line)
+diff --git a/eval_checkpoints.py b/eval_checkpoints.py
+index 4ddd5ce..c05b004 100644
+--- a/eval_checkpoints.py
++++ b/eval_checkpoints.py
+@@ -212,7 +212,7 @@ _MULTI_DOC_MASK_TYPES = frozenset({
+ # perplexity / single-doc suites that never resolve links. The inference layout
+ # for each detector is derived via data.layout.inference_layout_for_detector.
+ _BENCHMARK_LINK_DETECTOR = {
+-    "repobench_cross_doc": "python",
++    "repobench_cross_doc": "python",  # default; overridden by spec["language"]
+     "hotpotqa_cross_doc":  "markdown",
+     # Annotated NLP benchmarks inject markdown links via MarkdownPromptAnnotator.
+     "wiki_qa":             "markdown",
+@@ -227,9 +227,14 @@ def detector_for_benchmark(spec: dict) -> Optional[str]:
+ 
+     ``annotated`` in a benchmark's conditions forces the markdown annotator path
+     regardless of the base benchmark, so those always need the markdown detector.
++    ``repobench_cross_doc`` needs the detector for its ``language`` (the import
++    detector must match the benchmark language), so its ``spec["language"]``
++    overrides the default python entry.
+     """
+     if "annotated" in (spec.get("conditions") or []):
+         return "markdown"
++    if spec.get("name") == "repobench_cross_doc":
++        return spec.get("language", "python")
+     return _BENCHMARK_LINK_DETECTOR.get(spec.get("name"))
+ 
+ _BUILTIN_CONDITIONS: Dict[str, Dict[str, Any]] = {
+@@ -542,6 +547,7 @@ def run_benchmarks_on_model(
+                         continue
+                     results[key] = run_repobench_cross_doc(
+                         model=model,
++                        language=spec.get("language", "python"),
+                         max_examples=max_docs,
+                         device=device,
+                     )
+@@ -1082,6 +1088,13 @@ def main() -> None:
+         choices=["python", "cpp", "go", "java", "js", "rust"],
+         help="HumanEvalPack language (used when 'humaneval_buggy' is in --benchmarks).",
+     )
++    parser.add_argument(
++        "--repobench-language", default="python",
++        choices=["python", "java"],
++        help="RepoBench language (used when 'repobench_cross_doc' is in "
++             "--benchmarks). Must match the model's link detector. "
++             "RepoBench exists upstream for python and java only.",
++    )
+     parser.add_argument(
+         "--conditions", nargs="+", default=["experimental"],
+         help="Named conditions to run each benchmark under. "
+@@ -1202,6 +1215,7 @@ def main() -> None:
+     # Per-benchmark extra params from CLI — folded into each spec dict.
+     _bench_extras: Dict[str, Dict[str, Any]] = {
+         "repobench":                {"split": args.repobench_split},
++        "repobench_cross_doc":      {"language": args.repobench_language},
+         "humaneval_buggy":          {"language": args.humaneval_language},
+         "community_pack_perplexity": {"split": args.split},
+     }
+diff --git a/tests/eval/test_nlp_benchmarks.py b/tests/eval/test_nlp_benchmarks.py
+index 4d2c2cb..1b49ef8 100644
+--- a/tests/eval/test_nlp_benchmarks.py
++++ b/tests/eval/test_nlp_benchmarks.py
+@@ -773,6 +773,110 @@ class _FakeHFDataset:
+         return iter(self._rows)
+ 
+ 
++# ─── RepoBench cross-doc: multi-language port ─────────────────────────────────
++
++def _make_java_cross_doc_model():
++    """Mock cross_doc_link model backed by a real JavaImportDetector."""
++    from model.graph_traversal.java_import_detector import JavaImportDetector
++    model = _make_mock_model(tokenizer=True)
++    model.mask_type = "cross_doc_link"
++    model.link_detector = JavaImportDetector(decode_fn=lambda toks: "")
++    return model
++
++
++def test_repobench_cross_doc_invalid_language_raises():
++    model = _make_cross_doc_model()
++    with pytest.raises(ValueError, match="language must be one of"):
++        run_repobench_cross_doc(model=model, language="cobol", device="cpu")
++
++
++def test_repobench_cross_doc_java_requires_java_detector():
++    # A Python detector must be rejected when language='java'.
++    model = _make_cross_doc_model()  # PythonImportDetector
++    with pytest.raises(ValueError, match="JavaImportDetector"):
++        run_repobench_cross_doc(model=model, language="java", device="cpu")
++
++
++def test_repobench_cross_doc_python_requires_python_detector():
++    # A Java detector must be rejected when language='python' (the default).
++    model = _make_java_cross_doc_model()
++    with pytest.raises(ValueError, match="PythonImportDetector"):
++        run_repobench_cross_doc(model=model, language="python", device="cpu")
++
++
++def test_strip_java_source_root():
++    strip = _bench._strip_java_source_root
++    assert strip("service-core/x/src/main/java/fun/isite/entity/SystemMenu.java") == \
++        "fun/isite/entity/SystemMenu.java"
++    assert strip("backend/src/test/java/com/foo/BarTest.java") == "com/foo/BarTest.java"
++    assert strip("app/src/main/kotlin/com/foo/Baz.kt") == "com/foo/Baz.kt"
++    # No known source root → returned unchanged (falls back to flat scoring).
++    assert strip("com/foo/Bar.java") == "com/foo/Bar.java"
++
++
++def test_repobench_java_aux_identifier_roundtrips_to_import_fqn():
++    """The Java aux identifier must dotify (via index_doc_span) to the import FQN.
++
++    This is the crux of the Java port: RepoBench-Java imports are dotted FQNs
++    (com.foo.Bar) but snippet paths carry a build source root. The aux
++    identifier must be shaped so JavaImportDetector.index_doc_span yields the
++    exact FQN the detector emits for the import, or no grant fires.
++    """
++    from model.graph_traversal.java_import_detector import JavaImportDetector
++
++    class _Span:
++        def __init__(self, rid):
++            self.raw_identifier = rid
++
++    det = JavaImportDetector(decode_fn=lambda toks: "")
++    rid = _bench._repobench_aux_identifier(
++        "java", "myrepo",
++        "service/src/main/java/fun/isite/entity/SystemMenu.java",
++        "public class SystemMenu {}",
++    )
++    # index_doc_span strips the repo prefix and dotifies the FQN path.
++    assert det.index_doc_span(_Span(rid)) == "fun.isite.entity.SystemMenu"
++
++
++def test_repobench_python_aux_identifier_uses_path_verbatim():
++    rid = _bench._repobench_aux_identifier(
++        "python", "myrepo", "pkg/sub/module.py", "def f(): pass",
++    )
++    assert rid == "myrepo:pkg/sub/module.py"
++
++
++def test_repobench_cross_doc_java_loads_java_repo(monkeypatch):
++    """language='java' must load the java HF repo, not the python one."""
++    model = _make_java_cross_doc_model()
++    examples = [{
++        "next_line": "    List<X> f();",
++        "context": [{"identifier": "X",
++                     "path": "svc/src/main/java/com/foo/X.java",
++                     "snippet": "public class X {}"}],
++        "import_statement": "import com.foo.X;",
++        "cropped_code": "class Y {\n",
++        "file_path": "svc/src/main/java/com/foo/Y.java",
++        "repo_name": "myrepo",
++    }]
++    seen = {}
++
++    def _fake_load(repo, **kw):
++        seen["repo"] = repo
++        seen["verification_mode"] = kw.get("verification_mode")
++        return _FakeHFDataset(examples)
++
++    with patch("datasets.load_dataset", side_effect=_fake_load), \
++         patch.object(_bench, "score_completion_with_context_docs", return_value=1.5), \
++         patch.object(_bench, "score_completions_independent_batched",
++                      side_effect=lambda m, pairs, **kw: [2.0] * len(pairs)):
++        result = run_repobench_cross_doc(model=model, language="java",
++                                         max_examples=1, device="cpu")
++
++    assert seen["repo"] == "tianyang/repobench_java_v1.1"
++    assert seen["verification_mode"] == "no_checks"
++    assert result["n_link_found"] == 1
++
++
+ # ─── HumanEvalPack canonical-vs-buggy ─────────────────────────────────────────
+ 
+ def test_humaneval_buggy_invalid_language_raises():
+
+diff --git a/scripts/precompute_code_round2.sh b/scripts/precompute_code_round2.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/precompute_code_round2.sh
+@@ -0,0 +1,34 @@
++#!/bin/bash
++# Round-2 precompute: finish rust/kotlin (interrupted when the dart merge broke
++# data/layout.py mid-run) and add dart/zig. Resume-safe (skips existing epochs).
++# All C-family langs → stochastic_slash_comment_prefix. Detector = lang name.
++# Epoch targets (need 120k packs for 15k steps @ world=8):
++#   rust ~37k→4  kotlin ~84k→2  dart ~13.9k→9  zig ~921→16 (zig is far below chinchilla;
++#   16 ep ≈ 1840 steps — a pragmatic floor, NOT 15k; zig config caps steps accordingly).
++set -uo pipefail
++REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
++
++# GUARD: abort immediately if the code doesn't import (catches merge-conflict breakage
++# like the one that silently burned the round-1 allocation for 7h).
++python -c "import data.layout, precompute_epochs; from model.graph_traversal.link_detector import LINK_DETECTOR_NAMES" || {
++  echo "[round2] IMPORT CHECK FAILED — aborting (repo likely mid-merge/broken)"; exit 1; }
++echo "[round2] import check OK"
++
++gen () { # lang n_epochs strat
++  local lang=$1 n=$2 strat=$3
++  echo "=== [$(date)] $lang/$strat → $n epoch(s) ==="
++  python precompute_epochs.py \
++    --dataset-dir "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/$lang/splits/train" \
++    --output-dir  "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/${lang}_${strat}" \
++    --n-epochs "$n" --strategy "$strat" --local-seq-len 32768 --n-buckets 32 --n-workers 32 \
++    --link-detector "$lang" --layout-policy stochastic_slash_comment_prefix \
++    --max-grants 256 --order-mode prefer_targets_first --device cpu \
++    || echo "[round2] WARN: $lang/$strat exited nonzero"
++}
++
++for s in bfs dfs random_walk random; do gen rust   4  "$s"; done
++for s in bfs dfs random_walk random; do gen kotlin 2  "$s"; done
++for s in bfs dfs random_walk random; do gen dart   9  "$s"; done
++for s in bfs dfs random_walk random; do gen zig    16 "$s"; done
++echo "=== [$(date)] ROUND-2 PRECOMPUTE DONE ==="
++

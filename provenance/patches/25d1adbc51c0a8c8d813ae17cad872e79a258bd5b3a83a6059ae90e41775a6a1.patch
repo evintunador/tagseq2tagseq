@@ -1,0 +1,205 @@
+diff --git a/configs/merged_v2_16b_balanced_cross_doc.yaml b/configs/merged_v2_16b_balanced_cross_doc.yaml
+index e416f2a..067dc0e 100644
+--- a/configs/merged_v2_16b_balanced_cross_doc.yaml
++++ b/configs/merged_v2_16b_balanced_cross_doc.yaml
+@@ -117,9 +117,9 @@ train_loop:
+   warmup_steps: 300
+   cooldown_frac: 0.4
+   min_lr_ratio: 0.1
+-  val_steps: 20
+-  val_interval: 250
+-  save_latest_interval: 250
++  val_steps: 400
++  val_interval: 1000
++  save_latest_interval: 1000
+   atomic_feature_kwargs:
+     norm_clip_value: 1.0
+     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+diff --git a/configs/merged_v2_16b_balanced_doc_causal.yaml b/configs/merged_v2_16b_balanced_doc_causal.yaml
+index 3f4a427..778df31 100644
+--- a/configs/merged_v2_16b_balanced_doc_causal.yaml
++++ b/configs/merged_v2_16b_balanced_doc_causal.yaml
+@@ -117,9 +117,9 @@ train_loop:
+   warmup_steps: 300
+   cooldown_frac: 0.4
+   min_lr_ratio: 0.1
+-  val_steps: 20
+-  val_interval: 250
+-  save_latest_interval: 250
++  val_steps: 400
++  val_interval: 1000
++  save_latest_interval: 1000
+   atomic_feature_kwargs:
+     norm_clip_value: 1.0
+     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+diff --git a/configs/merged_v2_16b_natural_cross_doc.yaml b/configs/merged_v2_16b_natural_cross_doc.yaml
+index fb37c94..d771593 100644
+--- a/configs/merged_v2_16b_natural_cross_doc.yaml
++++ b/configs/merged_v2_16b_natural_cross_doc.yaml
+@@ -117,9 +117,9 @@ train_loop:
+   warmup_steps: 300
+   cooldown_frac: 0.4
+   min_lr_ratio: 0.1
+-  val_steps: 20
+-  val_interval: 250
+-  save_latest_interval: 250
++  val_steps: 400
++  val_interval: 1000
++  save_latest_interval: 1000
+   atomic_feature_kwargs:
+     norm_clip_value: 1.0
+     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+diff --git a/configs/merged_v2_16b_natural_doc_causal.yaml b/configs/merged_v2_16b_natural_doc_causal.yaml
+index 6c948fa..bc39514 100644
+--- a/configs/merged_v2_16b_natural_doc_causal.yaml
++++ b/configs/merged_v2_16b_natural_doc_causal.yaml
+@@ -117,9 +117,9 @@ train_loop:
+   warmup_steps: 300
+   cooldown_frac: 0.4
+   min_lr_ratio: 0.1
+-  val_steps: 20
+-  val_interval: 250
+-  save_latest_interval: 250
++  val_steps: 400
++  val_interval: 1000
++  save_latest_interval: 1000
+   atomic_feature_kwargs:
+     norm_clip_value: 1.0
+     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+diff --git a/configs/merged_v2_3p9b_cross_doc.yaml b/configs/merged_v2_3p9b_cross_doc.yaml
+index dd31ed3..a11c9dd 100644
+--- a/configs/merged_v2_3p9b_cross_doc.yaml
++++ b/configs/merged_v2_3p9b_cross_doc.yaml
+@@ -117,9 +117,9 @@ train_loop:
+   warmup_steps: 300
+   cooldown_frac: 0.4
+   min_lr_ratio: 0.1
+-  val_steps: 20
+-  val_interval: 250
+-  save_latest_interval: 250
++  val_steps: 400
++  val_interval: 1000
++  save_latest_interval: 1000
+   atomic_feature_kwargs:
+     norm_clip_value: 1.0
+     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+diff --git a/configs/merged_v2_3p9b_doc_causal.yaml b/configs/merged_v2_3p9b_doc_causal.yaml
+index f8d723e..8918361 100644
+--- a/configs/merged_v2_3p9b_doc_causal.yaml
++++ b/configs/merged_v2_3p9b_doc_causal.yaml
+@@ -117,9 +117,9 @@ train_loop:
+   warmup_steps: 300
+   cooldown_frac: 0.4
+   min_lr_ratio: 0.1
+-  val_steps: 20
+-  val_interval: 250
+-  save_latest_interval: 250
++  val_steps: 400
++  val_interval: 1000
++  save_latest_interval: 1000
+   atomic_feature_kwargs:
+     norm_clip_value: 1.0
+     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+diff --git a/configs/merged_v2_8b_cross_doc.yaml b/configs/merged_v2_8b_cross_doc.yaml
+index 45e0ab6..6114124 100644
+--- a/configs/merged_v2_8b_cross_doc.yaml
++++ b/configs/merged_v2_8b_cross_doc.yaml
+@@ -117,9 +117,9 @@ train_loop:
+   warmup_steps: 300
+   cooldown_frac: 0.4
+   min_lr_ratio: 0.1
+-  val_steps: 20
+-  val_interval: 250
+-  save_latest_interval: 250
++  val_steps: 400
++  val_interval: 1000
++  save_latest_interval: 1000
+   atomic_feature_kwargs:
+     norm_clip_value: 1.0
+     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+diff --git a/configs/merged_v2_8b_doc_causal.yaml b/configs/merged_v2_8b_doc_causal.yaml
+index 9f8c5dc..a0d4ac1 100644
+--- a/configs/merged_v2_8b_doc_causal.yaml
++++ b/configs/merged_v2_8b_doc_causal.yaml
+@@ -117,9 +117,9 @@ train_loop:
+   warmup_steps: 300
+   cooldown_frac: 0.4
+   min_lr_ratio: 0.1
+-  val_steps: 20
+-  val_interval: 250
+-  save_latest_interval: 250
++  val_steps: 400
++  val_interval: 1000
++  save_latest_interval: 1000
+   atomic_feature_kwargs:
+     norm_clip_value: 1.0
+     accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+diff --git a/data/bucketed_pack_dataset.py b/data/bucketed_pack_dataset.py
+index 3e06064..92acc38 100644
+--- a/data/bucketed_pack_dataset.py
++++ b/data/bucketed_pack_dataset.py
+@@ -87,6 +87,7 @@ class BucketedPackDataset(IterableDataset):
+         world_size: int,
+         start_state: Optional[BucketState] = None,
+         encode_fn=None,
++        shuffle_within_bucket_seed: Optional[int] = None,
+     ) -> None:
+         super().__init__()
+         self.epoch_dirs = epoch_dirs
+@@ -95,6 +96,16 @@ class BucketedPackDataset(IterableDataset):
+         self.layout = layout
+         self.rank = rank
+         self.world_size = world_size
++        # VAL sampling: packs are stored bucket-sorted then pack_id-sorted, and
++        # pack_id is SOURCE-SEQUENTIAL in a merged corpus (wiki 0..N, stack next,
++        # …). So the first pack drawn from each density bucket is always the same
++        # earliest-source pack, and a capped val (val_steps << |packs|) always
++        # scores that same source-biased head. Shuffling each bucket's pack list
++        # by a FIXED seed makes the capped sample source-unbiased AND stable
++        # across checkpoints (same seed → same subset). None = keep pack_id order
++        # (training path — order there is irrelevant since it consumes the whole
++        # epoch). Set for val loaders.
++        self._shuffle_within_bucket_seed = shuffle_within_bucket_seed
+ 
+         # Per-pack layout support (mixed-source corpora): packs may carry a
+         # layout_name naming the DocLayoutPolicy they were budgeted under.
+@@ -182,6 +193,13 @@ class BucketedPackDataset(IterableDataset):
+                 bucket_lists[r.bucket_id].append(r)
+             for b in bucket_lists:
+                 bucket_lists[b].sort(key=lambda r: r.pack_id)
++            if self._shuffle_within_bucket_seed is not None:
++                # Source-unbiased, deterministic (seeded) shuffle within each
++                # bucket so a capped val samples a density-stratified, source-mixed
++                # subset rather than the earliest-source head. Per-bucket seed
++                # offset so buckets don't shuffle in lockstep.
++                for b in bucket_lists:
++                    random.Random(self._shuffle_within_bucket_seed + b).shuffle(bucket_lists[b])
+ 
+             bucket_seq = _make_bucket_sequence(n_buckets, seed=self._epoch_idx)
+ 
+diff --git a/main.py b/main.py
+index 46025ed..d426f9d 100644
+--- a/main.py
++++ b/main.py
+@@ -788,11 +788,18 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+             layout=layout_policy,
+             rank=0,
+             world_size=1,
++            # Source-unbiased, deterministic within-bucket shuffle: packs are
++            # pack_id-sorted = source-sequential, so a capped val otherwise always
++            # scores the earliest-source head. Fixed seed → density-stratified,
++            # source-mixed, and identical across checkpoints.
++            shuffle_within_bucket_seed=1234,
+         )
+         # rewind_each_iter: BucketedPackDataset is stateful; without a per-pass
+-        # rewind, repeated val passes drain it and eventually raise "epoch dirs
+-        # exhausted" (the step-500 merged_v2 crash). Reset to initial state each
+-        # pass → no exhaustion + identical deterministic subset every checkpoint.
++        # rewind, repeated val passes advance through DIFFERENT packs each pass
++        # (drift misread as overfitting) and eventually raise "epoch dirs
++        # exhausted". Reset to initial state each pass → same deterministic subset
++        # every checkpoint. Together with the shuffle + a larger val_steps this
++        # gives an unbiased, stable, representative val sample.
+         return LimitedDataLoader(DataLoader(_ds, batch_size=None, num_workers=0),
+                                  max_batches=val_steps, rewind_each_iter=True)
+ 

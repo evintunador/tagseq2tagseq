@@ -1,0 +1,228 @@
+# Results ledger: the single source of truth for every number that enters the paper.
+#
+# Each entry maps a stable claim-key to a value SOURCE (a specific field of a specific
+# run's distilled record), never a hand-typed number. `scripts/gen_values_tex.py`
+# resolves every entry against `provenance/runs/<run_id>.json` and emits
+# `paper/generated/values.tex`; the paper cites the number as `\val{claim-key}`.
+# `scripts/check_grounding.py` re-resolves and fails on any drift.
+#
+# Claim-key rules: characters [A-Za-z0-9._/-] only. Convention: dot-separated
+# <topic>.<subject>.<quantity>, optionally suffixed .ci for a confidence interval.
+#
+# Value source kinds:
+#   eval       {metric_path, field}  -- read record.eval.metrics[metric_path][field].
+#                                        For a CI: give an array field (e.g. accuracy_ci)
+#                                        OR a "<base>_ci" field; the resolver also accepts
+#                                        the sibling-scalar form <base>_ci_low/<base>_ci_high
+#                                        and normalizes both to [lo, hi].
+#   hyperparam {path}                 -- dotted lookup into record.hyperparameters.
+#   derived    {op, operands}         -- op in {subtract, add} over other ledger keys
+#                                        (operands are claim-keys). Keeps a delta grounded:
+#                                        it is recomputed from its raw components, so it
+#                                        cannot drift independently. No interval operands.
+#   literal    {value}                -- a number NOT in any distilled artifact (e.g. read
+#                                        from a training log). REQUIRES a `note`. Tracked as
+#                                        grounding debt; see provenance/README.md.
+#
+# `expected` (optional) is re-checked against the resolved value within tolerance -- it
+# catches a metric that silently changed (e.g. eval_results re-merged after the fact).
+# `format`: {sig_figs: N} (default 3), optional {units: "..."} metadata, or
+#           {kind: interval} to render a [lo, hi] pair.
+
+schema_version: 1
+
+entries:
+
+  # === Cross-document attention beats flat concatenation (Wiki HotpotQA, bfs) ===
+  # Tuned bfs cross_doc_link wiki model (configs/wiki_crossdoc_best.yaml). See RESULTS.md.
+  crossdoc.wiki_hotpotqa.nll_crossdoc:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 5.628932316290331
+    units: nll
+    note: "Cross-doc-only mean NLL on the HotpotQA cross-doc benchmark."
+  crossdoc.wiki_hotpotqa.nll_flat:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 6.920065671932407
+    units: nll
+    note: "Flat-linked-only mean NLL, same run and benchmark."
+  crossdoc.wiki_hotpotqa.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.wiki_hotpotqa.nll_flat, crossdoc.wiki_hotpotqa.nll_crossdoc]}
+    units: nll
+    note: "flat - cross NLL reduction from cross-document attention."
+  crossdoc.wiki_hotpotqa.n:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: n_cross_doc}
+    expected: 738
+    format: {sig_figs: 0}
+    note: "Number of cross-doc examples scored."
+
+  # === Compute controls: RepoBench perplexity across masks (thestack, VE-off) ===
+  # thestack_sweep/thestack_veoff_*.yaml. Lower is better; cross_doc_link wins.
+  compute.repobench_ppl.cross_doc_link:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench/doceval", field: perplexity}
+    expected: 7.248327523404614
+    note: "cross_doc_link (the linking inductive bias)."
+  compute.repobench_ppl.doc_concat_link:
+    run_ids: [run_20260720_070020_196807]
+    source: {kind: eval, metric_path: "repobench/doceval", field: perplexity}
+    expected: 8.76307652585637
+    note: "doc_concat_link compute control (more attention, no link supervision)."
+  compute.repobench_ppl.doc_causal:
+    run_ids: [run_20260720_063850_432424]
+    source: {kind: eval, metric_path: "repobench/doceval", field: perplexity}
+    expected: 8.941371551083046
+    note: "doc_causal baseline."
+  compute.repobench_ppl.doc_concatenated:
+    run_ids: [run_20260720_064936_044405]
+    source: {kind: eval, metric_path: "repobench/doceval", field: perplexity}
+    expected: 10.417361568766257
+    note: "doc_concatenated (flat concat) baseline."
+
+  # === Code RepoBench cross-doc Delta nll across traversals (Java) ===
+  # thestack Java runs; Delta = flat_linked - cross_doc mean NLL on repobench_cross_doc.
+  crossdoc.repobench_java.bfs.nll_crossdoc:
+    run_ids: [run_20260722_063905_465684]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 1.3833620236275044
+    units: nll
+    note: "Java RepoBench cross-doc, bfs traversal."
+  crossdoc.repobench_java.bfs.nll_flat:
+    run_ids: [run_20260722_063905_465684]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 1.4479938379627593
+    units: nll
+    note: "Java RepoBench flat-linked, bfs traversal."
+  crossdoc.repobench_java.bfs.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.repobench_java.bfs.nll_flat, crossdoc.repobench_java.bfs.nll_crossdoc]}
+    units: nll
+    note: "Java bfs cross-doc NLL reduction."
+  crossdoc.repobench_java.dfs.nll_crossdoc:
+    run_ids: [run_20260722_191916_590119]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 1.4007205285290454
+    units: nll
+    note: "Java RepoBench cross-doc, dfs traversal."
+  crossdoc.repobench_java.dfs.nll_flat:
+    run_ids: [run_20260722_191916_590119]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 1.4745194263914798
+    units: nll
+    note: "Java RepoBench flat-linked, dfs traversal."
+  crossdoc.repobench_java.dfs.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.repobench_java.dfs.nll_flat, crossdoc.repobench_java.dfs.nll_crossdoc]}
+    units: nll
+    note: "Java dfs cross-doc NLL reduction."
+  crossdoc.repobench_java.rw.nll_crossdoc:
+    run_ids: [run_20260722_194928_381368]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 1.3935569205816756
+    units: nll
+    note: "Java RepoBench cross-doc, random-walk traversal."
+  crossdoc.repobench_java.rw.nll_flat:
+    run_ids: [run_20260722_194928_381368]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 1.4723674781779026
+    units: nll
+    note: "Java RepoBench flat-linked, random-walk traversal."
+  crossdoc.repobench_java.rw.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.repobench_java.rw.nll_flat, crossdoc.repobench_java.rw.nll_crossdoc]}
+    units: nll
+    note: "Java random-walk cross-doc NLL reduction."
+  crossdoc.repobench_java.random.nll_crossdoc:
+    run_ids: [run_20260722_201940_182374]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 1.4269798921777848
+    units: nll
+    note: "Java RepoBench cross-doc, random-packing traversal (java_random_cdl.yaml; from eval_java_repobench_final.json sidecar)."
+  crossdoc.repobench_java.random.nll_flat:
+    run_ids: [run_20260722_201940_182374]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 1.4583711239885777
+    units: nll
+    note: "Java RepoBench flat-linked, random-packing traversal."
+  crossdoc.repobench_java.random.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.repobench_java.random.nll_flat, crossdoc.repobench_java.random.nll_crossdoc]}
+    units: nll
+    note: "Java random-packing cross-doc NLL reduction (low end of the traversal range)."
+
+  # === Python RepoBench cross-doc Delta nll (corrected, max_grants=256) ===
+  # From eval_reeval256.json (the distiller now ingests sidecar eval files); the primary
+  # eval_results.json held the superseded 64-grant value.
+  crossdoc.repobench_python.nll_crossdoc:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 1.6998099421632702
+    units: nll
+    note: "Python RepoBench cross-doc, cross_doc_link, max_grants=256."
+  crossdoc.repobench_python.nll_flat:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 1.7924900263205341
+    units: nll
+    note: "Python RepoBench flat-linked, same run."
+  crossdoc.repobench_python.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.repobench_python.nll_flat, crossdoc.repobench_python.nll_crossdoc]}
+    units: nll
+    note: "Python cross-doc NLL reduction (~+0.09 at max_grants=256)."
+
+  # === Single-document control: HellaSwag accuracy across the four masks ===
+  # Matched 4-mask set (wiki_merged, bfs, 3614 steps); overlapping CIs => the mask does
+  # not move single-document performance. Undertrained regime (accuracies near chance).
+  singledoc.hellaswag.doc_causal:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.283
+    format: {sig_figs: 3}
+    note: "doc_causal, HellaSwag accuracy."
+  singledoc.hellaswag.doc_causal.ci:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, HellaSwag 95% CI."
+  singledoc.hellaswag.cross_doc_link:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.2905
+    format: {sig_figs: 3}
+    note: "cross_doc_link, HellaSwag accuracy."
+  singledoc.hellaswag.cross_doc_link.ci:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, HellaSwag 95% CI."
+  singledoc.hellaswag.doc_concatenated:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.2845
+    format: {sig_figs: 3}
+    note: "doc_concatenated, HellaSwag accuracy."
+  singledoc.hellaswag.doc_concat_link:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.2865
+    format: {sig_figs: 3}
+    note: "doc_concat_link, HellaSwag accuracy."
+
+  # === Traversal ablation: base-LM val loss (LITERAL / grounding debt) ===
+  # These are training-log validation cross-entropy, NOT in eval_results.json, so they
+  # cannot be eval-grounded yet (needs a `log` source, see provenance/README.md). Values
+  # from RESULTS.md; runs are the wiki traversal-matrix arms.
+  traversal.wiki_val_loss.graph:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: literal, value: 2.42}
+    units: "val CE"
+    format: {decimals: 2}
+    note: "Base-LM final val loss, graph packing (bfs/dfs ~2.42). Recoverable via a future
+      kind:log source from runs/run_20260717_173951_071952/logs/metrics_rank_0.jsonl
+      (field val_loss_mean); literal grounding debt until then."
+  traversal.wiki_val_loss.random:
+    run_ids: [run_20260719_070658_156892]
+    source: {kind: literal, value: 3.00}
+    units: "val CE"
+    format: {decimals: 2}
+    note: "Base-LM final val loss, random packing (~3.00). Recoverable via a future kind:log
+      source from runs/run_20260719_070658_156892/logs/metrics_rank_0.jsonl (field
+      val_loss_mean = 3.0006); literal grounding debt until then."

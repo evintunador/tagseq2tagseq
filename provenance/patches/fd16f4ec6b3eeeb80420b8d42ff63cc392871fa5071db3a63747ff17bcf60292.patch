@@ -1,0 +1,3223 @@
+diff --git a/scripts/sweep_yield_watcher.sh b/scripts/sweep_yield_watcher.sh
+index 8e20f2d..d77ebdf 100755
+--- a/scripts/sweep_yield_watcher.sh
++++ b/scripts/sweep_yield_watcher.sh
+@@ -232,6 +232,31 @@ job_to_rundir_config() {
+   printf '%s\t%s\n' "$rundir" "$cfg"
+ }
+ 
++# Extract the ORIGINAL run's main.py args to REPLAY on resume, EXCLUDING the
++# launcher-managed ones (--config, --resume-from) which are supplied separately.
++# Without this, ad-hoc CLI overrides (e.g. --data.epoch_dirs pointing at a
++# subsampled graph-sparsity schedule) are silently dropped on auto-resume, so the
++# job reloads its checkpoint but trains on the CONFIG's baked (wrong) data — a
++# corrupted hybrid. See memory [[sparsity-watcher-resume-bug]]. Backward-compatible:
++# a run launched with only --config yields no extra args (identical old behavior).
++extra_main_args() {
++  local rundir="$1"
++  local inv; inv="$(find "$rundir/reproducibility" -name run_invocation.json 2>/dev/null | head -1)"
++  [ -z "$inv" ] && return 0
++  python3 - "$inv" <<'PYEOF' 2>/dev/null
++import json, sys, shlex
++argv = json.load(open(sys.argv[1]))["argv"]
++# argv[0] is "main"; drop it. Strip --config VALUE and --resume-from VALUE.
++out, i = [], 1
++while i < len(argv):
++    a = argv[i]
++    if a in ("--config", "--resume-from"):
++        i += 2; continue
++    out.append(a); i += 1
++print(" ".join(shlex.quote(x) for x in out))
++PYEOF
++}
++
+ # Relaunch one yielded job on a given clean node, resuming if a checkpoint exists.
+ relaunch_yielded() {
+   local rundir="$1" cfg="$2" node="$3"
+@@ -239,11 +264,14 @@ relaunch_yielded() {
+   local ck="$rundir/checkpoints/latest.pt"
+   local resume_args=""
+   if [ -f "$ck" ]; then resume_args="--resume-from $ck"; fi
++  # Replay the original invocation's extra overrides (e.g. --data.epoch_dirs) so
++  # resume trains on the SAME data the run was launched with, not the config default.
++  local extra; extra="$(extra_main_args "$rundir")"
+   local tag; tag="$(basename "$cfg" .yaml)"
+-  note "  RELAUNCH $tag on $node $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")"
++  note "  RELAUNCH $tag on $node $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
+   TS2TS_SHARED_COMPILE_CACHE="/tmp/ts2ts_relaunch_$(basename "$rundir")" \
+     "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node 8 \
+-    --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args \
++    --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args $extra \
+     >> "$STATE_DIR/relaunch.log" 2>&1
+ }
+ 
+
+diff --git a/configs/sparsity/dart_keep0p25_cdl.yaml b/configs/sparsity/dart_keep0p25_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/dart_keep0p25_cdl.yaml
+@@ -0,0 +1,81 @@
++# GRAPH-SPARSITY dart keep=0p25 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/dart_sweep/dart_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p25, 9 epoch(s)).
++# DART SWEEP — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# dart 9 epoch_dirs cover max_optimizer_steps=15000 @ world=8 (~chinchilla).
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_3,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_4,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_5,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_6,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_7,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p25/epoch_8]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'dart'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++  max_docs: 500
++  link_fuzzy_match: false
++
+
+diff --git a/configs/sparsity/dart_keep0p5_cdl.yaml b/configs/sparsity/dart_keep0p5_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/dart_keep0p5_cdl.yaml
+@@ -0,0 +1,81 @@
++# GRAPH-SPARSITY dart keep=0p5 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/dart_sweep/dart_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p5, 9 epoch(s)).
++# DART SWEEP — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# dart 9 epoch_dirs cover max_optimizer_steps=15000 @ world=8 (~chinchilla).
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_3,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_4,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_5,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_6,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_7,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p5/epoch_8]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'dart'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++  max_docs: 500
++  link_fuzzy_match: false
++
+
+diff --git a/configs/sparsity/dart_keep0p75_cdl.yaml b/configs/sparsity/dart_keep0p75_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/dart_keep0p75_cdl.yaml
+@@ -0,0 +1,81 @@
++# GRAPH-SPARSITY dart keep=0p75 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/dart_sweep/dart_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p75, 9 epoch(s)).
++# DART SWEEP — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# dart 9 epoch_dirs cover max_optimizer_steps=15000 @ world=8 (~chinchilla).
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_3,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_4,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_5,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_6,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_7,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/dart_bfs_keep0p75/epoch_8]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'dart'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++  max_docs: 500
++  link_fuzzy_match: false
++
+
+diff --git a/configs/sparsity/javascript_keep0p25_cdl.yaml b/configs/sparsity/javascript_keep0p25_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/javascript_keep0p25_cdl.yaml
+@@ -0,0 +1,82 @@
++# GRAPH-SPARSITY javascript keep=0p25 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/javascript_sweep/javascript_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p25, 1 epoch(s)).
++# JAVASCRIPT SWEEP — mask=cross_doc_link. Wiki recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# 13.3B tok > chinchilla → 1 epoch, subset via max_optimizer_steps=15000. // layout.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/javascript_bfs_keep0p25/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'javascript'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: humaneval_buggy,           conditions: [doceval], language: js}
++  max_docs: 500
++  link_fuzzy_match: false
++
+
+diff --git a/configs/sparsity/javascript_keep0p5_cdl.yaml b/configs/sparsity/javascript_keep0p5_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/javascript_keep0p5_cdl.yaml
+@@ -0,0 +1,82 @@
++# GRAPH-SPARSITY javascript keep=0p5 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/javascript_sweep/javascript_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p5, 1 epoch(s)).
++# JAVASCRIPT SWEEP — mask=cross_doc_link. Wiki recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# 13.3B tok > chinchilla → 1 epoch, subset via max_optimizer_steps=15000. // layout.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/javascript_bfs_keep0p5/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'javascript'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: humaneval_buggy,           conditions: [doceval], language: js}
++  max_docs: 500
++  link_fuzzy_match: false
++
+
+diff --git a/configs/sparsity/javascript_keep0p75_cdl.yaml b/configs/sparsity/javascript_keep0p75_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/javascript_keep0p75_cdl.yaml
+@@ -0,0 +1,82 @@
++# GRAPH-SPARSITY javascript keep=0p75 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/javascript_sweep/javascript_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p75, 1 epoch(s)).
++# JAVASCRIPT SWEEP — mask=cross_doc_link. Wiki recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# 13.3B tok > chinchilla → 1 epoch, subset via max_optimizer_steps=15000. // layout.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/javascript_bfs_keep0p75/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'javascript'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: humaneval_buggy,           conditions: [doceval], language: js}
++  max_docs: 500
++  link_fuzzy_match: false
++
+
+diff --git a/configs/sparsity/rust_keep0p25_cdl.yaml b/configs/sparsity/rust_keep0p25_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/rust_keep0p25_cdl.yaml
+@@ -0,0 +1,91 @@
++# GRAPH-SPARSITY rust keep=0p25 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/rust_sweep/rust_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p25, 4 epoch(s)).
++# RUST SWEEP (bfs) — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# Layout: stochastic_slash_comment_prefix (// comment card — C-family fix for the # prefix bug).
++# Chinchilla: 4 epoch_dir(s) cover max_optimizer_steps=15000 @ world=8.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p25/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p25/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p25/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p25/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'rust'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    # community_pack_perplexity [baseline, experimental] = headline cross-doc metric
++    # (language-agnostic; repobench_cross_doc is Python-hardcoded).
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: humaneval_buggy,           conditions: [doceval], language: rust}
++  max_docs: 500
++  link_fuzzy_match: false
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048  --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/rust_keep0p5_cdl.yaml b/configs/sparsity/rust_keep0p5_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/rust_keep0p5_cdl.yaml
+@@ -0,0 +1,91 @@
++# GRAPH-SPARSITY rust keep=0p5 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/rust_sweep/rust_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p5, 4 epoch(s)).
++# RUST SWEEP (bfs) — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# Layout: stochastic_slash_comment_prefix (// comment card — C-family fix for the # prefix bug).
++# Chinchilla: 4 epoch_dir(s) cover max_optimizer_steps=15000 @ world=8.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p5/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p5/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p5/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p5/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'rust'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    # community_pack_perplexity [baseline, experimental] = headline cross-doc metric
++    # (language-agnostic; repobench_cross_doc is Python-hardcoded).
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: humaneval_buggy,           conditions: [doceval], language: rust}
++  max_docs: 500
++  link_fuzzy_match: false
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048  --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/rust_keep0p75_cdl.yaml b/configs/sparsity/rust_keep0p75_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/rust_keep0p75_cdl.yaml
+@@ -0,0 +1,91 @@
++# GRAPH-SPARSITY rust keep=0p75 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/rust_sweep/rust_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p75, 4 epoch(s)).
++# RUST SWEEP (bfs) — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# Layout: stochastic_slash_comment_prefix (// comment card — C-family fix for the # prefix bug).
++# Chinchilla: 4 epoch_dir(s) cover max_optimizer_steps=15000 @ world=8.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p75/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p75/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p75/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/rust_bfs_keep0p75/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'rust'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    # community_pack_perplexity [baseline, experimental] = headline cross-doc metric
++    # (language-agnostic; repobench_cross_doc is Python-hardcoded).
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: humaneval_buggy,           conditions: [doceval], language: rust}
++  max_docs: 500
++  link_fuzzy_match: false
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048  --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/thestack_keep0p25_cdl.yaml b/configs/sparsity/thestack_keep0p25_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/thestack_keep0p25_cdl.yaml
+@@ -0,0 +1,95 @@
++# GRAPH-SPARSITY thestack keep=0p25 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/thestack_sweep/thestack_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p25, 1 epoch(s)).
++# THESTACK (Python) SWEEP — cross_doc_link, ve=off, muon_lr=0.003 muon_wd=0.1, 15000 steps.
++# Chinchilla subset: thestack = 9.29B tok; 15k steps @ world=8 ≈ 3.9B tok (~0.55 epoch).
++# The cross-doc thesis condition: detected python imports grant cross-doc attention.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'identifier_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/thestack_bfs_keep0p25/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'python'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: repobench,                 conditions: [doceval]}
++    - {name: repobench_cross_doc,       conditions: [experimental]}
++    - {name: codexglue_code_to_text,    conditions: [doceval]}
++    - {name: humaneval_buggy,           conditions: [doceval]}
++  max_docs: 500
++  link_fuzzy_match: true
++  link_fuzzy_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++  link_ed_threshold: 0.2
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/thestack_keep0p5_cdl.yaml b/configs/sparsity/thestack_keep0p5_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/thestack_keep0p5_cdl.yaml
+@@ -0,0 +1,95 @@
++# GRAPH-SPARSITY thestack keep=0p5 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/thestack_sweep/thestack_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p5, 1 epoch(s)).
++# THESTACK (Python) SWEEP — cross_doc_link, ve=off, muon_lr=0.003 muon_wd=0.1, 15000 steps.
++# Chinchilla subset: thestack = 9.29B tok; 15k steps @ world=8 ≈ 3.9B tok (~0.55 epoch).
++# The cross-doc thesis condition: detected python imports grant cross-doc attention.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'identifier_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/thestack_bfs_keep0p5/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'python'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: repobench,                 conditions: [doceval]}
++    - {name: repobench_cross_doc,       conditions: [experimental]}
++    - {name: codexglue_code_to_text,    conditions: [doceval]}
++    - {name: humaneval_buggy,           conditions: [doceval]}
++  max_docs: 500
++  link_fuzzy_match: true
++  link_fuzzy_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++  link_ed_threshold: 0.2
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/thestack_keep0p75_cdl.yaml b/configs/sparsity/thestack_keep0p75_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/thestack_keep0p75_cdl.yaml
+@@ -0,0 +1,95 @@
++# GRAPH-SPARSITY thestack keep=0p75 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/thestack_sweep/thestack_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p75, 1 epoch(s)).
++# THESTACK (Python) SWEEP — cross_doc_link, ve=off, muon_lr=0.003 muon_wd=0.1, 15000 steps.
++# Chinchilla subset: thestack = 9.29B tok; 15k steps @ world=8 ≈ 3.9B tok (~0.55 epoch).
++# The cross-doc thesis condition: detected python imports grant cross-doc attention.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'identifier_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/thestack_bfs_keep0p75/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'python'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [baseline, experimental]}
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++    - {name: repobench,                 conditions: [doceval]}
++    - {name: repobench_cross_doc,       conditions: [experimental]}
++    - {name: codexglue_code_to_text,    conditions: [doceval]}
++    - {name: humaneval_buggy,           conditions: [doceval]}
++  max_docs: 500
++  link_fuzzy_match: true
++  link_fuzzy_strategies: [exact, norm, word_overlap_ordered, edit_distance]
++  link_ed_threshold: 0.2
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/typescript_keep0p25_cdl.yaml b/configs/sparsity/typescript_keep0p25_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/typescript_keep0p25_cdl.yaml
+@@ -0,0 +1,90 @@
++# GRAPH-SPARSITY typescript keep=0p25 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/typescript_sweep/typescript_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p25, 1 epoch(s)).
++# TYPESCRIPT SWEEP (bfs) — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# Layout: stochastic_slash_comment_prefix (// comment card — C-family fix for the # prefix bug).
++# Chinchilla: 1 epoch_dir(s) cover max_optimizer_steps=15000 @ world=8.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/typescript_bfs_keep0p25/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'typescript'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    # community_pack_perplexity [baseline, experimental] = headline cross-doc metric
++    # (language-agnostic; repobench_cross_doc is Python-hardcoded).
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++  max_docs: 500
++  link_fuzzy_match: false
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048  --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/typescript_keep0p5_cdl.yaml b/configs/sparsity/typescript_keep0p5_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/typescript_keep0p5_cdl.yaml
+@@ -0,0 +1,90 @@
++# GRAPH-SPARSITY typescript keep=0p5 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/typescript_sweep/typescript_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p5, 1 epoch(s)).
++# TYPESCRIPT SWEEP (bfs) — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# Layout: stochastic_slash_comment_prefix (// comment card — C-family fix for the # prefix bug).
++# Chinchilla: 1 epoch_dir(s) cover max_optimizer_steps=15000 @ world=8.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/typescript_bfs_keep0p5/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'typescript'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    # community_pack_perplexity [baseline, experimental] = headline cross-doc metric
++    # (language-agnostic; repobench_cross_doc is Python-hardcoded).
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++  max_docs: 500
++  link_fuzzy_match: false
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048  --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/typescript_keep0p75_cdl.yaml b/configs/sparsity/typescript_keep0p75_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/typescript_keep0p75_cdl.yaml
+@@ -0,0 +1,90 @@
++# GRAPH-SPARSITY typescript keep=0p75 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/typescript_sweep/typescript_veoff_cdl.yaml; ONLY epoch_dirs changed (→ keep0p75, 1 epoch(s)).
++# TYPESCRIPT SWEEP (bfs) — mask=cross_doc_link. Wiki-tuned recipe (muon_lr=0.003, muon_wd=0.1, VE-off).
++# Layout: stochastic_slash_comment_prefix (// comment card — C-family fix for the # prefix bug).
++# Chinchilla: 1 epoch_dir(s) cover max_optimizer_steps=15000 @ world=8.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript
++  strategy: 'bfs'
++  layout_policy: 'stochastic_slash_comment_prefix'
++  inference_layout_policy: 'slash_comment_prefix_eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/typescript_bfs_keep0p75/epoch_0]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'typescript'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.1
++  adamw_wd: 0.005
++  momentum: 0.95
++  muon_beta2: 0.95
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 15000  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    # community_pack_perplexity [baseline, experimental] = headline cross-doc metric
++    # (language-agnostic; repobench_cross_doc is Python-hardcoded).
++    - {name: community_pack_perplexity, conditions: [baseline, experimental]}
++  max_docs: 500
++  link_fuzzy_match: false
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048  --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/wiki_merged_keep0p25_cdl.yaml b/configs/sparsity/wiki_merged_keep0p25_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/wiki_merged_keep0p25_cdl.yaml
+@@ -0,0 +1,103 @@
++# GRAPH-SPARSITY wiki_merged keep=0p25 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/wiki_crossdoc_best.yaml (the retuned lr0.003/VE-off recipe the
++# wiki endpoint used); ONLY epoch_dirs changed (-> keep0p25, 4 epochs, CORRECTED packing).
++# WIKI CROSS-DOC — best config (LR0.003, muon_wd0.3, VE off, 4-epoch), cross_doc_link mask.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p25/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p25/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p25/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p25/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 14507  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/wiki_merged_keep0p5_cdl.yaml b/configs/sparsity/wiki_merged_keep0p5_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/wiki_merged_keep0p5_cdl.yaml
+@@ -0,0 +1,103 @@
++# GRAPH-SPARSITY wiki_merged keep=0p5 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/wiki_crossdoc_best.yaml (the retuned lr0.003/VE-off recipe the
++# wiki endpoint used); ONLY epoch_dirs changed (-> keep0p5, 4 epochs, CORRECTED packing).
++# WIKI CROSS-DOC — best config (LR0.003, muon_wd0.3, VE off, 4-epoch), cross_doc_link mask.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p5/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p5/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p5/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p5/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 14507  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/wiki_merged_keep0p75_cdl.yaml b/configs/sparsity/wiki_merged_keep0p75_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/wiki_merged_keep0p75_cdl.yaml
+@@ -0,0 +1,103 @@
++# GRAPH-SPARSITY wiki_merged keep=0p75 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/wiki_crossdoc_best.yaml (the retuned lr0.003/VE-off recipe the
++# wiki endpoint used); ONLY epoch_dirs changed (-> keep0p75, 4 epochs, CORRECTED packing).
++# WIKI CROSS-DOC — best config (LR0.003, muon_wd0.3, VE off, 4-epoch), cross_doc_link mask.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p75/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p75/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p75/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep0p75/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 14507  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/sparsity/wiki_merged_keep1p0_cdl.yaml b/configs/sparsity/wiki_merged_keep1p0_cdl.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/sparsity/wiki_merged_keep1p0_cdl.yaml
+@@ -0,0 +1,103 @@
++# GRAPH-SPARSITY wiki_merged keep=1p0 — subsampled epoch_dirs baked in (resume-safe).
++# Derived from configs/wiki_crossdoc_best.yaml (the retuned lr0.003/VE-off recipe the
++# wiki endpoint used); ONLY epoch_dirs changed (-> keep1p0, 4 epochs, CORRECTED packing).
++# WIKI CROSS-DOC — best config (LR0.003, muon_wd0.3, VE off, 4-epoch), cross_doc_link mask.
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep1p0/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep1p0/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep1p0/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/schedules/wiki_merged_bfs_keep1p0/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: 14507  # PINNED to match endpoint schedule (was null/auto-derive -> stretched)
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/docs/handoff_merged_v2_scaling_2026-08-07.md b/docs/handoff_merged_v2_scaling_2026-08-07.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/docs/handoff_merged_v2_scaling_2026-08-07.md
+@@ -0,0 +1,41 @@
++# Handoff: merged_v2 diversity-scaling (2026-08-07)
++
++Full detail in memory `[[merged-corpus-build]]` + `RESULTS_merged_v2_diversity_scaling.md`.
++
++## Headline result (STANDS)
++8B merged model (11 linked sources, ~727M tok/domain) BEATS per-language specialists
++on cross-doc benchmark ports 1.7–11× (use_line Δnll): repobench_python +0.162,
++java +0.247, kotlin +0.265, ts +0.564, go +0.426, rust +0.105, js +0.129 — all clean
++placebo separation. The cross-doc *mechanism* gain outpaces base-LM gain (merge trails
++specialists on raw held-out ppl, the wrong axis). Δ is FLAT 3.9B→8B (saturated, not
++scaling). 8B was healthy (held-out stack 2.15).
++
++## 16B is BROKEN — LR too hot at length (NOT resume corruption)
++16B held-out worse than 8B AND 3.9B (stack 2.72, wiki 10.7). 4-agent audit + direct
++ckpt/log checks cleared all resume paths (data-order, weights, optimizer-step, scheduler
++all correct for these runs; "0 skipped" every resume; total_steps=60600 correct).
++Cause: WSD holds peak 0.003 flat ~36k steps pre-cooldown = ~2× 8B's peak exposure →
++back-half blowup. The 4 broken 16B runs were KILLED.
++
++## Currently running (verify with `squeue -u evin_t`)
++- **6-arm LR/WD sweep @16B length** (60600 steps, all fresh-from-scratch): lr∈{0.001,
++  0.0015,0.002} + wd∈{0.05,0.2}, base 0.003/0.1. This is the gate. Jobs ~55083/55084/
++  56545/56546/56586 (+ maybe base). Rank on final held-out + port Δnll.
++- The other agent's sparsity/edge-dropout runs may also be running — NOT mine, don't touch.
++
++## Next steps (gated)
++1. Sweep finishes (~2 days) → pick corrected LR (expect ≤0.002).
++2. Re-run 16B (both natural+balanced, cdl+dc) at corrected LR → the real 16B scaling point.
++3. THEN decide 32B. Do NOT launch 32B before the sweep picks LR.
++4. Pending eval: 8B doc_causal-arm is NOT port-able (no cross-doc mask; placebo-sep is
++   the control). 16B ports once healthy 16B exists.
++
++## Ops notes
++- GPU-495/954 FIXED (drop from --nodelist exclusions).
++- Launch onto CONFIRMED-idle nodes (`sinfo -n <n> -o %t`==idle), not the queue — watcher
++  yields RUNNING jobs but doesn't reorder PENDING vs coworkers.
++- val cadence now val_steps=200/interval=2000 (was 400/1000, ate 2/3 wall-clock).
++- Two latent resume bugs being fixed (see TODOS.md "Resume latent bugs"): NULL-path
++  cooldown inflation (main.py:1195) + silent optimizer partial-restore (main.py:1100).
++</content>
++
+
+diff --git a/paper/README.md b/paper/README.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/README.md
+@@ -0,0 +1,22 @@
++# TAGSeq2TAGSeq — paper
++
++LaTeX source for the TAGSeq2TAGSeq paper.
++
++## Layout
++- `main.tex` — top-level document (NeurIPS-style single-column preamble; swap for target venue).
++- `sections/` — one `.tex` per section, `\input` from `main.tex`.
++- `bib/refs.bib` — consolidated BibTeX (assembled from the literature-review pass).
++- `figures/` — figures (symlink or copy from ../docs/images and ../artifacts as needed).
++- `PROJECT_SUMMARY_for_litreview.md` — the brief handed to the lit-review sub-agents.
++
++## Build
++```bash
++cd paper && latexmk -pdf main.tex   # or: pdflatex main && bibtex main && pdflatex main x2
++```
++
++## Source material (in repo root)
++- README.md — method overview + mask figures
++- RESULTS*.md — all quantitative results
++- INSTRUCTIONS.md — full pipeline
++- docs/handoff_*.md — design notes
++
+
+diff --git a/paper/bib/raw/01_rag_kvcache.md b/paper/bib/raw/01_rag_kvcache.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/bib/raw/01_rag_kvcache.md
+@@ -0,0 +1,132 @@
++# RAG & KV-cache retrieval (agent ad1d3e80) — the PRIORITY slice
++
++## ★ MYSTERY PAPER VERDICT (author remembered Google/DeepMind cached-per-doc-KV, frozen corpus, no code)
++- **Most likely = wu2022memorizing "Memorizing Transformers"** (Wu, Rabe, Hutchins, Szegedy; Google; ICLR 2022 spotlight; 2203.08913). ONLY paper caching literal (k,v) attention states into a NON-differentiable frozen external memory, retrieved by kNN into a designated attention layer, NOT trained on the store, memory populated from doc corpora (C4/arXiv/GitHub/PG-19). No official code. Mismatches: token-level granularity (not per-doc), and the model IS trained to use the kNN layer. → If "KV cache" is load-bearing, THIS is it.
++- **Closest to "per-document knowledge corpus" framing = dejong2022tome "Mention Memory / TOME"** (Google, ICLR 2022, 2110.06176). Precomputes corpus-wide table (150M Wikipedia mention reps), frozen swappable store, injected via "memory attention" layers, no official code. Mismatch: learned embedding vectors at mention granularity, not raw per-doc KV; model pretrained to use it.
++- Same Google line: dejong2023lumen (LUMEN, ICML 2023, 2301.10448), dejong2023glimmer (2306.10231, preprint).
++- RECOMMENDATION: cite Memorizing Transformers as primary "cached-KV frozen knowledge store, inference-only" prior art; TOME/LUMEN as "precomputed per-corpus memory attention." Our novelty framing: cached KV at document/node granularity + graph-structured cross-doc attention mask applied in BOTH training AND inference (generated link deterministically fetches target node) — none combine these.
++
++```bibtex
++@inproceedings{lewis2020rag,
++  title = {Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks},
++  author = {Lewis, Patrick and Perez, Ethan and Piktus, Aleksandra and Petroni, Fabio and Karpukhin, Vladimir and Goyal, Naman and K{\"u}ttler, Heinrich and Lewis, Mike and Yih, Wen-tau and Rockt{\"a}schel, Tim and Riedel, Sebastian and Kiela, Douwe},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, volume = {33}, pages = {9459--9474}, year = {2020},
++  eprint = {2005.11401}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{guu2020realm,
++  title = {{REALM}: Retrieval-Augmented Language Model Pre-Training},
++  author = {Guu, Kelvin and Lee, Kenton and Tung, Zora and Pasupat, Panupong and Chang, Ming-Wei},
++  booktitle = {Proceedings of the 37th International Conference on Machine Learning (ICML)}, volume = {119}, pages = {3929--3938}, year = {2020}, publisher = {PMLR},
++  eprint = {2002.08909}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{izacard2023atlas,
++  title = {Atlas: Few-shot Learning with Retrieval Augmented Language Models},
++  author = {Izacard, Gautier and Lewis, Patrick and Lomeli, Maria and Hosseini, Lucas and Petroni, Fabio and Schick, Timo and Dwivedi-Yu, Jane and Joulin, Armand and Riedel, Sebastian and Grave, Edouard},
++  journal = {Journal of Machine Learning Research}, volume = {24}, number = {251}, pages = {1--43}, year = {2023},
++  eprint = {2208.03299}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{izacard2021fid,
++  title = {Leveraging Passage Retrieval with Generative Models for Open Domain Question Answering},
++  author = {Izacard, Gautier and Grave, Edouard},
++  booktitle = {Proceedings of the 16th Conference of the European Chapter of the ACL (EACL)}, pages = {874--880}, year = {2021}, publisher = {ACL},
++  eprint = {2007.01282}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{borgeaud2022retro,
++  title = {Improving Language Models by Retrieving from Trillions of Tokens},
++  author = {Borgeaud, Sebastian and Mensch, Arthur and Hoffmann, Jordan and Cai, Trevor and Rutherford, Eliza and Millican, Katie and van den Driessche, George and Lespiau, Jean-Baptiste and Damoc, Bogdan and Clark, Aidan and de Las Casas, Diego and Guy, Aurelia and Menick, Jacob and Ring, Roman and Hennigan, Tom and Huang, Saffron and Maggiore, Loren and Jones, Chris and Cassirer, Albin and Brock, Andy and Paganini, Michela and Irving, Geoffrey and Vinyals, Oriol and Osindero, Simon and Simonyan, Karen and Rae, Jack W. and Elsen, Erich and Sifre, Laurent},
++  booktitle = {Proceedings of the 39th International Conference on Machine Learning (ICML)}, volume = {162}, pages = {2206--2240}, year = {2022}, publisher = {PMLR},
++  eprint = {2112.04426}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{khandelwal2020knnlm,
++  title = {Generalization through Memorization: Nearest Neighbor Language Models},
++  author = {Khandelwal, Urvashi and Levy, Omer and Jurafsky, Dan and Zettlemoyer, Luke and Lewis, Mike},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2020},
++  eprint = {1911.00172}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{shi2024replug,
++  title = {{REPLUG}: Retrieval-Augmented Black-Box Language Models},
++  author = {Shi, Weijia and Min, Sewon and Yasunaga, Michihiro and Seo, Minjoon and James, Rich and Lewis, Mike and Zettlemoyer, Luke and Yih, Wen-tau},
++  booktitle = {Proceedings of NAACL-HLT}, pages = {8371--8384}, year = {2024}, publisher = {ACL},
++  eprint = {2301.12652}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{asai2024selfrag,
++  title = {Self-{RAG}: Learning to Retrieve, Generate, and Critique through Self-Reflection},
++  author = {Asai, Akari and Wu, Zeqiu and Wang, Yizhong and Sil, Avirup and Hajishirzi, Hannaneh},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024},
++  eprint = {2310.11511}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{ram2023incontextralm,
++  title = {In-Context Retrieval-Augmented Language Models},
++  author = {Ram, Ori and Levine, Yoav and Dalmedigos, Itay and Muhlgay, Dor and Shashua, Amnon and Leyton-Brown, Kevin and Shoham, Yoav},
++  journal = {Transactions of the Association for Computational Linguistics}, volume = {11}, pages = {1316--1331}, year = {2023},
++  eprint = {2302.00083}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{gim2024promptcache,
++  title = {Prompt Cache: Modular Attention Reuse for Low-Latency Inference},
++  author = {Gim, In and Chen, Guojun and Lee, Seung-seob and Sarda, Nikhil and Khandelwal, Anurag and Zhong, Lin},
++  booktitle = {Proceedings of Machine Learning and Systems (MLSys)}, year = {2024},
++  eprint = {2311.04934}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{yao2025cacheblend,
++  title = {CacheBlend: Fast Large Language Model Serving for {RAG} with Cached Knowledge Fusion},
++  author = {Yao, Jiayi and Li, Hanchen and Liu, Yuhan and Ray, Siddhant and Cheng, Yihua and Zhang, Qizheng and Du, Kuntai and Lu, Shan and Jiang, Junchen},
++  booktitle = {Proceedings of the Twentieth European Conference on Computer Systems (EuroSys)}, year = {2025},
++  eprint = {2405.16444}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{ma2025blockattention,
++  title = {Block-Attention for Efficient Prefilling},
++  author = {Ma, Dongyang and Wang, Yan and Tian, Lan},
++  booktitle = {The Thirteenth International Conference on Learning Representations (ICLR)}, year = {2025},
++  eprint = {2409.15355}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{chan2025cag,
++  title = {Don't Do {RAG}: When Cache-Augmented Generation is All You Need for Knowledge Tasks},
++  author = {Chan, Brian J. and Chen, Chao-Ting and Cheng, Jui-Hung and Huang, Hen-Hsen},
++  booktitle = {Companion Proceedings of the ACM Web Conference (WWW Companion)}, year = {2025},
++  eprint = {2412.15605}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{wu2022memorizing,
++  title = {Memorizing Transformers},
++  author = {Wu, Yuhuai and Rabe, Markus N. and Hutchins, DeLesley and Szegedy, Christian},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2022}, note = {Spotlight},
++  eprint = {2203.08913}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{dejong2022tome,
++  title = {Mention Memory: Incorporating Textual Knowledge into Transformers through Entity Mention Attention},
++  author = {de Jong, Michiel and Zemlyanskiy, Yury and FitzGerald, Nicholas and Sha, Fei and Cohen, William W.},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2022}, note = {TOME},
++  eprint = {2110.06176}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{dejong2023lumen,
++  title = {Pre-computed Memory or On-the-fly Encoding? A Hybrid Approach to Retrieval Augmentation Makes the Most of Your Compute},
++  author = {de Jong, Michiel and Zemlyanskiy, Yury and FitzGerald, Nicholas and Ainslie, Joshua and Sanghai, Sumit and Sha, Fei and Cohen, William W.},
++  booktitle = {Proceedings of the 40th International Conference on Machine Learning (ICML)}, year = {2023}, note = {LUMEN},
++  eprint = {2301.10448}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{dejong2023glimmer,
++  title = {{GLIMMER}: Generalized Late-Interaction Memory Reranker},
++  author = {de Jong, Michiel and Zemlyanskiy, Yury and FitzGerald, Nicholas and Sanghai, Sumit and Cohen, William W. and Ainslie, Joshua},
++  journal = {arXiv preprint arXiv:2306.10231}, year = {2023}
++}
++```
++
++NOTES (train-on-structure vs retrieve-at-inference; cached-KV?):
++- lewis2020rag: DPR+BART, passages concatenated as text, generator+query-enc trained, index frozen. No cached KV. Train+infer retrieval.
++- guu2020realm: learned retriever baked into MLM PRE-training, backprop through retrieval. Text prepend, no cached KV. (unique: retrieval at pretraining)
++- izacard2023atlas: Contriever+T5 FiD, jointly trained. No cached KV.
++- izacard2021fid: FiD, passages encoded independently, decoder attends over concat. No cached KV. Backbone of LUMEN/GLIMMER.
++- borgeaud2022retro: CLOSEST train-time comparator. kNN chunks from trillion-token DB via chunked cross-attention (CCA). Trained w/ retrieval from scratch; frozen retriever; neighbor encodings precomputed/cached & cross-attended. Chunk-level, not link/graph.
++- khandelwal2020knnlm: THE KV-cache exemplar. Frozen LM + datastore of (hidden-state→next-token); interpolate with kNN. Inference-only, no retrieval training. Sharpest contrast.
++- shi2024replug: frozen black-box LM, prepend+ensemble. Inference-time, no cached KV.
++- asai2024selfrag: trains LM to decide WHEN to retrieve + reflection tokens. Text-level. FLAG ICLR2024 venue unconfirmed.
++- ram2023incontextralm: frozen LM, prepend retrieved docs, optional trained reranker. Inference-only pole (w/ REPLUG).
++- gim2024promptcache: precompute KV for reusable prompt segments, adjust positions. Inference-only serving opt, nothing trained. Caches actual k/v tensors, splices into attention. Inference-only precursor to reusing doc KV.
++- yao2025cacheblend: precompute per-chunk KV, selectively recompute cross-chunk tokens, fuse. Inference-only. Closest inference analogue to "fetch target doc into attention" but APPROXIMATES rather than TRAINS cross-doc interaction. FLAG EuroSys2025 venue consensus not on arXiv.
++- ma2025blockattention: block-local KV + final query block attends across; FINE-TUNES model to adapt to block mask, re-indexes positions. MOST relevant: custom block-structured mask at BOTH train+inference — parallels ours; difference = ours graph/link-structured (generated link fetches specific target node) vs flat retrieved blocks. Title = "Efficient Prefilling", ICLR 2025.
++- chan2025cag: preload whole KB, precompute one monolithic corpus KV cache, append query. Inference-only. No per-doc caches selected by retrieval, no structured mask.
++- wu2022memorizing / bertsch2023unlimiformer / mohtashami2023landmark / tworkowski2023focused: see long-context slice (04). Cached-KV external memory attention family.
++- dejong2022tome/lumen/glimmer: Google precomputed-corpus-memory line (mystery candidates).
++
++FLAGS: asai selfrag ICLR2024, yao cacheblend EuroSys2025 unconfirmed; glimmer no venue (preprint). RETRO+kNN-LM also belong to KV-cache discussion, cross-ref.
++NOTE overlap w/ slice 04 (long-context): wu2022memorizing, bertsch2023unlimiformer, mohtashami2023landmark, tworkowski2023focused, borgeaud2022retro — dedup on merge.
++
+
+diff --git a/paper/bib/raw/03_packing_composition.md b/paper/bib/raw/03_packing_composition.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/bib/raw/03_packing_composition.md
+@@ -0,0 +1,64 @@
++# Packing & sequence composition (agent ab2ba112) — all verified vs arXiv
++
++KEY: shi2024incontext = MOST IMPORTANT prior art (In-Context Pretraining, Meta).
++
++@inproceedings{shi2024incontext, 2310.10638, ICLR 2024 — pack related docs via ANN retrieval + TSP-style ordering; STANDARD causal attention, NO cross-doc attention. We differ: explicit graph edges + mask granting cross-doc attention.}
++@inproceedings{staniszewski2025structured, 2312.17296, AAAI 2025 (SPLiCe) — retrieval-collated long examples; SPLiCe-Repo uses repo/dir structure (closest to edge traversal); no attention along edges.}
++@inproceedings{zhao2024analysing, 2402.13991, ACL 2024 — intra-document causal masking; treats cross-doc attention as HARMFUL, masks entirely. We selectively RE-ENABLE along link edges. Key baseline motivating block-diagonal isolation.}
++@inproceedings{ding2024fewer, 2404.10830, ICML 2024 — best-fit bin-packing for doc integrity; orthogonal to relatedness/attention.}
++@inproceedings{groeneveld2024olmo, 2402.00838, ACL 2024 — open pretraining recipe (standard packing). FLAG masking in body/code.}
++@article{brown2020language, 2005.14165, NeurIPS 2020 — GPT-3, canonical concat-with-delimiter packing baseline. FLAG specifics in body.}
++@article{touvron2023llama, 2302.13971, 2023 — standard packing recipe, contrast point.}
++@article{shoeybi2019megatron, 1909.08053, 2019 — reset-attention-mask/reset-position-ids = doc-boundary masking we generalize. FLAG feature in codebase.}
++
++Full bibtex bodies stored below:
++
++```bibtex
++@inproceedings{shi2024incontext,
++  title = {In-Context Pretraining: Language Modeling Beyond Document Boundaries},
++  author = {Shi, Weijia and Min, Sewon and Lomeli, Maria and Zhou, Chunting and Li, Margaret and Szilvasy, Gergely and James, Rich and Lin, Xi Victoria and Smith, Noah A. and Zettlemoyer, Luke and Yih, Scott and Lewis, Mike},
++  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)}, year = {2024},
++  eprint = {2310.10638}, archivePrefix = {arXiv}, primaryClass = {cs.CL}, url = {https://arxiv.org/abs/2310.10638}
++}
++@inproceedings{staniszewski2025structured,
++  title = {Structured Packing in {LLM} Training Improves Long Context Utilization},
++  author = {Staniszewski, Konrad and Tworkowski, Szymon and Jaszczur, Sebastian and Zhao, Yu and Michalewski, Henryk and Kuci{\'n}ski, {\L}ukasz and Mi{\l}o{\'s}, Piotr},
++  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence}, year = {2025},
++  eprint = {2312.17296}, archivePrefix = {arXiv}, primaryClass = {cs.CL}, url = {https://arxiv.org/abs/2312.17296}
++}
++@inproceedings{zhao2024analysing,
++  title = {Analysing the Impact of Sequence Composition on Language Model Pre-training},
++  author = {Zhao, Yu and Qu, Yuanbin and Staniszewski, Konrad and Tworkowski, Szymon and Liu, Wei and Mi{\l}o{\'s}, Piotr and Wu, Yuxiang and Minervini, Pasquale},
++  booktitle = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (ACL)}, year = {2024},
++  eprint = {2402.13991}, archivePrefix = {arXiv}, primaryClass = {cs.CL}, url = {https://arxiv.org/abs/2402.13991}
++}
++@inproceedings{ding2024fewer,
++  title = {Fewer Truncations Improve Language Modeling},
++  author = {Ding, Hantian and Wang, Zijian and Paolini, Giovanni and Kumar, Varun and Deoras, Anoop and Roth, Dan and Soatto, Stefano},
++  booktitle = {Proceedings of the 41st International Conference on Machine Learning (ICML)}, year = {2024},
++  eprint = {2404.10830}, archivePrefix = {arXiv}, primaryClass = {cs.CL}, url = {https://arxiv.org/abs/2404.10830}
++}
++@inproceedings{groeneveld2024olmo,
++  title = {{OLMo}: Accelerating the Science of Language Models},
++  author = {Groeneveld, Dirk and Beltagy, Iz and Walsh, Pete and others},
++  booktitle = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (ACL)}, year = {2024},
++  eprint = {2402.00838}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{brown2020language,
++  title = {Language Models are Few-Shot Learners},
++  author = {Brown, Tom B. and others},
++  journal = {Advances in Neural Information Processing Systems (NeurIPS)}, volume = {33}, year = {2020},
++  eprint = {2005.14165}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{touvron2023llama,
++  title = {{LLaMA}: Open and Efficient Foundation Language Models},
++  author = {Touvron, Hugo and others}, year = {2023},
++  eprint = {2302.13971}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{shoeybi2019megatron,
++  title = {Megatron-{LM}: Training Multi-Billion Parameter Language Models Using Model Parallelism},
++  author = {Shoeybi, Mohammad and Patwary, Mostofa and Puri, Raul and LeGresley, Patrick and Casper, Jared and Catanzaro, Bryan}, year = {2019},
++  eprint = {1909.08053}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++```
++
+
+diff --git a/paper/bib/raw/04_longcontext_sparse_attn.md b/paper/bib/raw/04_longcontext_sparse_attn.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/bib/raw/04_longcontext_sparse_attn.md
+@@ -0,0 +1,107 @@
++# Long-context / sparse attention / retrieval-into-attention (agent a4e8bc5e)
++
++```bibtex
++@misc{flexattention_blog2024,
++  author = {Horace He and Driss Guessous and Yanbo Liang and Joy Dong},
++  title  = {{FlexAttention}: The Flexibility of {PyTorch} with the Performance of {FlashAttention}},
++  howpublished = {PyTorch Blog}, year = {2024}, month = aug,
++  note = {\url{https://pytorch.org/blog/flexattention/}}
++}
++@article{flexattention_paper2024,
++  author = {Juechu Dong and Boyuan Feng and Driss Guessous and Yanbo Liang and Horace He},
++  title  = {Flex Attention: A Programming Model for Generating Optimized Attention Kernels},
++  journal = {arXiv preprint arXiv:2412.05496}, year = {2024},
++  eprint = {2412.05496}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@inproceedings{dao2022flashattention,
++  author = {Tri Dao and Daniel Y. Fu and Stefano Ermon and Atri Rudra and Christopher R{\'e}},
++  title  = {{FlashAttention}: Fast and Memory-Efficient Exact Attention with {IO}-Awareness},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2022},
++  eprint = {2205.14135}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@inproceedings{dao2023flashattention2,
++  author = {Tri Dao}, title = {{FlashAttention-2}: Faster Attention with Better Parallelism and Work Partitioning},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024},
++  eprint = {2307.08691}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@article{child2019sparsetransformers,
++  author = {Rewon Child and Scott Gray and Alec Radford and Ilya Sutskever},
++  title  = {Generating Long Sequences with Sparse Transformers},
++  journal = {arXiv preprint arXiv:1904.10509}, year = {2019},
++  eprint = {1904.10509}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@article{beltagy2020longformer,
++  author = {Iz Beltagy and Matthew E. Peters and Arman Cohan},
++  title  = {{Longformer}: The Long-Document Transformer},
++  journal = {arXiv preprint arXiv:2004.05150}, year = {2020},
++  eprint = {2004.05150}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{zaheer2020bigbird,
++  author = {Manzil Zaheer and Guru Guruganesh and Avinava Dubey and Joshua Ainslie and Chris Alberti and Santiago Onta{\~n}{\'o}n and Philip Pham and Anirudh Ravula and Qifan Wang and Li Yang and Amr Ahmed},
++  title  = {{Big Bird}: Transformers for Longer Sequences},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2020},
++  eprint = {2007.14062}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@inproceedings{mohtashami2023landmark,
++  author = {Amirkeivan Mohtashami and Martin Jaggi},
++  title  = {Landmark Attention: Random-Access Infinite Context Length for Transformers},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2023},
++  eprint = {2305.16300}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{ainslie2023colt5,
++  author = {Joshua Ainslie and Tao Lei and Michiel de Jong and Santiago Onta{\~n}{\'o}n and Siddhartha Brahma and Yury Zemlyanskiy and David Uthus and Mandy Guo and James Lee-Thorp and Yi Tay and Yun-Hsuan Sung and Sumit Sanghai},
++  title  = {{CoLT5}: Faster Long-Range Transformers with Conditional Computation},
++  journal = {arXiv preprint arXiv:2303.09752}, year = {2023},
++  eprint = {2303.09752}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{liu2023ringattention,
++  author = {Hao Liu and Matei Zaharia and Pieter Abbeel},
++  title  = {Ring Attention with Blockwise Transformers for Near-Infinite Context},
++  journal = {arXiv preprint arXiv:2310.01889}, year = {2023},
++  eprint = {2310.01889}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{wu2022memorizing,
++  author = {Yuhuai Wu and Markus N. Rabe and DeLesley Hutchins and Christian Szegedy},
++  title  = {Memorizing Transformers},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2022},
++  eprint = {2203.08913}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@inproceedings{borgeaud2022retro,
++  author = {Sebastian Borgeaud and Arthur Mensch and Jordan Hoffmann and Trevor Cai and Eliza Rutherford and Katie Millican and George van den Driessche and Jean-Baptiste Lespiau and Bogdan Damoc and Aidan Clark and Diego de Las Casas and Aurelia Guy and Jacob Menick and Roman Ring and Tom Hennigan and Saffron Huang and Loren Maggiore and Chris Jones and Albin Cassirer and Andy Brock and Michela Paganini and Geoffrey Irving and Oriol Vinyals and Simon Osindero and Karen Simonyan and Jack W. Rae and Erich Elsen and Laurent Sifre},
++  title  = {Improving Language Models by Retrieving from Trillions of Tokens},
++  booktitle = {International Conference on Machine Learning (ICML)}, year = {2022},
++  eprint = {2112.04426}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{bertsch2023unlimiformer,
++  author = {Amanda Bertsch and Uri Alon and Graham Neubig and Matthew R. Gormley},
++  title  = {{Unlimiformer}: Long-Range Transformers with Unlimited Length Input},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2023},
++  eprint = {2305.01625}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{tworkowski2023focused,
++  author = {Szymon Tworkowski and Konrad Staniszewski and Miko{\l}aj Pacek and Yuhuai Wu and Henryk Michalewski and Piotr Mi{\l}o{\'s}},
++  title  = {Focused Transformer: Contrastive Training for Context Scaling},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2023},
++  eprint = {2307.03170}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{ying2021graphormer,
++  author = {Chengxuan Ying and Tianle Cai and Shengjie Luo and Shuxin Zheng and Guolin Ke and Di He and Yanming Shen and Tie-Yan Liu},
++  title  = {Do Transformers Really Perform Bad for Graph Representation?},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2021},
++  eprint = {2106.05234}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++```
++
++NOTES:
++- flexattention_blog2024 / _paper2024: THE API we build on. mask_mod predicate compiled to BlockMask skipping fully-masked KV blocks. Blog shows doc-masking (block-diagonal); we generalize to block-SPARSE-GRAPH mask lighting off-diagonal blocks along link edges. FLAG blog byline unverified.
++- dao flashattention 1/2: kernel foundation; FlexAttention = FlashAttn + fused mask_mod. Makes 32k sparse training tractable.
++- child2019 / beltagy2020 / zaheer2020: fixed-pattern sparse attention. Ours is DATA-defined by link graph, not geometric heuristic.
++- mohtashami2023 landmark: learned block retrieval at inference, single sequence — not pretraining over external doc graph.
++- ainslie2023colt5: conditional computation axis (we don't use).
++- liu2023ringattention: distributed blockwise; complementary to our mask.
++- wu2022memorizing: ARCHETYPAL retrieval-into-attention CONTRAST — non-differentiable frozen KV memory, kNN, inference augmentation. We train cross-doc attn as differentiable pretraining objective along known edges.
++- borgeaud2022retro (RETRO, DeepMind): frozen datastore, embedding-sim neighbors, chunked cross-attn. We pack actual linked docs in-sequence, learned end-to-end.
++- bertsch2023unlimiformer: inference kNN over encoder states; encoder-decoder.
++- tworkowski2023focused (LongLLaMA): trains to improve memory attention but context still external kNN memory at inference.
++- ying2021graphormer: attention over graph via shortest-path/edge BIAS terms (soft, dense, small graphs); we use HARD block-sparse mask over long token seqs.
++
+
+diff --git a/paper/bib/raw/05_code_repo_level.md b/paper/bib/raw/05_code_repo_level.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/bib/raw/05_code_repo_level.md
+@@ -0,0 +1,116 @@
++# Code / repo-level LM + benchmarks (agent a83d2e68) — 20 works, verified vs arXiv/DBLP/ACL
++
++CLOSEST CODE PRIOR ART = guo2024deepseekcoder: §2.2 topological sort of files by import graph for pretraining data, then FLAT concat + plain causal attention (NO edge-keyed cross-file attention) = exactly our gap.
++Inference-retrieval CONTRAST class: repocoder, crosscodeeval, cocomic, repofusion, r2c2coder, repohyper, rlpg, monitor(MGD).
++Pretraining-packing (flat, no edge attn): starcoder, starcoder2, deepseekcoder.
++Single-file baselines: humaneval, humanevalpack(octopack), mbpp, codexglue.
++NOTE: StackV2 == StarCoder2 SAME paper (2402.19173) — one key only.
++
++```bibtex
++@article{kocetkov2022stack,
++  title = {The Stack: 3 TB of permissively licensed source code},
++  author = {Kocetkov, Denis and Li, Raymond and Ben Allal, Loubna and Li, Jia and Mou, Chenghao and Mu{\~n}oz Ferrandis, Carlos and Jernite, Yacine and Mitchell, Margaret and Hughes, Sean and Wolf, Thomas and Bahdanau, Dzmitry and von Werra, Leandro and de Vries, Harm},
++  journal = {arXiv preprint arXiv:2211.15533}, year = {2022}, eprint = {2211.15533}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{li2023starcoder,
++  title = {StarCoder: may the source be with you!},
++  author = {Li, Raymond and Ben Allal, Loubna and Zi, Yangtian and Muennighoff, Niklas and Kocetkov, Denis and others},
++  journal = {arXiv preprint arXiv:2305.06161}, year = {2023}, eprint = {2305.06161}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{lozhkov2024starcoder2,
++  title = {StarCoder 2 and The Stack v2: The Next Generation},
++  author = {Lozhkov, Anton and Li, Raymond and Ben Allal, Loubna and Cassano, Federico and Lamy-Poirier, Joel and others},
++  journal = {arXiv preprint arXiv:2402.19173}, year = {2024}, eprint = {2402.19173}, archivePrefix = {arXiv}, primaryClass = {cs.SE}
++}
++@inproceedings{liu2024repobench,
++  title = {RepoBench: Benchmarking Repository-Level Code Auto-Completion Systems},
++  author = {Liu, Tianyang and Xu, Canwen and McAuley, Julian},
++  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)}, year = {2024},
++  eprint = {2306.03091}, archivePrefix = {arXiv}, primaryClass = {cs.CL}, url = {https://arxiv.org/abs/2306.03091}
++}
++@inproceedings{ding2023crosscodeeval,
++  title = {CrossCodeEval: A Diverse and Multilingual Benchmark for Cross-File Code Completion},
++  author = {Ding, Yangruibo and Wang, Zijian and Ahmad, Wasi Uddin and Ding, Hantian and Tan, Ming and Jain, Nihal and Ramanathan, Murali Krishna and Nallapati, Ramesh and Bhatia, Parminder and Roth, Dan and Xiang, Bing},
++  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS) Datasets and Benchmarks Track}, year = {2023},
++  eprint = {2310.11248}, archivePrefix = {arXiv}, primaryClass = {cs.LG}, url = {https://arxiv.org/abs/2310.11248}
++}
++@inproceedings{zhang2023repocoder,
++  title = {RepoCoder: Repository-Level Code Completion Through Iterative Retrieval and Generation},
++  author = {Zhang, Fengji and Chen, Bei and Zhang, Yue and Keung, Jacky and Liu, Jin and Zan, Daoguang and Mao, Yi and Lou, Jian-Guang and Chen, Weizhu},
++  booktitle = {Proceedings of the 2023 Conference on EMNLP}, year = {2023},
++  eprint = {2303.12570}, archivePrefix = {arXiv}, primaryClass = {cs.CL}, url = {https://arxiv.org/abs/2303.12570}
++}
++@inproceedings{ding2024cocomic,
++  title = {CoCoMIC: Code Completion by Jointly Modeling In-file and Cross-file Context},
++  author = {Ding, Yangruibo and Wang, Zijian and Ahmad, Wasi Uddin and Ramanathan, Murali Krishna and Nallapati, Ramesh and Bhatia, Parminder and Roth, Dan and Xiang, Bing},
++  booktitle = {Proceedings of LREC-COLING 2024}, pages = {3433--3445}, year = {2024},
++  eprint = {2212.10007}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@article{shrivastava2023repofusion,
++  title = {RepoFusion: Training Code Models to Understand Your Repository},
++  author = {Shrivastava, Disha and Kocetkov, Denis and de Vries, Harm and Bahdanau, Dzmitry and Scholak, Torsten},
++  journal = {arXiv preprint arXiv:2306.10998}, year = {2023}, eprint = {2306.10998}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@article{deng2024r2c2coder,
++  title = {R2C2-Coder: Enhancing and Benchmarking Real-world Repository-level Code Completion Abilities of Code Large Language Models},
++  author = {Deng, Ken and Liu, Jiaheng and Zhu, He and Liu, Congnan and others},
++  journal = {arXiv preprint arXiv:2406.01359}, year = {2024}, eprint = {2406.01359}, archivePrefix = {arXiv}, primaryClass = {cs.SE}
++}
++@article{phan2024repohyper,
++  title = {RepoHyper: Search-Expand-Refine on Semantic Graphs for Repository-Level Code Completion},
++  author = {Phan, Huy N. and Phan, Hoang N. and Nguyen, Tien N. and Bui, Nghi D. Q.},
++  journal = {arXiv preprint arXiv:2403.06095}, year = {2024}, eprint = {2403.06095}, archivePrefix = {arXiv}, primaryClass = {cs.SE}
++}
++@article{bairi2024codeplan,
++  title = {CodePlan: Repository-level Coding using LLMs and Planning},
++  author = {Bairi, Ramakrishna and Sonwane, Atharv and Kanade, Aditya and D C, Vageesh and Iyer, Arun and Parthasarathy, Suresh and Rajamani, Sriram and Ashok, B. and Shet, Shashank},
++  journal = {arXiv preprint arXiv:2309.12499}, year = {2023}, eprint = {2309.12499}, archivePrefix = {arXiv}, primaryClass = {cs.SE}
++}
++@article{guo2024deepseekcoder,
++  title = {{DeepSeek-Coder}: When the Large Language Model Meets Programming -- The Rise of Code Intelligence},
++  author = {Guo, Daya and Zhu, Qihao and Yang, Dejian and Xie, Zhenda and Dong, Kai and Zhang, Wentao and Chen, Guanting and Bi, Xiao and Wu, Y. and Li, Y. K. and Luo, Fuli and Xiong, Yingfei and Liang, Wenfeng},
++  journal = {arXiv preprint arXiv:2401.14196}, year = {2024}, eprint = {2401.14196}, archivePrefix = {arXiv}, primaryClass = {cs.SE}, url = {https://arxiv.org/abs/2401.14196}
++}
++@inproceedings{shrivastava2023rlpg,
++  title = {Repository-Level Prompt Generation for Large Language Models of Code},
++  author = {Shrivastava, Disha and Larochelle, Hugo and Tarlow, Daniel},
++  booktitle = {Proceedings of the 40th International Conference on Machine Learning (ICML)}, year = {2023},
++  eprint = {2206.12839}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@inproceedings{agrawal2023monitor,
++  title = {Guiding Language Models of Code with Global Context using Monitors},
++  author = {Agrawal, Lakshya A and Kanade, Aditya and Goyal, Navin and Lahiri, Shuvendu K. and Rajamani, Sriram K.},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2023},
++  eprint = {2306.10763}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
++}
++@inproceedings{wang2023codet5plus,
++  title = {{CodeT5+}: Open Code Large Language Models for Code Understanding and Generation},
++  author = {Wang, Yue and Le, Hung and Gotmare, Akhilesh Deepak and Bui, Nghi D. Q. and Li, Junnan and Hoi, Steven C. H.},
++  booktitle = {Proceedings of the 2023 Conference on EMNLP}, pages = {1069--1088}, year = {2023}, publisher = {ACL}
++}
++@article{chen2021humaneval,
++  title = {Evaluating Large Language Models Trained on Code},
++  author = {Chen, Mark and Tworek, Jerry and Jun, Heewoo and Yuan, Qiming and others},
++  journal = {arXiv preprint arXiv:2107.03374}, year = {2021}, eprint = {2107.03374}, archivePrefix = {arXiv}, primaryClass = {cs.LG}
++}
++@article{muennighoff2024octopack,
++  title = {OctoPack: Instruction Tuning Code Large Language Models},
++  author = {Muennighoff, Niklas and Liu, Qian and Zebaze, Armel and Zheng, Qinkai and Hui, Binyuan and Zhuo, Terry Yue and Singh, Swayam and Tang, Xiangru and von Werra, Leandro and Longpre, Shayne},
++  journal = {arXiv preprint arXiv:2308.07124}, year = {2024}, eprint = {2308.07124}, archivePrefix = {arXiv}, primaryClass = {cs.CL},
++  note = {Introduces HumanEvalPack; ICLR 2024}
++}
++@article{austin2021mbpp,
++  title = {Program Synthesis with Large Language Models},
++  author = {Austin, Jacob and Odena, Augustus and Nye, Maxwell and Bosma, Maarten and Michalewski, Henryk and Dohan, David and Jiang, Ellen and Cai, Carrie and Terry, Michael and Le, Quoc and Sutton, Charles},
++  journal = {arXiv preprint arXiv:2108.07732}, year = {2021}, eprint = {2108.07732}, archivePrefix = {arXiv}, primaryClass = {cs.PL}
++}
++@inproceedings{lu2021codexglue,
++  title = {{CodeXGLUE}: A Machine Learning Benchmark Dataset for Code Understanding and Generation},
++  author = {Lu, Shuai and Guo, Daya and Ren, Shuo and Huang, Junjie and Svyatkovskiy, Alexey and others},
++  booktitle = {Proceedings of NeurIPS Datasets and Benchmarks}, year = {2021},
++  eprint = {2102.04664}, archivePrefix = {arXiv}, primaryClass = {cs.SE}
++}
++```
++
++FLAGS: octopack ICLR2024 & codexglue NeurIPS2021 venues not on arXiv page; codet5+ "single-file" inferred; starcoder2 author roster truncated (verify tail).
++
+
+diff --git a/paper/bib/raw/06_multihop_qa_citation_corpora.md b/paper/bib/raw/06_multihop_qa_citation_corpora.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/bib/raw/06_multihop_qa_citation_corpora.md
+@@ -0,0 +1,170 @@
++# Multi-hop QA benchmarks + citation/wiki graph corpora (agent adf14453) — verified vs ACL Anthology/DBLP
++
++Benchmarks: HotpotQA = HEADLINE source (2-hop, sentence-level supporting facts → build cross-doc setting). Plus WikiHop/MedHop, 2WikiMultiHopQA, MuSiQue, HoVer, StrategyQA, Bamboogle.
++Graph readers (prior graph-multihop, inference-time): Cognitive Graph, HDE, DFGN.
++Single-doc CONTROLS: HellaSwag, ARC, PIQA, WinoGrande, OpenBookQA, BoolQ.
++Corpora: unarXive 2020 + 2022 (arXiv \cite citation graph — our training corpus), S2ORC, OGB (ogbn-arxiv), WikiLinkGraphs (wiki hyperlink graph), WikiText.
++Citation-embedding LMs: SciBERT, SPECTER, SciNCL.
++
++```bibtex
++@inproceedings{yang-etal-2018-hotpotqa,
++  title = {{H}otpot{QA}: A Dataset for Diverse, Explainable Multi-hop Question Answering},
++  author = {Yang, Zhilin and Qi, Peng and Zhang, Saizheng and Bengio, Yoshua and Cohen, William and Salakhutdinov, Ruslan and Manning, Christopher D.},
++  booktitle = {Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing (EMNLP)}, year = {2018}, address = {Brussels, Belgium}, publisher = {ACL},
++  url = {https://aclanthology.org/D18-1259/}, doi = {10.18653/v1/D18-1259}, pages = {2369--2380}
++}
++@article{welbl-etal-2018-constructing,
++  title = {Constructing Datasets for Multi-hop Reading Comprehension Across Documents},
++  author = {Welbl, Johannes and Stenetorp, Pontus and Riedel, Sebastian},
++  journal = {Transactions of the Association for Computational Linguistics}, volume = {6}, year = {2018}, publisher = {MIT Press},
++  url = {https://aclanthology.org/Q18-1021/}, doi = {10.1162/tacl_a_00021}, pages = {287--302}
++}
++@inproceedings{ho-etal-2020-constructing,
++  title = {Constructing A Multi-hop {QA} Dataset for Comprehensive Evaluation of Reasoning Steps},
++  author = {Ho, Xanh and Duong Nguyen, Anh-Khoa and Sugawara, Saku and Aizawa, Akiko},
++  booktitle = {Proceedings of the 28th International Conference on Computational Linguistics (COLING)}, year = {2020}, publisher = {ICCL},
++  url = {https://aclanthology.org/2020.coling-main.580/}, doi = {10.18653/v1/2020.coling-main.580}, pages = {6609--6625}
++}
++@article{trivedi-etal-2022-musique,
++  title = {{M}u{S}i{Q}ue: Multihop Questions via Single-hop Question Composition},
++  author = {Trivedi, Harsh and Balasubramanian, Niranjan and Khot, Tushar and Sabharwal, Ashish},
++  journal = {Transactions of the Association for Computational Linguistics}, volume = {10}, year = {2022}, publisher = {MIT Press},
++  url = {https://aclanthology.org/2022.tacl-1.31/}, doi = {10.1162/tacl_a_00475}, pages = {539--554}
++}
++@inproceedings{jiang-etal-2020-hover,
++  title = {{H}o{V}er: A Dataset for Many-Hop Fact Extraction And Claim Verification},
++  author = {Jiang, Yichen and Bordia, Shikha and Zhong, Zheng and Dognin, Charles and Singh, Maneesh and Bansal, Mohit},
++  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2020}, year = {2020}, publisher = {ACL},
++  url = {https://aclanthology.org/2020.findings-emnlp.309/}, doi = {10.18653/v1/2020.findings-emnlp.309}, pages = {3441--3460}
++}
++@article{geva-etal-2021-aristotle,
++  title = {Did {A}ristotle Use a Laptop? A Question Answering Benchmark with Implicit Reasoning Strategies},
++  author = {Geva, Mor and Khashabi, Daniel and Segal, Elad and Khot, Tushar and Roth, Dan and Berant, Jonathan},
++  journal = {Transactions of the Association for Computational Linguistics}, volume = {9}, year = {2021}, publisher = {MIT Press},
++  url = {https://aclanthology.org/2021.tacl-1.21/}, doi = {10.1162/tacl_a_00370}, pages = {346--361}
++}
++@inproceedings{press-etal-2023-measuring,
++  title = {Measuring and Narrowing the Compositionality Gap in Language Models},
++  author = {Press, Ofir and Zhang, Muru and Min, Sewon and Schmidt, Ludwig and Smith, Noah A. and Lewis, Mike},
++  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2023}, year = {2023}, publisher = {ACL},
++  url = {https://aclanthology.org/2023.findings-emnlp.378/}, doi = {10.18653/v1/2023.findings-emnlp.378}, pages = {5687--5711}
++}
++@inproceedings{ding-etal-2019-cognitive,
++  title = {Cognitive Graph for Multi-Hop Reading Comprehension at Scale},
++  author = {Ding, Ming and Zhou, Chang and Chen, Qibin and Yang, Hongxia and Tang, Jie},
++  booktitle = {Proceedings of the 57th Annual Meeting of the ACL}, year = {2019}, publisher = {ACL},
++  url = {https://aclanthology.org/P19-1259/}, doi = {10.18653/v1/P19-1259}, pages = {2694--2703}
++}
++@inproceedings{tu-etal-2019-multi,
++  title = {Multi-hop Reading Comprehension across Multiple Documents by Reasoning over Heterogeneous Graphs},
++  author = {Tu, Ming and Wang, Guangtao and Huang, Jing and Tang, Yun and He, Xiaodong and Zhou, Bowen},
++  booktitle = {Proceedings of the 57th Annual Meeting of the ACL}, year = {2019}, publisher = {ACL},
++  url = {https://aclanthology.org/P19-1260/}, doi = {10.18653/v1/P19-1260}, pages = {2704--2713}
++}
++@inproceedings{qiu-etal-2019-dynamically,
++  title = {Dynamically Fused Graph Network for Multi-hop Reasoning},
++  author = {Qiu, Lin and Xiao, Yunxuan and Qu, Yanru and Zhou, Hao and Li, Lei and Zhang, Weinan and Yu, Yong},
++  booktitle = {Proceedings of the 57th Annual Meeting of the ACL}, year = {2019}, publisher = {ACL},
++  url = {https://aclanthology.org/P19-1617/}, doi = {10.18653/v1/P19-1617}, pages = {6140--6150}
++}
++@inproceedings{zellers-etal-2019-hellaswag,
++  title = {{H}ella{S}wag: Can a Machine Really Finish Your Sentence?},
++  author = {Zellers, Rowan and Holtzman, Ari and Bisk, Yonatan and Farhadi, Ali and Choi, Yejin},
++  booktitle = {Proceedings of the 57th Annual Meeting of the ACL}, year = {2019}, publisher = {ACL},
++  url = {https://aclanthology.org/P19-1472/}, doi = {10.18653/v1/P19-1472}, pages = {4791--4800}
++}
++@article{clark2018arc,
++  title = {Think you have Solved Question Answering? Try {ARC}, the {AI2} Reasoning Challenge},
++  author = {Clark, Peter and Cowhey, Isaac and Etzioni, Oren and Khot, Tushar and Sabharwal, Ashish and Schoenick, Carissa and Tafjord, Oyvind},
++  journal = {arXiv preprint arXiv:1803.05457}, year = {2018}
++}
++@inproceedings{bisk2020piqa,
++  title = {{PIQA}: Reasoning about Physical Commonsense in Natural Language},
++  author = {Bisk, Yonatan and Zellers, Rowan and Le Bras, Ronan and Gao, Jianfeng and Choi, Yejin},
++  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence}, volume = {34}, number = {05}, pages = {7432--7439}, year = {2020}
++}
++@inproceedings{sakaguchi2020winogrande,
++  title = {{W}ino{G}rande: An Adversarial {W}inograd Schema Challenge at Scale},
++  author = {Sakaguchi, Keisuke and Le Bras, Ronan and Bhagavatula, Chandra and Choi, Yejin},
++  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence}, volume = {34}, number = {05}, pages = {8732--8740}, year = {2020}
++}
++@inproceedings{mihaylov-etal-2018-suit,
++  title = {Can a Suit of Armor Conduct Electricity? A New Dataset for Open Book Question Answering},
++  author = {Mihaylov, Todor and Clark, Peter and Khot, Tushar and Sabharwal, Ashish},
++  booktitle = {Proceedings of the 2018 Conference on EMNLP}, year = {2018}, publisher = {ACL},
++  url = {https://aclanthology.org/D18-1260/}, doi = {10.18653/v1/D18-1260}, pages = {2381--2391}
++}
++@inproceedings{clark-etal-2019-boolq,
++  title = {{B}ool{Q}: Exploring the Surprising Difficulty of Natural Yes/No Questions},
++  author = {Clark, Christopher and Lee, Kenton and Chang, Ming-Wei and Kwiatkowski, Tom and Collins, Michael and Toutanova, Kristina},
++  booktitle = {Proceedings of NAACL-HLT}, year = {2019}, publisher = {ACL},
++  url = {https://aclanthology.org/N19-1300/}, doi = {10.18653/v1/N19-1300}, pages = {2924--2936}
++}
++@article{saier2020unarxive,
++  title = {un{a}r{X}ive: a large scholarly data set with publications' full-text, annotated in-text citations, and links to metadata},
++  author = {Saier, Tarek and F{\"a}rber, Michael},
++  journal = {Scientometrics}, volume = {125}, number = {3}, pages = {3085--3108}, year = {2020}, publisher = {Springer}, doi = {10.1007/s11192-020-03382-z}
++}
++@inproceedings{saier2023unarxive,
++  title = {un{a}r{X}ive 2022: All ar{X}iv Publications Pre-Processed for {NLP}, Including Structured Full-Text and Citation Network},
++  author = {Saier, Tarek and Krause, Johan and F{\"a}rber, Michael},
++  booktitle = {2023 ACM/IEEE Joint Conference on Digital Libraries (JCDL)}, pages = {66--70}, year = {2023}, doi = {10.1109/JCDL57899.2023.00020}, note = {arXiv:2303.14957}
++}
++@inproceedings{lo-etal-2020-s2orc,
++  title = {{S}2{ORC}: The Semantic Scholar Open Research Corpus},
++  author = {Lo, Kyle and Wang, Lucy Lu and Neumann, Mark and Kinney, Rodney and Weld, Daniel},
++  booktitle = {Proceedings of the 58th Annual Meeting of the ACL}, year = {2020}, publisher = {ACL},
++  url = {https://aclanthology.org/2020.acl-main.447/}, doi = {10.18653/v1/2020.acl-main.447}, pages = {4969--4983}
++}
++@inproceedings{hu2020ogb,
++  title = {Open Graph Benchmark: Datasets for Machine Learning on Graphs},
++  author = {Hu, Weihua and Fey, Matthias and Zitnik, Marinka and Dong, Yuxiao and Ren, Hongyu and Liu, Bowen and Catasta, Michele and Leskovec, Jure},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, volume = {33}, pages = {22118--22133}, year = {2020}
++}
++@inproceedings{consonni2019wikilinkgraphs,
++  title = {{W}iki{L}ink{G}raphs: A Complete, Longitudinal and Multi-Language Dataset of the {W}ikipedia Link Networks},
++  author = {Consonni, Cristian and Laniado, David and Montresor, Alberto},
++  booktitle = {Proceedings of the International AAAI Conference on Web and Social Media (ICWSM)}, volume = {13}, pages = {598--607}, year = {2019}
++}
++@inproceedings{merity2017pointer,
++  title = {Pointer Sentinel Mixture Models},
++  author = {Merity, Stephen and Xiong, Caiming and Bradbury, James and Socher, Richard},
++  booktitle = {5th International Conference on Learning Representations (ICLR)}, year = {2017}
++}
++@inproceedings{beltagy-etal-2019-scibert,
++  title = {{S}ci{BERT}: A Pretrained Language Model for Scientific Text},
++  author = {Beltagy, Iz and Lo, Kyle and Cohan, Arman},
++  booktitle = {Proceedings of the 2019 Conference on EMNLP-IJCNLP}, year = {2019}, publisher = {ACL},
++  url = {https://aclanthology.org/D19-1371/}, doi = {10.18653/v1/D19-1371}, pages = {3615--3620}
++}
++@inproceedings{cohan-etal-2020-specter,
++  title = {{SPECTER}: Document-level Representation Learning using Citation-informed Transformers},
++  author = {Cohan, Arman and Feldman, Sergey and Beltagy, Iz and Downey, Doug and Weld, Daniel},
++  booktitle = {Proceedings of the 58th Annual Meeting of the ACL}, year = {2020}, publisher = {ACL},
++  url = {https://aclanthology.org/2020.acl-main.207/}, doi = {10.18653/v1/2020.acl-main.207}, pages = {2270--2282}
++}
++@inproceedings{ostendorff-etal-2022-neighborhood,
++  title = {Neighborhood Contrastive Learning for Scientific Document Representations with Citation Embeddings},
++  author = {Ostendorff, Malte and Rethmeier, Nils and Augenstein, Isabelle and Gipp, Bela and Rehm, Georg},
++  booktitle = {Proceedings of the 2022 Conference on EMNLP}, year = {2022}, publisher = {ACL},
++  url = {https://aclanthology.org/2022.emnlp-main.802/}, doi = {10.18653/v1/2022.emnlp-main.802}, pages = {11670--11688}
++}
++```
++
++NOTES:
++- HotpotQA: HEADLINE. 2-hop over 2 wiki paragraphs + sentence-level supporting facts → construct cross-doc setting (answer para + linked supporting doc). Test cross-doc attention over graph edge vs flat concat.
++- welbl (WikiHop/MedHop): canonical "reasoning across linked documents" origin.
++- ho (2WikiMultiHopQA): harder, evidence-path annotated, mitigates HotpotQA shortcuts.
++- trivedi (MuSiQue): 2-4 hop by composition; stress-test >2 hops.
++- jiang (HoVer): many-hop claim verification (extends QA→verification).
++- geva (StrategyQA): implicit reasoning control. press (Bamboogle): clean 2-hop compositionality probe.
++- ding/tu/qiu (Cognitive Graph/HDE/DFGN): prior graph-multihop READERS at inference; we replace bolt-on GNN reader with native attention across TAG edges in decoder-only LM.
++- CONTROLS (single-doc, should be unaffected): zellers HellaSwag, clark2018 ARC, bisk PIQA, sakaguchi WinoGrande, mihaylov OpenBookQA, clark2019 BoolQ.
++- saier2020/2023 unarXive: arXiv \cite citation graph = our training corpus (nodes=papers, edges=citations). Cite whichever release ingested (likely 2022/2023).
++- lo S2ORC: larger citation-graph alt. hu OGB (ogbn-arxiv): canonical TAG citation graph, GNN comparability.
++- consonni WikiLinkGraphs: wiki hyperlink graph underlying our wiki corpus. merity WikiText: conventional wiki LM benchmark.
++- beltagy SciBERT (sci text, ignores citation graph), cohan SPECTER + ostendorff SciNCL (use citation edges for DOC EMBEDDINGS; we inject link edges into generative LM via cross-doc attention).
++
++FLAGS: SimpleWiki has NO canonical paper (cite as dataset/URL). PIQA/WinoGrande/OGB/WikiLinkGraphs/WikiText proceedings pages filled from standard refs, reverify. ARC=AI2 techreport (no peer venue). WinoGrande authoritative venue AAAI2020.
++NOTE overlap: consonni2019wikilinkgraphs ALSO in slice 02 (graph-aware) — dedup on merge.
++
+
+diff --git a/paper/bib/raw/07_arch_optimizer_infra.md b/paper/bib/raw/07_arch_optimizer_infra.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/bib/raw/07_arch_optimizer_infra.md
+@@ -0,0 +1,122 @@
++# Architecture / optimizer / training infra (agent a1a769f3) — verified vs arXiv/github
++
++PRIORITY (Muon + modded-nanoGPT), author-recommended @misc forms:
++
++```bibtex
++@misc{jordan2024muon,
++  author = {Keller Jordan and Yuchen Jin and Vlado Boza and Jiacheng You and Franz Cesista and Laker Newhouse and Jeremy Bernstein},
++  title  = {Muon: An optimizer for hidden layers in neural networks}, year = {2024},
++  url    = {https://kellerjordan.github.io/posts/muon/}
++}
++@misc{liu2025muonscalable,
++  title  = {Muon is Scalable for {LLM} Training},
++  author = {Jingyuan Liu and Jianlin Su and Xingcheng Yao and Zhejun Jiang and Guokun Lai and Yulun Du and Yidao Qin and Weixin Xu and Enzhe Lu and Junjie Yan and Yanru Chen and Huabin Zheng and Yibo Liu and Shaowei Liu and Bohong Yin and Weiran He and Han Zhu and Yuzhi Wang and Jianzhou Wang and Mengnan Dong and Zheng Zhang and Yongsheng Kang and Hao Zhang and Xinran Xu and Yutao Zhang and Yuxin Wu and Xinyu Zhou and Zhilin Yang},
++  year = {2025}, eprint = {2502.16982}, archivePrefix = {arXiv}, primaryClass = {cs.LG}, url = {https://arxiv.org/abs/2502.16982}
++}
++@misc{jordan2024moddednanogpt,
++  author = {Keller Jordan and Jeremy Bernstein and Brendan Rappazzo and {@fernbear.bsky.social} and Boza Vlado and You Jiacheng and Franz Cesista and Braden Koszarsky and {@Grad62304977}},
++  title  = {modded-nanogpt: Speedrunning the NanoGPT baseline}, year = {2024},
++  url    = {https://github.com/KellerJordan/modded-nanogpt}
++}
++@misc{karpathy2022nanogpt,
++  author = {Andrej Karpathy}, title = {nanoGPT}, year = {2022}, url = {https://github.com/karpathy/nanoGPT}
++}
++@inproceedings{vaswani2017attention,
++  title = {Attention Is All You Need},
++  author = {Ashish Vaswani and Noam Shazeer and Niki Parmar and Jakob Uszkoreit and Llion Jones and Aidan N. Gomez and {\L}ukasz Kaiser and Illia Polosukhin},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2017}, url = {https://arxiv.org/abs/1706.03762}
++}
++@article{radford2019gpt2,
++  title = {Language Models are Unsupervised Multitask Learners},
++  author = {Alec Radford and Jeffrey Wu and Rewon Child and David Luan and Dario Amodei and Ilya Sutskever},
++  journal = {OpenAI technical report}, year = {2019}
++}
++@inproceedings{brown2020gpt3,
++  title = {Language Models are Few-Shot Learners},
++  author = {Tom B. Brown and Benjamin Mann and Nick Ryder and Melanie Subbiah and Jared Kaplan and Prafulla Dhariwal and Arvind Neelakantan and others},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2020}, url = {https://arxiv.org/abs/2005.14165}
++}
++@article{su2021roformer,
++  title = {RoFormer: Enhanced Transformer with Rotary Position Embedding},
++  author = {Jianlin Su and Yu Lu and Shengfeng Pan and Ahmed Murtadha and Bo Wen and Yunfeng Liu},
++  journal = {arXiv preprint arXiv:2104.09864}, year = {2021}, url = {https://arxiv.org/abs/2104.09864}
++}
++@inproceedings{zhang2019rmsnorm,
++  title = {Root Mean Square Layer Normalization}, author = {Biao Zhang and Rico Sennrich},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2019}, url = {https://arxiv.org/abs/1910.07467}
++}
++@article{so2021primer,
++  title = {Primer: Searching for Efficient Transformers for Language Modeling},
++  author = {David R. So and Wojciech Ma\'{n}ke and Hanxiao Liu and Zihang Dai and Noam Shazeer and Quoc V. Le},
++  journal = {arXiv preprint arXiv:2109.08668}, year = {2021}, url = {https://arxiv.org/abs/2109.08668}
++}
++@article{shazeer2020glu,
++  title = {GLU Variants Improve Transformer}, author = {Noam Shazeer},
++  journal = {arXiv preprint arXiv:2002.05202}, year = {2020}, url = {https://arxiv.org/abs/2002.05202}
++}
++@article{gemmateam2024gemma2,
++  title = {Gemma 2: Improving Open Language Models at a Practical Size}, author = {{Gemma Team}},
++  journal = {arXiv preprint arXiv:2408.00118}, year = {2024}, url = {https://arxiv.org/abs/2408.00118}
++}
++@inproceedings{press2017tying,
++  title = {Using the Output Embedding to Improve Language Models}, author = {Ofir Press and Lior Wolf},
++  booktitle = {Proceedings of the 15th Conference of the European Chapter of the ACL (EACL)}, year = {2017}, url = {https://arxiv.org/abs/1608.05859}
++}
++@inproceedings{inan2017tying,
++  title = {Tying Word Vectors and Word Classifiers: A Loss Framework for Language Modeling},
++  author = {Hakan Inan and Khashayar Khosravi and Richard Socher},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2017}, url = {https://arxiv.org/abs/1611.01462}
++}
++@inproceedings{kingma2015adam,
++  title = {Adam: A Method for Stochastic Optimization}, author = {Diederik P. Kingma and Jimmy Ba},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2015}, url = {https://arxiv.org/abs/1412.6980}
++}
++@inproceedings{loshchilov2019adamw,
++  title = {Decoupled Weight Decay Regularization}, author = {Ilya Loshchilov and Frank Hutter},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2019}, url = {https://arxiv.org/abs/1711.05101}
++}
++@inproceedings{micikevicius2018mixed,
++  title = {Mixed Precision Training},
++  author = {Paulius Micikevicius and Sharan Narang and Jonah Alben and Gregory Diamos and Erich Elsen and David Garcia and Boris Ginsburg and Michael Houston and Oleksii Kuchaiev and Ganesh Venkatesh and Hao Wu},
++  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2018}, url = {https://arxiv.org/abs/1710.03740}
++}
++@article{kaplan2020scaling,
++  title = {Scaling Laws for Neural Language Models},
++  author = {Jared Kaplan and Sam McCandlish and Tom Henighan and Tom B. Brown and Benjamin Chess and Rewon Child and Scott Gray and Alec Radford and Jeffrey Wu and Dario Amodei},
++  journal = {arXiv preprint arXiv:2001.08361}, year = {2020}, url = {https://arxiv.org/abs/2001.08361}
++}
++@article{hoffmann2022chinchilla,
++  title = {Training Compute-Optimal Large Language Models},
++  author = {Jordan Hoffmann and Sebastian Borgeaud and Arthur Mensch and others},
++  journal = {arXiv preprint arXiv:2203.15556}, year = {2022}, url = {https://arxiv.org/abs/2203.15556}
++}
++@inproceedings{ainslie2023gqa,
++  title = {GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints},
++  author = {Joshua Ainslie and James Lee-Thorp and Michiel de Jong and Yury Zemlyanskiy and Federico Lebr\'{o}n and Sumit Sanghai},
++  booktitle = {Proceedings of the 2023 Conference on EMNLP}, year = {2023}, url = {https://arxiv.org/abs/2305.13245}
++}
++@inproceedings{paszke2019pytorch,
++  title = {PyTorch: An Imperative Style, High-Performance Deep Learning Library},
++  author = {Adam Paszke and Sam Gross and Francisco Massa and others},
++  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2019}, url = {https://arxiv.org/abs/1912.01703}
++}
++@article{li2020pytorchddp,
++  title = {PyTorch Distributed: Experiences on Accelerating Data Parallel Training},
++  author = {Shen Li and Yanli Zhao and Rohan Varma and Omkar Salpekar and Pieter Noordhuis and Teng Li and Adam Paszke and Jeff Smith and Brian Vaughan and Pritam Damania and Soumith Chintala},
++  journal = {Proceedings of the VLDB Endowment}, volume = {13}, number = {12}, pages = {3005--3018}, year = {2020}, url = {https://arxiv.org/abs/2006.15704}
++}
++@inproceedings{ansel2024pytorch2,
++  title = {PyTorch 2: Faster Machine Learning Through Dynamic Python Bytecode Transformation and Graph Compilation},
++  author = {Jason Ansel and Edward Yang and Horace He and Natalia Gimelshein and Animesh Jain and Michael Voznesensky and Bin Bao and Peter Bell and David Berard and Evgeni Burovski and others},
++  booktitle = {Proceedings of the 29th ACM ASPLOS}, year = {2024}, doi = {10.1145/3620665.3640366}
++}
++@misc{submitit,
++  author = {J{\'e}r{\'e}my Rapin and Louis Martin and {Facebook AI Research}},
++  title  = {submitit: A lightweight tool for submitting Python functions onto a Slurm cluster}, year = {2020},
++  url    = {https://github.com/facebookincubator/submitit}
++}
++```
++
++NOTES: Muon(2D weights); liu2025 = Muon-scales-to-LLM; modded-nanogpt/nanogpt = recipe lineage; vaswani=transformer; radford2019/brown2020=decoder-only; su2021=RoPE; zhang2019=RMSNorm; so2021=squared-ReLU MLP; shazeer2020=SwiGLU(if compared); gemma2=logit soft-cap; press/inan=weight tying; adam/adamw; micikevicius=bf16; kaplan/chinchilla=scaling/token budget; gqa(if used); pytorch/ddp/pytorch2(torch.compile)/submitit=systems.
++FLAGS: ansel2024pytorch2 DOI/venue not web-confirmed (ACM 403); gemma2 soft-capping in body not abstract; press2017 correct title = "...to Improve Language Models".
++
+
+diff --git a/paper/main.tex b/paper/main.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/main.tex
+@@ -0,0 +1,60 @@
++% TAGSeq2TAGSeq
++% Top-level LaTeX document. Preamble targets a generic single-column ML-conference
++% style; replace the documentclass/style with the target venue's when chosen.
++\documentclass[11pt]{article}
++
++\usepackage[utf8]{inputenc}
++\usepackage[T1]{fontenc}
++\usepackage{microtype}
++\usepackage[margin=1in]{geometry}
++\usepackage{amsmath,amssymb}
++\usepackage{graphicx}
++\usepackage{booktabs}
++\usepackage{multirow}
++\usepackage{xcolor}
++\usepackage{subcaption}
++\usepackage[hidelinks]{hyperref}
++\usepackage{cleveref}
++\usepackage{natbib}
++
++\graphicspath{{figures/}}
++
++% --- editorial macros -------------------------------------------------------
++\newcommand{\method}{\textsc{TAGSeq2TAGSeq}\xspace}
++\usepackage{xspace}
++\newcommand{\doccausal}{\texttt{doc\_causal}\xspace}
++\newcommand{\crossdoc}{\texttt{cross\_doc\_link}\xspace}
++\newcommand{\concatlink}{\texttt{doc\_concat\_link}\xspace}
++\newcommand{\concat}{\texttt{doc\_concatenated}\xspace}
++\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
++% ---------------------------------------------------------------------------
++
++\title{\method: Training Language Models on Text-Attributed Graphs\\
++       with Link-Aware Cross-Document Attention}
++\author{\todo{authors}}
++\date{\today}
++
++\begin{document}
++\maketitle
++
++\begin{abstract}
++\input{sections/00_abstract}
++\end{abstract}
++
++\input{sections/01_introduction}
++\input{sections/02_related_work}
++\input{sections/03_method}
++\input{sections/04_datasets}
++\input{sections/05_experiments}
++\input{sections/06_results}
++\input{sections/07_analysis}
++\input{sections/08_conclusion}
++
++\bibliographystyle{plainnat}
++\bibliography{bib/refs}
++
++\appendix
++\input{sections/A_appendix}
++
++\end{document}
++
+
+diff --git a/paper/sections/00_abstract.tex b/paper/sections/00_abstract.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/00_abstract.tex
+@@ -0,0 +1,18 @@
++% ABSTRACT
++Most text corpora carry an implicit graph structure that standard language-model
++pretraining discards: Wikipedia articles hyperlink to related articles, source
++files import one another, and papers cite prior work. \method treats such a corpus
++as a \emph{text-attributed graph}---documents are nodes, links are edges---and makes
++that structure a first-class part of both pretraining and inference.
++% TODO: tighten once numbers are final.
++Two ingredients: (i) a graph traversal (BFS/DFS/random-walk) packs
++topologically-close documents into each long training sequence, and (ii) a custom
++sparse attention mask grants a linking document read-access, from the link position
++onward, into the document it links to, while causally isolating unrelated documents.
++The same link machinery runs at inference: a generated link that resolves to a
++corpus document pulls that document into the attention context.
++\todo{headline results sentence: cross-doc attention $>$ flat concatenation of the
++same linked content on multi-hop QA (+1.29 $\Delta$nll on HotpotQA-cross-doc) and
++cross-file code completion; effect isolated from compute via concat controls; a
++merged multi-source model strengthens the effect.}
++
+
+diff --git a/paper/sections/01_introduction.tex b/paper/sections/01_introduction.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/01_introduction.tex
+@@ -0,0 +1,32 @@
++\section{Introduction}
++\label{sec:intro}
++
++% Motivation: corpora are graphs, standard LM training flattens them.
++\todo{Open with the graph-structure-is-ignored motivation (Wikipedia links, Python
++imports, arXiv citations as three concrete edge types).}
++
++% The gap: retrieval/RAG uses links at inference; packing work orders docs but adds
++% no cross-doc attention; GNN/graph-LM work message-passes but doesn't train a
++% decoder-only LM's attention along edges.
++\todo{State the gap precisely against the three neighbouring literatures
++(retrieval-augmented LMs, sequence packing, graph-aware pretraining) --- pull from
++related work once the lit-review returns.}
++
++% Contribution list.
++\paragraph{Contributions.}
++\begin{itemize}
++  \item A pretraining framework that packs documents by graph traversal and grants
++        \emph{link-position-gated} cross-document attention along explicit edges
++        (\Cref{sec:method}).
++  \item Compute-controlled ablations (\concatlink, \concat) that attribute the gain
++        to the linking inductive bias rather than to extra attention FLOPs.
++  \item Evidence across three edge modalities---Wikipedia hyperlinks, code imports,
++        arXiv citations---that cross-document attention beats flat concatenation of
++        the same linked content on benchmarks built to require it, while remaining
++        neutral on single-document benchmarks.
++  \item A density-aware batch scheduler that removes the DDP rank imbalance caused
++        by variable mask sparsity, for a $1.45\times$ mean step speedup.
++  \item An inference/generation loop that resolves generated links against the
++        corpus and injects the target document, mirroring training.
++\end{itemize}
++
+
+diff --git a/paper/sections/02_related_work.tex b/paper/sections/02_related_work.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/02_related_work.tex
+@@ -0,0 +1,30 @@
++\section{Related Work}
++\label{sec:related}
++
++% This section is assembled from the literature-review pass. Each paragraph should
++% draw the train-on-structure vs. retrieve-at-inference distinction explicitly.
++
++\paragraph{Retrieval-augmented language models.}
++\todo{RAG, REALM, RETRO, kNN-LM, Atlas, FiD, REPLUG. Contrast: these retrieve into a
++frozen external store at inference; we train cross-document attention as a
++pretraining objective. Include the Google/DeepMind cached-per-document-KV work the
++author recalls (see lit-review agent output) as the closest inference-time analog.}
++
++\paragraph{Sequence packing and document composition.}
++\todo{In-Context Pretraining (Shi et al.), Structured Packing, Zhao et al. on
++sequence composition, best-fit packing. Contrast: they select/order documents but
++add no cross-document attention along explicit link edges.}
++
++\paragraph{Graph-aware and link-aware pretraining.}
++\todo{LinkBERT, Patton, GraphFormers, Edgeformers, GLEM, entity-aware LMs. Contrast:
++link used as a training-pair signal or GNN message-passing edge vs. our
++attention-edge in a decoder-only LM.}
++
++\paragraph{Long-context and sparse attention.}
++\todo{FlexAttention (machinery we build on), FlashAttention, Longformer/BigBird,
++Memorizing Transformers, Unlimiformer.}
++
++\paragraph{Repository-level code modeling.}
++\todo{The Stack, StarCoder2, DeepSeek-Coder (topological file ordering --- closest
++packing analog), RepoBench/CrossCodeEval/RepoCoder (retrieval at inference).}
++
+
+diff --git a/paper/sections/03_method.tex b/paper/sections/03_method.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/03_method.tex
+@@ -0,0 +1,42 @@
++\section{Method}
++\label{sec:method}
++
++\subsection{Text-attributed graphs}
++\todo{Formalize: corpus as directed graph $G=(V,E)$, node = document with a token
++sequence, edge $(A,B)$ = a detected link from $A$ to $B$. Link detectors run online.}
++
++\subsection{Graph-traversal packing}
++\todo{BFS/DFS/random-walk/random; token budget + per-doc token cap; why order matters
++for causal cross-doc attention (a doc can only attend to earlier docs in the pack).}
++
++\subsection{Link-aware attention masks}
++The four mask conditions, ordered by attention permitted
++($\doccausal < \crossdoc \le \concatlink \le \concat$):
++\begin{description}
++  \item[\doccausal] block-diagonal causal; documents fully isolated (baseline).
++  \item[\crossdoc] when $A$ links to $B$ and both are packed, tokens in $A$ from the
++        link position onward attend to all of $B$; asymmetric, causal order kept.
++  \item[\concatlink] compute control: grant from the \emph{entire} source document,
++        not just the link position (same connectivity, more attention).
++  \item[\concat] compute control: connected components merged into one causal
++        super-document (most attention, no inference-time linking).
++\end{description}
++\todo{Figure: the four masks on one 16k batch (reuse docs/images/mask_*.png).}
++\todo{Formal mask definition (indicator over token pairs); note FlexAttention block
++mask + custom Triton kernels make 32k-context sparse training tractable.}
++
++\subsection{Density-aware batch scheduling}
++\todo{Mask sparsity varies $6\times$ across packs $\to$ DDP rank imbalance. Offline
++epoch precompute + kv\_block\_count quantile buckets; ranks draw from the same bucket.
++$1.45\times$ mean step speedup. Reuse docs/images/density_aware_*.png.}
++
++\subsection{Inference: link-following generation}
++\todo{generate.py: after each token, run link detection; resolved links fetch the
++target doc into the attention context (retrieval mirroring training);
++--allow-generation-fallback synthesizes unresolved targets.}
++
++\subsection{Model and training recipe}
++\todo{Decoder-only transformer, RoPE, bf16, Muon (2D) + AdamW (embeddings/norms),
++weight tying + mid-training untie, squared-ReLU MLP, logit soft-cap; modded-nanoGPT
++lineage; Chinchilla-derived token budgets; DDP via SLURM/submitit.}
++
+
+diff --git a/paper/sections/04_datasets.tex b/paper/sections/04_datasets.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/04_datasets.tex
+@@ -0,0 +1,10 @@
++\section{Datasets}
++\label{sec:datasets}
++
++\todo{Table: SimpleWiki (275k nodes, ~108M tok, markdown hyperlinks), EnWikiSource
++(662k, ~612M), The Stack + 8 more languages (import edges), arXiv/unarXive 2024
++(~10B tok, \textbackslash cite edges). Merged-v2 = 11 sources jointly.}
++
++\todo{Link detectors per modality (Markdown, Python/Java/..., LaTeX \textbackslash
++cite, composite dispatch for the merged model). Graph splitting into train/val/test.}
++
+
+diff --git a/paper/sections/05_experiments.tex b/paper/sections/05_experiments.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/05_experiments.tex
+@@ -0,0 +1,15 @@
++\section{Experimental Setup}
++\label{sec:experiments}
++
++\todo{Model sizes (350M--1B, 1024d/24L default), 32k context, tuned recipe
++(muon\_lr=0.003, muon\_wd=0.1, VE-off), max\_grants=256.}
++
++\todo{Benchmarks: HotpotQA-cross-doc (multi-hop, the headline wiki metric);
++RepoBench-cross-doc (Python/Java, headline code metric); community\_pack held-out
++cross-doc perplexity; single-doc controls (HellaSwag, ARC, PIQA, WinoGrande,
++OpenBookQA, BoolQ, HumanEval). Define the cross-doc-vs-flat-concat contrast and the
++placebo control.}
++
++\todo{The 4-mask ablation and the traversal ablation (bfs/dfs/rw/random $\times$
++dc/cdl) design.}
++
+
+diff --git a/paper/sections/06_results.tex b/paper/sections/06_results.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/06_results.tex
+@@ -0,0 +1,29 @@
++\section{Results}
++\label{sec:results}
++
++\subsection{Cross-document attention beats flat concatenation}
++\todo{Wiki HotpotQA-cross-doc: cross-doc NLL 5.63 vs flat-linked 6.92,
++$\Delta$nll +1.29 (~19\% lower NLL, 3.6$\times$ lower ppl), n=738. Code
++RepoBench-cross-doc: Python +0.09, Java +0.03..+0.08 across traversals. Table.}
++
++\subsection{Single-document benchmarks are unaffected}
++\todo{All four masks statistically indistinguishable on hellaswag/arc/piqa/etc ---
++cross-doc attention has nothing to attend to on isolated docs, as predicted.}
++
++\subsection{Compute controls}
++\todo{\concat/\concatlink grant more attention but do not beat \crossdoc (e.g. code
++repobench\_ppl: cdl 7.25 vs concat 10.4 vs dc 8.94) --- the gain is the linking
++inductive bias, not FLOPs.}
++
++\subsection{Traversal ablation}
++\todo{Graph packing $\gg$ random for base LM (val 2.42 bfs/dfs vs 3.00 random);
++incremental cross-doc benefit is traversal-robust --- two decoupled axes.}
++
++\subsection{Diversity scaling (merged multi-source model)}
++\todo{11-source merge's cross-doc $\Delta$ is 1.7--11$\times$ larger than
++single-domain specialists despite far less per-domain data; flat 3.9B$\to$8B; joint
++training over many link types strengthens the cross-doc machinery itself.}
++
++\subsection{Density-aware scheduling efficiency}
++\todo{1.45$\times$ mean / 1.14$\times$ max step speedup; CoV collapse within buckets.}
++
+
+diff --git a/paper/sections/07_analysis.tex b/paper/sections/07_analysis.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/07_analysis.tex
+@@ -0,0 +1,9 @@
++\section{Analysis and Discussion}
++\label{sec:analysis}
++
++\todo{Why cross-doc $>$ concat: link-position gating vs. whole-doc concat.
++Why code $\ll$ wiki (~10$\times$ smaller effect): cross-file dependency is more
++local/predictable than Wikipedia bridge reasoning. community\_pack near-noise for
++code. Limitations: undertrained regime, scale ceiling, single-language benchmark
++coverage gaps (only Python/Java have RepoBench). Honest framing of the flat scaling.}
++
+
+diff --git a/paper/sections/08_conclusion.tex b/paper/sections/08_conclusion.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/08_conclusion.tex
+@@ -0,0 +1,8 @@
++\section{Conclusion}
++\label{sec:conclusion}
++
++\todo{Recap: making link structure a first-class part of pretraining attention
++yields a real, compute-controlled cross-document reasoning benefit across three edge
++modalities, strengthened by multi-source diversity. Future: scale, more edge types
++(Obsidian vaults), generation evaluation.}
++
+
+diff --git a/paper/sections/A_appendix.tex b/paper/sections/A_appendix.tex
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/paper/sections/A_appendix.tex
+@@ -0,0 +1,5 @@
++\section{Additional results}
++\label{app:results}
++\todo{Full per-language sweep tables, per-traversal ablation tables, community\_pack
++32k re-run numbers, hyperparameter sweep (LR/WD U-curves), kernel/backend details.}
++
+
+diff --git a/scripts/launch_sparsity_fresh.sh b/scripts/launch_sparsity_fresh.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/launch_sparsity_fresh.sh
+@@ -0,0 +1,47 @@
++#!/usr/bin/env bash
++# Launch the 19 graph-sparsity keep-runs FRESH on the SCHEDULE-CORRECTED configs
++# (max_optimizer_steps pinned: code 15000, wiki 14507 — matching each endpoint).
++# The prior runs were abandoned: they trained on an auto-derived ~37-45k LR schedule
++# (wrong warmup/cooldown/untie vs endpoints) — a scientific-validity break. This is
++# the first clean, schedule-matched run. See [[sparsity-watcher-resume-bug]].
++#
++# Idempotent + node-polite: skips any (ds,keep) already RUNNING, launches at most
++# (idle nodes) each invocation (re-run as capacity frees), staggered ~12s. No
++# --resume-from (fresh). No --exclude (bad nodes GPU-495/954/943 are drained).
++# 96h wall-time so runs don't TIMEOUT mid-training.
++#
++# DRYRUN=1 to preview. MAXLAUNCH=N to cap this invocation.
++set -uo pipefail
++REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
++
++ALL=(
++ javascript_keep0p25 javascript_keep0p5 javascript_keep0p75
++ typescript_keep0p25 typescript_keep0p5 typescript_keep0p75
++ thestack_keep0p25 thestack_keep0p5 thestack_keep0p75
++ rust_keep0p25 rust_keep0p5 rust_keep0p75
++ dart_keep0p25 dart_keep0p5 dart_keep0p75
++ wiki_merged_keep0p25 wiki_merged_keep0p5 wiki_merged_keep0p75 wiki_merged_keep1p0
++)
++
++# what (ds,keep) tags are already running? (skip them)
++running_tags="$(python3 /fss/evin_t/.claude/jobs/465d9eaf/tmp/live.py 2>/dev/null \
++  | grep -oE '[a-z_]+ keep[0-9p]+' | sed 's/ /_/' | sort -u)"
++
++launched=0
++MAXLAUNCH="${MAXLAUNCH:-999}"
++for name in "${ALL[@]}"; do
++  # normalize tag: config name uses {ds}_keep{K}; running tag uses {ds}_keep{K} too
++  if grep -qx "$name" <<< "$running_tags"; then echo "skip $name (already running)"; continue; fi
++  [ "$launched" -ge "$MAXLAUNCH" ] && { echo "hit MAXLAUNCH=$MAXLAUNCH"; break; }
++  idle=$(sinfo -p compute -h -t idle -o "%D" 2>/dev/null | head -1); idle=${idle:-0}
++  if [ "$idle" -lt 1 ]; then echo "no idle nodes — stopping (re-run later for the rest)"; break; fi
++  cfg="configs/sparsity/${name}_cdl.yaml"
++  [ -f "$cfg" ] || { echo "MISSING $cfg"; continue; }
++  if [ "${DRYRUN:-0}" = "1" ]; then echo "DRYRUN: $name (idle=$idle)"; launched=$((launched+1)); continue; fi
++  echo "=== launch $name (idle=$idle) ==="
++  python launch_slurm.py --nodes 1 --gpus-per-node 8 --time 96:00:00 \
++    --config "$cfg" --no-tail 2>&1 | grep -E "Job ID|Run dir"
++  launched=$((launched+1)); sleep 12
++done
++echo "=== launched $launched this invocation ==="
++
+
+diff --git a/scripts/launch_wiki_sparsity.sh b/scripts/launch_wiki_sparsity.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/launch_wiki_sparsity.sh
+@@ -0,0 +1,23 @@
++#!/usr/bin/env bash
++# Launch the 4 wiki graph-sparsity runs (interior keep{0.25,0.5,0.75} + keep=1.0
++# retrained on CORRECTED-packing epochs). Baked resume-safe configs; all FRESH (no
++# prior wiki keep ckpts). wiki recipe = wiki_crossdoc_best.yaml (lr0.003/VE-off/4ep).
++# Staggered ~12s; launches only into free nodes (stops when idle=0).
++# DRYRUN=1 to preview.
++set -uo pipefail
++REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null
++KEEPS=(keep0p25 keep0p5 keep0p75 keep1p0)
++n=0
++for k in "${KEEPS[@]}"; do
++  cfg="configs/sparsity/wiki_merged_${k}_cdl.yaml"
++  [ -f "$cfg" ] || { echo "MISSING $cfg"; continue; }
++  if [ "${DRYRUN:-0}" = "1" ]; then echo "DRYRUN: wiki $k cfg=$cfg <fresh>"; n=$((n+1)); continue; fi
++  idle=$(sinfo -p compute -h -t idle -o "%D" 2>/dev/null | head -1); idle=${idle:-0}
++  if [ "$idle" -lt 1 ]; then echo "no free nodes — stopping at $n (watcher will resume the rest as capacity frees)"; break; fi
++  echo "=== launch wiki $k (idle=$idle) ==="
++  python launch_slurm.py --nodes 1 --gpus-per-node 8 --time 6:00:00 \
++    --config "$cfg" --no-tail 2>&1 | grep -E "Job ID|Run dir"
++  n=$((n+1)); sleep 12
++done
++echo "=== launched $n wiki runs ==="
++
+
+diff --git a/scripts/relaunch_sparsity_clean.sh b/scripts/relaunch_sparsity_clean.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/relaunch_sparsity_clean.sh
+@@ -0,0 +1,52 @@
++#!/usr/bin/env bash
++# Relaunch the 15 code-dataset graph-sparsity interior keep-runs CLEANLY, using the
++# baked per-(ds,keep) configs (configs/sparsity/{ds}_{keep}_cdl.yaml) whose epoch_dirs
++# point at the subsampled schedules — so they are RESUME-SAFE (no CLI override for the
++# watcher to drop; see [[sparsity-watcher-resume-bug]]). Where a last-valid keep-density
++# checkpoint exists, resume from it (exact Muon+AdamW); else start fresh.
++# Staggered ~12s (avoid run-dir-collision). Launches only into free nodes.
++#
++# DRYRUN=1 bash scripts/relaunch_sparsity_clean.sh    # print plan
++set -uo pipefail
++REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null
++
++# ds keep resume_run_dir(""=fresh)   — resume dirs from relaunch_plan.py (2026-08-05)
++RUNS=(
++ "javascript 0p25 run_20260804_171138_972353"
++ "javascript 0p5  run_20260804_211844_277741"
++ "javascript 0p75 run_20260804_211858_627575"
++ "typescript 0p25 "
++ "typescript 0p5  run_20260804_211926_167053"
++ "typescript 0p75 run_20260804_211939_908957"
++ "thestack   0p25 run_20260804_211953_676337"
++ "thestack   0p5  run_20260804_212007_463712"
++ "thestack   0p75 run_20260804_212021_085438"
++ "rust       0p25 run_20260804_212034_839586"
++ "rust       0p5  run_20260804_212049_691789"
++ "rust       0p75 "
++ "dart       0p25 "
++ "dart       0p5  "
++ "dart       0p75 "
++)
++n=0
++for spec in "${RUNS[@]}"; do
++  read -r ds keep resume <<< "$spec"
++  cfg="configs/sparsity/${ds}_keep${keep}_cdl.yaml"
++  [ -f "$cfg" ] || { echo "MISSING CONFIG $cfg — skip"; continue; }
++  resume_args=""
++  if [ -n "$resume" ]; then
++    ck="$REPO/runs/$resume/checkpoints/latest.pt"
++    [ -f "$ck" ] && resume_args="--resume-from $ck" || echo "  warn: $ds $keep resume ckpt missing, going fresh"
++  fi
++  if [ "${DRYRUN:-0}" = "1" ]; then
++    echo "DRYRUN: $ds keep=$keep cfg=$cfg ${resume_args:-<fresh>}"; n=$((n+1)); continue
++  fi
++  idle=$(sinfo -p compute -h -t idle -o "%D" 2>/dev/null | head -1); idle=${idle:-0}
++  if [ "$idle" -lt 1 ]; then echo "no free nodes — stopping at $n launched"; break; fi
++  echo "=== launch $ds keep=$keep (idle=$idle) ${resume_args:+[resume]} ==="
++  python launch_slurm.py --nodes 1 --gpus-per-node 8 --time 6:00:00 \
++    --config "$cfg" --no-tail $resume_args 2>&1 | grep -E "Job ID|Run dir"
++  n=$((n+1)); sleep 12
++done
++echo "=== relaunched $n runs ==="
++
