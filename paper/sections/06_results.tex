@@ -111,7 +111,7 @@ reduced graph; \cref{fig:sparsity-train}), and cross the two axes into a surface
   \item \textbf{\cref{fig:sparsity-eval} (eval-time lines + cross-dataset law).} How a
   fixed trained model's cross-doc benefit grows as it is allowed to attend to more of
   the graph's links. \emph{Meaning:} for code the benefit rises near-linearly with
-  effective link density and the cross-dataset fit is strong ($r{=}0.95$), so it
+  effective link density and the cross-dataset fit is strong ($r{=}\val{sparsity.crossdoc_law.eval_r_code}$), so it
   extrapolates \emph{above} today's densest corpus; the honest density axis is
   effective co-packed grants/pack, not raw out-degree. Text (wiki, arxiv) is flat or
   slightly negative.
