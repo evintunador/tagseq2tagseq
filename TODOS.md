@@ -333,28 +333,6 @@ bottleneck.
 
 ## Eval
 
-### Leakage-stratified cross-doc Δnll (RETRO bpb(α) protocol — filed 2026-08-10)
-Our grant makes verbatim copying from the target more direct than retrieval baselines,
-and dedup is sampling-only, so raw perplexity gains risk being re-exposure of
-memorized/duplicated text (HotpotQA's 2017 Wikipedia and The Stack both overlap
-training data). Measure FIRST on the already-completed sweep (pure eval, no retrain):
-stratify the cross-doc Δnll by target<->context n-gram overlap α and show the effect
-survives at low overlap. Only if the low-overlap effect is weak do we go back to the
-datasets, filter, and re-run training — a HARD BLOCKER on final numbers *conditional*
-on the measurement demanding it, NOT a pre-committed retrain. Expect a steeper leakage
-slope than RETRO. (Related but distinct from the deferred dataset-side dedup blacklist
-item below, which is graph-construction dedup, not eval-side α-stratification.)
-
-### Placebo/derangement on the headline arms + fired-subset Δnll (filed 2026-08-10)
-Tier-2 ports already have the derangement placebo (`eval/benchmark_harness/tier2.py`,
-`placebo_separation` + bootstrap CI). The headline HotpotQA-cross-doc and
-RepoBench-cross-doc arms do NOT — they report only cross-vs-flat, where the cross arm
-sees strictly more tokens, so "is it the right doc or just more context?" is unanswered
-(acute given HotpotQA single-hop solvability). Extend the existing derangement machinery
-to the headline arms, or caveat prominently. Also report Δnll over the *fired* subset
-honestly (Repoformer's ~20/60/20 help/neutral/hurt split makes averaging over non-fired
-items misleading).
-
 ### Eval-time max_seq_len extension (long-context generalization probe — filed 2026-08-10)
 Cheap probe, no retrain: eval a 32k-trained checkpoint at larger max_seq_len (64k+) and
 check whether grants keep helping as context grows past the training window. Direct
