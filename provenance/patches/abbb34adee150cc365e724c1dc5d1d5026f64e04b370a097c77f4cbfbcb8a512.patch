@@ -1,0 +1,620 @@
+diff --git a/RESULTS.md b/RESULTS.md
+index c79b961..1b119ff 100644
+--- a/RESULTS.md
++++ b/RESULTS.md
+@@ -29,8 +29,32 @@ Winner (muon_lr=0.003, fully trained to step 14438, `doceval`, max_docs=1000):
+ First wiki model **statistically above chance** (hellaswag + arc_easy) — the old
+ ablation was indistinguishable from chance on everything. Config: 1024d/24L/8H,
+ `ve_layers: []`, `weight_tying:true` + `untie_at_frac:0.667`, cooldown_frac 0.4,
+-min_lr_ratio 0.1. Run dir `runs/20260715_232111...` (job 45065). Pending: seed-43
+-replica + doc_concatenated LR-transfer confirm; then a weight-decay sweep at 0.003.
++min_lr_ratio 0.1. Run dir `runs/20260715_232111...` (job 45065).
++
++**Follow-on tuning (2026-07-18):** weight-decay sweep found `muon_wd=1.2` (inherited)
++was ~12× too high — clean U-curve minimum at **muon_wd=0.1** (val 2.424 vs 2.548 @1.2).
++LR optimum stayed 0.003 across WD. Final tuned config: **muon_lr=0.003, muon_wd=0.1,
++VE-off**. wd=0.1 winner re-eval: ppl **3.75**, arc_easy 0.368, hellaswag 0.322.
++
++## CROSS-DOC THESIS CONFIRMED (2026-07-18) — the core result
++
++`hotpotqa_cross_doc` on the tuned **cross_doc_link** wiki model (bfs, run 45314) scores
++the same 2-hop questions two ways:
++
++| condition | mean NLL | perplexity |
++|-----------|:--------:|:----------:|
++| **cross-doc** (linked doc via cross-doc attention) | **5.63** | **278** |
++| flat-linked (same content concatenated, no cross-doc structure) | 6.92 | 1012 |
++
++**Δnll = +1.29 (~19% lower NLL, 3.6× lower perplexity) favoring cross-doc attention**
++(n=738). This is the project's central mechanism, confirmed at a properly-tuned
++operating point (the old undertrained run showed only +13.4%). On single-doc
++benchmarks all masks are ~identical (doc_causal / cross_doc_link / doc_concat_link
++all ppl≈3.84, hellaswag≈0.33) — the cross-doc advantage appears **only** on the
++multi-hop cross-doc benchmark, exactly as the hypothesis predicts.
++
++In progress: traversal ablation (cross_doc_link on dfs / random_walk / bfs — does
++traversal order change the cross-doc Δnll?); arxiv sweep (VE converging on 38B tok).
+ 
+ ---
+ 
+
+diff --git a/configs/wiki_crossdoc_dfs.yaml b/configs/wiki_crossdoc_dfs.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_crossdoc_dfs.yaml
+@@ -0,0 +1,100 @@
++# TRAVERSAL ABLATION — cross_doc_link on dfs (LR0.003/wd0.3/VE-off, 4-epoch).
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'dfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_dfs/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_dfs/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_dfs/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_dfs/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/configs/wiki_crossdoc_random_walk.yaml b/configs/wiki_crossdoc_random_walk.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/wiki_crossdoc_random_walk.yaml
+@@ -0,0 +1,100 @@
++# TRAVERSAL ABLATION — cross_doc_link on random_walk (LR0.003/wd0.3/VE-off, 4-epoch).
++# muon_lr=0.003, adamw_lr=3e-05. Goal: monotonic loss + above-chance benchmarks.
++# Generated from configs/wiki_merged_doc_causal.yaml.
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  strategy: 'random_walk'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/train
++  epoch_dirs:  [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_random_walk/epoch_0,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_random_walk/epoch_1,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_random_walk/epoch_2,/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_merged_random_walk/epoch_3]
++  val_dirs:
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
++  test_dirs:
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'cross_doc_link'
++  link_detector: 'markdown'
++  max_grants: 256
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: []            # VE banks OFF: 258M params removed to match 1.36B-tok corpus
++  shared_ve_bank: false
++  # use_bigram: false
++  # bigram_vocab_size: 251520
++
++optimizer:
++  type: 'muon'
++  muon_wd: 0.3             # WD SWEEP
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.003
++  adamw_lr: 3e-05
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # AUTO-DERIVED from 4 epoch_dirs (~14456 steps @ world=8); enables cooldown+untie
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 250
++  # Overwrite a single latest.pt every N optimizer steps (independent of val)
++  # so a kill/preemption loses at most N steps. Set to val_interval here.
++  # latest.pt embeds full optimizer state (>model size) — written to /fss-data
++  # each time; resume with --resume-from <run>/checkpoints/latest.pt (or best_model.pt).
++  save_latest_interval: 250
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  benchmarks:
++    - {name: held_out_perplexity,       conditions: [doceval]}
++    - {name: community_pack_perplexity, conditions: [doceval]}
++    - {name: wiki_qa,     conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++    - {name: hotpotqa,    conditions: [doceval]}
++  max_docs: 500
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
++  annotator_mode: corpus_only
++  annotator_strategies: [exact, norm, word_overlap_ordered]
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/docs/multilang_code_datasets_DESIGN.md b/docs/multilang_code_datasets_DESIGN.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/docs/multilang_code_datasets_DESIGN.md
+@@ -0,0 +1,360 @@
++# Multi-language code datasets — design doc (stage 1 of 4)
++
++Status: **DRAFT for review**. Author: Claude. Date: 2026-07-17.
++
++Plan (agreed): **spec/design → harness → one pilot language → fan-out**, each stage
++possibly handed to a fresh session. This doc is the spec. Nothing here is built yet.
++
++---
++
++## 0. Goal
++
++Extend the graph-structured code corpus beyond the Python subset of The Stack to
++additional programming languages, so we can train the cross-doc-link model on
++richer, multi-language code graphs. The hard requirement: **the pipeline that
++turns a new language's imports into graph edges must be un-gameable and produce
++verifiably high-quality data**, confirmed ultimately by a human reading the actual
++decoded content of packed batches.
++
++---
++
++## 1. How the existing Python pipeline works (shared background)
++
++A "link" is an intra-repo, file→file dependency edge. `import` → directed edge
++from the importing file-node to the imported file-node **within the same repo**.
++Nodes are keyed `owner/repo:path/to/file.py`; edges live as `outgoing`/`incoming`
++adjacency lists on each node in `tokenized_graph.jsonl`.
++
++The edge becomes attention through **three stages that must agree on one string
++key** — this agreement *is* the contract:
++
++1. **Build time** — `data/github_graph_extractor/{build_graph_streaming.py,extract.py}`.
++   Python-specific regexes extract imports; a hard-coded stdlib/3rd-party denylist
++   skips external imports; `module_path → candidate file path` resolution (with
++   `__init__.py` package semantics) picks the target file inside the repo.
++2. **Train / inference time** — `model/graph_traversal/python_import_detector.py`,
++   a `LinkDetector`. It **re-detects links from tokens** (not from the raw graph),
++   emitting `LinkInfo(link_end_pos, target_str)`. `index_doc_span(span)` produces
++   the corpus lookup key. The *only* thing that makes resolution work is that
++   `target_str` and `index_doc_span` live in the **same string space** (Python
++   strips the repo prefix so bare `utils/helpers.py` matches node
++   `owner/repo:utils/helpers.py`).
++3. **Mask** — `model/graph_traversal/cross_doc_mask.py`. Each resolved
++   `(link_pos → target_doc_id)` co-packed in one sequence becomes a grant
++   rectangle `[link_pos : source_end] × [target_start : target_end]`, OR-ed into
++   the predicate `causal & (same_doc | in_grant)`.
++
++**Single-repo constraint (Python):** because Python import strings say *what* not
++*where* (`import utils` — which file?), and bare paths like `setup.py` recur across
++repos, a Python corpus must contain **exactly one repo** or link targets are
++ambiguous. `data/make_repo_corpus.py` carves one repo out of a pretokenized dataset.
++
++### The `LinkDetector` contract a new language must satisfy
++(from `model/graph_traversal/link_detector.py`)
++
++```python
++class LinkInfo(NamedTuple):
++    link_end_pos: int   # EXCLUSIVE token pos just after the reference; grant starts here
++    target_str: str     # decoded target identifier; matched against index_doc_span(span)
++
++class LinkDetector(Protocol):
++    def __init__(self, decode_fn: Callable[[List[int]], str]): ...
++    def detect_links(self, input_ids: torch.Tensor) -> List[LinkInfo]: ...   # 1-D [seq_len]
++    def index_doc_span(self, span: Any) -> str: ...                          # corpus lookup key
++    # optional: detect_links_for_doc(span_tokens, raw_identifier) -> List[LinkInfo]
++    #           (span-local positions; used by Python for relative imports)
++```
++
++### The ~5 touch-points to add a language `<lang>`
++1. `data/document_sources.py` — a `DocumentSource` yielding `(normed_id, content)`.
++2. `data/pretokenize_<lang>.py` — thin wrapper picking that source (mirrors
++   `pretokenize_stack.py`).
++3. Graph extraction — language-specific import extraction + module→file resolution
++   (new module under `data/<lang>_graph_extractor/` or a parametrized extractor).
++4. `model/graph_traversal/<lang>_..._detector.py` — a `LinkDetector`, plus one
++   entry each in `make_link_detector` and `LINK_DETECTOR_NAMES`
++   (`link_detector.py:75,95`).
++5. `data/layout.py` — one entry in `_DETECTOR_INFERENCE_LAYOUT`
++   (`inference_layout_for_detector` raises on unknown detectors, so this can't be
++   silently skipped).
++
++Reused **unchanged**, language-agnostic: the sharding/writer core
++(`data/pretokenize.py`), `data.dataset.GraphIndex`/`PretokShardedBackend`,
++`data/split_graph.py`, `data/make_repo_corpus.py`, all of `cross_doc_mask.py` and
++the mask kernels.
++
++---
++
++## 2. The reward-hacking problem, precisely
++
++Any single scalar we might optimize is gameable:
++
++| Naive metric | The hack that scores perfectly | What it produces |
++|---|---|---|
++| link **resolution rate** (`resolved/detected`) | emit only links you're sure resolve; emit nothing → 0/0 | sparse or empty graph, "100%" |
++| **edge count** | emit every plausible pair | dense garbage graph, hallucinated edges |
++| detector==extractor **agreement** | same agent authors both → shared blind spot passes | subtly wrong, self-consistent |
++
++The defense is **precision AND recall measured against an independent oracle the
++implementing agent did not author**, plus structural invariants, plus a mandatory
++human read of real batch content. No single number; a panel that closes each hack.
++
++### Two axes: DETECTION vs. RESOLUTION (the key distinction)
++Turning an import into an edge is two steps, validated by **different** oracles:
++
++- **Detection** — find the import and extract its target *string* (`"github.com/x/y/pkg"`).
++  "What does this file import?"
++- **Resolution** — map that string to the *right* node in the corpus. "Which
++  document does it point to?"
++
++Tree-sitter answers **detection only** — it parses syntax and knows nothing about
++the corpus, so it cannot say whether a target string resolves, or resolves
++*correctly*. Resolution is the harder, more dangerous axis: a **mis-resolved** link
++is a false edge in the training graph — arguably worse than a missing one. So each
++axis needs its own oracle.
++
++### Are the LLMs allowed to use tree-sitter? YES — and it's not circular
++Language agents **should** use tree-sitter for the build-time extractor (hand-rolled
++regex like the old Python code would be a worse wheel). The apparent circularity
++(oracle = tree-sitter, impl = tree-sitter) is not a real hole:
++1. The oracle grades on **random real Stack files the agent doesn't curate** — you
++   can't teach-to-the-test when the test set is 50 unseen files.
++2. **We author and freeze the oracle's tree-sitter query ourselves**, independently
++   of the agent's; a query that misses an import form disagrees on real files.
++3. The genuinely independent checks are **resolution** and the **token-space runtime
++   detector** — neither is tree-sitter (the detector only has tokens, so it's a real
++   second implementation).
++
++### Layered oracle (strongest → broadest)
++| Axis | Oracle | Coverage |
++|---|---|---|
++| Detection (find imports) | frozen tree-sitter query (ours) on random real files | strong, near-complete |
++| Resolution (string → right node) | **language toolchain** (`go list`/`go/packages`, `cargo metadata`, `javac -Xlint`) on a *buildable* subset | gold, but narrow — Stack files rarely build standalone |
++| Resolution (broad) | hand-labeled fixture repos + structural invariants (target exists, no dangling, no self-link, identifier round-trip self-consistent) | broad, shallow |
++| Both, final | human sample-dump spot-check of `(import → resolved target)` pairs | judgment |
++
++**Honest limitation:** resolution precision/recall cannot be fully auto-oracle'd on
++arbitrary Stack code without the toolchain, and the toolchain needs buildable code.
++So resolution leans on fixtures + invariants + the human gate more than detection
++does. This is called out, not papered over.
++
++Tree-sitter is a **new dependency** (`tree_sitter` + per-language grammar wheels;
++none currently installed — verified). Where a grammar is weak, fall back to the
++language toolchain or hand-labeled fixtures and say so explicitly.
++
++---
++
++## 3. The test harness (stage 2) — what gets built
++
++A **frozen, language-agnostic conformance harness** that grades a language
++implementation. "Frozen" = the harness is written and reviewed BEFORE any language
++agent runs, lives behind tests, and an implementing agent may not modify it (only
++add a small per-language adapter that declares fixtures + the tree-sitter grammar
++name). This is what makes the gate un-gameable.
++
++### 3a. Per-language conformance suite (automated, checkpoint-free)
++Two scoring blocks, one per axis (§2), on a held sample of real files from that
++language's Stack subset:
++
++**DETECTION block** (oracle = frozen tree-sitter query):
++1. **Extractor vs. tree-sitter** — precision/recall of the build-time extractor's
++   import strings vs. tree-sitter's import set on the raw source text. Draft gate:
++   recall ≥ 0.90, precision ≥ 0.95. Report exact false-pos / false-neg examples.
++2. **Runtime detector vs. tree-sitter** — same, for `detect_links` on decoded
++   tokens. This is the genuinely-independent second implementation (token-space, no
++   tree-sitter). Both stages checked against the third-party oracle → closes the
++   shared-blind-spot hole.
++
++**RESOLUTION block** (oracle = toolchain on buildable subset + fixtures + invariants):
++3. **Resolution correctness on fixtures** — hand-labeled fixture repos with known
++   ground-truth edges; score precision/recall of `(target_str → resolved node)`
++   against the labels. This is the axis tree-sitter CANNOT check.
++4. **Toolchain cross-check (where buildable)** — on the subset of fixture/Stack code
++   that actually builds, compare resolved edges to the language toolchain's own
++   dependency output (`go list`/`go/packages`, etc.). Gold standard, narrow coverage.
++5. **Structural invariants** (cheap, always on):
++   - no self-links; every `outgoing` target exists as a node (no dangling edges);
++   - `link_end_pos` lands in decoded text immediately after the real import
++     statement (spot-verified by re-decoding around the position);
++   - DAG guard honored; `index_doc_span(node)` and `detect_links` `target_str`
++     occupy the same string space (round-trip: every real edge's target key is
++     reachable from some emitted `target_str`).
++6. **Resolvability audit** — fraction of emitted `target_str` that resolve via
++   `PretokCorpus._resolve_target`, reported ALONGSIDE precision/recall (never
++   alone), plus degree distribution, dangling rate, isolated-node fraction.
++
++### 3b. General dataset auditor (fills a real gap; reusable for Python too)
++A checkpoint-free CLI that points at any built `pretokenized_datasets/<name>` dir
++and reports: node/edge counts, out/in-degree distribution, dangling-edge rate,
++self-link rate, isolated-node fraction, and resolvability of a sampled set of
++detected links. This does not exist today (extractor stats are build-time only and
++per-dataset bespoke). It doubles as the Python-corpus sanity check.
++
++### 3c. Link sample-dump tool (feeds the human gate)
++A CLI that prints N random `(source doc, detected link surface text, resolved
++target identifier, target snippet)` tuples from a built dataset — no model needed.
++Complements `demo_traversal.py` (in-batch connectivity) and
++`visualize_llm_input.py` (per-doc layout + detected links). This is the artifact a
++human skims to confirm links point where they claim.
++
++### 3d. Mandatory human visual gate (final, non-automatable)
++For each language, before its data is accepted, a human runs
++`visualize_llm_input.py` / `visualize_epoch.py` on real packed batches and reads
++the decoded content: do the linked docs actually co-pack, does the link surface
++text sit where the tool says, does the target doc make sense as the import target?
++The harness produces a ready-to-review artifact bundle; a human signs off. **No
++language ships on green automated metrics alone.**
++
++---
++
++## 4. Language plan
++
++Ranked by how cleanly intra-repo file→file resolution maps onto the model.
++
++### Pilot: **Go** (stage 3)
++- Import strings are **globally unique by design**: modern Go (module mode,
++  universal since ~2019) has **no relative imports** — even a same-repo sibling
++  package is imported by its full module-qualified path
++  (`import "github.com/owner/repo/internal/foo"`). The string is a namespace
++  declared in `go.mod`; nothing hits the network at parse time. "Global" = the
++  string is globally unique, not a live fetch.
++- **Single-repo resolution** = strip the `go.mod` module prefix, remainder is the
++  package dir. **Multi-repo** = the full string is already the unique key, no strip.
++- **Enables multi-repo corpora** (cross-repo edges), since paths never collide.
++  This removes Python's single-repo eval bottleneck and yields a much denser graph.
++- **PILOT DECISION — package vs. file nodes.** A Go import points to a *package*
++  (a directory of many `.go` files), but the current model has *file*-nodes
++  (Python: import ≈ one file). Options: (a) fan one import out to an edge per file
++  in the target package, or (b) make **packages the node unit for Go** (concatenate
++  a package's files into one node). This does not exist in the Python model and must
++  be decided in the pilot. Leaning (b) — cleaner mapping, matches Go's own unit of
++  import — but it changes what a "document" is for code.
++- Best possible showcase and lowest-risk template for the fan-out.
++
++### Then, in order
++- **Java / Kotlin** — `package` == directory; imports are fully-qualified class
++  names (`com.google.common.collect.ImmutableList`) mapping deterministically to a
++  file path, near-globally-unique → also **multi-repo capable**.
++- **Rust** — `mod`/`use` tree rooted at the crate; needs mod-declaration graph
++  walking (not pure path convention). **Single-repo.**
++- **TypeScript / JavaScript** (stretch) — relative imports (`./foo`) are clean and
++  common, but full resolution (index files, extension inference, `package.json`
++  exports, `node_modules`) is messy. **Single-repo**, relative imports only at
++  first; high volume in The Stack.
++
++### Corpus scope decision (per language) — RESOLVED
++Approach: **start single-repo (identical to Python, lowest risk), make multi-repo
++a configurable relaxation.** Confirmed that multi-repo is compatible with the
++existing precompute partitioner (see §7), so the relaxation is safe where import
++strings are globally unique.
++- **Multi-repo capable** (relax after pilot): Go & Java/Kotlin — unique import
++  strings make cross-repo edges unambiguous → denser graph, no single-repo carve.
++- **Single-repo only**: Rust and TS/JS relative imports (path-relative → ambiguous
++  across repos, same as Python).
++- Multi-repo requires the language's `index_doc_span` to key on the **globally
++  unique import string** (full module path), not a bare repo-relative path, AND the
++  precompute dispatcher fix in §7.
++
++---
++
++## 5. Fan-out plan (stage 4)
++
++Once harness + Go pilot are proven:
++- One implementation sub-agent per approved language, **each in its own git
++  worktree** (`isolation: worktree`), producing a **branch/PR** — not committing to
++  a shared tree. Rationale: the *shared* files agents must edit —
++  `link_detector.py`'s registry + `data/layout.py`'s map — are exactly where they'd
++  collide; isolation + PR review avoids conflicts and gives a per-language human
++  checkpoint that dovetails with the mandatory visual gate. (Per-language files —
++  each detector, `pretokenize_<lang>.py`, extractor module — don't overlap.)
++- Agent deliverable = the ~5 touch-points + a per-language harness adapter
++  (fixtures + grammar name) — **not** any change to harness scoring code.
++- Acceptance = harness green (detection + resolution precision/recall, invariants,
++  resolvability report) **AND** human visual sign-off on real batches, reviewed at
++  PR time.
++- Launch/build discipline per CLAUDE.md (stagger jobs; artifacts to `/fss-data`,
++  never `/fss` for bulk I/O).
++
++---
++
++## 6. Resolved decisions (from review 2026-07-17)
++1. **Tree-sitter dependency — APPROVED.** Add `tree_sitter` + per-language grammar
++   wheels to the env.
++2. **Thresholds — APPROVED** as draft: recall ≥ 0.90 / precision ≥ 0.95, tunable
++   per language. Recall denominator counts **only in-corpus targets** (external
++   deps legitimately don't resolve and are excluded).
++3. **Go data — none exists yet; downloader is trivially retargetable.** The Stack
++   record schema is fully language-agnostic (`lang`, `ext`, `max_stars_repo_name`,
++   `max_stars_repo_path`, `content`), organized by `data_dir="data/<lang>"`. The
++   current `download_sample.py` hardcodes `data/python`; getting Go = parametrize
++   that to `data/go`. `StackJSONLSource` barely changes. (Verified 2026-07-17.)
++   TODO before pilot: confirm Go volume + `go.mod` presence in the downloaded slice.
++4. **Extraction approach — RESOLVED: tree-sitter in three roles.** The two stages
++   already consume different representations, so there's no tokenization conflict:
++   - **Build-time extractor** consumes **raw source text** → use tree-sitter as the
++     extraction engine (replaces hand regexes; strictly more correct).
++   - **Runtime `LinkDetector`** consumes **tokens** (all it has at train time) →
++     keeps its own lightweight token-space logic; can't run tree-sitter directly.
++   - **Oracle** = tree-sitter, grading BOTH stages.
++   The runtime detector stays simple *because* it is the checked thing, not the
++   checker — testability preserved, extractor quality improved.
++5. **Multi-repo — start single-repo, relax later (configurable).** See §4 and §7.
++
++## 7. Precompute partitioner + multi-repo (investigated 2026-07-17)
++Verdict: **the Voronoi partitioner is structurally repo-agnostic; multi-repo code
++graphs are compatible with it.** Details, all in `data/epoch_precompute.py`:
++- Two partitioners: `_partition_repos` (round-robins whole repos to workers,
++  assumes edges stay in-repo — the single-repo path) and
++  `_partition_graph_communities` (multi-source BFS **Voronoi**, used by wiki/arxiv,
++  co-locates linked docs; **never inspects identifiers**, only `neighbors_out/in`).
++- A multi-repo code graph with cross-repo edges would partition **identically to
++  arxiv/wiki** under the Voronoi path — the worker view, component assignment,
++  bucketing, and parallel driver are all repo-agnostic.
++- **The one trap:** the dispatcher `_is_repo_partitioned` returns True whenever
++  identifiers contain `:` (which `owner/repo:path` does), so it would *mis-route* a
++  multi-repo corpus to `_partition_repos`, severing cross-repo edges and collapsing
++  packs toward `doc_causal`. **Fix is one line** — prefer the Voronoi path when
++  cross-repo edges exist (or key the heuristic on something better than `:`). No
++  algorithmic work; the Voronoi code is unchanged.
++
++## 8. Data-availability probe (run 2026-07-18)
++
++Streamed ~3000 files/language from `bigcode/the-stack-dedup` (per-language
++`data_dir`). **Python baseline** (from existing `graph_100M_stats.json`): 3.56M
++nodes, 6.3M internal edges, ~7.3 files/repo, avg out-degree 1.78, ~4.0 imports/file.
++
++| Lang | imports/file | % files w/imports | chars/file | local-ish imports |
++|---|---|---|---|---|
++| Go | ~7.6 | 92% | 7772 | (all module-qualified) |
++| Java | ~9.5 | 88% | 5820 | (all FQN) |
++| Rust | ~5.0 | 86% | 7500 | ~35% (`crate::`/`super::`/`mod`) |
++| TypeScript | ~4.0 | 83% | 3878 | ~48% (`./`,`../`) |
++| JavaScript | ~2.5 | 60% | 10019 | ~45% (`./`,`../`) |
++
++**Takeaways:**
++- **Go & Java have the richest import density** (7.6 / 9.5 imports/file, ~90% files
++  with imports) — both beat Python's ~4.0. Strong graph potential. Go confirmed as
++  the pilot.
++- **Rust/TS/JS**: only 35–48% of imports are local (intra-repo); the rest are
++  external deps that legitimately won't resolve — reinforces the §6.2 decision to
++  count only in-corpus targets in the recall denominator.
++- **METHODOLOGY CAVEAT:** streaming reads the dataset *head*, which is NOT
++  repo-ordered, so a stream window shows ~1.1 files/repo — this is a **sampling
++  artifact and does NOT measure real co-location.** The pipeline hash-partitions the
++  *entire* dataset into repo buckets (Python's final graph averages ~7.3 files/repo).
++  Actual multi-file-repo density can only be measured after a full
++  `build_graph_streaming` pass. Import *density* and file *size* above ARE reliable
++  from streaming; repo co-location is NOT.
++- **`go.mod` files are sparse in a raw stream** (0 in first 4000) — expected, since
++  they're 1 per repo. The extractor must read the module prefix from `go.mod` when
++  present and fall back to a heuristic (longest common import prefix) when absent in
++  the sampled slice. Flag for the Go pilot.
++
++## 9. Companion task: Python re-implementation on the harness
++Once the harness exists, one agent **rewrites the existing Python extractor +
++detector to use tree-sitter** and pass the same conformance suite. Value: (a)
++validates the harness against a known-good language, (b) removes the last
++hand-regex extractor, (c) makes Python a peer of the new languages rather than a
++special case. This is a fan-out task like any other (own worktree + PR), but should
++run FIRST (or alongside Go) as the harness's reference conformance case.
++

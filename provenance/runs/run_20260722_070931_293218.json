@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "run_id": "run_20260722_070931_293218",
+  "naming_convention": "submitit",
+  "source_run_dirs": [
+    "/fss/evin_t/tagseq2tagseq/runs/run_20260722_070931_293218"
+  ],
+  "run_dir_exists": true,
+  "warnings": [],
+  "reproduce": {
+    "commit_hash": "603327651b789f1590ca9dbfe8b7bc0c07e9dfe0",
+    "branch": "main",
+    "remote_url": "https://github.com/evintunador/tagseq2tagseq.git",
+    "github_url": "https://github.com/evintunador/tagseq2tagseq/commit/603327651b789f1590ca9dbfe8b7bc0c07e9dfe0",
+    "git_is_dirty": true,
+    "patch": {
+      "hash": "ef9af8090eac4a7a51bdbcb908e2c087c7d5d215a903a03851bb73445f111d2d",
+      "path": "provenance/patches/ef9af8090eac4a7a51bdbcb908e2c087c7d5d215a903a03851bb73445f111d2d.patch",
+      "bytes": 2203
+    },
+    "config_path": "configs/go_ablation/go_random_cdl.yaml",
+    "cli_overrides": {},
+    "python_version": "3.13.2",
+    "torch_version": "2.10.0",
+    "torch_cuda_version": "12.8",
+    "cudnn_version": 91900,
+    "nvidia_driver_version": "560.35.03",
+    "slurm_job_id": "47236"
+  },
+  "environment": {
+    "gpu_model": "NVIDIA A100-SXM4-80GB",
+    "gpu_count": 8,
+    "world_size": 8,
+    "os_release": "5.15.0-122-generic"
+  },
+  "hyperparameters": {
+    "data": {
+      "dataset_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go",
+      "strategy": "random",
+      "layout_policy": "stochastic_slash_comment_prefix",
+      "inference_layout_policy": "slash_comment_prefix_eos",
+      "order_mode": "prefer_targets_first",
+      "doc_budget": null,
+      "train_dir": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/train",
+      "epoch_dirs": [
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_random/epoch_0",
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_random/epoch_1",
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_random/epoch_2",
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_random/epoch_3",
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_random/epoch_4",
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_random/epoch_5"
+      ],
+      "val_dirs": {
+        "val_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/val_community",
+        "val_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/val_random"
+      },
+      "test_dirs": {
+        "test_community": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/test_community",
+        "test_random": "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/test_random"
+      }
+    },
+    "model": {
+      "compile": true,
+      "compile_mode": "default",
+      "attention_backend": "triton",
+      "inference_attention_backend": "flex",
+      "mask_type": "cross_doc_link",
+      "link_detector": "go",
+      "max_grants": 256,
+      "activation_checkpointing": false,
+      "model_dim": 1024,
+      "num_layers": 24,
+      "num_heads": 8,
+      "max_seq_len": 32768,
+      "drop_path_rate": 0.0,
+      "fp8": false,
+      "weight_tying": true,
+      "untie_at_frac": 0.667,
+      "ignore_index": -100,
+      "dtype": "bfloat16",
+      "logit_softcap": 30.0,
+      "mtp_extra_weights": [
+        0.5,
+        0.25
+      ],
+      "mtp_decay_steps": 0,
+      "ve_layers": [],
+      "shared_ve_bank": false
+    },
+    "optimizer": {
+      "type": "muon",
+      "muon_wd": 0.1,
+      "adamw_wd": 0.005,
+      "momentum": 0.95,
+      "muon_beta2": 0.95,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "muon_lr": 0.003,
+      "adamw_lr": "3e-05",
+      "muon_momentum_warmup_steps": 300,
+      "adamw_embed_beta1": 0.5
+    },
+    "train_loop": {
+      "epochs": 1,
+      "max_optimizer_steps": 15000,
+      "warmup_steps": 300,
+      "cooldown_frac": 0.4,
+      "min_lr_ratio": 0.1,
+      "val_steps": 20,
+      "val_interval": 250,
+      "save_latest_interval": 250,
+      "atomic_feature_kwargs": {
+        "norm_clip_value": 1.0,
+        "accum_steps": 1
+      }
+    },
+    "seed": 42,
+    "eval": {
+      "run_on_completion": true,
+      "benchmarks": [
+        {
+          "name": "held_out_perplexity",
+          "conditions": [
+            "doceval"
+          ]
+        },
+        {
+          "name": "community_pack_perplexity",
+          "conditions": [
+            "baseline",
+            "experimental"
+          ]
+        },
+        {
+          "name": "humaneval_buggy",
+          "conditions": [
+            "doceval"
+          ],
+          "language": "go"
+        }
+      ],
+      "max_docs": 500,
+      "link_fuzzy_match": false
+    }
+  },
+  "hyperparameters_sha256": "1a77114d333bfbe3d17946e5ea47fadbf122a1d45013ee0649291bc8e9901b21",
+  "timestamps": {
+    "run_started": "2026-07-22T07:09:31",
+    "slurm_start_time": "1784715242",
+    "slurm_end_time": "1785060842"
+  },
+  "eval": {
+    "present": true,
+    "eval_results_sha256": "393e8fb5a88d858db6e6cac3bd9e16c617da9b6befd6415c8dcd76b16975432f",
+    "metrics": {
+      "held_out_perplexity/doceval": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 1.323609783783555,
+        "perplexity": 3.7569587378158915,
+        "nll_ci_low": 1.2738661861866714,
+        "nll_ci_high": 1.3760133192904291,
+        "perplexity_ci_low": 3.57464612841066,
+        "perplexity_ci_high": 3.959086509713084
+      },
+      "community_pack_perplexity/baseline": {
+        "split": "val_community",
+        "n_packs": 204,
+        "mean_nll_cross_doc": 1.4432446909572882,
+        "mean_nll_baseline": 1.444208612648214,
+        "mean_delta": 0.0009639216909260826,
+        "delta_ci_low": -9.591772778467157e-05,
+        "delta_ci_high": 0.00228741092451656,
+        "cross_doc_ci_low": 1.379657645173621,
+        "cross_doc_ci_high": 1.5101212179197256,
+        "baseline_ci_low": 1.377952407494573,
+        "baseline_ci_high": 1.5127926369556668
+      },
+      "community_pack_perplexity/experimental": {
+        "split": "val_community",
+        "n_packs": 200,
+        "mean_nll_cross_doc": 1.4053006250984044,
+        "mean_nll_baseline": 1.4062315927171767,
+        "mean_delta": 0.0009309676187723503,
+        "delta_ci_low": -0.0002915416230196934,
+        "delta_ci_high": 0.002423484338405127,
+        "cross_doc_ci_low": 1.339810607153239,
+        "cross_doc_ci_high": 1.4762841641203575,
+        "baseline_ci_low": 1.344466182296649,
+        "baseline_ci_high": 1.479412399174423
+      },
+      "humaneval_buggy/doceval": {
+        "accuracy": 0.6829268292682927,
+        "accuracy_ci": [
+          0.6097560975609756,
+          0.7560975609756098
+        ],
+        "total_examples": 164
+      },
+      "community_pack_perplexity/baseline__val_community": {
+        "split": "val_community",
+        "n_packs": 204,
+        "mean_nll_cross_doc": 1.433516538487075,
+        "mean_nll_baseline": 1.434400623471436,
+        "mean_delta": 0.0008840849843606323,
+        "delta_ci_low": -8.469439130529938e-06,
+        "delta_ci_high": 0.0018443244496649772,
+        "cross_doc_ci_low": 1.315963408662932,
+        "cross_doc_ci_high": 1.5903454772353647,
+        "baseline_ci_low": 1.3171929301758956,
+        "baseline_ci_high": 1.584400986805337
+      },
+      "community_pack_perplexity/experimental__val_community": {
+        "split": "val_community",
+        "n_packs": 200,
+        "mean_nll_cross_doc": 1.4018899398019178,
+        "mean_nll_baseline": 1.4023431830826367,
+        "mean_delta": 0.00045324328071881417,
+        "delta_ci_low": -0.00035072631615197904,
+        "delta_ci_high": 0.001287799311075787,
+        "cross_doc_ci_low": 1.2854907558141881,
+        "cross_doc_ci_high": 1.5493251504674481,
+        "baseline_ci_low": 1.28512670135713,
+        "baseline_ci_high": 1.5490386298151
+      },
+      "held_out_perplexity/baseline__val_random": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 1.4043666460067035,
+        "perplexity": 4.07294630738147,
+        "nll_ci_low": 1.3509567282058297,
+        "nll_ci_high": 1.4618798043388874,
+        "perplexity_ci_low": 3.8611178044736754,
+        "perplexity_ci_high": 4.314061502426875
+      },
+      "community_pack_perplexity/baseline__test_community": {
+        "split": "test_community",
+        "n_packs": 237,
+        "mean_nll_cross_doc": 1.44514147930475,
+        "mean_nll_baseline": 1.4449093022600947,
+        "mean_delta": -0.00023217704465514088,
+        "delta_ci_low": -0.0013529732078683015,
+        "delta_ci_high": 0.0008185331418910798,
+        "cross_doc_ci_low": 1.3657772868509934,
+        "cross_doc_ci_high": 1.5350685994947555,
+        "baseline_ci_low": 1.361393802033409,
+        "baseline_ci_high": 1.524724096496844
+      },
+      "community_pack_perplexity/experimental__test_community": {
+        "split": "test_community",
+        "n_packs": 233,
+        "mean_nll_cross_doc": 1.4146605666791596,
+        "mean_nll_baseline": 1.4149555699537306,
+        "mean_delta": 0.0002950032745709996,
+        "delta_ci_low": -0.0007352033965322994,
+        "delta_ci_high": 0.001273736563863338,
+        "cross_doc_ci_low": 1.326808897183121,
+        "cross_doc_ci_high": 1.496521685630481,
+        "baseline_ci_low": 1.329113735111049,
+        "baseline_ci_high": 1.495242309750392
+      },
+      "held_out_perplexity/baseline__test_random": {
+        "split": "all",
+        "num_docs": 500,
+        "mean_nll": 1.3902841505259276,
+        "perplexity": 4.015991036846184,
+        "nll_ci_low": 1.3363266498222948,
+        "nll_ci_high": 1.448730052760616,
+        "perplexity_ci_low": 3.8050405558415283,
+        "perplexity_ci_high": 4.257704020907381
+      }
+    },
+    "eval_source_files": [
+      "eval_results.json",
+      "eval_reeval256.json"
+    ]
+  },
+  "distilled_at": "2026-08-19T20:41:37Z"
+}

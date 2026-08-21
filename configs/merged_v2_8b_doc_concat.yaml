@@ -1,0 +1,161 @@
+# merged_all_v2 — 11 LINKED sources (NO fineweb), 3.9B COMPUTE-MATCHED control point.
+# Diversity-scaling experiment (see TODOS.md "Merge all datasets → diversity-scaling
+# experiment" + memory [[merged-corpus-build]]). This is the doc_causal BASELINE ARM;
+# its FLOP-matched twin is merged_v2_3p9b_cross_doc.yaml (identical except mask_type).
+# doc_causal ignores cross-doc links entirely (each doc attends causally within
+# itself); per-pack layout_name still applies. The within-model Δ vs the cross_doc
+# twin at this exact budget is the interpretable metric.
+# Recipe is the EXACT small-single-source-run recipe (muon_lr=0.003/wd=0.1, VE-off,
+# 15k steps ≈ 3.9B tok @ world=8, max_grants=256) so this run is a clean compute-match
+# to the per-language sweeps — the ONLY variable vs those runs is corpus DIVERSITY.
+# Packs are WITHIN-source (precomputed per source, balanced equal-ish + re-bucketed by
+# data/merge_packs.py); each pack carries its own layout_name so one BucketedPackDataset
+# decorates arxiv with the latex card and the rest with identifier/slash-comment cards.
+data:
+  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all_v2
+  train_shuffle_within_bucket_seed: 42   # interleave sources within density buckets (fixes wiki/arxiv forgetting); fixed seed = resume-consistent
+  strategy: 'bfs'
+  layout_policy: 'stochastic_identifier_prefix'   # default/fallback; per-pack layout_name overrides
+  inference_layout_policy: 'identifier_prefix_eos'
+  order_mode: 'prefer_targets_first'
+  doc_budget: null
+  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all_v2/splits/train
+  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/merged_all_v2/epoch_8b
+
+  # Per-source val: kept SEPARATE (not merged) for a per-link-type signal. Precomputed
+  # (not live) so packs carry baked per-source links + layout_name — correct regardless
+  # of the model's single config detector. val_dirs supplies each loader's graph;
+  # val_epoch_dirs supplies its packs (doc_ids index into that source's val graph).
+  val_dirs:
+    wiki_community:       /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_community
+    wiki_random:          /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged/splits/val_random
+    stack_community:      /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
+    stack_random:         /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+    arxiv_community:      /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
+    arxiv_random:         /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
+    go_community:         /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/val_community
+    go_random:            /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/go/splits/val_random
+    java_community:       /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/java/splits/val_community
+    java_random:          /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/java/splits/val_random
+    typescript_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_community
+    typescript_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/typescript/splits/val_random
+    kotlin_community:     /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/kotlin/splits/val_community
+    kotlin_random:        /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/kotlin/splits/val_random
+    rust_community:       /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_community
+    rust_random:          /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/rust/splits/val_random
+    javascript_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/val_community
+    javascript_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/javascript/splits/val_random
+    zig_community:        /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/zig/splits/val_community
+    zig_random:           /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/zig/splits/val_random
+    dart_community:       /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/val_community
+    dart_random:          /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/dart/splits/val_random
+  val_epoch_dirs:
+    wiki_community:       [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_val/val_community/epoch_0]
+    wiki_random:          [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/wiki_val/val_random/epoch_0]
+    stack_community:      [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/stack_val/val_community/epoch_0]
+    stack_random:         [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/stack_val/val_random/epoch_0]
+    arxiv_community:      [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_val/val_community/epoch_0]
+    arxiv_random:         [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_val/val_random/epoch_0]
+    go_community:         [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_val/val_community/epoch_0]
+    go_random:            [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/go_val/val_random/epoch_0]
+    java_community:       [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/java_val/val_community/epoch_0]
+    java_random:          [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/java_val/val_random/epoch_0]
+    typescript_community: [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/typescript_val/val_community/epoch_0]
+    typescript_random:    [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/typescript_val/val_random/epoch_0]
+    kotlin_community:     [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/kotlin_val/val_community/epoch_0]
+    kotlin_random:        [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/kotlin_val/val_random/epoch_0]
+    rust_community:       [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/rust_val/val_community/epoch_0]
+    rust_random:          [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/rust_val/val_random/epoch_0]
+    javascript_community: [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/javascript_val/val_community/epoch_0]
+    javascript_random:    [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/javascript_val/val_random/epoch_0]
+    zig_community:        [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_val/val_community/epoch_0]
+    zig_random:           [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/zig_val/val_random/epoch_0]
+    dart_community:       [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/dart_val/val_community/epoch_0]
+    dart_random:          [/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/dart_val/val_random/epoch_0]
+
+model:
+  compile: true
+  compile_mode: 'default'
+  attention_backend: 'triton'
+  inference_attention_backend: 'flex'
+  mask_type: 'doc_concatenated'
+  # doc_causal never resolves links → no link_detector / max_grants needed. The
+  # precomputed packs are IDENTICAL to the cross_doc arm (same doc_ids, same order);
+  # only the mask differs, so this is a clean FLOP/data-matched baseline.
+  activation_checkpointing: false
+  model_dim: 1024
+  num_layers: 24
+  num_heads: 8    # 8H × 128Dh = 1024
+  max_seq_len: 32768
+  drop_path_rate: 0.0
+  fp8: false
+  weight_tying: true
+  untie_at_frac: 0.667
+  ignore_index: -100
+  dtype: 'bfloat16'
+  logit_softcap: 30.0
+  mtp_extra_weights: [0.5, 0.25]
+  mtp_decay_steps: 0
+  ve_layers: []          # VE-OFF — matches the small-run sweep recipe
+  shared_ve_bank: false
+
+optimizer:
+  type: 'muon'
+  muon_wd: 0.1           # small-run recipe
+  adamw_wd: 0.005
+  momentum: 0.95
+  muon_beta2: 0.95
+  beta1: 0.9
+  beta2: 0.95
+  muon_lr: 0.003         # small-run recipe (fixed across scaling rungs)
+  adamw_lr: 3.0e-05   # 100:1 muon:adamw (re-pinned); 3.0e-05 form so YAML parses as float
+  muon_momentum_warmup_percent: 0.02   # 2% of full run (validated at 3.9B; 300 abs steps silently drifted to 0.5% at 16B)
+  adamw_embed_beta1: 0.5
+
+train_loop:
+  epochs: 1
+  max_optimizer_steps: 30340   # ~8B tok @ world=8 (30518 steps × 262144)
+  warmup_percent: 0.02   # 2% of full run (validated at 3.9B; 300 abs steps silently drifted to 0.5% at 16B)
+  cooldown_frac: 0.4
+  min_lr_ratio: 0.1
+  val_steps: 200
+  val_interval: 2000
+  save_latest_interval: 1000
+  atomic_feature_kwargs:
+    norm_clip_value: 1.0
+    accum_steps: 1   # world=8 × 32768 × accum1 = 262144 tok/step (matches small runs)
+
+seed: 42
+
+eval:
+  run_on_completion: true
+  benchmarks:
+    # No bare held_out/community_pack_perplexity — merged_all_v2 has no unified val
+    # split; per-source perplexity comes from the val_dirs split-eval loop, emitting
+    # per-source __suffix results (held_out_perplexity__wiki_random, __go_random, …).
+    # NB: NO hotpotqa_cross_doc / repobench_cross_doc here — those benchmarks assert a
+    # cross_doc_link model (they toggle a cross-doc mask); a doc_causal model can't run
+    # them. The cross-doc Δ comes from pairing THIS baseline's per-source held-out
+    # perplexity + the harness ports against the cross_doc twin's, post-hoc.
+    - {name: wiki_qa,             conditions: [doceval]}
+    - {name: hotpotqa,            conditions: [doceval]}
+    # detector-free general NLP sanity
+    - {name: hellaswag,           conditions: [doceval]}
+    - {name: boolq,               conditions: [doceval]}
+    - {name: openbookqa,          conditions: [doceval]}
+  max_docs: 500
+  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/wiki_merged
+  annotator_mode: corpus_only
+  annotator_strategies: [exact, norm, word_overlap_ordered]
+  link_fuzzy_match: true
+  link_fuzzy_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+  link_ed_threshold: 0.2
+
+# --- Smoke-test overrides (pass on CLI, don't edit here) ---
+# NOTE: do NOT lower max_seq_len — precomputed packs are token_budget=32768 and
+# BucketedPackDataset asserts materialized T==32768 (RoPE also asserts at 32k).
+# Shrink the MODEL and step counts only; keep the 32k sequence length.
+# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
+# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
+# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
+# --eval.max_docs 20

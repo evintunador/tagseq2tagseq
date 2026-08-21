@@ -39,8 +39,8 @@ REPO="/fss/evin_t/tagseq2tagseq"
 # Run dirs may live in the new default location (/fss-data, off-repo, survives worktree
 # deletion) OR the legacy <repo>/runs. Job name (ts2ts_<basename>) is root-agnostic, so
 # we resolve a basename against BOTH roots. Order = new first, then legacy. Extend via
-# TS2TS_RUNS_DIR (checked first).
-RUNS_DIRS=(${TS2TS_RUNS_DIR:+"$TS2TS_RUNS_DIR"} "/fss-data/evin_t/tagseq2tagseq_artifacts/runs" "$REPO/runs")
+# TS2TS_RUNS_ROOT (checked first; matches the default in main.py/launch_slurm.py).
+RUNS_DIRS=(${TS2TS_RUNS_ROOT:+"$TS2TS_RUNS_ROOT"} "/fss-data/evin_t/tagseq2tagseq_artifacts/runs" "$REPO/runs")
 NOTIFY="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/SWEEP_YIELD_NOTIFY.log"
 STATE_DIR="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/watcher_state"
 YIELD_LEDGER="$STATE_DIR/yielded_jobs.tsv"        # run_dir<TAB>config<TAB>killed_epoch<TAB>status

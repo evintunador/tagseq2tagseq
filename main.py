@@ -1634,13 +1634,13 @@ if __name__ == "__main__":
         # Rank 0 picks the run directory name; all ranks receive it via broadcast
         # so they agree on one name even when launched within the same second.
         if dist_mgr.is_main:
-            # Runs default OUTSIDE the repo (on /fss-data) so they survive worktree
-            # deletion and keep checkpoints off /fss. Override with TS2TS_RUNS_DIR.
+            # Runs live on the shared filesystem by default so they survive repo/worktree
+            # removal; override with TS2TS_RUNS_ROOT (e.g. a local path for throwaway runs).
             runs_root = os.environ.get(
-                "TS2TS_RUNS_DIR", "/fss-data/evin_t/tagseq2tagseq_artifacts/runs")
+                "TS2TS_RUNS_ROOT", "/fss-data/evin_t/tagseq2tagseq_artifacts/runs"
+            )
             run_dir = os.path.join(
-                runs_root,
-                datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                runs_root, datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
             )
         else:
             run_dir = None

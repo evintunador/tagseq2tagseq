@@ -10,7 +10,7 @@ Launcher options (all optional):
     --config PATH        Config YAML              (default: configs/baseline.yaml)
     --partition NAME     SLURM partition          (default: compute)
     --time HH:MM:SS      Wall-clock time limit    (default: 24:00:00)
-    --mem-per-gpu GB     CPU RAM per GPU in GB    (default: 64)
+    --mem-per-gpu GB     CPU RAM per GPU in GB    (default: 192)
     --cpus-per-task N    CPU cores per task/GPU   (default: 8)
     --exclude NODES      Comma-separated node list to exclude
     --no-tail            Don't follow logs interactively
@@ -169,7 +169,7 @@ def launch(
     config:        str   = "configs/baseline.yaml",
     partition:     str   = "compute",
     time_limit:    str   = "168:00:00",
-    mem_per_gpu:   int   = 128,
+    mem_per_gpu:   int   = 192,
     cpus_per_task: int   = 8,
     exclude:       str   = None,
     nodelist:      str   = None,
@@ -184,15 +184,13 @@ def launch(
     if "--config" not in main_argv:
         main_argv = ["--config", config] + main_argv
 
-    # Build a timestamped run directory. Default location is OUTSIDE the repo, on
-    # /fss-data — so runs survive worktree deletion and don't put multi-GB
-    # checkpoints on /fss. Override with TS2TS_RUNS_DIR. (The yield-watcher scans
-    # both this location and the legacy <repo>/runs.)
-    project_root = Path(__file__).parent
+    # Build a timestamped run directory on the shared filesystem so runs survive
+    # repo/worktree removal; override the root with TS2TS_RUNS_ROOT. (The yield-watcher
+    # scans both this location and the legacy <repo>/runs.)
+    runs_root = Path(os.environ.get(
+        "TS2TS_RUNS_ROOT", "/fss-data/evin_t/tagseq2tagseq_artifacts/runs"))
     run_id  = datetime.datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
-    runs_root = os.environ.get(
-        "TS2TS_RUNS_DIR", "/fss-data/evin_t/tagseq2tagseq_artifacts/runs")
-    run_dir = Path(runs_root) / run_id
+    run_dir = runs_root / run_id
     (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
     (run_dir / "logs").mkdir(exist_ok=True)
 
@@ -284,7 +282,7 @@ def main():
                         help="SLURM partition")
     parser.add_argument("--time",          type=str, default="168:00:00",
                         help="Wall-clock limit HH:MM:SS")
-    parser.add_argument("--mem-per-gpu",   type=int, default=64,
+    parser.add_argument("--mem-per-gpu",   type=int, default=192,
                         help="CPU RAM (GB) per GPU")
     parser.add_argument("--cpus-per-task", type=int, default=8,
                         help="CPU cores per task/GPU")

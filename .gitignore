@@ -210,7 +210,7 @@ __marimo__/
 .DS_Store
 
 # Specific to this repo
-runs/
+/runs/
 evals/
 logs/
 data/pretokenized_datasets/

@@ -1,0 +1,1093 @@
+diff --git a/configs/arxiv_cross_doc.yaml b/configs/arxiv_cross_doc.yaml
+index ede8c99..78b578c 100644
+--- a/configs/arxiv_cross_doc.yaml
++++ b/configs/arxiv_cross_doc.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/arxiv
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
+   strategy: 'bfs'
+   layout_policy: 'stochastic_latex_comment_prefix'
+   inference_layout_policy: 'latex_comment_prefix'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/arxiv/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/arxiv_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
+ 
+ model:
+   compile: true
+@@ -77,7 +77,7 @@ eval:
+     - {name: boolq,              conditions: [doceval, annotated]}
+     - {name: openbookqa,         conditions: [doceval, annotated]}
+   max_docs: 500
+-  annotator_corpus: <to/be/generated>/pretokenized_datasets/arxiv
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
+   annotator_mode: corpus_only
+   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+ 
+diff --git a/configs/arxiv_doc_causal.yaml b/configs/arxiv_doc_causal.yaml
+index 726369f..7131a24 100644
+--- a/configs/arxiv_doc_causal.yaml
++++ b/configs/arxiv_doc_causal.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/arxiv
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
+   strategy: 'bfs'
+   layout_policy: 'stochastic_latex_comment_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/arxiv/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/arxiv_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
+ 
+ model:
+   compile: true
+@@ -73,7 +73,7 @@ eval:
+     - {name: boolq,       conditions: [doceval]}
+     - {name: openbookqa,  conditions: [doceval]}
+   max_docs: 500
+-  annotator_corpus: <to/be/generated>/pretokenized_datasets/arxiv
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
+   annotator_mode: corpus_only
+   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+ 
+diff --git a/configs/arxiv_doc_concatenated.yaml b/configs/arxiv_doc_concatenated.yaml
+index b3216bd..bc03cb8 100644
+--- a/configs/arxiv_doc_concatenated.yaml
++++ b/configs/arxiv_doc_concatenated.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/arxiv
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
+   strategy: 'bfs'
+   layout_policy: 'stochastic_latex_comment_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/arxiv/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/arxiv_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/arxiv_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/arxiv/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/arxiv/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv/splits/test_random
+ 
+ model:
+   compile: true
+@@ -79,7 +79,7 @@ eval:
+     - {name: boolq,       conditions: [doceval]}
+     - {name: openbookqa,  conditions: [doceval]}
+   max_docs: 500
+-  annotator_corpus: <to/be/generated>/pretokenized_datasets/arxiv
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/arxiv
+   annotator_mode: corpus_only
+   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+ 
+diff --git a/configs/simplewiki_cross_doc.yaml b/configs/simplewiki_cross_doc.yaml
+index c0d3880..93c3f61 100644
+--- a/configs/simplewiki_cross_doc.yaml
++++ b/configs/simplewiki_cross_doc.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/simplewiki
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'identifier_prefix_eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/simplewiki/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/simplewiki_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/simplewiki_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_random
+ 
+ model:
+   compile: true
+@@ -82,7 +82,7 @@ eval:
+     - {name: hotpotqa,           conditions: [doceval]}
+     - {name: hotpotqa_cross_doc, conditions: [experimental]}
+   max_docs: 500
+-  annotator_corpus: <to/be/generated>/pretokenized_datasets/simplewiki
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+   annotator_mode: corpus_only
+   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+ 
+diff --git a/configs/simplewiki_doc_causal.yaml b/configs/simplewiki_doc_causal.yaml
+index 70fc451..270f3ae 100644
+--- a/configs/simplewiki_doc_causal.yaml
++++ b/configs/simplewiki_doc_causal.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/simplewiki
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/simplewiki/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/simplewiki_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/simplewiki_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_random
+ 
+ model:
+   compile: true
+@@ -77,7 +77,7 @@ eval:
+     - {name: openbookqa,  conditions: [doceval]}
+     - {name: hotpotqa,    conditions: [doceval]}
+   max_docs: 500
+-  annotator_corpus: <to/be/generated>/pretokenized_datasets/simplewiki
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+   annotator_mode: corpus_only
+   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+ 
+diff --git a/configs/simplewiki_doc_concatenated.yaml b/configs/simplewiki_doc_concatenated.yaml
+index 56b181a..5d01799 100644
+--- a/configs/simplewiki_doc_concatenated.yaml
++++ b/configs/simplewiki_doc_concatenated.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/simplewiki
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/simplewiki/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/simplewiki_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/simplewiki_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/simplewiki/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/test_random
+ 
+ model:
+   compile: true
+@@ -83,7 +83,7 @@ eval:
+     - {name: openbookqa,  conditions: [doceval]}
+     - {name: hotpotqa,    conditions: [doceval]}
+   max_docs: 500
+-  annotator_corpus: <to/be/generated>/pretokenized_datasets/simplewiki
++  annotator_corpus: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
+   annotator_mode: corpus_only
+   annotator_strategies: [exact, norm, word_overlap_ordered, edit_distance]
+ 
+diff --git a/configs/thestack_cross_doc.yaml b/configs/thestack_cross_doc.yaml
+index 120724c..4aad433 100644
+--- a/configs/thestack_cross_doc.yaml
++++ b/configs/thestack_cross_doc.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'identifier_prefix_eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true
+diff --git a/configs/thestack_doc_causal.yaml b/configs/thestack_doc_causal.yaml
+index ac5f61d..ede4b7d 100644
+--- a/configs/thestack_doc_causal.yaml
++++ b/configs/thestack_doc_causal.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true
+diff --git a/configs/thestack_doc_concatenated.yaml b/configs/thestack_doc_concatenated.yaml
+index c0281f1..06aea30 100644
+--- a/configs/thestack_doc_concatenated.yaml
++++ b/configs/thestack_doc_concatenated.yaml
+@@ -1,18 +1,18 @@
+ data:
+-  dataset_dir: <to/be/generated>/pretokenized_datasets/thestack
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack
+   strategy: 'bfs'
+   layout_policy: 'stochastic_identifier_prefix'
+   inference_layout_policy: 'eos'
+   order_mode: 'prefer_targets_first'
+   doc_budget: null
+-  train_dir:   <to/be/generated>/pretokenized_datasets/thestack/splits/train
+-  epoch_dirs:  <to/be/generated>/schedules/thestack_bfs/epoch_0
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0
+   val_dirs:
+-    val_community: <to/be/generated>/pretokenized_datasets/thestack/splits/val_community
+-    val_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/val_random
++    val_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_community
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/val_random
+   test_dirs:
+-    test_community: <to/be/generated>/pretokenized_datasets/thestack/splits/test_community
+-    test_random:    <to/be/generated>/pretokenized_datasets/thestack/splits/test_random
++    test_community: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_community
++    test_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/test_random
+ 
+ model:
+   compile: true
+diff --git a/model/graph_traversal/cross_doc_mask.py b/model/graph_traversal/cross_doc_mask.py
+index fd9176a..170213f 100644
+--- a/model/graph_traversal/cross_doc_mask.py
++++ b/model/graph_traversal/cross_doc_mask.py
+@@ -12,6 +12,10 @@ See also:
+ 
+ import logging
+ import math
++import os
++import time
++from collections import defaultdict
++from contextlib import contextmanager
+ from dataclasses import dataclass, field
+ from typing import Any, Dict, List, Optional, Set, Tuple
+ 
+@@ -23,6 +27,49 @@ from .link_detector import LinkDetector, LinkInfo
+ 
+ logger = logging.getLogger(__name__)
+ 
++# ---------------------------------------------------------------------------
++# Optional per-phase mask-build profiling.  Zero overhead unless the env var
++# TS2TS_MASK_PROFILE is truthy.  When enabled, MASK_PROFILE accumulates summed
++# wall-time (and call counts) per named phase across every mask build, so a
++# profiler can attribute step time to link-detection vs grant-bitmask vs BIM
++# construction.  Read/reset via mask_profile_snapshot() / mask_profile_reset().
++# ---------------------------------------------------------------------------
++_MASK_PROFILE_ON = os.environ.get("TS2TS_MASK_PROFILE", "").strip().lower() in ("1", "true", "yes")
++MASK_PROFILE_TIMES: "defaultdict[str, float]" = defaultdict(float)
++MASK_PROFILE_COUNTS: "defaultdict[str, int]" = defaultdict(int)
++
++
++@contextmanager
++def _mask_phase(name: str):
++    """Time a mask-build phase into MASK_PROFILE_* (no-op unless profiling on)."""
++    if not _MASK_PROFILE_ON:
++        yield
++        return
++    if torch.cuda.is_available():
++        torch.cuda.synchronize()
++    t0 = time.perf_counter()
++    try:
++        yield
++    finally:
++        if torch.cuda.is_available():
++            torch.cuda.synchronize()
++        MASK_PROFILE_TIMES[name] += time.perf_counter() - t0
++        MASK_PROFILE_COUNTS[name] += 1
++
++
++def mask_profile_snapshot() -> Dict[str, Dict[str, float]]:
++    """Return {phase: {'total_s': float, 'calls': int, 'mean_ms': float}}."""
++    out: Dict[str, Dict[str, float]] = {}
++    for k, total in MASK_PROFILE_TIMES.items():
++        n = MASK_PROFILE_COUNTS[k]
++        out[k] = {"total_s": total, "calls": n, "mean_ms": (total / n * 1e3) if n else 0.0}
++    return out
++
++
++def mask_profile_reset() -> None:
++    MASK_PROFILE_TIMES.clear()
++    MASK_PROFILE_COUNTS.clear()
++
+ 
+ # ---------------------------------------------------------------------------
+ # TritonMaskInputs — all inputs needed by the v12 Triton kernel
+@@ -362,11 +409,12 @@ class CrossDocLinkMaskCreator:
+                         target_str=lk.target_str,
+                     )
+                 )
+-        logger.info(
+-            "_collect_links_per_doc: %d total LinkInfos across %d spans",
+-            len(all_links),
+-            len(doc_spans),
+-        )
++        if logger.isEnabledFor(logging.DEBUG):
++            logger.debug(
++                "_collect_links_per_doc: %d total LinkInfos across %d spans",
++                len(all_links),
++                len(doc_spans),
++            )
+         return all_links
+ 
+     def _match_links_to_docs(
+@@ -428,9 +476,10 @@ class CrossDocLinkMaskCreator:
+                 f"doc {target_doc_id} ('{link.target_str}')"
+             )
+ 
+-        logger.info(
+-            f"Matched {matched}/{len(links)} links to documents in batch"
+-        )
++        if logger.isEnabledFor(logging.DEBUG):
++            logger.debug(
++                "Matched %d/%d links to documents in batch", matched, len(links)
++            )
+         return link_to_target
+ 
+     def _build_cross_doc_mask(
+@@ -585,10 +634,11 @@ class CrossDocLinkMaskCreator:
+                     )
+                     grant_idx += 1
+ 
+-        logger.info(
+-            f"Built {grant_idx} cross-doc attention grants "
+-            f"across {self._n_chunks} chunk(s)"
+-        )
++        if logger.isEnabledFor(logging.DEBUG):
++            logger.debug(
++                "Built %d cross-doc attention grants across %d chunk(s)",
++                grant_idx, self._n_chunks,
++            )
+         return q_bitmasks, kv_bitmasks
+ 
+     def _build_block_interaction_mask(
+@@ -902,11 +952,12 @@ class CrossDocLinkMaskCreator:
+             bwd_q_kv_indices=bwd_q_kv_indices,
+             bwd_q_kv_n_full=bwd_q_kv_n_full,
+         )
+-        logger.info(
+-            f"Built BlockInteractionMask: {n_blocks} blocks, "
+-            f"{int(q_kv_counts.sum())} non-empty fwd pairs, "
+-            f"sparsity={bim.sparsity:.1%} (block_size={bs})"
+-        )
++        if logger.isEnabledFor(logging.DEBUG):
++            logger.debug(
++                "Built BlockInteractionMask: %d blocks, %d non-empty fwd pairs, "
++                "sparsity=%.1f%% (block_size=%d)",
++                n_blocks, int(q_kv_counts.sum()), bim.sparsity * 100, bs,
++            )
+         return bim
+ 
+     def __call__(
+@@ -939,16 +990,20 @@ class CrossDocLinkMaskCreator:
+             # Online path: detect links from tokens.
+             # Use per-doc detection when available (e.g. PythonImportDetector)
+             # so relative imports can be resolved from each span's raw_identifier.
+-            if hasattr(self.link_detector, "detect_links_for_doc"):
+-                links = self._collect_links_per_doc(tokens, doc_spans)
+-            else:
+-                links = self.link_detector.detect_links(tokens[0])
+-                logger.info(f"Found {len(links)} links in batch")
+-            link_to_target = self._match_links_to_docs(links, doc_spans)
++            with _mask_phase("link_detect"):
++                if hasattr(self.link_detector, "detect_links_for_doc"):
++                    links = self._collect_links_per_doc(tokens, doc_spans)
++                else:
++                    links = self.link_detector.detect_links(tokens[0])
++                    if logger.isEnabledFor(logging.DEBUG):
++                        logger.debug("Found %d links in batch", len(links))
++                link_to_target = self._match_links_to_docs(links, doc_spans)
+         else:
+-            logger.info(
+-                f"Using pre-computed link_to_target with {len(link_to_target)} entries"
+-            )
++            if logger.isEnabledFor(logging.DEBUG):
++                logger.debug(
++                    "Using pre-computed link_to_target with %d entries",
++                    len(link_to_target),
++                )
+ 
+         # Build document_ids tensor for base doc_causal mask
+         document_ids = torch.full((seq_len,), -1, dtype=torch.int32, device=device)
+@@ -969,25 +1024,28 @@ class CrossDocLinkMaskCreator:
+                 f"current_max_grants={current_max_grants}/{self.max_grants}"
+             )
+ 
+-        q_bms, kv_bms = self._build_grant_bitmasks(
+-            seq_len, doc_spans, link_to_target, device,
+-            max_grants_cap=current_max_grants,
+-        )
++        with _mask_phase("grant_bitmasks"):
++            q_bms, kv_bms = self._build_grant_bitmasks(
++                seq_len, doc_spans, link_to_target, device,
++                max_grants_cap=current_max_grants,
++            )
+ 
+         if self.backend == "triton":
+             # Precompute block interaction table — no FlexAttention BlockMask built.
+-            return self._build_block_interaction_mask(
+-                seq_len, document_ids, q_bms, kv_bms, device
+-            )
++            with _mask_phase("bim_build"):
++                return self._build_block_interaction_mask(
++                    seq_len, document_ids, q_bms, kv_bms, device
++                )
+ 
+         if self.backend in ("triton_v12", "triton_v17", "triton_v18"):
+             # Build BIM at block_size=128 (forward tiles) and package all
+             # kernel inputs into a TritonMaskInputs bundle.
+             saved_bs = self.triton_block_size
+             self.triton_block_size = 128
+-            bim128 = self._build_block_interaction_mask(
+-                seq_len, document_ids, q_bms, kv_bms, device
+-            )
++            with _mask_phase("bim_build_128"):
++                bim128 = self._build_block_interaction_mask(
++                    seq_len, document_ids, q_bms, kv_bms, device
++                )
+             self.triton_block_size = saved_bs
+ 
+             # For v12_bwd64: also build BIM at block_size=64 for the backward
+@@ -995,9 +1053,10 @@ class CrossDocLinkMaskCreator:
+             bim64 = None
+             if self.backend in ("triton_v17", "triton_v18"):
+                 self.triton_block_size = 64
+-                bim64 = self._build_block_interaction_mask(
+-                    seq_len, document_ids, q_bms, kv_bms, device
+-                )
++                with _mask_phase("bim_build_64"):
++                    bim64 = self._build_block_interaction_mask(
++                        seq_len, document_ids, q_bms, kv_bms, device
++                    )
+                 self.triton_block_size = saved_bs
+ 
+             return TritonMaskInputs(
+@@ -1029,7 +1088,8 @@ class CrossDocLinkMaskCreator:
+             device=device
+         )
+ 
+-        logger.info(f"Created cross-document link mask for sequence length {seq_len}")
++        if logger.isEnabledFor(logging.DEBUG):
++            logger.debug("Created cross-document link mask for sequence length %d", seq_len)
+         return block_mask
+ 
+     def build_dense_mask_for_visualization(
+diff --git a/profile_training.py b/profile_training.py
+index 38f2a78..4dcc771 100644
+--- a/profile_training.py
++++ b/profile_training.py
+@@ -53,11 +53,14 @@ from model import TS2TSTrainingModule
+ from model.graph_traversal.block_mask_creator import (
+     make_mask_creator_callable,
+     make_mask_creator_callable_from,
++    create_doc_causal_triton_mask,
++    create_doc_concat_triton_mask,
+ )
+ from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
+ from model.graph_traversal.link_detector import make_link_detector
+ from data.dataset import GraphIndex, PretokShardedBackend
+ from data.packed_dataset import PackedSequenceDataset
++from data.bucketed_pack_dataset import BucketedPackDataset
+ from data.layout import make_layout_policy
+ from data.pack_sampler import PackBatchSampler
+ from data.traversal import (
+@@ -154,14 +157,32 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+         order_mode=cfg.get('data', {}).get('order_mode', 'prefer_targets_first'),
+         layout_policy=layout_policy,
+     )
+-    # TODO: BucketedPackDataset path (pre-computed epoch) for profiling density-aware packing.
+-    dataset = PackedSequenceDataset(
+-        graph=graph_index,
+-        backend=backend,
+-        pack_sampler=pack_sampler,
+-        layout_policy=layout_policy,
+-        as_2d=True,
+-    )
++    # Use the precomputed BucketedPackDataset when epoch_dirs is given — that is
++    # the real production training regime (density-bucketed packs, per-rank draws
++    # in world_size lockstep).  Fall back to the live PackedSequenceDataset only
++    # when no precomputed schedule is supplied.
++    _epoch_dirs = cfg.get('data', {}).get('epoch_dirs')
++    if isinstance(_epoch_dirs, str):
++        _epoch_dirs = [p.strip() for p in _epoch_dirs.strip('[]').split(',') if p.strip()]
++    if _epoch_dirs:
++        _log(dist.rank, f"using BucketedPackDataset ({len(_epoch_dirs)} epoch dir(s))")
++        dataset = BucketedPackDataset(
++            epoch_dirs=_epoch_dirs,
++            graph=graph_index,
++            backend=backend,
++            layout=layout_policy,
++            rank=dist.rank,
++            world_size=dist.world_size,
++        )
++    else:
++        _log(dist.rank, "using live PackedSequenceDataset")
++        dataset = PackedSequenceDataset(
++            graph=graph_index,
++            backend=backend,
++            pack_sampler=pack_sampler,
++            layout_policy=layout_policy,
++            as_2d=True,
++        )
+     data_iter = iter(dataset)
+     _log(dist.rank, "dataset ready")
+ 
+@@ -171,25 +192,44 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+     seq_len    = cfg['model']['max_seq_len']
+     mask_type  = cfg.get('model', {}).get('mask_type', 'doc_causal')
+ 
+-    if mask_type == 'cross_doc_link':
+-        link_detector_name = cfg.get('model', {}).get('link_detector')
++    # Mask-creator wiring MUST mirror main.py exactly so the profile reflects the
++    # real training regime (triton kernels per mask_type), not the flex fallback.
++    _mcfg = cfg.get('model', {})
++    use_triton = _mcfg.get('attention_backend', 'triton') != 'flex'
++    detector = None
++    if mask_type in ('cross_doc_link', 'doc_concat_link'):
++        link_detector_name = _mcfg.get('link_detector')
+         if not link_detector_name:
+             raise ValueError(
+-                "model.link_detector must be set to 'markdown', 'python' or 'arxiv' "
+-                "when model.mask_type is 'cross_doc_link'"
++                "model.link_detector must be set ('markdown'|'python'|'arxiv') "
++                f"when model.mask_type is '{mask_type}'"
+             )
+         detector = make_link_detector(link_detector_name, enc.decode)
+-        _mcfg = cfg.get('model', {})
++        attention_backend = 'triton_v18' if use_triton else 'flex'
+         block_mask_creator = make_mask_creator_callable_from(
+             CrossDocLinkMaskCreator(
+                 link_detector=detector,
+                 max_grants=_mcfg.get('max_grants', 64),
+                 max_grants_start=_mcfg.get('max_grants_start'),
+                 max_grants_warmup_steps=int(_mcfg.get('max_grants_warmup_steps', 0)),
++                backend=attention_backend,
++                whole_doc_grant=(mask_type == 'doc_concat_link'),
+             )
+         )
++    elif mask_type == 'doc_concatenated':
++        if use_triton:
++            attention_backend = 'varlen_bim_v2'
++            block_mask_creator = make_mask_creator_callable_from(create_doc_concat_triton_mask)
++        else:
++            attention_backend = 'flex'
++            block_mask_creator = make_mask_creator_callable(mask_type)
+     else:
+-        block_mask_creator = make_mask_creator_callable(mask_type)
++        if use_triton and mask_type == 'doc_causal':
++            attention_backend = 'varlen_bim_v2'
++            block_mask_creator = make_mask_creator_callable_from(create_doc_causal_triton_mask)
++        else:
++            attention_backend = 'flex'
++            block_mask_creator = make_mask_creator_callable(mask_type)
+ 
+     tokenizer_name = graph_index.metadata.get('tokenizer', 'gpt2')
+     vocab_size = 50304 if tokenizer_name == 'gpt2' else cfg['model'].get('vocab_size', 50304)
+@@ -201,7 +241,6 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+         model_dim=cfg['model']['model_dim'],
+         num_heads=cfg['model']['num_heads'],
+         max_seq_len=seq_len,
+-        dropout=cfg['model'].get('dropout', 0.0),
+         drop_path_rate=cfg['model'].get('drop_path_rate', 0.0),
+         block_mask_creator=block_mask_creator,
+         fp8=cfg['model'].get('fp8', False),
+@@ -209,6 +248,10 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+         ignore_index=cfg['model'].get('ignore_index', -100),
+         dtype=getattr(torch, cfg['model'].get('dtype', 'bfloat16')),
+         activation_checkpointing=cfg['model'].get('activation_checkpointing', False),
++        attention_backend=attention_backend,   # resolved above to match mask creator
++        logit_softcap=cfg['model'].get('logit_softcap', None),
++        mtp_extra_weights=cfg['model'].get('mtp_extra_weights', None),
++        ve_layers=cfg['model'].get('ve_layers', None),
+     ).to(dist.device)
+     _log(dist.rank, "model built")
+ 
+@@ -511,6 +554,22 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
+     print(f"{'NCCL est.':<22} | {nccl_this:<28} | {nccl_all}", flush=True)
+ 
+     print(sep, flush=True)
++
++    # Intra-mask phase breakdown (only populated when TS2TS_MASK_PROFILE=1):
++    # attributes the mask_create CPU time to link-detection vs grant-bitmask vs
++    # BlockInteractionMask construction, so we can tell WHICH part is expensive.
++    try:
++        from model.graph_traversal.cross_doc_mask import mask_profile_snapshot
++        snap = mask_profile_snapshot()
++        if snap:
++            print("  mask-build phase breakdown (rank 0, TS2TS_MASK_PROFILE):", flush=True)
++            print(f"  {'phase':<18} {'calls':>6} {'total_s':>9} {'mean_ms':>9}", flush=True)
++            for ph, d in sorted(snap.items(), key=lambda kv: -kv[1]['total_s']):
++                print(f"  {ph:<18} {d['calls']:>6d} {d['total_s']:>9.3f} {d['mean_ms']:>9.2f}", flush=True)
++            print(sep, flush=True)
++    except Exception as _e:
++        print(f"  (mask phase breakdown unavailable: {_e})", flush=True)
++
+     if no_sync_steps == 0:
+         print("  Note: no_sync_steps=0 — NCCL estimate unavailable", flush=True)
+     if profile_steps > 0:
+diff --git a/tests/data/test_bucketed_pack_dataset.py b/tests/data/test_bucketed_pack_dataset.py
+index 46f9ed4..300dab8 100644
+--- a/tests/data/test_bucketed_pack_dataset.py
++++ b/tests/data/test_bucketed_pack_dataset.py
+@@ -261,3 +261,92 @@ class TestBucketedPackDataset:
+             it = iter(ds)
+             with pytest.raises(AssertionError, match="token_budget"):
+                 next(it)
++
++
++class TestBucketStateCheckpointPersistence:
++    """The checkpoint save helper must embed BucketState so the precomputed
++    data-schedule position survives a save/resume cycle.
++
++    Regression for the silent data-position loss: production uses the
++    ``multi_val`` checkpoint feature (``val_loaders`` plural), which routes
++    through the shared ``_save_best`` helper.  ``bucket_state`` persistence had
++    only been wired into the never-selected ``bucket_state_checkpoint`` feature,
++    so every resume restarted the epoch's data schedule from the beginning.
++    """
++
++    @staticmethod
++    def _save_best():
++        # Imported lazily so the test is skipped cleanly if tunalab is absent.
++        from tunalab.train_loops.checkpoint_best_model import _save_best
++        return _save_best
++
++    def test_save_best_persists_bucket_state(self):
++        """_save_best embeds bucket_state in metadata when bucket_state_fn is given,
++        and the saved dict round-trips back into a BucketState."""
++        import torch.nn as nn
++
++        _save_best = self._save_best()
++        model = nn.Linear(4, 4)
++        opt = torch.optim.SGD(model.parameters(), lr=0.1)
++        live_state = BucketState(epoch_idx=2, global_accum_step=4170,
++                                 bucket_consumed={0: 33, 1: 33})
++
++        with tempfile.TemporaryDirectory() as d:
++            _save_best(model, opt, val_loss=1.23, step=4170, output_dir=d,
++                       kwargs={"bucket_state_fn": lambda: live_state, "config": {}})
++            ckpt = torch.load(os.path.join(d, "checkpoints", "best_model.pt"),
++                              map_location="cpu", weights_only=False)
++            md = ckpt["metadata"]
++            assert "bucket_state" in md, "bucket_state missing from checkpoint metadata"
++            # Round-trips exactly back into a BucketState matching the live position.
++            restored = BucketState(**md["bucket_state"])
++            assert restored.epoch_idx == 2
++            assert restored.global_accum_step == 4170
++            assert restored.bucket_consumed == {0: 33, 1: 33}
++
++    def test_save_best_omits_bucket_state_without_fn(self):
++        """Back-compat: no bucket_state_fn → no bucket_state key (old behaviour)."""
++        import torch.nn as nn
++
++        _save_best = self._save_best()
++        model = nn.Linear(4, 4)
++        opt = torch.optim.SGD(model.parameters(), lr=0.1)
++        with tempfile.TemporaryDirectory() as d:
++            _save_best(model, opt, val_loss=1.23, step=10, output_dir=d,
++                       kwargs={"config": {}})
++            ckpt = torch.load(os.path.join(d, "checkpoints", "best_model.pt"),
++                              map_location="cpu", weights_only=False)
++            assert "bucket_state" not in ckpt["metadata"]
++
++    def test_dataset_resumes_from_persisted_state(self):
++        """End-to-end: get_state() → _save_best → reload → BucketedPackDataset
++        resumes at the exact same pack position."""
++        import torch.nn as nn
++
++        _save_best = self._save_best()
++        with tempfile.TemporaryDirectory() as tmp:
++            epoch_dir = _make_epoch_dir(tmp, n_buckets=2, packs_per_bucket=20)
++            epoch_dirs = [epoch_dir]
++
++            # Consume 5 accum steps, capture state, persist via the checkpoint helper.
++            ds1 = _make_dataset(epoch_dirs)
++            packs_first5 = _collect_pack_ids(ds1, 5)
++            live_state = ds1.get_state()
++
++            model = nn.Linear(4, 4)
++            opt = torch.optim.SGD(model.parameters(), lr=0.1)
++            _save_best(model, opt, val_loss=0.5, step=5, output_dir=tmp,
++                       kwargs={"bucket_state_fn": ds1.get_state, "config": {}})
++
++            ckpt = torch.load(os.path.join(tmp, "checkpoints", "best_model.pt"),
++                              map_location="cpu", weights_only=False)
++            restored = BucketState(**ckpt["metadata"]["bucket_state"])
++            assert restored.__dict__ == live_state.__dict__
++
++            # A fresh dataset resumed from the persisted state continues, not restarts.
++            ds2 = _make_dataset(epoch_dirs, start_state=restored)
++            packs_next5 = _collect_pack_ids(ds2, 5)
++            # No overlap with the first 5 — i.e. it did NOT replay from the top.
++            assert set(packs_first5).isdisjoint(set(packs_next5)), (
++                f"resume replayed already-consumed packs:\n  first5={packs_first5}\n  next5={packs_next5}"
++            )
+diff --git a/tunalab/train_loops/bucket_state_checkpoint.py b/tunalab/train_loops/bucket_state_checkpoint.py
+index ea473c4..9dfb30a 100644
+--- a/tunalab/train_loops/bucket_state_checkpoint.py
++++ b/tunalab/train_loops/bucket_state_checkpoint.py
+@@ -103,12 +103,12 @@ def run_training(
+         csv_file = open(csv_path, "w", newline="")
+         csv_writer = csv.writer(csv_file)
+         csv_writer.writerow(
+-            ["step", "total_s", "backward_s", "wait_s", "it_per_s", "loss"]
++            ["step", "total_s", "data_load_s", "backward_s", "wait_s", "it_per_s", "loss"]
+         )
+ 
+     if timing_enabled:
+         print(
+-            f"\n{'step':>6}  {'total_s':>8}  {'bwd_s':>7}  {'wait_s':>7}  "
++            f"\n{'step':>6}  {'total_s':>8}  {'data_s':>7}  {'bwd_s':>7}  {'wait_s':>7}  "
+             f"{'it/s':>7}  loss",
+             flush=True,
+         )
+@@ -144,8 +144,18 @@ def run_training(
+             cpu_barrier()
+ 
+     # ---- training loop ------------------------------------------------------
+-    for batch in train_loader:
++    # Iterate manually so we can time the data-fetch (iterator next) separately
++    # from compute — this is the true data-starvation signal on the REAL training
++    # path (bucketed/live dataset + backend I/O), not a separate profiler script.
++    _loader_iter = iter(train_loader)
++    while True:
++        t_data0 = time.perf_counter()
++        try:
++            batch = next(_loader_iter)
++        except StopIteration:
++            break
+         t_start = time.perf_counter()
++        data_load_s = t_start - t_data0   # wall time blocked on the dataloader
+ 
+         loss = model(batch)
+         loss.backward()
+@@ -168,21 +178,23 @@ def run_training(
+             _maybe_save()
+ 
+         # ---- record timing --------------------------------------------------
++        # total_s now spans the full step including the data fetch, so
++        # it_per_s reflects true end-to-end throughput.
+         bwd_s = t_after_bwd - t_start
+         wait_s = t_after_barrier - t_after_bwd
+-        total_s = t_after_barrier - t_start
++        total_s = t_after_barrier - t_data0
+         it_per_s = 1.0 / total_s if total_s > 0 else float("inf")
+         loss_val = float(loss.detach().cpu().item())
+ 
+         if csv_writer is not None:
+             csv_writer.writerow(
+-                [step_count, f"{total_s:.4f}", f"{bwd_s:.4f}",
++                [step_count, f"{total_s:.4f}", f"{data_load_s:.4f}", f"{bwd_s:.4f}",
+                  f"{wait_s:.4f}", f"{it_per_s:.3f}", f"{loss_val:.4f}"]
+             )
+ 
+         if timing_enabled:
+             print(
+-                f"{step_count:>6}  {total_s:>8.3f}  {bwd_s:>7.3f}  "
++                f"{step_count:>6}  {total_s:>8.3f}  {data_load_s:>7.3f}  {bwd_s:>7.3f}  "
+                 f"{wait_s:>7.3f}  {it_per_s:>7.2f}  {loss_val:.4f}",
+                 flush=True,
+             )
+
+diff --git a/downnode_rank_wrapper.sh b/downnode_rank_wrapper.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/downnode_rank_wrapper.sh
+@@ -0,0 +1,46 @@
++#!/bin/bash
++# Per-rank wrapper invoked by torchrun.
++#
++# Compile-cache strategy (CLAUDE.md "Multi-rank runs need a pre-warmed compile
++# cache"): all ranks of a run share ONE cache dir, NOT per-rank dirs.  With
++# TORCHINDUCTOR_COMPILE_THREADS=1 (set by launch_downnode.sh) inductor/triton
++# take a FileLock per cache key, so exactly one rank compiles each kernel and
++# the others block on the lock then read the artifact.  Per-rank dirs instead
++# make all N ranks cold-compile the SAME kernels concurrently — which deadlocks
++# the heavy custom cross-doc-link (BIM/FlexAttention) kernel (observed: rank0
++# idle while ranks1-3 spin forever in compile).  doc_causal/doc_concatenated
++# (lighter varlen kernels) tolerated per-rank dirs; cross_doc did not.
++#
++# Cache lives on /fss-data and is keyed by RUN_TAG so it persists across runs
++# (a second run of the same tag is a warm cache hit = fast startup) but distinct
++# configs don't collide.
++set -euo pipefail
++REPO=/fss/evin_t/tagseq2tagseq
++RUN_TAG="$1"; shift
++
++# NODE-LOCAL shared cache (/tmp = local ext4), shared by this node's 4 ranks.
++# Must NOT be on /fss-data: that is NFS, and inductor/triton FileLocks taken by
++# 3 nodes x 4 ranks = 12 procs concurrently on one NFS server DEADLOCK (observed:
++# the node that grabs the NFS lock first compiles; the others' rank0 freezes
++# while ranks1-3 spin forever).  Node-local /tmp gives reliable within-node
++# FileLock serialization (1 rank compiles each kernel, the node's other 3 read)
++# with ZERO cross-node lock contention.  Cost: each node compiles independently
++# (no cache reuse across nodes) — fine, 3 parallel local compiles beats a deadlock.
++SHARED_CACHE=/tmp/ts2ts_compile_cache_${RUN_TAG}
++export TORCHINDUCTOR_CACHE_DIR=${SHARED_CACHE}/inductor
++export TRITON_CACHE_DIR=${SHARED_CACHE}/triton
++mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
++
++# main.py installs no console log handler, so logger.info (graph load, compile,
++# cache-vs-mock decision) is invisible by default.  Force INFO logging to stderr
++# so down-node runs are observable, then exec main.py via runpy.
++export PYTHONUNBUFFERED=1
++exec "$REPO/.venv/bin/python" -u -c "
++import logging, sys, runpy
++logging.basicConfig(level=logging.INFO,
++                    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
++                    stream=sys.stderr)
++sys.argv = ['main.py'] + sys.argv[1:]
++runpy.run_path('$REPO/main.py', run_name='__main__')
++" "$@"
++
+
+diff --git a/launch_downnode.sh b/launch_downnode.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/launch_downnode.sh
+@@ -0,0 +1,74 @@
++#!/bin/bash
++# Launch a torchrun training job on a SLURM-detached "down" node
++# (GPU-269/423/694 — broken 8th GPU, not in SLURM, ssh-only).
++#
++# Parameterized so multiple jobs can share a node on disjoint GPU sets:
++#   thestack : 4 GPUs (0-3) x accum 2  = 262144 tok/step
++#   arxiv    : 2 GPUs      x accum 4   = 262144 tok/step
++#   wiki     : 1 GPU       x accum 8   = 262144 tok/step
++#
++# Usage (run ON the node):
++#   launch_downnode.sh <config> <run_tag> <gpus> <accum> <max_opt_steps> [extra main.py args...]
++# where <gpus> is a CUDA_VISIBLE_DEVICES list, e.g. "0,1,2,3" or "4,5" or "6".
++# Back-compat: if <gpus>/<accum>/<max_opt_steps> omitted → thestack defaults
++# (0,1,2,3 / 2 / 27488).
++set -euo pipefail
++
++REPO=/fss/evin_t/tagseq2tagseq
++VENV=$REPO/.venv
++ART=/fss-data/evin_t/tagseq2tagseq_artifacts
++
++CONFIG="$1"; shift
++RUN_TAG="$1"; shift
++GPUS="${1:-0,1,2,3}"; [ $# -gt 0 ] && shift || true
++ACCUM="${1:-2}";      [ $# -gt 0 ] && shift || true
++MAX_STEPS="${1:-27488}"; [ $# -gt 0 ] && shift || true
++EXTRA_ARGS="$@"
++
++# nproc = number of GPUs in the list
++NPROC=$(awk -F',' '{print NF}' <<< "$GPUS")
++
++cd "$REPO"
++
++# --- env: replicate launch_slurm.py's critical settings ---
++export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
++export PYTORCH_ALLOC_CONF="expandable_segments:True"
++export TORCH_DIST_TIMEOUT_SECONDS=1800
++export NCCL_TIMEOUT=1800
++# Single-node intra-host: NVLink, no IB needed.
++# Prevent concurrent-compile deadlock (CLAUDE.md): synchronous in-process compile.
++export TORCHINDUCTOR_COMPILE_THREADS=1
++export TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0
++# Compile cache is a NODE-LOCAL shared dir keyed by RUN_TAG (set in
++# downnode_rank_wrapper.sh) — distinct RUN_TAGs get distinct caches, so jobs
++# sharing a node do not collide.
++
++export CUDA_VISIBLE_DEVICES="$GPUS"
++
++LOGDIR=$ART/pipeline_logs
++mkdir -p "$LOGDIR"
++LOG=$LOGDIR/downnode_${RUN_TAG}_$(hostname).log
++
++TOK_PER_STEP=$(( NPROC * ACCUM * 32768 ))
++echo "[launch_downnode] host=$(hostname) config=$CONFIG tag=$RUN_TAG gpus=$GPUS nproc=$NPROC accum=$ACCUM max_steps=$MAX_STEPS log=$LOG"
++echo "[launch_downnode] $NPROC GPUs x accum_steps=$ACCUM x 32768 = $TOK_PER_STEP tokens/step"
++
++# Random-ish port so jobs sharing a node don't clash on the rendezvous port.
++PORT=$(( 29500 + (RANDOM % 6000) ))
++
++nohup "$VENV/bin/torchrun" \
++    --standalone \
++    --nnodes=1 \
++    --nproc_per_node=$NPROC \
++    --master_port=$PORT \
++    --no-python \
++    "$REPO/downnode_rank_wrapper.sh" "$RUN_TAG" \
++    --config "$CONFIG" \
++    --train_loop.max_optimizer_steps $MAX_STEPS \
++    --train_loop.atomic_feature_kwargs.accum_steps $ACCUM \
++    $EXTRA_ARGS \
++    > "$LOG" 2>&1 &
++
++echo "[launch_downnode] PID=$! LOG=$LOG"
++echo "$LOG"
++
+
+diff --git a/mask_microbench.py b/mask_microbench.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/mask_microbench.py
+@@ -0,0 +1,45 @@
++"""Time the real cross_doc mask build phases on real bucketed batches.
++Run with TS2TS_MASK_PROFILE=1. Single process, no model fwd — isolates
++link-detect / grant-bitmask / BIM-build costs."""
++import os, sys, time, logging
++os.environ.setdefault("TS2TS_MASK_PROFILE", "1")
++logging.basicConfig(level=logging.WARNING)
++sys.path.insert(0, "/fss/evin_t/tagseq2tagseq")
++import torch, tiktoken
++from data.dataset import GraphIndex, PretokShardedBackend
++from data.bucketed_pack_dataset import BucketedPackDataset
++from data.layout import make_layout_policy
++from model.graph_traversal.cross_doc_mask import (
++    CrossDocLinkMaskCreator, mask_profile_snapshot, mask_profile_reset)
++from model.graph_traversal.link_detector import make_link_detector
++
++ddir = "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train"
++edir = "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0"
++N = int(sys.argv[1]) if len(sys.argv) > 1 else 20
++dev = torch.device("cuda:0")
++enc = tiktoken.get_encoding("gpt2")
++g = GraphIndex(ddir); b = PretokShardedBackend(g)
++layout = make_layout_policy("stochastic_identifier_prefix", encode_fn=lambda s: enc.encode(s, allowed_special="all"))
++ds = BucketedPackDataset(epoch_dirs=[edir], graph=g, backend=b, layout=layout, rank=0, world_size=4)
++det = make_link_detector("python", enc.decode)
++mc = CrossDocLinkMaskCreator(link_detector=det, max_grants=256, backend="triton_v18")
++it = iter(ds)
++# warmup (compile-independent; just cache & first-touch)
++for _ in range(3):
++    batch = next(it)
++    mc(tokens=batch["tokens"].to(dev), doc_spans=batch["doc_spans"],
++       link_to_target=batch.get("link_to_target"))
++mask_profile_reset()
++t0 = time.perf_counter()
++for _ in range(N):
++    batch = next(it)
++    mc(tokens=batch["tokens"].to(dev), doc_spans=batch["doc_spans"],
++       link_to_target=batch.get("link_to_target"))
++wall = time.perf_counter() - t0
++print(f"\n=== mask build over {N} real batches: {wall/N*1e3:.1f} ms/batch total ===")
++snap = mask_profile_snapshot()
++print(f"{'phase':<18} {'calls':>6} {'total_s':>9} {'mean_ms':>9}")
++for ph, d in sorted(snap.items(), key=lambda kv:-kv[1]['total_s']):
++    print(f"{ph:<18} {d['calls']:>6d} {d['total_s']:>9.3f} {d['mean_ms']:>9.2f}")
++b.close()
++
+
+diff --git a/profile_downnode.sh b/profile_downnode.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/profile_downnode.sh
+@@ -0,0 +1,36 @@
++#!/bin/bash
++# 2-GPU torchrun profiling run on free GPUs of a down-node, mirroring the real
++# training regime (triton kernels + compile + DDP + bucketed data).
++set -euo pipefail
++REPO=/fss/evin_t/tagseq2tagseq
++CONFIG="$1"; TAG="$2"; GPUS="$3"   # e.g. GPUS=4,5
++export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
++export TORCH_DIST_TIMEOUT_SECONDS=600
++export TORCHINDUCTOR_COMPILE_THREADS=1
++export TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0
++export TS2TS_MASK_PROFILE=1   # enable intra-mask phase timing (link/grant/BIM)
++export CUDA_VISIBLE_DEVICES="$GPUS"
++SHARED=/tmp/ts2ts_profcache_${TAG}
++LOG=/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/profile_${TAG}_$(hostname).log
++cd "$REPO"
++PORT=$(( 31000 + (RANDOM % 2000) ))
++cat > /tmp/profrank_${TAG}.sh <<INNER
++#!/bin/bash
++export TORCHINDUCTOR_CACHE_DIR=${SHARED}/inductor
++export TRITON_CACHE_DIR=${SHARED}/triton
++mkdir -p "\$TORCHINDUCTOR_CACHE_DIR" "\$TRITON_CACHE_DIR"
++export PYTHONUNBUFFERED=1
++export TS2TS_MASK_PROFILE=1
++exec ${REPO}/.venv/bin/python -u ${REPO}/profile_training.py "\$@"
++INNER
++chmod +x /tmp/profrank_${TAG}.sh
++nohup "$REPO/.venv/bin/torchrun" --standalone --nnodes=1 --nproc_per_node=2 --no-python \
++    --master_port=$PORT /tmp/profrank_${TAG}.sh \
++    --config "$CONFIG" \
++    --data.dataset_dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \
++    --data.epoch_dirs /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/thestack_bfs/epoch_0 \
++    --model.max_seq_len 32768 \
++    --profile.warmup_steps 3 --profile.profile_steps 15 --profile.no_sync_steps 5 \
++    > "$LOG" 2>&1 &
++echo "PID=$! LOG=$LOG"
++

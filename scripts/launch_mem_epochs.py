@@ -62,9 +62,30 @@ def epoch_dir(corpus: str, i: int) -> Path:
     return SCHED / f"{corpus}_bfs" / f"epoch_{i}"
 
 
+def _epoch_meta(corpus: str, i: int) -> dict:
+    return json.loads((epoch_dir(corpus, i) / "metadata.json").read_text())
+
+
 def n_packs(corpus: str, i: int) -> int:
-    meta = epoch_dir(corpus, i) / "metadata.json"
-    return json.loads(meta.read_text())["n_packs"]
+    return _epoch_meta(corpus, i)["n_packs"]
+
+
+def _achievable_steps(corpus: str, i: int, world_size: int, accum: int) -> int:
+    """Optimizer steps actually yielded by one epoch dir under BucketedPackDataset.
+
+    The loader consumes each of the n_buckets quantile buckets in world_size*accum
+    chunks and DROPS each bucket's partial tail every epoch, so usable steps =
+    n_buckets * floor(n_packs / (n_buckets * world_size * accum)), NOT
+    n_packs // (world_size*accum). Pinning to the latter overshoots and the run
+    dies "epoch dirs exhausted" a few %% early (benign for long runs, but exit-1
+    -> the yield-watcher may resume into a re-exhaustion loop). Pinning to the
+    achievable count -> clean exit at the last real step. Quantile buckets are
+    equal-count so floor-per-bucket is exact-to-slightly-under = safe.
+    """
+    m = _epoch_meta(corpus, i)
+    nb = int(m.get("n_buckets", 1)) or 1
+    per_batch = nb * world_size * accum
+    return nb * (m["n_packs"] // per_batch)
 
 
 def resolve_arm(corpus, mask, mode, n, world_size, accum):
@@ -81,7 +102,7 @@ def resolve_arm(corpus, mask, mode, n, world_size, accum):
         if not (d / "packs.parquet").exists():
             raise FileNotFoundError(f"missing {d}/packs.parquet (corpus={corpus} epoch_{i})")
     total = sum(n_packs(corpus, i) for i in idxs)
-    max_steps = total // (world_size * accum)
+    max_steps = sum(_achievable_steps(corpus, i, world_size, accum) for i in idxs)
     return dirs, total, max_steps
 
 
@@ -105,6 +126,12 @@ def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limi
         # Skip the config's run_on_completion benchmark suite (e.g. tiny pilot
         # arms, or a config whose annotator_corpus doesn't match this corpus).
         cmd += ["--eval.run_on_completion", "false"]
+    # Memorization experiment uses a COMMON muon_wd across masks so the cross-mask
+    # onset comparison isn't confounded by regularization strength. The wiki
+    # cross-doc base configs are tuned to wd 0.3 (val-loss optimum); pin them to
+    # 0.1 to match doc_causal. go configs are already all 0.1 (no-op there, but
+    # set explicitly for a self-documenting run record).
+    cmd += ["--optimizer.muon_wd", "0.1"]
     # simplewiki reuses wiki base configs but must point at simplewiki splits.
     if corpus == "simplewiki":
         base = str(ART / "pretokenized_datasets/simplewiki")
@@ -191,35 +218,48 @@ def main():
         cmd = build_command(a["corpus"], a["mask"], a["mode"], a["n"], a["dirs"],
                             a["steps"], args.nodes, args.gpus, args.time, args.no_eval) + ["--no-tail"]
         print(f"\n>>> submitting {a['label']}")
-        subprocess.run(cmd, cwd=str(REPO), check=True)
-        _wait_for_first_step(a["label"], args.first_step_timeout)
+        res = subprocess.run(cmd, cwd=str(REPO), check=True, capture_output=True, text=True)
+        if res.stdout:
+            print(res.stdout, end="")
+        run_dir = _parse_run_dir(res.stdout)
+        _wait_for_first_step(a["label"], run_dir, args.first_step_timeout)
     print("\nAll arms submitted.")
 
 
-def _wait_for_first_step(label, timeout):
-    """Poll for the newest run dir to reach a training step before returning.
+def _parse_run_dir(stdout):
+    """Extract this arm's run dir from launch_slurm.py's banner ('Run dir : ...')."""
+    for line in (stdout or "").splitlines():
+        if "Run dir" in line and "runs/" in line:
+            return Path(line.split(":", 1)[1].strip())
+    return None
 
-    Best-effort: scans runs/ for the most recently modified log and greps for a
-    training-step marker. Falls back to a fixed wait on timeout so the sweep does
-    not stall indefinitely (the yield-watcher handles resumes independently).
+
+def _wait_for_first_step(label, run_dir, timeout):
+    """Poll THIS arm's run dir for a training-step marker before returning.
+
+    Polls run_dir/logs/stderr.txt (+ .slurm/*_log.err) for this arm ONLY, so a
+    concurrently-running earlier arm can't trigger a false positive (the old
+    global-newest glob did, firing the next arm while this one was still PD /
+    cold-compiling — a concurrent-compile hazard on cold caches). Falls back to a
+    fixed timeout so the sweep never stalls; the yield-watcher resumes preempted
+    arms independently. If run_dir is unknown, degrades to a short fixed wait.
     """
-    runs = REPO / "runs"
+    markers = ("Training step", "Epoch 1/1:", "Starting Training")
+    if run_dir is None:
+        print(f"    {label}: run dir not parsed; waiting {min(180, timeout)}s before next.")
+        time.sleep(min(180, timeout))
+        return
     deadline = time.time() + timeout
-    marker_seen = False
     while time.time() < deadline:
-        time.sleep(30)
-        logs = sorted(runs.glob("*/logs/*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for lp in logs[:3]:
+        time.sleep(20)
+        for lp in list(run_dir.glob("logs/stderr.txt")) + list(run_dir.glob(".slurm/*_log.err")):
             try:
                 txt = lp.read_text(errors="ignore")
             except OSError:
                 continue
-            if "Training:" in txt or "step 1" in txt or "step=1" in txt:
-                marker_seen = True
-                break
-        if marker_seen:
-            print(f"    {label}: reached first step; launching next.")
-            return
+            if any(m in txt for m in markers):
+                print(f"    {label}: reached first step; launching next.")
+                return
     print(f"    {label}: first-step marker not seen within timeout; proceeding "
           f"(check the run manually — yield-watcher will resume if preempted).")
 

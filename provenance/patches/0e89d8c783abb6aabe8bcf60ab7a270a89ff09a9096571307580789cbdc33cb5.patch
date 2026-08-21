@@ -1,0 +1,73 @@
+
+diff --git a/scripts/precompute_code_round2.sh b/scripts/precompute_code_round2.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/precompute_code_round2.sh
+@@ -0,0 +1,34 @@
++#!/bin/bash
++# Round-2 precompute: finish rust/kotlin (interrupted when the dart merge broke
++# data/layout.py mid-run) and add dart/zig. Resume-safe (skips existing epochs).
++# All C-family langs → stochastic_slash_comment_prefix. Detector = lang name.
++# Epoch targets (need 120k packs for 15k steps @ world=8):
++#   rust ~37k→4  kotlin ~84k→2  dart ~13.9k→9  zig ~921→16 (zig is far below chinchilla;
++#   16 ep ≈ 1840 steps — a pragmatic floor, NOT 15k; zig config caps steps accordingly).
++set -uo pipefail
++REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
++
++# GUARD: abort immediately if the code doesn't import (catches merge-conflict breakage
++# like the one that silently burned the round-1 allocation for 7h).
++python -c "import data.layout, precompute_epochs; from model.graph_traversal.link_detector import LINK_DETECTOR_NAMES" || {
++  echo "[round2] IMPORT CHECK FAILED — aborting (repo likely mid-merge/broken)"; exit 1; }
++echo "[round2] import check OK"
++
++gen () { # lang n_epochs strat
++  local lang=$1 n=$2 strat=$3
++  echo "=== [$(date)] $lang/$strat → $n epoch(s) ==="
++  python precompute_epochs.py \
++    --dataset-dir "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/$lang/splits/train" \
++    --output-dir  "/fss-data/evin_t/tagseq2tagseq_artifacts/schedules/${lang}_${strat}" \
++    --n-epochs "$n" --strategy "$strat" --local-seq-len 32768 --n-buckets 32 --n-workers 32 \
++    --link-detector "$lang" --layout-policy stochastic_slash_comment_prefix \
++    --max-grants 256 --order-mode prefer_targets_first --device cpu \
++    || echo "[round2] WARN: $lang/$strat exited nonzero"
++}
++
++for s in bfs dfs random_walk random; do gen rust   4  "$s"; done
++for s in bfs dfs random_walk random; do gen kotlin 2  "$s"; done
++for s in bfs dfs random_walk random; do gen dart   9  "$s"; done
++for s in bfs dfs random_walk random; do gen zig    16 "$s"; done
++echo "=== [$(date)] ROUND-2 PRECOMPUTE DONE ==="
++
+
+diff --git a/scripts/resume_stagger.sh b/scripts/resume_stagger.sh
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/scripts/resume_stagger.sh
+@@ -0,0 +1,25 @@
++#!/bin/bash
++# Resume a list of stalled runs from their latest.pt, staggered (wait for each to reach
++# a training step before launching the next). Args: pairs of "config_path run_dir".
++set -uo pipefail
++REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
++EXCLUDE="GPU-954,GPU-749,GPU-495,GPU-386"
++while [ $# -ge 2 ]; do
++  cfg="$1"; rd="$2"; shift 2
++  ckpt="$REPO/runs/$rd/checkpoints/latest.pt"
++  if [ ! -f "$ckpt" ]; then echo "[resume] MISSING ckpt $ckpt — skip"; continue; fi
++  echo "[resume] $cfg  from runs/$rd/checkpoints/latest.pt"
++  out=$(python launch_slurm.py --nodes 1 --gpus-per-node 8 --config "$cfg" \
++        --time 96:00:00 --no-tail --exclude "$EXCLUDE" --resume-from "$ckpt" 2>&1)
++  jid=$(echo "$out"|grep -oE 'Job ID *: [0-9]+'|grep -oE '[0-9]+')
++  nrd=$(echo "$out"|grep -oE 'runs/run_[0-9_]+'|head -1)
++  echo "$jid  RESUME($rd)  $nrd  $cfg" >> runs/CODE_SWEEP_RUNMAP.txt
++  echo "[resume] -> job $jid $nrd"
++  for i in $(seq 1 60); do
++    grep -q "smart_compiled_loop.*Training step" "$nrd/logs/stderr.txt" 2>/dev/null && { echo "[resume] $jid TRAINING"; break; }
++    grep -qiE "Traceback|out of range|Error:|Process group cannot be None" "$nrd/logs/stderr.txt" "$nrd"/.slurm/*_0_log.err 2>/dev/null && { echo "[resume] $jid ERROR"; grep -iE "Error|Traceback" "$nrd"/.slurm/${jid}_0_log.err 2>/dev/null|tail -3; break; }
++    sleep 15
++  done
++done
++echo "[resume] all done."
++

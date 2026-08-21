@@ -1,0 +1,20 @@
+# LaTeX build artifacts — regenerate with `latexmk -pdf main.tex`.
+# The compiled PDF stays untracked until we cut a final version.
+*.pdf
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.synctex(busy)
+*.nav
+*.snm
+*.vrb
+*.bcf
+*.run.xml

@@ -1,0 +1,812 @@
+diff --git a/data/document_sources.py b/data/document_sources.py
+index 2a2460d..944f551 100644
+--- a/data/document_sources.py
++++ b/data/document_sources.py
+@@ -119,3 +119,37 @@ class ArxivUnarxiveSource:
+                     continue
+                 if normed_id in self._graph_normed_ids:
+                     yield normed_id, content
++
++
++class FineWebSource:
++    """
++    Yields (normed_id, content) for FineWeb docs from a pre-built content JSONL.
++
++    Identical reader contract to ArxivUnarxiveSource: the builder
++    (data/fineweb_graph_extractor/build_fineweb.py) already streamed FineWeb,
++    assigned normed ids, and wrote content.jsonl + an edgeless graph.jsonl. This
++    source is a thin reader that yields each record whose normed_id is in the
++    graph (keeps the tokenized corpus aligned with the graph after any filter).
++
++    Args:
++        content_jsonl: Path to the builder's content JSONL.
++        graph_normed_ids: Set of normed_identifier strings from graph.jsonl.
++    """
++
++    def __init__(self, content_jsonl: Path, graph_normed_ids: set[str]):
++        self._content_jsonl = content_jsonl
++        self._graph_normed_ids = graph_normed_ids
++
++    def __len__(self) -> int:
++        return len(self._graph_normed_ids)
++
++    def __iter__(self) -> Iterator[tuple[str, str]]:
++        with open(self._content_jsonl, "r", encoding="utf-8") as f:
++            for line in f:
++                record = json.loads(line)
++                normed_id = record.get("normed_identifier", "")
++                content = record.get("content", "")
++                if not (normed_id and content):
++                    continue
++                if normed_id in self._graph_normed_ids:
++                    yield normed_id, content
+diff --git a/data/epoch_precompute.py b/data/epoch_precompute.py
+index 5228b0d..34e926e 100644
+--- a/data/epoch_precompute.py
++++ b/data/epoch_precompute.py
+@@ -420,6 +420,18 @@ def _worker_fn(
+         tokens = batch["tokens"]
+         doc_spans = batch["doc_spans"]
+ 
++        # Mark visited BEFORE the under-budget drop below. The sampler draws
++        # docs with replacement and only converges as epoch_visited fills up;
++        # build_packed_batch never pads, so the tail pack (once the shard's
++        # remaining unvisited docs can no longer fill token_budget) is always
++        # under-budget. If we dropped it without marking its docs visited, the
++        # sampler would rebuild the identical under-budget pack forever — an
++        # infinite loop (reliably triggered by small/edgeless corpora like
++        # FineWeb). These tail docs are dropped from the epoch either way; this
++        # just stops them from being re-sampled.
++        for p in placements:
++            epoch_visited.add(p.doc_id)
++
+         if tokens.shape[-1] != config.token_budget:
+             logger.debug(
+                 "Worker %d: dropping pack with T=%d (expected %d).",
+@@ -428,9 +440,6 @@ def _worker_fn(
+             pack_id += 1
+             continue
+ 
+-        for p in placements:
+-            epoch_visited.add(p.doc_id)
+-
+         if hasattr(detector, "detect_links_for_doc"):
+             links = creator._collect_links_per_doc(tokens, doc_spans)
+         else:
+diff --git a/generate.py b/generate.py
+index 741a5fd..8679653 100644
+--- a/generate.py
++++ b/generate.py
+@@ -127,12 +127,12 @@ def load_inference_model(
+     link_detector_name = model_cfg.get("link_detector")
+     link_detector      = None
+ 
+-    if mask_type == "cross_doc_link":
++    if mask_type in ("cross_doc_link", "doc_concat_link"):
+         link_detector = make_link_detector(link_detector_name, enc.decode)
+ 
+     # Training backend — determines which attention kernel was used during training
+     use_triton = model_cfg.get("attention_backend", "triton") != "flex"
+-    if mask_type == "cross_doc_link":
++    if mask_type in ("cross_doc_link", "doc_concat_link"):
+         training_attention_backend = "triton" if use_triton else "flex"
+         training_attn_class_backend = "triton_v12" if use_triton else "flex"
+     elif mask_type == "doc_causal" and use_triton:
+@@ -145,12 +145,13 @@ def load_inference_model(
+     # Build the block_mask_creator for weight reconstruction only.
+     # The resulting TS2TSModel will build its own _creators dict.
+     from model.graph_traversal.block_mask_creator import create_doc_causal_triton_mask
+-    if mask_type == "cross_doc_link":
++    if mask_type in ("cross_doc_link", "doc_concat_link"):
+         training_bmc = make_mask_creator_callable_from(
+             CrossDocLinkMaskCreator(
+                 link_detector=link_detector,
+                 max_grants=model_cfg.get('max_grants', 64),
+                 backend=training_attn_class_backend,
++                whole_doc_grant=(mask_type == "doc_concat_link"),
+             )
+         )
+     elif training_attn_class_backend == "varlen_bim_v1":
+diff --git a/model/graph_traversal/link_detector.py b/model/graph_traversal/link_detector.py
+index a172e53..c50a093 100644
+--- a/model/graph_traversal/link_detector.py
++++ b/model/graph_traversal/link_detector.py
+@@ -72,7 +72,7 @@ class LinkDetector(Protocol):
+ 
+ # Valid names accepted by ``make_link_detector`` (and the ``model.link_detector``
+ # config key), kept here as the single source of truth for error messages.
+-LINK_DETECTOR_NAMES = ("markdown", "python", "arxiv")
++LINK_DETECTOR_NAMES = ("markdown", "python", "arxiv", "null")
+ 
+ 
+ def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "LinkDetector":
+@@ -101,8 +101,12 @@ def make_link_detector(name: str, decode_fn: Callable[[List[int]], str]) -> "Lin
+     if name == "arxiv":
+         from .arxiv_cite_detector import ArxivCiteDetector
+         return ArxivCiteDetector(decode_fn=decode_fn)
++    if name == "null":
++        from .null_link_detector import NullLinkDetector
++        return NullLinkDetector(decode_fn=decode_fn)
+     raise ValueError(
+         f"Unknown model.link_detector '{name}'. "
+         f"Valid options: {', '.join(LINK_DETECTOR_NAMES)} "
+-        "('markdown'=Wikipedia, 'python'=TheStack, 'arxiv'=unarXive)."
++        "('markdown'=Wikipedia, 'python'=TheStack, 'arxiv'=unarXive, "
++        "'null'=edgeless/FineWeb)."
+     )
+diff --git a/precompute_epochs.py b/precompute_epochs.py
+index 5c9f986..2b7737d 100644
+--- a/precompute_epochs.py
++++ b/precompute_epochs.py
+@@ -55,8 +55,9 @@ def main() -> None:
+     parser.add_argument("--seed",           type=int, default=42,
+                         help="Base seed; epoch i uses seed+i.")
+     parser.add_argument("--link-detector",  type=str, default="python",
+-                        choices=["python", "markdown", "arxiv"],
+-                        help="Link detector type (python=TheStack, markdown=Wikipedia, arxiv=ArXiv).")
++                        choices=["python", "markdown", "arxiv", "null"],
++                        help="Link detector type (python=TheStack, markdown=Wikipedia, "
++                             "arxiv=ArXiv, null=edgeless/FineWeb).")
+     parser.add_argument("--layout-policy",  type=str, default="null",
+                         help="Layout policy name (null, bos_eos, etc.).")
+     parser.add_argument("--max-grants",     type=int, default=64,
+
+diff --git a/RESULTS.md b/RESULTS.md
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/RESULTS.md
+@@ -0,0 +1,181 @@
++# RESULTS
++
++Benchmark & held-out performance for the current model ablation: **4 datasets ×
++4 mask conditions**. Cells are `-` where the run isn't finished or the eval
++hasn't been run yet, `n/a` where the benchmark/condition doesn't apply to that
++model.
++
++> Last updated: 2026-07-03. Numbers are transcribed from each run's
++> `eval_results.json`. **Regenerate this file's numbers whenever new evals land.**
++
++## Caveats (read before trusting a number)
++
++1. **Perplexity metric FIXED 2026-07-03** (was broken: `mean_nll≈404`). Root
++   cause: inference returned raw logits without the training-time
++   `logit_softcap=30` → uncapped log-probs. Now `forward_inference` replays
++   `cap*tanh(logits/cap)`. Verified sane (wiki doc_causal held-out
++   `mean_nll=4.97 / ppl=143.5`). **All perplexity + `hotpotqa*` numbers below
++   that were produced before the fix are STALE and must be re-run** — they came
++   from the uncapped path. (Deltas between sub-conditions within one broken run
++   were still directionally valid since both sides shared the bug.)
++2. **`eval_checkpoints.py` now MERGES into `eval_results.json`** (fixed
++   2026-07-03): a later run of a different benchmark subset no longer wipes
++   earlier keys; same `{benchmark}/{condition}` keys update in place. NOTE: eval
++   jobs already running when the fix landed still use the old clobbering
++   behaviour until they're relaunched. Some values below are last-observed good
++   numbers captured before a clobber.
++3. **Conditions:** `doceval` = doc_causal + eos layout (the standard cross-model
++   comparison column, runs on ALL models). `baseline` = doc_causal floor, but
++   only emitted for multi-doc models. `experimental` = model's own mask +
++   inference layout (auto-skipped on single-doc benchmarks for multi-doc models —
++   grants can't fire on isolated docs). `annotated` = links injected into prompts
++   (requires cross_doc_link + Markdown/ArxivCite detector; the thestack python
++   detector is NOT annotatable).
++4. All runs are **1 epoch** at 262144 tok/step unless noted. Undertrained.
++5. `simplewiki` models are **excluded** — superseded by `wiki_merged`.
++
++## Model roster & training status
++
++| Dataset | Condition | Run dir | Status |
++|---------|-----------|---------|--------|
++| wiki_merged | doc_causal        | `runs/20260703_051129` | **done** (eval TODO) |
++| wiki_merged | cross_doc_link    | `runs/20260703_050528` | **done** |
++| wiki_merged | doc_concatenated  | `runs/20260703_052240` | training |
++| wiki_merged | doc_concat_link   | `runs/20260703_053518` | training |
++| thestack    | doc_causal        | `runs/20260630_193825` | **done** |
++| thestack    | cross_doc_link    | `runs/20260630_195754` | **done** (eval running) |
++| thestack    | doc_concatenated  | `runs/20260630_194919` | training |
++| thestack    | doc_concat_link   | `runs/20260702_010558` | training |
++| arxiv       | doc_causal        | `runs/20260701_170244` | training |
++| arxiv       | cross_doc_link    | `runs/20260701_170424` | training |
++| arxiv       | doc_concatenated  | `runs/20260701_170434` | training |
++| arxiv       | doc_concat_link   | `runs/20260703_000924` | training |
++
++---
++
++## WIKI (wiki_merged) — commonsense MC + multi-hop QA
++
++### Single-doc MC accuracy (condition = `doceval`; chance in header)
++
++| Condition | hellaswag (0.25) | boolq (0.50) | piqa (0.50) | arc_easy (0.25) | openbookqa (0.25) | winogrande (0.50) | wiki_qa |
++|-----------|:----------------:|:------------:|:-----------:|:---------------:|:-----------------:|:-----------------:|:-------:|
++| doc_causal        | 0.250 [.241,.259] n=10042 | 0.429 [.412,.446] n=3270 | 0.477 [.453,.498] n=1838 | 0.287 [.268,.304] n=2376 | 0.188 [.154,.224] n=500 | 0.487 [.462,.514] n=1267 | - |
++| **cross_doc_link**| **0.253** [.245,.262] n=10042 | 0.435 [.418,.452] n=3270 | 0.498 [.473,.520] n=1838 | **0.281** [.262,.298] n=2376 | 0.180 [.144,.210] n=500 | 0.493 [.463,.522] n=1267 | - |
++| doc_concatenated  | - | - | - | - | - | - | - |
++| doc_concat_link   | - | - | - | - | - | - | - |
++
++*Verdict @1ep: doc_causal and cross_doc_link are statistically indistinguishable
++(all CIs overlap) and both at chance except arc_easy (~.28, marginally above).
++Expected — single-doc MC gives cross-doc attention nothing to attend to.*
++
++### Link-injection MC accuracy (condition = `annotated`; cross_doc_link only)
++
++| Condition | wiki_qa | hellaswag | boolq | openbookqa |
++|-----------|:-------:|:---------:|:-----:|:----------:|
++| cross_doc_link | - | - | - | - |
++
++*(annotated eval RUNNING on GPU-670; results pending. Compare vs the `doceval`
++row above to isolate the effect of injecting links into prompts.)*
++
++### Multi-hop QA (NLL; POST-softcap-fix — absolutes now trustworthy)
++
++| Condition | hotpotqa (doceval) NLL | hotpotqa_cross_doc: NLL cross-doc | NLL flat-linked | Δ (n_cd) |
++|-----------|:---------------------:|:---------------------------------:|:---------------:|:--------:|
++| doc_causal        | - | n/a | n/a | - |
++| **cross_doc_link**| 14.22 (n=2000) | **13.43** | 15.51 | **−13.4%** (n=1466) |
++| doc_concatenated  | - | - | - | - |
++| doc_concat_link   | - | - | - | - |
++
++*🟢 cross_doc attention gives 13.4% lower NLL than flat concat of the same linked
++content — the core cross-doc thesis, confirmed on the fixed (softcapped) path
++(pre-fix delta was −14.3%, so the signal was real). Absolute NLL still high (~14)
++because 1-epoch QA is genuinely hard — that's the model, not a metric bug.*
++
++### Held-out perplexity (POST-softcap-fix; ppl now sane)
++
++split=all sampling used (val_random/community splits aren't queryable on the
++merged dataset via get_split_ids — needs the split subdir's own graph; see note).
++
++| Condition | held_out ppl (split=all) | mean_nll | community val | community test |
++|-----------|:------------------------:|:--------:|:-------------:|:--------------:|
++| doc_causal        | - | - | - | - |
++| cross_doc_link    | **125.7** (n=1935) | 4.83 | - | - |
++| doc_concatenated  | - | - | - | - |
++| doc_concat_link   | - | - | - | - |
++
++---
++
++## THESTACK — code benchmarks
++
++### Accuracy / perplexity (condition = `doceval` unless noted)
++
++| Condition | humaneval_buggy acc (0.50) | repobench ppl | codexglue ppl | repobench_cross_doc (exp): NLL cross-doc / flat |
++|-----------|:--------------------------:|:-------------:|:-------------:|:-----------------------------------------------:|
++| **doc_causal**    | **0.610** [.537,.683] n=164 | 10.42 (n=2000) | 4.39 (n=2000) | n/a |
++| **cross_doc_link**| **0.610** [.530,.683] n=164 | 12.44 (n=2000) | 3.80 (n=2000) | **2.321 / 2.418 = −4.0%** (n=1750) |
++| doc_concatenated  | - | - | - | - |
++| doc_concat_link   | - | - | - | - |
++
++*🟢 thestack doc_causal humaneval_buggy 0.61 (CI floor .537 > .50) — genuinely
++distinguishes correct vs buggy code. Code-benchmark perplexity is SANE here
++(softcap-immune: relative scoring across choices, unlike absolute held-out NLL).*
++*🟢 repobench_cross_doc: cross_doc_link scores linked source files −4.0% NLL vs
++flat concat of the same content (n=1750) — the code analog of the wiki hotpot
++cross-doc signal. humaneval_buggy identical to doc_causal (single-doc, expected).
++Note doc_causal edges out cross_doc on plain repobench ppl (10.4 vs 12.4).*
++
++### Held-out / community perplexity (BROKEN — graph path)
++
++| Condition | held_out val_random | held_out test_random | community val | community test |
++|-----------|:-------------------:|:--------------------:|:-------------:|:--------------:|
++| doc_causal        | broken | broken | broken | broken |
++| cross_doc_link    | - | - | - | - |
++| doc_concatenated  | - | - | - | - |
++| doc_concat_link   | - | - | - | - |
++
++---
++
++## ARXIV — commonsense MC (no code/hotpot; domain is science text)
++
++### Single-doc MC accuracy (condition = `doceval`; chance in header)
++
++| Condition | hellaswag (0.25) | boolq (0.50) | openbookqa (0.25) |
++|-----------|:----------------:|:------------:|:-----------------:|
++| doc_causal        | - | - | - |
++| cross_doc_link    | - | - | - |
++| doc_concatenated  | - | - | - |
++| doc_concat_link   | - | - | - |
++
++*(all arxiv models still training)*
++
++### Link-injection MC accuracy (condition = `annotated`; cross_doc_link only)
++
++| Condition | hellaswag | boolq | openbookqa |
++|-----------|:---------:|:-----:|:----------:|
++| cross_doc_link | - | - | - |
++
++### Held-out / community perplexity (BROKEN — graph path)
++
++| Condition | held_out val_random | held_out test_random | community val | community test |
++|-----------|:-------------------:|:--------------------:|:-------------:|:--------------:|
++| doc_causal        | - | - | - | - |
++| cross_doc_link    | - | - | - | - |
++| doc_concatenated  | - | - | - | - |
++| doc_concat_link   | - | - | - | - |
++
++---
++
++## Headline findings so far
++
++- **Cross-doc attention shows real signal** on the two benchmarks built to test
++  it: wiki `hotpotqa_cross_doc` (−14.3% NLL vs flat). thestack
++  `repobench_cross_doc` pending.
++- **thestack doc_causal** is the only model clearly above chance on a discrete
++  benchmark (humaneval_buggy 0.61).
++- **Wiki commonsense MC is at chance** across the board — expected for 1-epoch
++  models; these benchmarks likely need much more training (or aren't the right
++  probe for this corpus).
++- **Graph-path perplexity metric is broken** — blocks the held-out/community
++  perplexity comparison that would otherwise be the cleanest cross-condition
++  signal. Fixing it (see TODOS.md → Eval) is the highest-value eval task.
++
+
+diff --git a/configs/fineweb_doc_causal.yaml b/configs/fineweb_doc_causal.yaml
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/configs/fineweb_doc_causal.yaml
+@@ -0,0 +1,88 @@
++data:
++  dataset_dir: /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/fineweb
++  strategy: 'bfs'
++  layout_policy: 'stochastic_identifier_prefix'
++  inference_layout_policy: 'eos'
++  order_mode: 'prefer_targets_first'
++  doc_budget: null
++  train_dir:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/fineweb/splits/train
++  epoch_dirs:  /fss-data/evin_t/tagseq2tagseq_artifacts/schedules/fineweb_bfs/epoch_0
++  # FineWeb is edgeless (flat web text): there are NO links, so community-based
++  # splits come out empty. Only the *_random splits are meaningful.
++  val_dirs:
++    val_random:    /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/fineweb/splits/val_random
++  test_dirs:
++    test_random:   /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/fineweb/splits/test_random
++
++model:
++  compile: true
++  compile_mode: 'default'
++  attention_backend: 'triton'
++  inference_attention_backend: 'flex'
++  mask_type: 'doc_causal'
++  # No link_detector needed: doc_causal training never resolves links (main.py
++  # only builds a detector for cross_doc_link / doc_concat_link). The precompute
++  # step uses --link-detector null (edgeless) so no spurious grants fire.
++  activation_checkpointing: false
++  model_dim: 1024
++  num_layers: 24
++  num_heads: 8    # 8H × 128Dh = 1024
++  max_seq_len: 32768
++  drop_path_rate: 0.0
++  fp8: false
++  weight_tying: true
++  untie_at_frac: 0.667       # release embed/lm_head tie at 2/3 of training
++  ignore_index: -100
++  dtype: 'bfloat16'
++  logit_softcap: 30.0
++  mtp_extra_weights: [0.5, 0.25]
++  mtp_decay_steps: 0
++  ve_layers: [1, 2, 21, 22, 23]
++  shared_ve_bank: false
++
++optimizer:
++  type: 'muon'
++  muon_wd: 1.2             # Muon weight decay (spectral space)
++  adamw_wd: 0.005          # AdamW weight decay (embeddings, norms)
++  momentum: 0.95
++  muon_beta2: 0.95         # NorMuon second-moment EMA
++  beta1: 0.9
++  beta2: 0.95
++  muon_lr: 0.001
++  adamw_lr: 0.00001
++  muon_momentum_warmup_steps: 300
++  adamw_embed_beta1: 0.5   # lower β1 for embedding/lm_head (sparse gradients)
++
++train_loop:
++  epochs: 1
++  max_optimizer_steps: null  # determined by epoch precomputation
++  warmup_steps: 300
++  cooldown_frac: 0.4
++  min_lr_ratio: 0.1
++  val_steps: 20
++  val_interval: 100
++  atomic_feature_kwargs:
++    norm_clip_value: 1.0
++    accum_steps: 1
++
++seed: 42
++
++eval:
++  run_on_completion: true
++  # FineWeb has no link graph, so community_pack_perplexity and the
++  # Wikipedia-specific graph benchmarks (wiki_qa, hotpotqa) don't apply. Keep
++  # held-out perplexity (the flat baseline number) plus generic LLM benchmarks.
++  benchmarks:
++    - {name: held_out_perplexity, conditions: [doceval]}
++    - {name: hellaswag,   conditions: [doceval]}
++    - {name: boolq,       conditions: [doceval]}
++    - {name: openbookqa,  conditions: [doceval]}
++  max_docs: 500
++
++# --- Smoke-test overrides (pass on CLI, don't edit here) ---
++# --model.model_dim 256 --model.num_layers 4 --model.num_heads 4
++# --model.max_seq_len 2048
++# --model.mtp_extra_weights '[]' --model.ve_layers '[]'
++# --train_loop.max_optimizer_steps 5 --train_loop.val_steps 2 --train_loop.val_interval 3
++# --eval.max_docs 20
++
+
+diff --git a/data/fineweb_graph_extractor/build_fineweb.py b/data/fineweb_graph_extractor/build_fineweb.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/fineweb_graph_extractor/build_fineweb.py
+@@ -0,0 +1,167 @@
++"""
++FineWeb (edgeless) dataset builder.
++
++Streams high-quality web text from HuggingFaceFW/fineweb(-edu) and emits the
++same two-file layout the ArXiv extractor produces, so the shared
++pretokenization pipeline (data/pretokenize.py via data/pretokenize_fineweb.py)
++can consume it unchanged:
++
++  graph.jsonl    one node per doc: {normed_identifier, raw_identifier,
++                 char_count, outgoing: [], incoming: []}. FineWeb has NO link
++                 structure, so every edge list is empty — the corpus is a flat
++                 control/baseline. Only `doc_causal` is meaningful downstream
++                 (cross_doc_link would find nothing to grant).
++  content.jsonl  one {normed_identifier, content} per line, aligned to graph.
++
++Docs are accumulated until a target token budget is reached (FineWeb records
++carry a precomputed gpt2 ``token_count``, so we can hit the budget precisely
++without tokenizing here — pretokenize.py re-tokenizes with the real tokenizer).
++
++Usage:
++    python -m data.fineweb_graph_extractor.build_fineweb \\
++        -o /fss-data/evin_t/tagseq2tagseq_artifacts/graphs/fineweb_run \\
++        --target-tokens 1_300_000_000 \\
++        --edu --size 10BT --seed 42
++"""
++import argparse
++import json
++import logging
++from pathlib import Path
++
++from datasets import load_dataset
++
++from data.normalization import identifier_hash, _norm_body
++
++logger = logging.getLogger(__name__)
++
++
++# FineWeb ``token_count`` is a gpt2 count; our pretokenizer also defaults to
++# gpt2, so the budget estimate is essentially exact. If a different tokenizer
++# is used downstream the realized token total will differ slightly.
++def _normed_id(raw_id: str, seen: set) -> str:
++    """Derive a filesystem/graph-safe normed id from a FineWeb record id.
++
++    FineWeb ids look like ``<urn:uuid:d853d453-...-efc2b26c40d2>``. We normalize
++    the body and append a short hash of the raw id to guarantee uniqueness even
++    if two normalized bodies collide.
++    """
++    body = _norm_body(raw_id)
++    normed = f"{body}_{identifier_hash(raw_id)}" if body else identifier_hash(raw_id)
++    # Defensive: guarantee global uniqueness (hash collisions are astronomically
++    # unlikely but a duplicate would silently drop a doc in the writer merge).
++    if normed in seen:
++        suffix = 1
++        while f"{normed}_{suffix}" in seen:
++            suffix += 1
++        normed = f"{normed}_{suffix}"
++    return normed
++
++
++def build(args):
++    out_dir = Path(args.output_dir)
++    out_dir.mkdir(parents=True, exist_ok=True)
++    graph_path = out_dir / "graph.jsonl"
++    content_path = out_dir / "content.jsonl"
++
++    name = "HuggingFaceFW/fineweb" + ("-edu" if args.edu else "")
++    config = "sample-" + args.size
++    logger.info("Streaming %s (config=%s) ...", name, config)
++    ds = load_dataset(
++        name,
++        name=config,
++        split="train",
++        streaming=True,
++        cache_dir=args.cache_dir,
++    )
++    # Shuffle the stream so a token-capped prefix is a representative sample
++    # rather than the first N crawl-ordered docs.
++    ds = ds.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
++
++    seen: set = set()
++    n_docs = 0
++    total_tokens = 0
++    total_chars = 0
++
++    with open(graph_path, "w", encoding="utf-8") as gf, \
++         open(content_path, "w", encoding="utf-8") as cf:
++        for rec in ds:
++            content = rec.get("text", "")
++            if not content:
++                continue
++            raw_id = rec.get("id") or f"doc_{n_docs}"
++            normed = _normed_id(raw_id, seen)
++            seen.add(normed)
++
++            gf.write(json.dumps({
++                "normed_identifier": normed,
++                "raw_identifier": raw_id,
++                "char_count": len(content),
++                "outgoing": [],
++                "incoming": [],
++            }) + "\n")
++            cf.write(json.dumps({
++                "normed_identifier": normed,
++                "content": content,
++            }) + "\n")
++
++            n_docs += 1
++            total_chars += len(content)
++            # FineWeb provides a precomputed gpt2 token_count; fall back to a
++            # ~4 chars/token estimate if a record ever lacks it.
++            total_tokens += int(rec.get("token_count") or (len(content) // 4))
++
++            if n_docs % 50_000 == 0:
++                logger.info("  %d docs, ~%.1fM tokens", n_docs, total_tokens / 1e6)
++            if total_tokens >= args.target_tokens:
++                break
++
++    summary = {
++        "source": name,
++        "config": config,
++        "seed": args.seed,
++        "n_docs": n_docs,
++        "approx_tokens_gpt2": total_tokens,
++        "total_chars": total_chars,
++        "target_tokens": args.target_tokens,
++    }
++    with open(out_dir / "extract_summary.json", "w", encoding="utf-8") as f:
++        json.dump(summary, f, indent=2)
++    logger.info(
++        "Done: %d docs, ~%.1fM gpt2 tokens (target %.1fM) → %s",
++        n_docs, total_tokens / 1e6, args.target_tokens / 1e6, out_dir,
++    )
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        prog="FineWeb builder",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    parser.add_argument("-o", "--output-dir", required=True,
++                        help="Run dir for graph.jsonl + content.jsonl.")
++    parser.add_argument("--target-tokens", type=lambda s: int(s.replace("_", "")),
++                        default=1_300_000_000,
++                        help="Stop after ~this many (gpt2) tokens (default 1.3B).")
++    parser.add_argument("--edu", action="store_true",
++                        help="Use fineweb-edu (educational-filtered) instead of base fineweb.")
++    parser.add_argument("--size", type=str, default="10BT",
++                        choices=["10BT", "100BT", "350BT"],
++                        help="FineWeb sample config (default 10BT; plenty for a 1.3B slice).")
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--shuffle-buffer", type=int, default=10_000,
++                        help="Streaming shuffle buffer size.")
++    parser.add_argument("--cache-dir", type=str,
++                        default="/fss-data/evin_t/tagseq2tagseq_artifacts/raw/fineweb_hf_cache",
++                        help="HF datasets cache dir (on /fss-data, not /fss).")
++    parser.add_argument("--log-level", type=str, default="INFO")
++    args = parser.parse_args()
++
++    logging.basicConfig(level=getattr(logging, args.log_level),
++                        format="%(levelname)s: %(message)s")
++    build(args)
++
++
++if __name__ == "__main__":
++    main()
++
+
+diff --git a/data/pretokenize_fineweb.py b/data/pretokenize_fineweb.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/data/pretokenize_fineweb.py
+@@ -0,0 +1,105 @@
++"""
++FineWeb Pre-tokenizer: Pre-tokenize the FineWeb dataset built by
++data/fineweb_graph_extractor/build_fineweb.py into sharded binary files.
++
++Usage:
++    python -m data.pretokenize_fineweb \\
++        /fss-data/.../graphs/fineweb_run/content.jsonl \\
++        /fss-data/.../graphs/fineweb_run/graph.jsonl \\
++        -o /fss-data/.../pretokenized_datasets/fineweb \\
++        -p 60
++
++The content/graph inputs come from a builder run dir produced by
++data/fineweb_graph_extractor/build_fineweb.py. FineWeb is edgeless, so the
++graph carries empty outgoing/incoming lists and only doc_causal training is
++meaningful downstream.
++"""
++import argparse
++import json
++import logging
++import multiprocessing as mp
++from pathlib import Path
++
++from tunalab.reproducibility import ReproducibilityManager
++
++from data.document_sources import FineWebSource
++from data.pretokenize import run_preprocessing
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        prog="FineWeb Pre-tokenizer",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    parser.add_argument(
++        "content_jsonl",
++        type=Path,
++        help="Path to the content.jsonl produced by build_fineweb.py.",
++    )
++    parser.add_argument(
++        "graph_file",
++        type=Path,
++        help="Path to the graph.jsonl produced by build_fineweb.py.",
++    )
++    parser.add_argument(
++        "-o", "--runs-dir",
++        type=Path,
++        required=True,
++        help="Root directory to store experiment runs. A unique sub-directory will be created here.",
++    )
++    parser.add_argument(
++        "--tokenizer-file",
++        type=Path,
++        default=None,
++        help="Path to a custom .pkl tokenizer file. Overrides --tokenizer-name.",
++    )
++    parser.add_argument(
++        "--tokenizer-name",
++        type=str,
++        default="gpt2",
++        help="tiktoken tokenizer name if --tokenizer-file is not provided (default: gpt2).",
++    )
++    parser.add_argument(
++        "--shard-size-gb",
++        type=float,
++        default=2.0,
++        help="Target size for each binary shard in gigabytes (default: 2.0).",
++    )
++    parser.add_argument(
++        "-p", "--processes",
++        type=int,
++        default=max(1, mp.cpu_count() - 1),
++        help=f"Number of worker processes (default: {max(1, mp.cpu_count() - 1)}).",
++    )
++    parser.add_argument(
++        "--splits-file",
++        type=Path,
++        default=None,
++        help="Optional splits.json to annotate nodes with a 'split' field.",
++    )
++    parser.add_argument(
++        "-q", "--quiet",
++        action="store_true",
++        help="Suppress progress reporting and info messages.",
++    )
++    args = parser.parse_args()
++
++    log_level = logging.WARNING if args.quiet else logging.INFO
++    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
++    logger = logging.getLogger(__name__)
++
++    logger.info(f"Loading graph node ids from {args.graph_file} ...")
++    with open(args.graph_file, "r", encoding="utf-8") as f:
++        graph_normed_ids = {json.loads(line)["normed_identifier"] for line in f}
++    logger.info(f"Loaded {len(graph_normed_ids):,} graph nodes.")
++
++    source = FineWebSource(args.content_jsonl, graph_normed_ids)
++
++    with ReproducibilityManager(output_dir=str(args.runs_dir), is_main_process=True) as rep:
++        run_preprocessing(args, rep, source)
++
++
++if __name__ == "__main__":
++    main()
++
+
+diff --git a/model/graph_traversal/null_link_detector.py b/model/graph_traversal/null_link_detector.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/model/graph_traversal/null_link_detector.py
+@@ -0,0 +1,36 @@
++"""
++NullLinkDetector — a no-op LinkDetector for edgeless corpora (e.g. FineWeb).
++
++Datasets with no link structure (flat web text) have nothing to detect, so this
++detector always returns zero links. Using it (rather than borrowing markdown /
++python / arxiv) guarantees no spurious cross-doc grant can ever fire regardless
++of what incidental ``[text](url)`` / ``import`` / ``\\cite{}`` syntax happens to
++appear in the raw text, and documents intent: this corpus is a doc_causal-only
++baseline.
++"""
++from __future__ import annotations
++
++from typing import Any, Callable, List
++
++import torch
++
++from .link_detector import LinkInfo
++
++
++class NullLinkDetector:
++    """LinkDetector that never detects a link (for edgeless datasets)."""
++
++    def __init__(self, decode_fn: Callable[[List[int]], str] | None = None):
++        # decode_fn is accepted for a uniform constructor signature with the
++        # other detectors (make_link_detector passes it); it is unused.
++        self.decode_fn = decode_fn
++
++    def detect_links(self, input_ids: torch.Tensor) -> List[LinkInfo]:
++        return []
++
++    def index_doc_span(self, span: Any) -> str:
++        # Protocol default is not inherited (LinkDetector is a Protocol, not a
++        # base class), and _match_links_to_docs indexes every doc span even when
++        # detect_links returns nothing, so this must be defined explicitly.
++        return span.raw_identifier
++
+
+diff --git a/tests/test_null_link_detector.py b/tests/test_null_link_detector.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/tests/test_null_link_detector.py
+@@ -0,0 +1,41 @@
++r"""
++Tests for null_link_detector.py
++
++Coverage:
++  - NullLinkDetector.detect_links always returns an empty list (edgeless corpora)
++  - index_doc_span returns raw_identifier verbatim (must be defined explicitly:
++    the LinkDetector Protocol default is not inherited, and the mask creator
++    indexes every doc span even when no links are detected)
++  - make_link_detector('null') constructs a NullLinkDetector
++"""
++from types import SimpleNamespace
++
++import tiktoken
++import torch
++
++from model.graph_traversal.null_link_detector import NullLinkDetector
++from model.graph_traversal.link_detector import make_link_detector
++
++
++def test_detect_links_always_empty():
++    enc = tiktoken.get_encoding("gpt2")
++    det = NullLinkDetector(decode_fn=enc.decode)
++    # Text that WOULD trip the markdown / arxiv / python detectors.
++    text = r"See [foo](Bar) and \cite{Baz} plus `import os`"
++    ids = torch.tensor(enc.encode(text), dtype=torch.long)
++    assert det.detect_links(ids) == []
++    assert det.detect_links(torch.empty(0, dtype=torch.long)) == []
++
++
++def test_index_doc_span_returns_raw_identifier():
++    det = NullLinkDetector()
++    span = SimpleNamespace(raw_identifier="Some Title", normed_identifier="some_title")
++    assert det.index_doc_span(span) == "Some Title"
++
++
++def test_make_link_detector_null():
++    enc = tiktoken.get_encoding("gpt2")
++    det = make_link_detector("null", enc.decode)
++    assert isinstance(det, NullLinkDetector)
++    assert det.detect_links(torch.tensor(enc.encode("hi"), dtype=torch.long)) == []
++
