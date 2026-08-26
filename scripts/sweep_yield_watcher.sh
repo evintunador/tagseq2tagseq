@@ -293,11 +293,20 @@ config_from_rundir() {
   python3 -c "import json,sys; a=json.load(open('$inv'))['argv']; print(a[a.index('--config')+1] if '--config' in a else '')" 2>/dev/null
 }
 
+# Per-node GPU count of a (running) job, for world-size-preserving resume. All our
+# arms are --nodes 1, so per-node == total. Default 8 if it can't be parsed.
+_gpus_of_job() {
+  local jid="$1" g=""
+  g="$(scontrol show job "$jid" 2>/dev/null | grep -oiE 'gres/gpu=[0-9]+|gpu:[0-9]+' | grep -oE '[0-9]+' | head -1)"
+  [ -z "$g" ] && g=8
+  echo "$g"
+}
+
 # Relaunch one yielded job on a given clean node, resuming if a checkpoint exists.
 # Returns: 0 = relaunched; 1 = transient failure (retry later); 2 = UNRESOLVABLE
 # (no config anywhere) — caller should mark the ledger line so it stops jamming.
 relaunch_yielded() {
-  local rundir="$1" cfg="$2" node="$3"
+  local rundir="$1" cfg="$2" node="$3" gpus="${4:-8}"
   # Self-heal: if the ledger recorded no config, recover it from run_invocation.json.
   if [ -z "$cfg" ]; then cfg="$(config_from_rundir "$rundir")"; fi
   [ -z "$cfg" ] && { note "  relaunch UNRESOLVABLE ($rundir): no config in ledger or run_invocation.json — marking skipped"; return 2; }
@@ -308,9 +317,9 @@ relaunch_yielded() {
   # resume trains on the SAME data the run was launched with, not the config default.
   local extra; extra="$(extra_main_args "$rundir")"
   local tag; tag="$(basename "$cfg" .yaml)"
-  note "  RELAUNCH $tag on $node $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
+  note "  RELAUNCH $tag on $node (gpus/node=$gpus) $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
   TS2TS_SHARED_COMPILE_CACHE="/tmp/ts2ts_relaunch_$(basename "$rundir")" \
-    "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node 8 \
+    "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node "$gpus" \
     --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args $extra \
     >> "$STATE_DIR/relaunch.log" 2>&1
 }
@@ -347,11 +356,12 @@ while true; do
           note "  SKIP-YIELD $jid: could not map to run_dir/config; leaving it RUNNING (refusing to kill-without-resume)."
           continue
         fi
-        if ! printf '%s\t%s\tyielded\n' "$rc" "$now" >> "$YIELD_LEDGER"; then
+        gpn="$(_gpus_of_job "$jid")"   # preserve world_size for resume (partial-node arms)
+        if ! printf '%s\t%s\tyielded\t%s\n' "$rc" "$now" "$gpn" >> "$YIELD_LEDGER"; then
           note "  SKIP-YIELD $jid: ledger append to $YIELD_LEDGER FAILED; leaving it RUNNING."
           continue
         fi
-        note "  scancel $jid (yielding; recorded -> auto-resume when a node is idle >= ${IDLE_RELAUNCH_MIN}min)"
+        note "  scancel $jid (yielding; gpus/node=$gpn; recorded -> auto-resume when a node is idle >= ${IDLE_RELAUNCH_MIN}min)"
         scancel "$jid" 2>/dev/null
       done <<< "$to_kill"
       note "  remaining sweep jobs: $(squeue -h -u "$ME" -t RUNNING -o '%i' 2>/dev/null | tr '\n' ' ')"
@@ -380,20 +390,20 @@ while true; do
         # take the oldest un-relaunched yielded job
         line="$(awk -F'\t' '$4=="yielded"{print; exit}' "$YIELD_LEDGER" 2>/dev/null)"
         [ -z "$line" ] && break
-        rundir="$(echo "$line" | cut -f1)"; cfg="$(echo "$line" | cut -f2)"
+        rundir="$(echo "$line" | cut -f1)"; cfg="$(echo "$line" | cut -f2)"; gpus="$(echo "$line" | cut -f5)"; [ -z "$gpus" ] && gpus=8
         # preflight the node (GPU0 empty + NFS) before using it
         if "$REPO/scripts/preflight_node.sh" "$node" >/dev/null 2>&1; then
-          relaunch_yielded "$rundir" "$cfg" "$node"; rc_status=$?
+          relaunch_yielded "$rundir" "$cfg" "$node" "$gpus"; rc_status=$?
           if [ "$rc_status" -eq 0 ]; then
             # mark this ledger line relaunched (first match only)
-            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="relaunched"; done=1} {print $1"\t"$2"\t"$3"\t"$4}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
+            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="relaunched"; done=1} {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
             # reset that node's idle clock so we don't reuse it next poll
             grep -v "^${node}	" "$IDLE_SINCE" > "$IDLE_SINCE.tmp" 2>/dev/null; mv "$IDLE_SINCE.tmp" "$IDLE_SINCE"
           elif [ "$rc_status" -eq 2 ]; then
             # UNRESOLVABLE (no config anywhere): mark 'skipped' so this entry stops
             # jamming the head of the yield queue. Without this, the loop re-picks
             # the same broken oldest entry every poll and NOTHING else resumes.
-            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="skipped"; done=1} {print $1"\t"$2"\t"$3"\t"$4}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
+            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="skipped"; done=1} {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
             # do NOT consume the node — let the next loop iteration use it for a real entry
           fi
           # rc_status==1 (transient): leave 'yielded', retry next poll (node not consumed)
