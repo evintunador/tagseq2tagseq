@@ -338,11 +338,21 @@ while true; do
       note "$summary"
       while read -r jid; do
         [ -z "$jid" ] && continue
-        # Record run_dir + config to the ledger BEFORE scancel (squeue still knows the job).
+        # Map to run_dir/config and RECORD to the ledger BEFORE scancel. NEVER
+        # scancel a job we failed to record: doing so yields it with no ledger
+        # entry, so it can never auto-resume (the silent-drop bug that stranded
+        # yielded runs). If unmappable, leave it RUNNING rather than kill it.
         rc="$(job_to_rundir_config "$jid" 2>/dev/null)"
-        note "  scancel $jid (yielding; will auto-resume when a node is idle >= ${IDLE_RELAUNCH_MIN}min)"
+        if [ -z "$rc" ]; then
+          note "  SKIP-YIELD $jid: could not map to run_dir/config; leaving it RUNNING (refusing to kill-without-resume)."
+          continue
+        fi
+        if ! printf '%s\t%s\tyielded\n' "$rc" "$now" >> "$YIELD_LEDGER"; then
+          note "  SKIP-YIELD $jid: ledger append to $YIELD_LEDGER FAILED; leaving it RUNNING."
+          continue
+        fi
+        note "  scancel $jid (yielding; recorded -> auto-resume when a node is idle >= ${IDLE_RELAUNCH_MIN}min)"
         scancel "$jid" 2>/dev/null
-        [ -n "$rc" ] && printf '%s\t%s\tyielded\n' "$rc" "$now" >> "$YIELD_LEDGER"
       done <<< "$to_kill"
       note "  remaining sweep jobs: $(squeue -h -u "$ME" -t RUNNING -o '%i' 2>/dev/null | tr '\n' ' ')"
       prev_had_net=0
