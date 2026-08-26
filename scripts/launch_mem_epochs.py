@@ -110,7 +110,7 @@ def arm_label(corpus, mask, mode, n):
     return f"{corpus}.{mask}.{mode}.e{n}"
 
 
-def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limit, no_eval=False):
+def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limit, no_eval=False, accum=1):
     cfg = CONFIGS[corpus][mask]
     epoch_csv = ",".join(str(d) for d in dirs)
     cmd = [
@@ -122,6 +122,12 @@ def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limi
         "--train_loop.max_optimizer_steps", str(max_steps),
         "--model.mask_type", MASK_TYPE[mask],
     ]
+    if accum and int(accum) != 1:
+        # Partial-node arm: fewer GPUs (world_size) but grad-accum to keep the
+        # effective batch = world_size*accum*seq_len identical to the world=8 arms.
+        # max_optimizer_steps is already pinned on world_size*accum, so the WSD
+        # schedule matches. Lets us pack onto nodes with only 4 free GPUs.
+        cmd += ["--train_loop.atomic_feature_kwargs.accum_steps", str(int(accum))]
     if no_eval:
         # Skip the config's run_on_completion benchmark suite (e.g. tiny pilot
         # arms, or a config whose annotator_corpus doesn't match this corpus).
@@ -194,7 +200,7 @@ def main():
         note = "dc: fresh≡repeat (repeat=sanity only)" if (a["mask"] == "dc" and a["mode"] == "repeat") else ""
         print(f"{a['label']:<34} {cfg:<40} {a['total']:>8} {a['steps']:>7} {btok:>6.2f}  {note}")
         cmd = build_command(a["corpus"], a["mask"], a["mode"], a["n"], a["dirs"],
-                            a["steps"], args.nodes, args.gpus, args.time, args.no_eval)
+                            a["steps"], args.nodes, args.gpus, args.time, args.no_eval, args.accum)
         cmds.append(f"# {a['label']}  ({a['total']} packs, {a['steps']} steps)")
         cmds.append(" ".join(cmd))
         cmds.append("")
@@ -216,7 +222,7 @@ def main():
           f"{args.first_step_timeout}s each)...")
     for a in arms:
         cmd = build_command(a["corpus"], a["mask"], a["mode"], a["n"], a["dirs"],
-                            a["steps"], args.nodes, args.gpus, args.time, args.no_eval) + ["--no-tail"]
+                            a["steps"], args.nodes, args.gpus, args.time, args.no_eval, args.accum) + ["--no-tail"]
         print(f"\n>>> submitting {a['label']}")
         res = subprocess.run(cmd, cwd=str(REPO), check=True, capture_output=True, text=True)
         if res.stdout:
