@@ -2,3 +2,46 @@
 \label{app:results}
 \todo{Full per-language sweep tables, per-traversal ablation tables, community\_pack
 32k re-run numbers, hyperparameter sweep (LR/WD U-curves).}
+
+\subsection{Graph-sparsity: cross-dataset regression detail}
+\label{app:sparsity-regression}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.72\linewidth]{regression.png}
+  \caption{Pooled cross-dataset regression of cross-doc benefit vs effective grant
+  density $\times$ keep fraction, train-time (blue) vs eval-time (orange), code
+  (circles) vs text (crosses), with code OLS fits.}
+  \label{fig:sparsity-regression}
+\end{figure}
+\begin{itemize}
+  \item \textbf{\cref{fig:sparsity-regression}.} The quantitative form of the
+  cross-dataset law in \cref{sec:sparsity}, pooling all (dataset, keep) points on the
+  honest density axis (effective grants/pack $\times$ keep). \emph{Meaning:} code is
+  near-linear both eval-time ($r{=}0.95$) and train-time ($r{=}0.84$); the lower
+  train-time $r$ and its positive intercept ($\sim{+}0.016$) reflect the concavity
+  (much of the benefit already present at low density). Text datasets sit off the code
+  line. Raw graph out-degree is the wrong axis ($r{=}{-}0.27$, a misleading null)
+  because it counts edges the mask never used.
+\end{itemize}
+
+\subsection{Graph-sparsity: mask-time vs traversal-time validation}
+\label{app:sparsity-traversal}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.62\linewidth]{fig_traversal_check.png}
+  \caption{Train-time $\Delta$nll vs effective grant density for \textsc{typescript}:
+  cheap \emph{mask-time} dropping (blue, packing fixed) vs \emph{traversal-time}
+  dropping (orange, graph adjacency thinned before packing so co-packing itself
+  changes --- a genuinely sparser corpus). Error bars are 95\% CIs.}
+  \label{fig:sparsity-traversal}
+\end{figure}
+\begin{itemize}
+  \item \textbf{\cref{fig:sparsity-traversal}.} A validity check on the instrument
+  behind every density line: does the cheap mask-time subsample (thin recorded grants
+  on identical packs) predict the effect of a \emph{really} sparser corpus, where fewer
+  links also reshuffle which documents are co-packed? \emph{Meaning:} the traversal-time
+  points fall on the mask-time dose-response curve at matched effective density (both
+  within CI), so the content-distribution shift from real edge removal does not move the
+  curve --- density drives the benefit, and mask-time dropping is a faithful, far
+  cheaper proxy.
+\end{itemize}

@@ -68,3 +68,65 @@ step-time \fillin{speedup/slowdown?}, with per-bucket coefficient-of-variation
 % Wall-clock timing (step_timing_rank*.csv), not the eval harness. Raw CSVs are not located
 % in-repo and carry no run_id; only README.md prose + docs/images/density_aware_timing*.png
 % survive. Indicative only until the originating run + its CSVs are identified.
+
+\subsection{Graph-sparsity scaling law}
+\label{sec:sparsity}
+We interpolate the fraction of resolved links a model sees, from $0\%$ (\doccausal)
+to $100\%$ (\crossdoc), by seeded per-edge subsampling of the grant map, and measure
+the within-model cross-doc benefit $\Delta\mathrm{nll} =
+\mathrm{nll}(\doccausal)-\mathrm{nll}(\crossdoc)$ on each dataset's
+\texttt{val\_community} split. We do this both at eval time (fix a trained model, vary
+the links it attends to; \cref{fig:sparsity-eval}) and at train time (retrain on the
+reduced graph; \cref{fig:sparsity-train}), and cross the two axes into a surface
+(\cref{fig:sparsity-grid}).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig_sparsity.png}
+  \caption{Eval-time graph-sparsity law. Panel A: $\Delta$nll vs kept link fraction
+  per dataset (blue = code, orange = text; band = seeds 0--2). Panel B: cross-dataset
+  law --- $\Delta$nll at full density vs the effective co-packed grant density the mask
+  actually saw.}
+  \label{fig:sparsity-eval}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig_traintime.png}
+  \caption{Train-time graph-sparsity law: models retrained at each link density
+  (solid) overlaid on the eval-time curve (dashed) for the same datasets.}
+  \label{fig:sparsity-train}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig_grid2d.png}
+  \caption{Cross-doc benefit $\Delta$nll over the full (train keep $\times$ eval keep)
+  grid, per dataset. Rows = training-graph density, columns = inference-graph density;
+  keep${=}0$ column is the \doccausal identity ($\Delta{=}0$).}
+  \label{fig:sparsity-grid}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{\cref{fig:sparsity-eval} (eval-time lines + cross-dataset law).} How a
+  fixed trained model's cross-doc benefit grows as it is allowed to attend to more of
+  the graph's links. \emph{Meaning:} for code the benefit rises near-linearly with
+  effective link density and the cross-dataset fit is strong ($r{=}\val{sparsity.crossdoc_law.eval_r_code}$), so it
+  extrapolates \emph{above} today's densest corpus; the honest density axis is
+  effective co-packed grants/pack, not raw out-degree. Text (wiki, arxiv) is flat or
+  slightly negative.
+  \item \textbf{\cref{fig:sparsity-train} (train-time lines).} The same sweep but
+  \emph{retraining} at each density, so the model learns under the sparsity it is
+  given. \emph{Meaning:} the code curves are monotone but strongly concave --- most of
+  the benefit is captured by the first ${\sim}25\%$ of links (diminishing returns to
+  training density) --- and sit at or above the eval-time curve at low density.
+  \item \textbf{\cref{fig:sparsity-grid} (2D train\,$\times$\,eval surface).} The
+  headline result: the dominant gradient is \emph{horizontal} (eval keep), not vertical
+  (train keep). \emph{Meaning:} the cross-doc payoff is overwhelmingly an
+  \emph{inference-time} capability --- a \doccausal-trained code model (bottom row)
+  exploits cross-doc links at test time as well as, or better than, one trained with
+  them, so having linked content in context at inference matters far more than
+  training-time exposure. Wiki is the lone net-negative (blue) panel, and there
+  \emph{training} on cross-doc links makes it worse while a \doccausal wiki model is
+  barely affected.
+\end{itemize}
