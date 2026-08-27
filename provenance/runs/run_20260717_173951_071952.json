@@ -3,7 +3,7 @@
   "run_id": "run_20260717_173951_071952",
   "naming_convention": "submitit",
   "source_run_dirs": [
-    "/fss/evin_t/tagseq2tagseq/.claude/worktrees/synthesis-todos-dig/runs/run_20260717_173951_071952"
+    "/fss/evin_t/tagseq2tagseq/runs/run_20260717_173951_071952"
   ],
   "run_dir_exists": true,
   "warnings": [],
@@ -339,5 +339,5 @@
       "eval_leakage_placebo.json"
     ]
   },
-  "distilled_at": "2026-08-20T21:57:32Z"
+  "distilled_at": "2026-08-27T23:39:06Z"
 }
