@@ -333,6 +333,32 @@ bottleneck.
 
 ## Eval
 
+### Per-run eval metrics (ReproducibilityManager) linked to their training run + re-run ALL eval numbers (filed 2026-08-28)
+Eval results are currently written as sidecar `eval_*.json` INTO the *training* run dir
+and layered by `distill_runs` (`eval_reeval256.json`, `eval_java_repobench_final.json`,
+`eval_leakage_placebo.json`, ...). The distilled record's `reproduce` block is the
+**training** run's git state, so an eval number carries NO record of the code that
+produced it. This is not reproducible across code evolution: replicating the grounded
+`repobench_python` cross-doc eval (run_20260720_063128_690228, stored 2026-07-27) on a
+later HEAD gives cross NLL 1.69973 vs stored 1.69981 and flat 1.79389 vs 1.79249 —
+bit-identical across two reruns (deterministic → code drift, not GPU noise; `eval/scoring.py`
+changed 2026-08-03, after that eval). The derived Δnll shifts 0.0927 → 0.0942, visible at
+the 3-sig-fig precision the paper reports. The flat/batched NLL drifted ~18x more than the
+per-example cross NLL, so the culprit is likely something small (e.g. a batch-size change
+in the batched flat scoring path).
+
+A per-eval-result commit field is NOT enough: eval is often run with uncommitted working-tree
+changes, which a bare SHA can't capture. **Fix:** make each eval its OWN run created via
+`tunalab.reproducibility.ReproducibilityManager` (full capture: git SHA + dirty patch +
+software/runtime env, exactly like training), holding a reference to the training run(s) it
+evaluates (to locate the checkpoint) — instead of dropping bare `eval_*.json` into the
+training run dir. `distill_runs` then harvests eval runs the same way as training runs.
+**Then re-run ALL eval numbers** under this scheme (headline cross-doc, compute controls,
+single-doc, and the new placebo/leakage-α numbers) and update the `paper/` number pipeline
+accordingly: point ledger `eval` sources at the new per-eval-run records; adjust
+`distill_runs`/`gen_values_tex`/`check_grounding` so the eval commit is grounded per number.
+Supersedes the sidecar pattern; existing sidecars stay readable until migrated.
+
 ### Eval-time max_seq_len extension (long-context generalization probe — filed 2026-08-10)
 Cheap probe, no retrain: eval a 32k-trained checkpoint at larger max_seq_len (64k+) and
 check whether grants keep helping as context grows past the training window. Direct
