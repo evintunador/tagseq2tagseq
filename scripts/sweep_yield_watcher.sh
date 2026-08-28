@@ -317,9 +317,21 @@ relaunch_yielded() {
   # resume trains on the SAME data the run was launched with, not the config default.
   local extra; extra="$(extra_main_args "$rundir")"
   local tag; tag="$(basename "$cfg" .yaml)"
-  note "  RELAUNCH $tag on $node (gpus/node=$gpus) $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
+  # Instance isolation: if the run recorded a .launcher_info marker (written by an
+  # isolated worktree's launch_slurm.py), resume with THAT repo's launcher +
+  # interpreter so it runs its own code+venv, not the shared checkout. No marker
+  # -> shared defaults (jobs launched the normal way / other agents).
+  local py="$REPO/.venv/bin/python" launcher="$REPO/launch_slurm.py" inst="shared"
+  if [ -f "$rundir/.launcher_info" ]; then
+    local m_repo m_py
+    m_repo="$(sed -n 's/^repo=//p' "$rundir/.launcher_info" | head -1)"
+    m_py="$(sed -n 's/^python=//p' "$rundir/.launcher_info" | head -1)"
+    [ -n "$m_py" ] && [ -x "$m_py" ] && py="$m_py"
+    [ -n "$m_repo" ] && [ -f "$m_repo/launch_slurm.py" ] && { launcher="$m_repo/launch_slurm.py"; inst="$(basename "$m_repo")"; }
+  fi
+  note "  RELAUNCH $tag on $node (gpus/node=$gpus, instance=$inst) $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
   TS2TS_SHARED_COMPILE_CACHE="/tmp/ts2ts_relaunch_$(basename "$rundir")" \
-    "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node "$gpus" \
+    "$py" "$launcher" --nodes 1 --gpus-per-node "$gpus" \
     --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args $extra \
     >> "$STATE_DIR/relaunch.log" 2>&1
 }
