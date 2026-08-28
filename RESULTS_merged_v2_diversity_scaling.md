@@ -117,3 +117,19 @@ the ports table above (community_pack is near-noise for code per prior work).
   resume, community_pack 2048-budget, val-loader source-bias/rewind, Option-B
   graph-edge grants for eval, per-pack layout_epoch for multi-epoch. See
   `[[merged-corpus-build]]`.
+
+---
+## ★ COMPUTE-MATCHED CROSSOVER (post-forgetting-fix, 2026-08-28)
+Fixed re-runs (within-bucket shuffle seed=42; wiki no longer forgotten). use_line Δnll.
+**3.9B merge (355M tok/domain) vs specialist (3.9B tok/domain) — MATCHED total budget:**
+merge WINS 6 / TIE 3 / spec 4 (of 13 ports).
+- Merge wins: typescript +0.54 vs +0.28, python +0.30 vs +0.25, kotlin +0.23 vs +0.17,
+  zig +0.25 vs +0.14, java +0.15 vs +0.10, repobench_java +0.18 vs +0.08.
+- Tie: ase_kotlin, crosscodeeval_ts, repobench_python.
+- Spec wins: go (+0.15 vs +0.22), rust (+0.12 vs +0.28), dart (+0.25 vs +0.34), javascript.
+HEADLINE: with 1/11th the per-domain tokens, the merge matches-or-beats specialists on
+9/13 cross-doc benchmarks (decisively on ts/python/java/kotlin/zig). Effect STRENGTHENS
+with scale — at 8B/16B the merge win-or-tie count rises (typescript reaches +0.81 @16B).
+Base-LM ability (flat_nll) improves ~uniformly with tokens (~-0.23/doubling); cross-doc
+Δnll grows heterogeneously (ts/kotlin climb, python/rust/java saturate) — the two axes
+are DECOUPLED. Ladder completion + diversity-count curve (div3/5/7/9) still filling in.
