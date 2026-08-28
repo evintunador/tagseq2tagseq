@@ -182,6 +182,10 @@ class BucketedPackDataset(IterableDataset):
                 meta = json.load(f)
             n_buckets: int = meta["n_buckets"]
             self._token_budget: Optional[int] = meta.get("token_budget")
+            # Dir's PRECOMPUTE epoch for the stochastic-prefix coin-flip. Fresh: ==
+            # loader _epoch_idx. Repeat (same dir replayed): stays fixed so replays
+            # reproduce identical packs (else T != token_budget -> AssertionError).
+            self._current_layout_epoch: int = int(meta.get("epoch_idx", self._epoch_idx))
 
             # Warn if max_grants warmup is active (bucketing is approximate during warmup)
             max_grants_start = meta.get("max_grants_start")
@@ -292,7 +296,10 @@ class BucketedPackDataset(IterableDataset):
         # so a prior pack's per-pack epoch could otherwise leak into a -1 pack.
         _le = getattr(pack, "layout_epoch", -1)
         if hasattr(layout, "set_epoch"):
-            layout.set_epoch(_le if _le >= 0 else self._epoch_idx)
+            # Single-epoch pack: use the dir's PRECOMPUTE epoch, not loader position,
+            # so replaying a dir (repeat-mode) doesn't re-roll the prefix coin-flip.
+            fallback_epoch = getattr(self, "_current_layout_epoch", self._epoch_idx)
+            layout.set_epoch(_le if _le >= 0 else fallback_epoch)
         batch = build_packed_batch(self.graph, self.backend, layout, placements)
         T = batch["tokens"].shape[-1]
         budget = getattr(self, '_token_budget', None)
