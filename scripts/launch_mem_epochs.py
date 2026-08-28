@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-REPO = Path("/fss/evin_t/tagseq2tagseq")
+REPO = Path(__file__).resolve().parents[1]  # self-locating: this repo (isolated worktree or shared)
 ART = Path("/fss-data/evin_t/tagseq2tagseq_artifacts")
 SCHED = ART / "schedules"
 
@@ -114,7 +114,7 @@ def build_command(corpus, mask, mode, n, dirs, max_steps, nodes, gpus, time_limi
     cfg = CONFIGS[corpus][mask]
     epoch_csv = ",".join(str(d) for d in dirs)
     cmd = [
-        "python", "launch_slurm.py",
+        str(REPO / ".venv/bin/python"), str(REPO / "launch_slurm.py"),
         "--nodes", str(nodes), "--gpus-per-node", str(gpus),
         "--time", time_limit,
         "--config", cfg,
