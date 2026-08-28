@@ -7,8 +7,21 @@
 \todo{Benchmarks: HotpotQA-cross-doc (multi-hop, the headline wiki metric);
 RepoBench-cross-doc (Python/Java, headline code metric); community\_pack held-out
 cross-doc perplexity; single-doc controls (HellaSwag, ARC, PIQA, WinoGrande,
-OpenBookQA, BoolQ, HumanEval). Define the cross-doc-vs-flat-concat contrast and the
-placebo control.}
+OpenBookQA, BoolQ, HumanEval).}
+
+\paragraph{Contrasts and controls.}
+Each cross-document benchmark scores the same target tokens under two conditions:
+\crossdoc attention with the granted linked document(s) present, versus the flat
+\doccausal baseline over the identical context and completion (the cross-vs-flat
+$\Delta$nll). Two further controls isolate the effect. The \emph{placebo} (derangement)
+re-scores each fired query with the granted document's content replaced by a different
+example's while holding the link identifiers fixed, so the grant still fires but the model
+attends to a wrong-but-plausible document; the placebo separation (placebo minus
+cross-document NLL) measures specificity to the correct link. To rule out verbatim
+re-exposure of duplicated text, we additionally stratify the $\Delta$nll by the
+target--context $n$-gram overlap $\alpha$ (RETRO's leakage protocol) and report the effect
+within the lowest-overlap stratum. Confidence intervals are 95\% percentile bootstrap over
+the paired per-example deltas.
 
 \todo{The 4-mask ablation and the traversal ablation (bfs/dfs/rw/random $\times$
 dc/cdl) design.}

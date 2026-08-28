@@ -227,6 +227,106 @@ entries:
       source from runs/run_20260719_070658_156892/logs/metrics_rank_0.jsonl (field
       val_loss_mean = 3.0006); literal grounding debt until then."
 
+  # === Placebo (derangement) control + leakage-α stratification on the headline arms ===
+  # Tier-2 harness (eval/benchmark_harness) run on the SAME single-source cross_doc_link
+  # checkpoints that back the grounded headline cross-doc numbers above.
+  #   placebo_sep = mean(placebo_nll - cross_nll): grants kept firing on the ORIGINAL
+  #     identifiers but attention reads a deranged (wrong) donor doc; CI excluding 0 proves
+  #     the gain needs the RIGHT document, not just extra in-language context.
+  #   leakage_lowalpha.delta_nll = flat-cross Δnll restricted to the lowest target<->aux
+  #     8-gram overlap stratum (α<0.05); CI excluding 0 rules out verbatim re-exposure
+  #     (RETRO bpb(α) protocol). Sidecar: runs/<id>/eval_leakage_placebo.json.
+
+  # Python RepoBench (thestack cross_doc_link, max_grants=256)
+  crossdoc.repobench_python.placebo_sep:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_python_xdoc_placebo/native", field: placebo_separation}
+    expected: 0.1295747930227324
+    units: nll
+    note: "Python RepoBench placebo separation (placebo - cross mean NLL)."
+  crossdoc.repobench_python.placebo_sep.ci:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_python_xdoc_placebo/native", field: placebo_separation_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "Python RepoBench placebo separation 95% bootstrap CI."
+  crossdoc.repobench_python.leakage_lowalpha.delta_nll:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_python_leakage/alpha_0.00_0.05", field: delta_real}
+    expected: 0.07807492273640258
+    units: nll
+    note: "Python RepoBench cross-doc Δnll in the lowest overlap stratum (α<0.05)."
+  crossdoc.repobench_python.leakage_lowalpha.delta_nll.ci:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_python_leakage/alpha_0.00_0.05", field: delta_real_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "95% bootstrap CI for the α<0.05 Python stratum Δnll."
+  crossdoc.repobench_python.leakage_lowalpha.n:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_python_leakage/alpha_0.00_0.05", field: n}
+    expected: 191
+    format: {sig_figs: 0}
+    note: "Number of scored pairs in the α<0.05 stratum (Python)."
+
+  # Java RepoBench (thestack cross_doc_link, bfs traversal)
+  crossdoc.repobench_java.bfs.placebo_sep:
+    run_ids: [run_20260722_063905_465684]
+    source: {kind: eval, metric_path: "repobench_java_xdoc_placebo/native", field: placebo_separation}
+    expected: 0.07738205790519714
+    units: nll
+    note: "Java RepoBench (bfs) placebo separation."
+  crossdoc.repobench_java.bfs.placebo_sep.ci:
+    run_ids: [run_20260722_063905_465684]
+    source: {kind: eval, metric_path: "repobench_java_xdoc_placebo/native", field: placebo_separation_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "Java RepoBench (bfs) placebo separation 95% bootstrap CI."
+  crossdoc.repobench_java.bfs.leakage_lowalpha.delta_nll:
+    run_ids: [run_20260722_063905_465684]
+    source: {kind: eval, metric_path: "repobench_java_leakage/alpha_0.00_0.05", field: delta_real}
+    expected: 0.038774442022497004
+    units: nll
+    note: "Java RepoBench (bfs) cross-doc Δnll in the lowest overlap stratum (α<0.05)."
+  crossdoc.repobench_java.bfs.leakage_lowalpha.delta_nll.ci:
+    run_ids: [run_20260722_063905_465684]
+    source: {kind: eval, metric_path: "repobench_java_leakage/alpha_0.00_0.05", field: delta_real_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "95% bootstrap CI for the α<0.05 Java stratum Δnll."
+  crossdoc.repobench_java.bfs.leakage_lowalpha.n:
+    run_ids: [run_20260722_063905_465684]
+    source: {kind: eval, metric_path: "repobench_java_leakage/alpha_0.00_0.05", field: n}
+    expected: 275
+    format: {sig_figs: 0}
+    note: "Number of scored pairs in the α<0.05 stratum (Java)."
+
+  # Wiki HotpotQA (wiki cross_doc_link, bfs)
+  crossdoc.wiki_hotpotqa.placebo_sep:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hotpotqa_xdoc_placebo/native", field: placebo_separation}
+    expected: 1.2762295113225872
+    units: nll
+    note: "HotpotQA placebo separation."
+  crossdoc.wiki_hotpotqa.placebo_sep.ci:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hotpotqa_xdoc_placebo/native", field: placebo_separation_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "HotpotQA placebo separation 95% bootstrap CI."
+  crossdoc.wiki_hotpotqa.leakage_lowalpha.delta_nll:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hotpotqa_leakage/alpha_0.00_0.05", field: delta_real}
+    expected: 1.0777658168282753
+    units: nll
+    note: "HotpotQA cross-doc Δnll in the lowest overlap stratum (α<0.05)."
+  crossdoc.wiki_hotpotqa.leakage_lowalpha.delta_nll.ci:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hotpotqa_leakage/alpha_0.00_0.05", field: delta_real_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "95% bootstrap CI for the α<0.05 HotpotQA stratum Δnll."
+  crossdoc.wiki_hotpotqa.leakage_lowalpha.n:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hotpotqa_leakage/alpha_0.00_0.05", field: n}
+    expected: 662
+    format: {sig_figs: 0}
+    note: "Number of scored pairs in the α<0.05 stratum (HotpotQA)."
+
   # === Graph-sparsity scaling law: cross-dataset regression (LITERAL / grounding debt) ===
   # This is a CROSS-RUN analysis fit (Pearson r over many (dataset, keep) points), not a
   # single run's eval metric, so it cannot be eval-grounded. Value is emitted by

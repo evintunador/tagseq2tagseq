@@ -1,0 +1,95 @@
+{
+  "bench": "hotpotqa",
+  "port": "hotpotqa_bridge",
+  "run_id": "run_20260717_173951_071952",
+  "checkpoint": "/fss/evin_t/tagseq2tagseq/runs/run_20260717_173951_071952/checkpoints/best_model.pt",
+  "scope": "native",
+  "max_examples": 1000,
+  "tier2": {
+    "native": {
+      "port": "hotpotqa_bridge",
+      "checkpoint": "/fss/evin_t/tagseq2tagseq/runs/run_20260717_173951_071952/checkpoints/best_model.pt",
+      "n_examples": 1000,
+      "scope": "native",
+      "n_dropped_no_use_site": 0,
+      "n_fired": 837,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 5.612475715613251,
+      "mean_nll_flat": 6.904218675132003,
+      "mean_nll_placebo": 6.888705226935838,
+      "delta_real": 1.291742959518752,
+      "delta_real_ci": [
+        1.1766344780842084,
+        1.4083524123226343
+      ],
+      "delta_placebo": 0.015513448196164958,
+      "placebo_separation": 1.2762295113225872,
+      "placebo_separation_ci": [
+        1.1622530515007141,
+        1.3914918630103175
+      ],
+      "leakage_ngram_n": 8,
+      "mean_alpha": 0.1992444689813111,
+      "leakage_strata": [
+        {
+          "alpha_lo": 0.0,
+          "alpha_hi": 0.05,
+          "n": 662,
+          "mean_alpha": 0.0,
+          "delta_real": 1.0777658168282753,
+          "delta_real_ci": [
+            0.9563405773070643,
+            1.2045266096820644
+          ]
+        },
+        {
+          "alpha_lo": 0.05,
+          "alpha_hi": 0.25,
+          "n": 0,
+          "mean_alpha": NaN,
+          "delta_real": NaN,
+          "delta_real_ci": [
+            NaN,
+            NaN
+          ]
+        },
+        {
+          "alpha_lo": 0.25,
+          "alpha_hi": 0.5,
+          "n": 0,
+          "mean_alpha": NaN,
+          "delta_real": NaN,
+          "delta_real_ci": [
+            NaN,
+            NaN
+          ]
+        },
+        {
+          "alpha_lo": 0.5,
+          "alpha_hi": 0.75,
+          "n": 13,
+          "mean_alpha": 0.5538461538461539,
+          "delta_real": 2.082098667438214,
+          "delta_real_ci": [
+            1.3352324641667879,
+            2.9770186648919026
+          ]
+        },
+        {
+          "alpha_lo": 0.75,
+          "alpha_hi": 1.0,
+          "n": 161,
+          "mean_alpha": 0.9898656898656899,
+          "delta_real": 2.1077568990103206,
+          "delta_real_ci": [
+            1.7995843887884424,
+            2.419508337604333
+          ]
+        }
+      ],
+      "failures": [],
+      "passed": true,
+      "fire_rate": 0.837
+    }
+  }
+}
