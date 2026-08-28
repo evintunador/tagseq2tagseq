@@ -196,6 +196,17 @@ def launch(
     slurm_logs_dir = run_dir / ".slurm"
     slurm_logs_dir.mkdir(exist_ok=True)
 
+    # Instance-isolation marker: record THIS launcher's repo root + interpreter so
+    # the single shared yield-watcher resumes the run with the SAME code+venv it was
+    # born from (this isolated worktree), not the shared checkout. Jobs launched the
+    # normal way (no marker) fall back to the watcher's shared defaults.
+    try:
+        with open(run_dir / ".launcher_info", "w") as _lf:
+            _lf.write(f"repo={Path(__file__).resolve().parent}\n")
+            _lf.write(f"python={sys.executable}\n")
+    except OSError:
+        pass
+
     executor = submitit.AutoExecutor(
         folder=str(slurm_logs_dir),
         slurm_max_num_timeout=0,
