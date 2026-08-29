@@ -4,6 +4,14 @@ eval_checkpoints.py — downstream benchmark evaluation for TS2TS checkpoints.
 Loads one or more checkpoints, reconstructs each model in inference mode, and
 runs the configured benchmark suite. Results are written as JSON.
 
+Every eval invocation gets its OWN standalone run directory (created the same way
+training creates its run dir, and captured by ReproducibilityManager), under
+$TS2TS_EVALS_ROOT (default /fss-data/evin_t/tagseq2tagseq_artifacts/evals/<eval_id>/).
+Eval results are NEVER written into the training run dir being evaluated — doing so
+silently merged eval-time numbers into that run's own eval_results.json and polluted
+paper grounding. Each eval run records a manifest.json linking its metrics back to the
+source training run(s); scripts/distill_runs.py re-attaches them by source_run_id.
+
 Benchmarks can be run under multiple named conditions in a single pass.
 Each condition specifies a mask_type and layout_policy override, allowing
 direct comparison between e.g. the model's experimental cross_doc_link
@@ -19,8 +27,8 @@ Usage (CLI — single checkpoint):
         [--output eval_results.json] \\
         [--device cuda]
 
-    Results are auto-saved to {run_dir}/eval_results.json.
-    Pass --output to override the save path.
+    Results are saved to the eval run dir ({eval_dir}/results/); pass --output to
+    ALSO write a copy to a path of your choosing (overwrites, never merges).
 
 Usage (CLI — multiple checkpoints):
     python eval_checkpoints.py \\
@@ -28,8 +36,8 @@ Usage (CLI — multiple checkpoints):
                       runs/RUN_B/checkpoints/best_model.pt \\
         --dataset data/pretokenized_datasets/stack_10m
 
-    Each checkpoint's results are saved to its own run dir.
-    A combined comparison table is written to evals/YYYYMMDD_HHMMSS/.
+    All checkpoints share one eval run dir; each checkpoint's results land in
+    {eval_dir}/results/, and a combined comparison table is written alongside.
 
 Importable:
     from eval_checkpoints import run_eval, run_benchmarks_on_model
@@ -49,7 +57,9 @@ import datetime
 import json
 import logging
 import math
+import os
 import random
+import socket
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -291,18 +301,30 @@ def _resolve_layout_policy(policy_str: Optional[str], model):
         )
 
 
-def _default_run_output_path(checkpoint_path: Path) -> Path:
-    """Infer eval_results.json save path from checkpoint location.
+def _evals_root() -> Path:
+    """Root dir for standalone eval run directories (parallel to the training runs
+    root). Off-repo by default so eval runs are worktree-agnostic and survive
+    run-dir cleanup. Override with $TS2TS_EVALS_ROOT."""
+    return Path(os.environ.get(
+        "TS2TS_EVALS_ROOT",
+        "/fss-data/evin_t/tagseq2tagseq_artifacts/evals",
+    ))
 
-    Convention: checkpoint lives at {run_dir}/checkpoints/best_model.pt
-    → run_dir = checkpoint.parent.parent.
-    Falls back to checkpoint.parent if the immediate parent dir is not
-    named 'checkpoints'.
+
+def _source_run_id(checkpoint_path: Path) -> str:
+    """Identify the training run a checkpoint belongs to, for provenance linkage.
+
+    Convention: checkpoint lives at {run_dir}/checkpoints/<name>.pt
+    → source_run_id = run_dir.name (e.g. 'run_20260720_063128_690228').
+    Falls back to the checkpoint's immediate parent dir name if the parent is not
+    named 'checkpoints'. This is recorded in the eval run's manifest so
+    scripts/distill_runs.py can re-attach the metrics to that training run's
+    provenance record — it is NEVER used to write into the training run dir.
     """
     p = checkpoint_path.resolve()
     if p.parent.name == "checkpoints":
-        return p.parent.parent / "eval_results.json"
-    return p.parent / "eval_results.json"
+        return p.parent.parent.name
+    return p.parent.name
 
 
 # ─── Core dispatch ────────────────────────────────────────────────────────────
@@ -1209,7 +1231,7 @@ def main() -> None:
     if multi and args.output:
         logger.warning(
             "--output is ignored when evaluating multiple checkpoints; "
-            "results are written to each checkpoint's run dir."
+            "each checkpoint's results are written to the eval run dir."
         )
 
     # Per-benchmark extra params from CLI — folded into each spec dict.
@@ -1241,24 +1263,21 @@ def main() -> None:
 
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Create eval dir for multi-checkpoint runs.
-    eval_dir: Optional[Path] = None
-    if multi:
-        eval_dir = Path(__file__).parent / "evals" / ts
-        eval_dir.mkdir(parents=True, exist_ok=True)
+    # Every eval run — single or multi — gets its OWN standalone run dir, created
+    # the same way training creates its run dir (fresh, off-repo, captured by
+    # ReproducibilityManager). Results are NEVER written into the training run dir
+    # being evaluated. eval_id includes host+pid so eval jobs fanned out across GPUs
+    # in the same wall-clock second don't collide on the run dir (run-dir timestamps
+    # are only second-precision and ReproducibilityManager aborts on a reused dir).
+    eval_id = f"{ts}_{socket.gethostname().split('.')[0]}_{os.getpid()}"
+    eval_dir = _evals_root() / eval_id
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    results_dir = eval_dir / "results"
+    results_dir.mkdir(exist_ok=True)
 
-    # ReproducibilityManager captures git state, pip freeze, and env for the
-    # entire eval session.  For single runs, use a timestamped subdir inside
-    # the run dir so training-time and eval-time snapshots don't collide and
-    # successive re-runs each get their own clean directory.
-    if eval_dir is not None:
-        rm_output_dir = eval_dir
-    else:
-        run_dir = _default_run_output_path(checkpoints[0]).parent
-        rm_output_dir = run_dir / "eval" / ts
-
-    with ReproducibilityManager(output_dir=str(rm_output_dir), is_main_process=True):
+    with ReproducibilityManager(output_dir=str(eval_dir), is_main_process=True):
         all_entries: List[Dict[str, Any]] = []
+        manifest_ckpts: List[Dict[str, Any]] = []
 
         for ckpt_path in checkpoints:
             results = run_eval(
@@ -1268,36 +1287,38 @@ def main() -> None:
                 device=args.device,
             )
 
-            # Per-checkpoint save path
-            if not multi and args.output:
-                out_path = Path(args.output)
-            else:
-                out_path = _default_run_output_path(ckpt_path)
-
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            # Merge into any existing results rather than clobbering them, so a
-            # later run of a *different* benchmark/condition subset doesn't wipe
-            # earlier keys. Same "{benchmark}/{condition}" keys are overwritten
-            # with the fresh values (intended: re-running updates in place).
-            merged = results
-            if out_path.exists():
-                try:
-                    prior = json.loads(out_path.read_text(encoding="utf-8"))
-                    if isinstance(prior, dict):
-                        merged = {**prior, **results}
-                except (json.JSONDecodeError, OSError) as _exc:
-                    logger.warning(
-                        "Could not read existing %s to merge (%s); overwriting.",
-                        out_path, _exc,
-                    )
+            # Canonical, provenance-tracked results file inside THIS eval run dir.
+            # Named by the source training run + checkpoint so a multi-checkpoint
+            # comparison keeps each checkpoint's metrics separate. No merging: each
+            # eval run is self-contained; combining across runs is the distiller's job.
+            source_run_id = _source_run_id(ckpt_path)
+            out_path = results_dir / f"{source_run_id}__{ckpt_path.stem}.json"
             out_path.write_text(
-                json.dumps(merged, ensure_ascii=False, indent=2),
+                json.dumps(results, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             logger.info(
-                "Results written to %s (%d total benchmark/condition keys)",
-                out_path, len(merged),
+                "Results written to %s (%d benchmark/condition keys)",
+                out_path, len(results),
             )
+
+            # Optional user-specified extra sink (back-compat). Overwrites, never
+            # merges, and never derives from the training run dir by default.
+            if not multi and args.output:
+                extra = Path(args.output)
+                extra.parent.mkdir(parents=True, exist_ok=True)
+                extra.write_text(
+                    json.dumps(results, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                logger.info("Also wrote results to --output %s", extra)
+
+            manifest_ckpts.append({
+                "checkpoint": str(ckpt_path.resolve()),
+                "source_run_id": source_run_id,
+                "results_file": f"results/{out_path.name}",
+                "n_keys": len(results),
+            })
 
             if multi:
                 all_entries.append(
@@ -1306,6 +1327,35 @@ def main() -> None:
 
         if multi and all_entries:
             _write_comparison_table(eval_dir, all_entries)
+
+        # Manifest links this eval run's metrics back to the source training run(s)
+        # and records the eval CODE's own git commit, so scripts/distill_runs.py can
+        # re-attach the metrics to each training run's provenance record. Read the
+        # git_info.json ReproducibilityManager just wrote (same file the distiller
+        # reads), so manifest and distilled record agree on the commit source.
+        git_info: Dict[str, Any] = {}
+        try:
+            _gi_path = eval_dir / "reproducibility" / "main" / "git_info.json"
+            if _gi_path.exists():
+                git_info = json.loads(_gi_path.read_text(encoding="utf-8")) or {}
+        except (OSError, json.JSONDecodeError):  # manifest git info is best-effort
+            git_info = {}
+        manifest = {
+            "eval_id": eval_id,
+            "eval_commit": git_info.get("commit_hash"),
+            "eval_git_dirty": git_info.get("git_is_dirty"),
+            "eval_ts": ts,
+            "host": socket.gethostname(),
+            "dataset": str(args.dataset),
+            "eval_cfg": eval_cfg,
+            "argv": sys.argv,
+            "checkpoints": manifest_ckpts,
+        }
+        (eval_dir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        logger.info("Eval run manifest written to %s", eval_dir / "manifest.json")
 
 
 if __name__ == "__main__":

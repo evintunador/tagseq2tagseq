@@ -32,6 +32,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import collections
 import datetime
 import hashlib
 import json
@@ -45,6 +46,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ROOTS = [
     REPO_ROOT / "runs",
     Path("/fss-data/evin_t/tagseq2tagseq_artifacts/runs"),
+]
+# Standalone eval run dirs (written by eval_checkpoints.py). Each carries a
+# manifest.json linking its metrics back to the training run(s) it evaluated, so
+# eval metrics are re-attached to the training record by source_run_id — eval no
+# longer writes into training run dirs. Keep in sync with eval_checkpoints._evals_root.
+DEFAULT_EVALS_ROOTS = [
+    REPO_ROOT / "evals",
+    Path("/fss-data/evin_t/tagseq2tagseq_artifacts/evals"),
 ]
 
 # run_YYYYMMDD_HHMMSS_ffffff (submitit) and bare YYYYMMDD_HHMMSS (direct main.py)
@@ -138,7 +147,48 @@ def find_run_dirs(roots):
     return found
 
 
-def build_record(run_id, run_dirs, patches_dir, dry_run=False):
+def find_eval_runs(eval_roots):
+    """Scan standalone eval run dirs and index their metrics by source training run.
+
+    Each eval run dir (written by eval_checkpoints.py) has a `manifest.json`
+    listing the checkpoints it evaluated (each with a `source_run_id` and a
+    `results_file`). Returns source_run_id -> list of contribution dicts
+    {eval_id, eval_commit, eval_ts, metrics, source_files}, sorted oldest-first by
+    eval_ts so a later re-eval layers over an earlier one, per metric_path.
+    """
+    contribs = collections.defaultdict(list)
+    for root in eval_roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        for eval_dir in sorted(root.iterdir()):
+            manifest = read_json(eval_dir / "manifest.json")
+            if not isinstance(manifest, dict):
+                continue  # not a new-style eval run (e.g. legacy comparison dir)
+            eval_id = manifest.get("eval_id") or eval_dir.name
+            eval_commit = manifest.get("eval_commit")
+            eval_ts = manifest.get("eval_ts") or eval_id
+            for ck in manifest.get("checkpoints") or []:
+                src_run = ck.get("source_run_id")
+                rel = ck.get("results_file")
+                if not src_run or not rel:
+                    continue
+                metrics = read_json(eval_dir / rel)
+                if not isinstance(metrics, dict):
+                    continue
+                contribs[src_run].append({
+                    "eval_id": eval_id,
+                    "eval_commit": eval_commit,
+                    "eval_ts": eval_ts,
+                    "eval_dir": str(eval_dir),
+                    "metrics": metrics,
+                })
+    for src_run in contribs:
+        contribs[src_run].sort(key=lambda c: c["eval_ts"])
+    return contribs
+
+
+def build_record(run_id, run_dirs, patches_dir, dry_run=False, eval_contribs=None):
     """Build a provenance record dict from the run dirs for one run_id.
 
     Copies the uncommitted patch into `patches_dir` as a side effect for dirty runs
@@ -194,7 +244,7 @@ def build_record(run_id, run_dirs, patches_dir, dry_run=False):
                 record["hyperparameters"] = hp
                 record["hyperparameters_sha256"] = canonical_sha256(hp)
                 break
-        _attach_eval(record, existing_dirs)
+        _attach_eval(record, existing_dirs, eval_contribs)
         return record
 
     main = canonical / "reproducibility" / "main"
@@ -273,41 +323,73 @@ def build_record(run_id, run_dirs, patches_dir, dry_run=False):
     else:
         warnings.append("no hyperparameters.json")
 
-    _attach_eval(record, [canonical] + [d for d in existing_dirs if d != canonical])
+    _attach_eval(record, [canonical] + [d for d in existing_dirs if d != canonical],
+                 eval_contribs)
     return record
 
 
-def _attach_eval(record, dirs):
-    """Attach eval metrics, merging sidecar eval files over eval_results.json.
+def _attach_eval(record, dirs, eval_contribs=None):
+    """Attach eval metrics for this run, layering (later overrides earlier per
+    metric_path):
 
-    A run dir may carry corrected/extra evals in sibling files (e.g.
-    eval_reeval256.json, eval_java_repobench_final.json) that a later standalone
-    re-eval wrote instead of updating eval_results.json. We layer every eval_*.json
-    on top of eval_results.json, later files overriding earlier per metric_path, so
-    the distilled record reflects the corrected numbers rather than the stale primary.
+      1. In-dir eval files (`eval_results.json` + any `eval_*.json` sidecars) — the
+         training run's own in-process post-training eval, plus any legacy standalone
+         re-evals that were written into the run dir before eval was decoupled.
+      2. Standalone eval-run contributions (`eval_contribs`, from find_eval_runs),
+         oldest-first by eval_ts — the current source of eval-script metrics, which
+         are written to their own run dirs and re-attached here by source_run_id.
+
+    Records which eval runs (eval_id + eval_commit) contributed under
+    `eval.eval_provenance`, and warns if two eval runs at different commits report
+    a different value for the same metric_path (kept: the later one).
     """
+    metrics = {}
+    sources = []
+    eval_provenance = []
+
+    # Layer 1: in-dir eval files (base).
     for d in dirs:
-        eval_files = sorted(d.glob("eval_*.json"))
-        if not eval_files:
-            continue
         base = d / "eval_results.json"
+        eval_files = sorted(d.glob("eval_*.json"))
         ordered = ([base] if base.exists() else []) + \
                   [f for f in eval_files if f.name != "eval_results.json"]
-        metrics = {}
-        sources = []
         for f in ordered:
             data = read_json(f)
             if isinstance(data, dict):
                 metrics.update(data)  # top-level key = "<benchmark>/<condition>"
                 sources.append(f.name)
         if sources:
-            record["eval"] = {
-                "present": True,
-                "eval_results_sha256": canonical_sha256(metrics),
-                "metrics": metrics,
-                "eval_source_files": sources,
-            }
-            return
+            break  # first dir with eval files wins as the in-dir base
+
+    # Layer 2: standalone eval runs, oldest-first (later re-evals override).
+    for c in (eval_contribs or []):
+        cm = c.get("metrics") or {}
+        for mp, val in cm.items():
+            prior = metrics.get(mp)
+            if (prior is not None and prior != val
+                    and any(p.get("eval_commit") != c.get("eval_commit")
+                            for p in eval_provenance if mp in (p.get("metric_paths") or []))):
+                record["warnings"].append(
+                    f"metric {mp!r} differs across eval commits "
+                    f"(kept eval_id {c.get('eval_id')})"
+                )
+            metrics[mp] = val
+        eval_provenance.append({
+            "eval_id": c.get("eval_id"),
+            "eval_commit": c.get("eval_commit"),
+            "eval_ts": c.get("eval_ts"),
+            "eval_dir": c.get("eval_dir"),
+            "metric_paths": sorted(cm.keys()),
+        })
+
+    if metrics:
+        record["eval"] = {
+            "present": True,
+            "eval_results_sha256": canonical_sha256(metrics),
+            "metrics": metrics,
+            "eval_source_files": sources,
+            "eval_provenance": eval_provenance,
+        }
 
 
 def record_body(rec):
@@ -334,6 +416,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--roots", nargs="+", default=[str(r) for r in DEFAULT_ROOTS],
                     help="Run-dir roots to scan (default: in-repo runs/ + fss-data runs/)")
+    ap.add_argument("--evals-roots", nargs="+", default=[str(r) for r in DEFAULT_EVALS_ROOTS],
+                    help="Standalone eval-run roots to scan for metrics re-attached by "
+                         "source_run_id (default: in-repo evals/ + fss-data evals/)")
     ap.add_argument("--out", default=str(REPO_ROOT / "provenance"),
                     help="Provenance output dir (default: provenance/)")
     ap.add_argument("--run-id", nargs="+", default=None,
@@ -349,6 +434,7 @@ def main():
     patches_dir = out / "patches"
 
     discovered = find_run_dirs(args.roots)
+    eval_map = find_eval_runs(args.evals_roots)
     if args.run_id:
         want = set(args.run_id)
         discovered = {k: v for k, v in discovered.items() if k in want}
@@ -363,7 +449,8 @@ def main():
     for run_id in sorted(discovered):
         run_dirs = discovered[run_id]
         try:
-            rec = build_record(run_id, run_dirs, patches_dir, dry_run=args.dry_run)
+            rec = build_record(run_id, run_dirs, patches_dir, dry_run=args.dry_run,
+                               eval_contribs=eval_map.get(run_id))
         except RuntimeError as e:
             counts["error"] += 1
             print(f"  ERROR {run_id}: {e}", file=sys.stderr)
