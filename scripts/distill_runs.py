@@ -181,11 +181,22 @@ def find_eval_runs(eval_roots):
                     "eval_commit": eval_commit,
                     "eval_ts": eval_ts,
                     "eval_dir": str(eval_dir),
+                    "dataset": manifest.get("dataset"),
                     "metrics": metrics,
                 })
+    # Oldest-first so later re-evals override; tie-break on eval_id (eval_ts is only
+    # second-precision, and fan-out evals of one run can share a second) for a
+    # deterministic "latest wins".
     for src_run in contribs:
-        contribs[src_run].sort(key=lambda c: c["eval_ts"])
+        contribs[src_run].sort(key=lambda c: (c["eval_ts"], c["eval_id"]))
     return contribs
+
+
+def _metric_headline(v):
+    """Drop *_ci keys so confidence-interval float noise doesn't count as a change."""
+    if isinstance(v, dict):
+        return {k: val for k, val in v.items() if not k.endswith("_ci")}
+    return v
 
 
 def build_record(run_id, run_dirs, patches_dir, dry_run=False, eval_contribs=None):
@@ -361,24 +372,40 @@ def _attach_eval(record, dirs, eval_contribs=None):
         if sources:
             break  # first dir with eval files wins as the in-dir base
 
-    # Layer 2: standalone eval runs, oldest-first (later re-evals override).
+    # Track which source last set each metric_path, so we can warn on suspicious
+    # overrides: (eval_id | "in-dir", eval_commit, dataset).
+    set_by = {mp: ("in-dir", None, None) for mp in metrics}
+
+    # Layer 2: standalone eval runs, oldest-first (later re-evals override per metric).
     for c in (eval_contribs or []):
         cm = c.get("metrics") or {}
+        c_id, c_commit, c_ds = c.get("eval_id"), c.get("eval_commit"), c.get("dataset")
         for mp, val in cm.items():
-            prior = metrics.get(mp)
-            if (prior is not None and prior != val
-                    and any(p.get("eval_commit") != c.get("eval_commit")
-                            for p in eval_provenance if mp in (p.get("metric_paths") or []))):
+            prev = set_by.get(mp)
+            # Compare on the headline value (drop *_ci) so CI float-noise isn't a "change".
+            if prev is not None and _metric_headline(metrics.get(mp)) != _metric_headline(val):
+                prev_id, prev_commit, _ = prev
+                if prev_id == "in-dir":
+                    why = "overrides the run's own in-dir eval"
+                elif prev_commit != c_commit:
+                    why = f"differs across eval commits ({prev_id} -> {c_id})"
+                else:
+                    why = f"differs across same-commit re-evals ({prev_id} -> {c_id})"
+                record["warnings"].append(f"metric {mp!r} changed: {why}")
+            # A metric_path carries no dataset/split dimension; re-attaching the same key
+            # from a different dataset would silently clobber. Flag it.
+            if prev is not None and prev[2] and c_ds and prev[2] != c_ds:
                 record["warnings"].append(
-                    f"metric {mp!r} differs across eval commits "
-                    f"(kept eval_id {c.get('eval_id')})"
+                    f"metric {mp!r} re-attached across different datasets ({prev[2]} -> {c_ds})"
                 )
             metrics[mp] = val
+            set_by[mp] = (c_id, c_commit, c_ds)
         eval_provenance.append({
-            "eval_id": c.get("eval_id"),
-            "eval_commit": c.get("eval_commit"),
+            "eval_id": c_id,
+            "eval_commit": c_commit,
             "eval_ts": c.get("eval_ts"),
             "eval_dir": c.get("eval_dir"),
+            "dataset": c_ds,
             "metric_paths": sorted(cm.keys()),
         })
 

@@ -1,7 +1,29 @@
 # STATUS — eval run-dir isolation + rerun
 
 **Read this first to re-orient.** Worktree `/fss/evin_t/tagseq2tagseq-evaltrack`, branch
-`eval-run-tracking` (off `provenance-grounding`).
+`eval-run-tracking` (off `provenance-grounding`). **Draft PR: #9**
+(https://github.com/evintunador/tagseq2tagseq/pull/9), base `provenance-grounding`,
+mechanism only (re-grounding held pending the repobench question below).
+
+## repobench finding (why the 4 numbers collapsed)
+The flat `repobench` benchmark is **mask-invariant by design**: `run_repobench` →
+`score_completions_independent_batched` hardcodes `mask_type='doc_causal'` and applies no
+layout (`eval/scoring.py:599`); the eval `condition` only gates whether it RUNS, never how
+it scores (agent-confirmed). So under `doceval` all 4 masks score identically flat → ~5.9.
+This hardcode dates to 2026-07-13, BEFORE the old numbers (~07-20), so the old separated
+7.2/8.9/10.4 came from a DIFFERENT path (main.py on-completion eval, sparse
+`{perplexity,total_examples}`), not today's benchmark. The genuine cross-doc probe is
+`repobench_cross_doc` — but it only runs on cross_doc_link models, so it can't form a 4-way
+table as the ledger's compute-control section assumes. => the compute-control claim's
+grounding metric needs rethinking (not just a rerun).
+
+## Re-eval scope (paper vs everything)
+- Paper grounding = `ledger.yaml` ONLY (gen_values_tex + check_grounding). ~14 jobs / 10
+  runs / 4 metric_paths. This is the subset we reran — DONE (bar the repobench decision).
+- Full contaminated universe = ~639 eval_results jobs + sidecars ≈ 800+ job-equivalents,
+  ~144 runs, 15+ benchmark families (dominated by held_out_perplexity + community_pack_
+  perplexity). ~50× the ledger, but only feeds the RESULTS_*.md analysis docs, NOT the
+  paper. Optional.
 
 ## What this is
 The eval script was writing results INTO training run dirs (and merging into training's
@@ -22,18 +44,18 @@ Then re-run the affected evals since the old numbers can't be trusted.
 ## Result
 - 12/16 ledger metrics reproduced EXACTLY (hotpotqa, all repobench_cross_doc java+python,
   all hellaswag). No ledger change needed for these.
-- 4× `compute.repobench_ppl.*` COLLAPSED to ~5.9 (was 7.2/8.9/10.4/8.8) and the mask
-  separation vanished. CAUSE UNDER INVESTIGATION — two live hypotheses: (a) `doceval`
-  scores every model under a common doc_causal layout, which may be legitimately
-  measuring "no effect" OR may be a bug that hides the real mask difference; (b) the old
-  per-mask numbers were the contaminated/wrong ones. Do NOT treat either number as truth
-  yet. Independent agents are checking the benchmark design + hunting for a bug.
+- 4× `compute.repobench_ppl.*` COLLAPSED to ~5.9 (was 7.2/8.9/10.4/8.8). SETTLED (2
+  independent agents + code/history): the new ~5.9 is GENUINE and correct — flat `repobench`
+  is mask-invariant by construction, so all 4 masks score identically; the OLD separated
+  numbers are the contamination (from an older/on-completion path, architecturally
+  impossible from run_repobench). NOT a bug in the fix (computation unchanged).
 
 ## BLOCKED ON YOU (2 decisions)
-1. **repobench_ppl compute-control claim:** pending the investigation into WHY the 4
-   numbers collapsed (design vs bug). Likely resolution is to re-run under the
-   `experimental`/`baseline` condition (each model under its own trained mask) and
-   re-ground — but confirm after the design/bug question is settled.
+1. **repobench_ppl compute-control claim:** the paper's "cross_doc_link wins on RepoBench
+   ppl" is grounded on a metric that structurally can't show a cross-doc effect. Re-running
+   under experimental/baseline will NOT help (repobench always flattens to doc_causal). Real
+   options: re-ground on `repobench_cross_doc` (cross_doc_link-only → not a 4-way table, needs
+   re-framing) OR drop the flat-repobench compute-control comparison. Your call.
 2. **Quarantine** the old contaminated `runs/*/eval_results.json` + `runs/*/eval/`? Deferred
    because the main checkout's `runs/` is shared with live peer sessions.
 

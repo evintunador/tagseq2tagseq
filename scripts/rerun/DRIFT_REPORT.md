@@ -24,28 +24,33 @@ re-evaluated value.
 
 n=500 in both old and new.
 
-### Observations (interpretation UNDER INVESTIGATION — do not treat as settled)
-- `doceval` (eval_checkpoints.py:141 comment) = doc_causal + eos layout applied to ALL
-  models. Under this common layout the four new perplexities are close (~5.9, CIs overlap)
-  and the ordering vs the old numbers appears to flip (cross_doc_link was best-old,
-  worst-new).
-- The OLD values came from the in-process on-completion eval: its `repobench/doceval`
-  entry has ONLY `{perplexity, total_examples}` (no exact_match/nll/CI), i.e. a different
-  code path than eval_checkpoints.py's full repobench benchmark.
-- Two live hypotheses (independent agents are checking both):
-  (a) `doceval`'s common-layout scoring is legitimate and the masks genuinely don't differ
-      on this metric — OR it is a BUG that strips each model's learned structure and hides
-      a real difference (bug-hunt in progress on the condition/layout override + attention
-      backend path).
-  (b) The old per-mask separated numbers were the contaminated/wrong ones.
-- NOTE: the eval-tracking fix in this PR does NOT change any benchmark math (only output
-  location), so the collapse is a property of running repobench under `doceval`, not of the
-  fix. (Being independently verified.)
+### Finding (SETTLED — 2 independent agents + code/history evidence converge)
+The ~5.9 collapse is GENUINE, not a bug. Details:
+- The flat `repobench` benchmark is **mask-invariant by construction**: its dispatch
+  (`eval_checkpoints.py:554-560`) does NOT pass the condition's mask/layout to
+  `run_repobench`; scoring hardcodes `mask_type='doc_causal'` on a single isolated DocSpan
+  (`eval/scoring.py:585-599`) with cross-file snippets flat-concatenated as text. So under
+  ANY condition (baseline/experimental/doceval) all four models are scored under the
+  identical plain-causal attention — the mask can't matter. This hardcode predates the old
+  numbers (present since 3c8f19a, 2026-07-13, and earlier).
+- The forward pass is a real FlexAttention pass on each model's true weights
+  (`doc_causal_flex` creator always built, `model/model.py:118-123`) — no degenerate/no-op.
+- Corroboration: these 4 models' single-doc `held_ppl` are already tied
+  (4.230/4.233/4.279/4.264); the new repobench avg_nll spread (~0.021 nats) matches that
+  tightness; new 95% CIs all overlap heavily; the apparent ordering "flip" is within noise.
+- => The OLD separated 7.2/8.9/10.4 numbers are the suspect ones. They cannot come from
+  `run_repobench` (mask-agnostic); they came from an older/on-completion path and are the
+  contamination. The eval-tracking fix does NOT change benchmark math (only output
+  location) — independently verified.
 
-### Decision needed (blocks re-grounding these 4 entries) — after the above is settled
-- If the intended comparison is each-model-under-its-own-mask, the ledger should point at
-  the `experimental`/`baseline` condition, not `doceval`; re-run under that and re-ground.
-- If faithful `doceval` (no effect) is the honest result, drop/re-frame the claim.
+### Decision needed (blocks re-grounding these 4 entries)
+The compute-control claim "cross_doc_link wins on RepoBench ppl" is grounded on a benchmark
+that STRUCTURALLY cannot show a cross-doc mask effect. Re-running repobench under
+`experimental`/`baseline` will NOT help — that dispatch still flattens to doc_causal. Options:
+- Re-ground the claim on `repobench_cross_doc` (the benchmark that actually fires cross-doc
+  links) — but it only runs on cross_doc_link models, so it is NOT a 4-way table; the claim
+  would need re-framing (e.g. cross_doc_only vs flat-fallback within the cross_doc_link model).
+- Or drop the flat-repobench compute-control comparison from the paper.
 
 The other 12 metrics need no ledger change (expected already matches). Hellaswag CIs are
 newly groundable (additive).
