@@ -163,7 +163,7 @@ def main():
     ap.add_argument("--nodes", type=int, default=1)
     ap.add_argument("--gpus", type=int, default=8)
     ap.add_argument("--accum", type=int, default=1)
-    ap.add_argument("--time", default="24:00:00")
+    ap.add_argument("--time", default="168:00:00")  # liberal wall; this cluster ignores slurm time estimates
     ap.add_argument("--no-eval", action="store_true", help="append --eval.run_on_completion false to each arm")
     ap.add_argument("--launch", action="store_true", help="actually submit (staggered); default dry-run")
     ap.add_argument("--first-step-timeout", type=int, default=1800,
