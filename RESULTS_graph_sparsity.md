@@ -129,15 +129,33 @@ nearly the full benefit if you evaluate it with a dense graph. wiki is the lone 
 (negative) panel, same shape. The earlier lines are slices: train-time line = the
 eval_keep=1.0 column; eval-time line = the train_keep=1.0 row.
 
-**True train-keep=0 row (§ in progress, preliminary).** We now also measure the bottom
-row directly (not just anchor it at Δ=0): evaluate the *doc_causal-trained* endpoints
+**True train-keep=0 row (measured, headline result).** We measure the bottom row
+directly rather than anchoring it at Δ=0: evaluate the *doc_causal-trained* endpoints
 under a real cross-doc mask (`sparsity_sweep --cross-mask-type cross_doc_link`, loading
 the doc_causal weights into a cross_doc-configured model — mask type is not
-parameterized). Preliminary typescript: the doc_causal-trained model gets Δ=**+0.041**
-at eval keep=1.0 — *essentially the same* as the cross_doc-trained model (+0.040). So
-for code, the cross-doc benefit is largely an **inference-time capability that does not
-require training-time exposure**. Full 6-dataset keep=0 row computing (SLURM 81104);
-this section + the grid figure will be updated when it lands.
+parameterized, so the load is strict). Δnll at eval keep=1.0 for the model that NEVER
+trained with cross-doc links, vs the cross_doc-trained endpoint:
+
+| dataset | train-keep=0 model Δ@eval=1.0 | cross_doc-trained Δ@eval=1.0 |
+|---------|------------------------------:|-----------------------------:|
+| typescript | **+0.046** | +0.040 |
+| javascript | +0.043 | +0.048 |
+| thestack (python) | **+0.028** | +0.020 |
+| rust | +0.028 | +0.025 |
+| dart | +0.027 | +0.025 |
+| wiki_merged | −0.003 | −0.021 |
+
+For code, a model that never trained with cross-doc links **exploits them at inference
+as well as — sometimes better than — one that did** (typescript +0.046 vs +0.040;
+thestack +0.028 vs +0.020). The keep=0 row is monotone in eval keep and nearly as red
+as the top row. So the cross-doc benefit is **almost entirely an inference-time
+capability**: it comes from having the linked content in context at test time, not from
+training-time exposure to the cross-doc mask (which for well-fit code models adds little
+and, on the within-model Δ metric, can slightly hurt vs a cleaner doc_causal objective).
+For wiki the sign even inverts with training: the doc_causal wiki model is barely hurt
+(−0.003), while *training* on cross-doc wiki makes it MORE hurt (−0.021) — consistent
+with "soft links become noise the model over-relies on." Figure `fig_grid2d.png` now
+shows the full 6×5 surface (SLURM 81104, 500 packs).
 
 **Cross-dataset regression** (rerunnable: `eval/viz/regress_density.py`; figure
 `sparsity_scaling/regression.png`). x = effective grants/pack × keep_frac; y = Δnll:
@@ -156,16 +174,36 @@ text datasets are the off-line outliers (§4). Raw graph out-degree is the WRONG
 (r=−0.27, a misleading null) because it counts edges the mask never used (targets not
 co-packed); effective grants/pack is the honest density axis.
 
-## 6. Traversal-time validation spot-check (IN PROGRESS)
+## 6. Traversal-time validation spot-check — mask-time IS a faithful proxy
 
 The lines above use *mask-time* dropping (packing held fixed). Does that predict *real*
-sparser-corpus training, where fewer links also change which docs co-pack? We test one
-dataset (typescript) with *traversal-time* dropping: thin the graph adjacency before
-packing, retrain, and compare the dose-response at matched effective density. Instrument
-built + validated (zig: traversal-0.5 → grants/pack 4.07→2.61, packing genuinely
-changes: 921→935 packs — note the drop is *non-linear* in keep because co-packing
-shifts). Precompute jobs 81106/07/08 running; training + comparison to follow. This
-section will report whether mask-time is a faithful proxy.
+sparser-corpus training, where fewer links also change which docs co-pack? We tested one
+dataset (typescript) with *traversal-time* dropping: thin the graph adjacency BEFORE
+packing (`_TraversalSubsampledGraph`), retrain from scratch, and compare the train-time
+dose-response at matched **effective grant density** (the honest x-axis — traversal
+keep=K does NOT give K× grants, because dropping edges reshuffles co-packing: keep
+0.25/0.5 trained at 6.0/11.5 grants/pack vs full 20.7, i.e. ~29%/55%, and even produced
+MORE packs, 187k/185k vs 181k). Retrained arms evaluated at full eval density (keep=1.0),
+500 packs, val_community:
+
+| effective train grants/pack | mask-time Δ | traversal-time Δ |
+|----------------------------:|------------:|-----------------:|
+| ~5–6   | +0.0296 (mask keep .25 → 5.2) | **+0.0330** (trav keep .25 → 6.0) [CI .029–.037] |
+| ~10–11 | +0.0362 (mask keep .5 → 10.4) | **+0.0352** (trav keep .5 → 11.5) [CI .031–.039] |
+| 20.7   | +0.0395 (shared cross_doc endpoint) | +0.0395 (shared) |
+
+**The traversal-time points land on the mask-time dose-response curve.** Interpolating
+the mask-time line to the traversal densities gives +0.031 @ 6.0 and +0.037 @ 11.5 —
+both inside the traversal arms' 95% CIs. So training on a genuinely sparser *corpus*
+(where fewer links also change which docs are co-packed) follows the same
+Δ-vs-effective-density relation as the cheap mask-time grant subsample. The
+content-distribution-shift confound does not materially move the curve — **density is
+what drives the benefit**, which validates mask-time dropping (used for all the lines
+above) as a faithful, far cheaper proxy for real sparser-corpus training. (Spot-check on
+typescript, 2 interior points; the optional keep=0.75 arm was skipped — cluster
+saturation — as the 2 points + shared endpoints already pin the curve. Data:
+`sparsity_scaling/phase2_traversal/`, `traversal_runs_manifest.json`; instrument also
+validated on zig: traversal-0.5 → 4.07→2.61 grants/pack, 921→935 packs.)
 
 ## 7. Provenance / how to reproduce
 

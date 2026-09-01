@@ -41,9 +41,18 @@ unreadable (HotpotQA) --- equivalent for the scored tokens under document-isolat
 attention, up to positional offset. We report
 $\Delta\mathrm{nll}=\mathrm{nll}_\text{flat}-\mathrm{nll}_\text{cross}$ over the
 subset of items on which the link detector fires and resolves (the \emph{fired}
-subset, of size $n$), with bootstrap $95\%$ confidence intervals. Because both arms
-score the same tokens on the same weights, memorization of $y$ cancels: the contrast
-measures only what attending into $B$ through the link adds.
+subset, of size $n$), with $95\%$ percentile-bootstrap confidence intervals over the
+paired per-example deltas. Because both arms score the same tokens on the same weights,
+memorization of $y$ cancels: the contrast measures only what attending into $B$ through
+the link adds. Two further controls isolate what that gain is made of
+(\Cref{sec:results:specificity}). A derangement \emph{placebo} re-scores each fired
+item with the link identifiers kept --- so the grant still fires --- but the granted
+document's content swapped for another example's; the placebo separation (placebo minus
+cross-doc NLL) measures specificity to the \emph{correct} document rather than to any
+extra in-language context. And the $\Delta$ is stratified by target--context $n$-gram
+overlap $\alpha$ (RETRO's leakage protocol), reporting the effect within the
+lowest-overlap stratum, where the completion cannot be copied from the granted
+document.
 \begin{itemize}
   \item \textbf{HotpotQA cross-doc} (Wikipedia). Bridge-type questions from HotpotQA
         \citep{yang2018hotpotqa}: the second supporting article $B$ is the target, the
@@ -62,12 +71,8 @@ measures only what attending into $B$ through the link adds.
         held-out community splits and score at the \emph{use line}---the first statement
         that references a symbol declared in the granted file, located with a
         tree-sitter declaration query---which removes import-syntax artefacts and
-        concentrates the signal where the dependency is used. These carry a
-        \emph{placebo} arm: the same identifiers (so grants still fire) with the target
-        content swapped for another item's, testing whether the gain comes from the
-        \emph{right} document or from any extra in-language tokens. The headline
-        HotpotQA and RepoBench arms do not yet carry this placebo
-        (\Cref{sec:analysis}).
+        concentrates the signal where the dependency is used. These carry the same
+        derangement placebo as the headline arms.
   \item \textbf{Community-pack perplexity.} Packs built by BFS over a held-out
         \texttt{val\_community} split (intact linked subgraphs, \Cref{app:datasets}) are
         scored under \crossdoc versus \doccausal on the same model, grants taken

@@ -15,6 +15,15 @@ ordering K-BERT's visible-matrix ablation \citep{liu2020kbert} would predict: th
 typed edge is doing work that more attention does not. We treat the controls as
 first-class results, not a survival test.
 
+\paragraph{The effect is a genuine linking bias.}
+The placebo and leakage controls (\Cref{sec:results:specificity}) rule out the two
+deflationary readings of the cross-document $\Delta$nll. The derangement placebo
+removes almost all of the gain while holding the amount of granted context fixed, so
+the benefit is specificity to the correct linked document, not generic extra context;
+and the reduction persists in the lowest $n$-gram-overlap stratum, so it is not
+verbatim copying of duplicated text. What remains is the intended inductive bias:
+attention gated onto the right cross-document target at generation time.
+
 \paragraph{Why the inference-time density result is about capability, not the thesis.}
 The density experiments say that on code the cross-document benefit is mostly a
 property of what the mask exposes at evaluation: a \doccausal-trained model given
@@ -86,13 +95,11 @@ edge-gated attention follows that trend is an open question our scaling runs are
 designed to test, not one we preconclude. \emph{arXiv.} Papers are long relative to a
 $32$k window, so citation targets are rarely co-packed and the arXiv models are
 uninformative about the method; the modality needs sequence-parallel training.
-\emph{Placebo on the headline arms.} The cross arm of HotpotQA and RepoBench sees
-strictly more tokens than the flat arm; the internal ports carry a content-swapped
-placebo that separates the right document from any document, and the headline arms do
-not yet. \emph{Leakage.} HotpotQA is built on 2017 English Wikipedia and The Stack
-overlaps public code; the paired same-token contrast cancels memorization of the
-completion but not re-exposure of a memorized target, and a leakage-stratified
-analysis is pending. \emph{Fired-subset reporting.} $\Delta$ is over items where the
+\emph{Leakage.} HotpotQA is built on 2017 English Wikipedia and The Stack overlaps
+public code; the paired same-token contrast cancels memorization of the completion,
+and the $\alpha$-stratified analysis shows the gain survives where the completion
+cannot be copied from the granted document (\Cref{sec:results:specificity}) --- but
+corpus deduplication itself remains sampling-only. \emph{Fired-subset reporting.} $\Delta$ is over items where the
 detector fires, which correlates with clean titles and parseable imports.
 \emph{Inference cost.} The generation loop recomputes the full forward at every token
 with no key/value cache. \emph{Diversity.} The merged-corpus experiment was invalidated

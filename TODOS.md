@@ -51,14 +51,6 @@ nearly the full cross-doc benefit at eval) is about *reading* a handed target, n
   first size at which free-generation link-following becomes measurable.
 Fold into the eval harness as a first-class benchmark; report cdl vs dc vs concat_link.
 
-### HotpotQA / RepoBench headline placebo (TENTATIVE — may already be done)
-Human believes the derangement placebo for the headline arms (`TODOS` "Placebo/
-derangement on the headline arms", filed 08-10) may have been implemented in a local
-worktree on fss (`/fss/evin_t/tagseq2tagseq-*`) and NOT pushed. Check `git -C
-/fss/evin_t/tagseq2tagseq* status` / unpushed branches before re-implementing. Once
-landed: run on the wiki bfs headline ckpt + Java/Python RepoBench arms, add ledger keys
-`crossdoc.wiki_hotpotqa.placebo_sep` etc., cite in §6.1 / §7 Limitations.
-
 ### Wiki concat-control HotpotQA eval (missing) — `\fillin` in §6.3
 `wiki_docconcatlink_best` (run_20260717_234605_156456, wd0.3, best_model.pt) has
 single-doc evals but NO `hotpotqa_cross_doc` eval in any record; `wiki_docconcat_best`
@@ -75,17 +67,17 @@ column.
 the record so it survives run-dir deletion. Same source unlocks the LR/WD U-curve tables
 and the per-language sweep val-loss table for App. Z.
 
-### Provenance: `kind: artifact` source for the sparsity-scaling JSONs — BLOCKS §6.5 numbers
-§6.5 (link-density dose–response) is written with `\fillin` magnitudes; the values are
-in `/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/{phase1_eval,
-phase2_traintime,grid2d,effective_density.json,regression.json}` and listed in a LaTeX
-comment under §6.5. Add an `artifact` source (path + JSON pointer, content-hashed, copied
-into `provenance/artifacts/`) and ground: eval-time code-only r/slope/intercept/n,
-train-time r, out-degree r, per-dataset Δ@κ=1 + eff. grants/pack, 2D-grid axis swings,
-keep0-row TS dc-trained vs cdl-trained. Also copy `fig_sparsity.png`, `fig_traintime.png`,
-`fig_grid2d.png`, `regression.png` into `paper/figures/` and wire them into §6.5. Finish
-the full 6-dataset keep0 row (SLURM 81104) and the traversal-time TS spot-check (81106–08)
-first so the section reports final numbers.
+### Provenance: `kind: artifact` source for the sparsity-scaling JSONs — remaining §6.5 numbers
+PARTIALLY RESOLVED 2026-08-28: figures are in `paper/figures/` and wired into §6.5 +
+App. Z; the eval-time code r is ledger-grounded as a documented literal
+(`sparsity.crossdoc_law.eval_r_code`); keep=0 row and the traversal-time spot-check are
+done and in the paper. REMAINING: the other `\fillin` magnitudes in §6.5 (n, slope,
+out-degree r, 2D-grid axis swings, TS keep0 pair) and a per-dataset Δ@κ=1 table. Values
+live in `/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/{phase1_eval,
+phase2_traintime,grid2d,effective_density.json,regression.json}` (listed in the §6.5
+LaTeX comment). Either extend the literal pattern used for eval_r_code, or (better) add
+a `kind: artifact` source (path + JSON pointer, content-hashed, copied into
+`provenance/artifacts/`) and migrate eval_r_code onto it too.
 
 ### Density-aware timing: locate the originating run — `\fillin` in §6.7
 The 1.45×/1.14× speedup and CoV numbers in README.md come from `step_timing_rank*.csv`
@@ -465,27 +457,31 @@ bottleneck.
 
 ## Eval
 
-### Leakage-stratified cross-doc Δnll (RETRO bpb(α) protocol — filed 2026-08-10)
-Our grant makes verbatim copying from the target more direct than retrieval baselines,
-and dedup is sampling-only, so raw perplexity gains risk being re-exposure of
-memorized/duplicated text (HotpotQA's 2017 Wikipedia and The Stack both overlap
-training data). Measure FIRST on the already-completed sweep (pure eval, no retrain):
-stratify the cross-doc Δnll by target<->context n-gram overlap α and show the effect
-survives at low overlap. Only if the low-overlap effect is weak do we go back to the
-datasets, filter, and re-run training — a HARD BLOCKER on final numbers *conditional*
-on the measurement demanding it, NOT a pre-committed retrain. Expect a steeper leakage
-slope than RETRO. (Related but distinct from the deferred dataset-side dedup blacklist
-item below, which is graph-construction dedup, not eval-side α-stratification.)
+### Per-run eval metrics (ReproducibilityManager) linked to their training run + re-run ALL eval numbers (filed 2026-08-28)
+Eval results are currently written as sidecar `eval_*.json` INTO the *training* run dir
+and layered by `distill_runs` (`eval_reeval256.json`, `eval_java_repobench_final.json`,
+`eval_leakage_placebo.json`, ...). The distilled record's `reproduce` block is the
+**training** run's git state, so an eval number carries NO record of the code that
+produced it. This is not reproducible across code evolution: replicating the grounded
+`repobench_python` cross-doc eval (run_20260720_063128_690228, stored 2026-07-27) on a
+later HEAD gives cross NLL 1.69973 vs stored 1.69981 and flat 1.79389 vs 1.79249 —
+bit-identical across two reruns (deterministic → code drift, not GPU noise; `eval/scoring.py`
+changed 2026-08-03, after that eval). The derived Δnll shifts 0.0927 → 0.0942, visible at
+the 3-sig-fig precision the paper reports. The flat/batched NLL drifted ~18x more than the
+per-example cross NLL, so the culprit is likely something small (e.g. a batch-size change
+in the batched flat scoring path).
 
-### Placebo/derangement on the headline arms + fired-subset Δnll (filed 2026-08-10)
-Tier-2 ports already have the derangement placebo (`eval/benchmark_harness/tier2.py`,
-`placebo_separation` + bootstrap CI). The headline HotpotQA-cross-doc and
-RepoBench-cross-doc arms do NOT — they report only cross-vs-flat, where the cross arm
-sees strictly more tokens, so "is it the right doc or just more context?" is unanswered
-(acute given HotpotQA single-hop solvability). Extend the existing derangement machinery
-to the headline arms, or caveat prominently. Also report Δnll over the *fired* subset
-honestly (Repoformer's ~20/60/20 help/neutral/hurt split makes averaging over non-fired
-items misleading).
+A per-eval-result commit field is NOT enough: eval is often run with uncommitted working-tree
+changes, which a bare SHA can't capture. **Fix:** make each eval its OWN run created via
+`tunalab.reproducibility.ReproducibilityManager` (full capture: git SHA + dirty patch +
+software/runtime env, exactly like training), holding a reference to the training run(s) it
+evaluates (to locate the checkpoint) — instead of dropping bare `eval_*.json` into the
+training run dir. `distill_runs` then harvests eval runs the same way as training runs.
+**Then re-run ALL eval numbers** under this scheme (headline cross-doc, compute controls,
+single-doc, and the new placebo/leakage-α numbers) and update the `paper/` number pipeline
+accordingly: point ledger `eval` sources at the new per-eval-run records; adjust
+`distill_runs`/`gen_values_tex`/`check_grounding` so the eval commit is grounded per number.
+Supersedes the sidecar pattern; existing sidecars stay readable until migrated.
 
 ### Eval-time max_seq_len extension (long-context generalization probe — filed 2026-08-10)
 Cheap probe, no retrain: eval a 32k-trained checkpoint at larger max_seq_len (64k+) and

@@ -50,6 +50,36 @@ $\Delta\mathrm{nll}=\val{crossdoc.repobench_python.delta_nll}$
   \label{tab:traversal}
 \end{table}
 
+\subsection{The cross-document gain is specific, not memorization}
+\label{sec:results:specificity}
+Two controls confirm the reduction above comes from reading the \emph{correct} linked
+document, not from generic extra context or verbatim re-exposure of overlapping text.
+First, a derangement \emph{placebo}: for each query we keep the original link identifiers
+(so the grant still fires) but replace the granted document's content with another
+example's, so the model attends to a wrong-but-plausible document. This collapses most of
+the benefit, leaving a placebo separation (placebo minus cross-document NLL) of
+\val{crossdoc.wiki_hotpotqa.placebo_sep} (95\% CI
+\val{crossdoc.wiki_hotpotqa.placebo_sep.ci}) on HotpotQA, and
+\val{crossdoc.repobench_python.placebo_sep}
+(\val{crossdoc.repobench_python.placebo_sep.ci}) and
+\val{crossdoc.repobench_java.bfs.placebo_sep}
+(\val{crossdoc.repobench_java.bfs.placebo_sep.ci}) on Python and Java RepoBench --- all
+CIs excluding zero. Second, we stratify the cross-document $\Delta$nll by the
+target--context $n$-gram overlap $\alpha$ (RETRO's leakage protocol): even in the
+lowest-overlap stratum ($\alpha<0.05$), where the target cannot be copied from the granted
+context, the reduction persists at
+\val{crossdoc.wiki_hotpotqa.leakage_lowalpha.delta_nll}
+(\val{crossdoc.wiki_hotpotqa.leakage_lowalpha.delta_nll.ci},
+$n=\val{crossdoc.wiki_hotpotqa.leakage_lowalpha.n}$) on HotpotQA,
+\val{crossdoc.repobench_python.leakage_lowalpha.delta_nll}
+(\val{crossdoc.repobench_python.leakage_lowalpha.delta_nll.ci},
+$n=\val{crossdoc.repobench_python.leakage_lowalpha.n}$) on Python, and
+\val{crossdoc.repobench_java.bfs.leakage_lowalpha.delta_nll}
+(\val{crossdoc.repobench_java.bfs.leakage_lowalpha.delta_nll.ci},
+$n=\val{crossdoc.repobench_java.bfs.leakage_lowalpha.n}$) on Java --- again all CIs
+excluding zero. The gain therefore reflects cross-document reasoning over the right link,
+not surface duplication.
+
 \subsection{Single-document benchmarks are unaffected}
 \label{sec:results:singledoc}
 Cross-document attention has nothing to attend to on an isolated document, and the
@@ -131,37 +161,70 @@ base-model loss and only weakly moves the within-model cross-document gain.
 % are tracked as grounding debt until a log-value source lands; see provenance/README.md.
 
 \subsection{The cross-document benefit scales with realized link density}
-\label{sec:results:density}
+\label{sec:results:density}\label{sec:sparsity}
 With corpus, packing, and model held fixed and only the fraction $\kappa$ of resolved
 grants varied, the community-pack $\Delta\mathrm{nll}$ on every code graph rises
-monotonically with $\kappa$ at evaluation time, near-linearly, and is pinned to zero at
+monotonically with $\kappa$ at evaluation time, near-linearly
+(\Cref{fig:sparsity-eval}, panel A), and is pinned to zero at
 $\kappa=0$ (the \doccausal identity; the instrument was verified to reproduce
 $\Delta=0$ exactly on real checkpoints). Which edges are kept does not matter, only how
 many: subsampling by edge and by node give the same lines. Pooling the nine code graphs
 and regressing $\Delta\mathrm{nll}$ on the number of grants the mask actually realizes
 per pack (out-degree $\times$ co-packing rate $\times\kappa$) yields a single
-cross-dataset line with correlation \fillin{$r$, eval-time, code} over
-\fillin{$n$} points and slope \fillin{nats per realized grant}, extrapolating above
-today's densest corpus. Raw graph out-degree is the wrong axis, with correlation
-\fillin{$r$, out-degree}: it counts edges whose targets are never co-packed and hence
-never attended.
+cross-dataset line with correlation $r=\val{sparsity.crossdoc_law.eval_r_code}$ over
+\fillin{$n$} points and slope \fillin{nats per realized grant}
+(\Cref{fig:sparsity-eval}, panel B; pooled regression detail in
+\Cref{app:sparsity-regression}), extrapolating above today's densest corpus. Raw graph
+out-degree is the wrong axis, with correlation \fillin{$r$, out-degree}: it counts
+edges whose targets are never co-packed and hence never attended.
 
 Retraining at each $\kappa$ and re-evaluating at full density gives the train-time
-line, which is monotone but strongly \emph{concave}: most of the benefit is already
-present when the model trained on a quarter of the edges, and the train-time curve
-lies above the eval-time curve at low $\kappa$ (training on a sparse graph beats
-evaluating a dense-trained model at that sparsity). The two-dimensional
-train-$\kappa\times$eval-$\kappa$ grid makes the asymmetry explicit: moving along the
+line (\Cref{fig:sparsity-train}), which is monotone but strongly \emph{concave}: most
+of the benefit is already present when the model trained on a quarter of the edges,
+and the train-time curve lies above the eval-time curve at low $\kappa$ (training on a
+sparse graph beats evaluating a dense-trained model at that sparsity). The
+two-dimensional train-$\kappa\times$eval-$\kappa$ grid (\Cref{fig:sparsity-grid})
+makes the asymmetry explicit: the dominant gradient is horizontal --- moving along the
 eval-density axis swings $\Delta$ by \fillin{eval-axis swing} while moving along the
-train-density axis moves it by only \fillin{train-axis swing}. The limiting case is the
-$\kappa_\text{train}=0$ row --- a \doccausal-trained model evaluated under the
+train-density axis moves it by only \fillin{train-axis swing}. The limiting case is
+the $\kappa_\text{train}=0$ row --- a \doccausal-trained model evaluated under the
 \crossdoc mask --- which on TypeScript recovers $\Delta\mathrm{nll}=$
 \fillin{dc-trained TS} against \fillin{cdl-trained TS} for the model trained with
 grants. On code, then, the cross-document benefit is overwhelmingly an
 \emph{inference-time} effect: what the mask exposes at evaluation matters far more than
-whether the model saw grants during training. The Wikipedia graph is excluded from
-this analysis pending an audit of the community-pack instrument on that corpus
+whether the model saw grants during training. The instrument itself is validated by a
+traversal-time spot-check --- really removing edges from the graph before packing, so
+co-packing changes too, lands on the same dose--response curve at matched effective
+density (\Cref{app:sparsity-traversal}). The Wikipedia graph is excluded from this
+analysis pending an audit of the community-pack instrument on that corpus
 (\Cref{sec:analysis}).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig_sparsity.png}
+  \caption{Eval-time graph-sparsity law. Panel A: $\Delta$nll vs kept link fraction
+  per dataset (blue = code, orange = text; band = seeds 0--2). Panel B: cross-dataset
+  law --- $\Delta$nll at full density vs the effective co-packed grant density the mask
+  actually saw.}
+  \label{fig:sparsity-eval}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig_traintime.png}
+  \caption{Train-time graph-sparsity law: models retrained at each link density
+  (solid) overlaid on the eval-time curve (dashed) for the same datasets.}
+  \label{fig:sparsity-train}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig_grid2d.png}
+  \caption{Cross-doc benefit $\Delta$nll over the full (train keep $\times$ eval keep)
+  grid, per dataset. Rows = training-graph density, columns = inference-graph density;
+  keep${=}0$ column is the \doccausal identity ($\Delta{=}0$).}
+  \label{fig:sparsity-grid}
+\end{figure}
 % NOT YET GROUNDED. Values from RESULTS_graph_sparsity.md (solo models only; unaffected
 % by the merged retraction). Artifacts: /fss-data/evin_t/tagseq2tagseq_artifacts/
 % sparsity_scaling/{phase1_eval,phase2_traintime,grid2d,effective_density.json,

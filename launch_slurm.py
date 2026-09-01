@@ -185,7 +185,8 @@ def launch(
         main_argv = ["--config", config] + main_argv
 
     # Build a timestamped run directory on the shared filesystem so runs survive
-    # repo/worktree removal; override the root with TS2TS_RUNS_ROOT.
+    # repo/worktree removal; override the root with TS2TS_RUNS_ROOT. (The yield-watcher
+    # scans both this location and the legacy <repo>/runs.)
     runs_root = Path(os.environ.get(
         "TS2TS_RUNS_ROOT", "/fss-data/evin_t/tagseq2tagseq_artifacts/runs"))
     run_id  = datetime.datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")

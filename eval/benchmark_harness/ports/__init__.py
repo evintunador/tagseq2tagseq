@@ -16,6 +16,7 @@ from ..schema import PortAdapter
 from .repobench import REPOBENCH_PYTHON, REPOBENCH_JAVA
 from .ase_kotlin import ASE_KOTLIN
 from .crosscodeeval_ts import CROSSCODEEVAL_TS
+from .hotpotqa import HOTPOTQA_BRIDGE
 from .internal_community import INTERNAL_PORTS
 
 PORTS: Dict[str, PortAdapter] = {
@@ -23,6 +24,7 @@ PORTS: Dict[str, PortAdapter] = {
     REPOBENCH_JAVA.name: REPOBENCH_JAVA,
     ASE_KOTLIN.name: ASE_KOTLIN,
     CROSSCODEEVAL_TS.name: CROSSCODEEVAL_TS,
+    HOTPOTQA_BRIDGE.name: HOTPOTQA_BRIDGE,
     **INTERNAL_PORTS,
 }
 

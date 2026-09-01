@@ -18,13 +18,17 @@ Gates:
 The placebo swap reuses each fired example's own identifiers on swapped
 CONTENT, so fire-rate is preserved by construction and the two conditions
 differ only in what the granted attention actually sees.
+
+Leakage stratification (RETRO bpb(α)): the paired Δnll_real deltas are also
+bucketed by α = target↔aux n-gram overlap, so the gain can be read at LOW
+overlap where verbatim re-exposure is ruled out (leakage_strata on the report).
 """
 from __future__ import annotations
 
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .schema import CrossDocExample, PortAdapter, encode_example
 from .scopes import SCOPES, scope_example
@@ -36,6 +40,18 @@ MIN_FIRE_RATE = 0.5
 BOOTSTRAP_RESAMPLES = 10_000
 SEED = 42
 
+# ── Leakage stratification (RETRO bpb(α) protocol) ───────────────────────────
+# α = fraction of the scored target's n-grams that also occur in the granted aux
+# doc(s). High α means the target is largely copyable from the context the grant
+# exposes, so a raw Δnll gain there is re-exposure of overlapping text rather
+# than genuine cross-doc reasoning. We bucket the paired flat−cross deltas by α
+# and report each bucket's mean + CI, so the effect can be read off at LOW
+# overlap (the leakage-robust regime). Token-level n-grams on the same gpt2 ids
+# the model scored — no re-decode, so α is exact w.r.t. what was measured.
+LEAKAGE_NGRAM_N = 8
+LEAKAGE_ALPHA_EDGES = (0.0, 0.05, 0.25, 0.5, 0.75, 1.0000001)
+LEAKAGE_MIN_BUCKET_CI = 10  # bootstrap a bucket's CI only above this count
+
 
 def _bootstrap_ci(deltas: List[float], seed: int = SEED,
                   resamples: int = BOOTSTRAP_RESAMPLES) -> Tuple[float, float]:
@@ -46,6 +62,60 @@ def _bootstrap_ci(deltas: List[float], seed: int = SEED,
     means = rng.choice(arr, size=(resamples, len(arr)), replace=True).mean(axis=1)
     lo, hi = np.percentile(means, [2.5, 97.5])
     return float(lo), float(hi)
+
+
+def _ngram_set(ids: Sequence[int], n: int) -> set:
+    """Set of contiguous token n-grams (as tuples); empty if the sequence is
+    shorter than n (it cannot contain an n-gram)."""
+    if len(ids) < n:
+        return set()
+    return {tuple(ids[i:i + n]) for i in range(len(ids) - n + 1)}
+
+
+def _target_aux_overlap(target_ids: Sequence[int],
+                        aux_token_lists: Sequence[Sequence[int]],
+                        n: int = LEAKAGE_NGRAM_N) -> float:
+    """α ∈ [0,1]: fraction of the target's n-grams that appear as a contiguous
+    n-gram in the union of the aux docs. n is capped at the target length so a
+    short target (e.g. a QA answer) is checked for substring-level copyability
+    from the granted context rather than being forced to α=0. 0 when the target
+    or all aux docs are empty."""
+    if not target_ids:
+        return 0.0
+    n_eff = min(n, len(target_ids))
+    tgt = _ngram_set(target_ids, n_eff)
+    if not tgt:
+        return 0.0
+    aux: set = set()
+    for lst in aux_token_lists:
+        aux |= _ngram_set(lst, n_eff)
+    if not aux:
+        return 0.0
+    return len(tgt & aux) / len(tgt)
+
+
+def _stratify_by_alpha(alphas: List[float], deltas: List[float],
+                       seed: int = SEED) -> List[Dict[str, Any]]:
+    """Bucket paired `deltas` (flat − cross) by their leakage overlap `alphas`
+    into LEAKAGE_ALPHA_EDGES bins; per bin report n, mean α, mean Δ and a
+    bootstrap CI (only where n is large enough to be meaningful)."""
+    strata: List[Dict[str, Any]] = []
+    edges = LEAKAGE_ALPHA_EDGES
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        idx = [k for k, a in enumerate(alphas) if lo <= a < hi]
+        d = [deltas[k] for k in idx]
+        a = [alphas[k] for k in idx]
+        strata.append({
+            "alpha_lo": float(lo),
+            "alpha_hi": float(min(hi, 1.0)),
+            "n": len(d),
+            "mean_alpha": (sum(a) / len(a)) if a else float("nan"),
+            "delta_real": (sum(d) / len(d)) if d else float("nan"),
+            "delta_real_ci": (_bootstrap_ci(d, seed=seed)
+                              if len(d) >= LEAKAGE_MIN_BUCKET_CI
+                              else (float("nan"), float("nan"))),
+        })
+    return strata
 
 
 def _model_max_seq_len(model, default: int = 32768) -> int:
@@ -76,6 +146,11 @@ class Tier2Report:
     delta_placebo: float = float("nan")         # flat − placebo
     placebo_separation: float = float("nan")    # delta_real − delta_placebo
     placebo_separation_ci: Tuple[float, float] = (float("nan"), float("nan"))
+    # Leakage stratification (RETRO bpb(α)): Δnll_real bucketed by target↔aux
+    # n-gram overlap. leakage_strata is one dict per α bin (see _stratify_by_alpha).
+    leakage_ngram_n: int = LEAKAGE_NGRAM_N
+    mean_alpha: float = float("nan")
+    leakage_strata: List[Dict[str, Any]] = field(default_factory=list)
     failures: List[str] = field(default_factory=list)
 
     @property
@@ -201,23 +276,31 @@ def run_tier2(
         placebo_nlls.append(nll)
 
     # ── metrics on the triple-paired subset ──────────────────────────────
-    triples = [(cross_nlls[i], f, pl)
+    # Keep the example index per triple so the paired deltas can be stratified
+    # by each example's target↔aux leakage overlap α.
+    triples = [(i, cross_nlls[i], f, pl)
                for i, f, pl in zip(fired, flat_nlls, placebo_nlls)
                if pl is not None]
     if triples:
-        cross = [t[0] for t in triples]
-        flat = [t[1] for t in triples]
-        placebo = [t[2] for t in triples]
+        cross = [t[1] for t in triples]
+        flat = [t[2] for t in triples]
+        placebo = [t[3] for t in triples]
         rep.mean_nll_cross = sum(cross) / len(cross)
         rep.mean_nll_flat = sum(flat) / len(flat)
         rep.mean_nll_placebo = sum(placebo) / len(placebo)
-        d_real = [f - c for c, f, _ in triples]
-        d_sep = [p - c for c, _, p in triples]   # placebo − cross, per example
+        d_real = [f - c for _, c, f, _ in triples]
+        d_sep = [p - c for _, c, _, p in triples]   # placebo − cross, per example
         rep.delta_real = sum(d_real) / len(d_real)
         rep.delta_real_ci = _bootstrap_ci(d_real, seed=seed)
         rep.delta_placebo = rep.mean_nll_flat - rep.mean_nll_placebo
         rep.placebo_separation = sum(d_sep) / len(d_sep)
         rep.placebo_separation_ci = _bootstrap_ci(d_sep, seed=seed)
+        # Leakage stratification: α per example from the exact scored token ids.
+        alphas = [_target_aux_overlap(packed[i]["completion_tokens"],
+                                      packed[i]["aux_token_lists"])
+                  for i, _, _, _ in triples]
+        rep.mean_alpha = sum(alphas) / len(alphas)
+        rep.leakage_strata = _stratify_by_alpha(alphas, d_real, seed=seed)
 
     n_scored = len(triples)
     if n_scored < MIN_N:
