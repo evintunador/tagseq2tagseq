@@ -1,7 +1,28 @@
 \section{Conclusion}
 \label{sec:conclusion}
 
-\todo{Recap: making link structure a first-class part of pretraining attention
-yields a real, compute-controlled cross-document reasoning benefit across three edge
-modalities, strengthened by multi-source diversity. Future: scale, more edge types
-(Obsidian vaults), generation evaluation.}
+We have made the link structure of a corpus a first-class part of a decoder-only
+language model's attention: documents are packed by graph traversal, a block-sparse
+mask keeps them causally isolated except along explicit edges, and where document $A$
+links to document $B$ the tokens of $A$ from the link onward may read $B$. On
+Wikipedia hyperlinks and on code imports across several languages, this lowers the
+likelihood of link-dependent completions relative to the same tokens scored without
+the target, leaves single-document capability unchanged, and beats matched-compute
+controls that grant more attention without the link gating. Varying only the fraction
+of edges the mask may use shows the benefit on code scaling with realized link
+density, saturating early in training, and being dominated by the density exposed at
+inference.
+
+The design's purpose is larger than these prerequisites. Because the grant opens
+exactly where a reference closes, and because causality is never relaxed, the model is
+taught by the plain pretraining objective that writing a reference is what makes a
+document readable. That is the ingredient a flat concatenation baseline cannot have
+and a retrieval-augmented system must be engineered to supply: the possibility of a
+model that fetches from its corpus \emph{by generating a citation}, with no retriever,
+no fusion module, and no post-training to teach the behaviour. The models in this
+paper are too small to test that directly; designing the measurement, and scaling to
+a regime where generation is coherent enough to make it, is the work this paper sets
+up. Beyond that: sequence-parallel training so long-document modalities such as arXiv
+can be co-packed at all, the corrected multi-source diversity experiment, and richer
+edge types where the graph is the author's own (personal knowledge bases, code with
+call graphs rather than imports).

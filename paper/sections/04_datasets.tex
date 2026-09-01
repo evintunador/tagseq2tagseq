@@ -1,9 +1,88 @@
 \section{Datasets}
 \label{sec:datasets}
 
-\todo{Table: SimpleWiki (275k nodes, ~108M tok, markdown hyperlinks), EnWikiSource
-(662k, ~612M), The Stack + 8 more languages (import edges), arXiv/unarXive 2024
-(~10B tok, \textbackslash cite edges). Merged-v2 = 11 sources jointly.}
+Every corpus is reduced to the same object: a typed attributed graph whose nodes are
+documents with their full text and whose directed edges are in-corpus references
+recovered from that text. Extraction is modality-specific; normalization,
+pretokenization (GPT-2 BPE), and splitting are shared (\Cref{app:datasets}). We use
+two edge modalities in the reported experiments and a third that we built but scope
+out of the claims.
 
-\todo{Link detectors per modality (Markdown, Python/Java/..., LaTeX \textbackslash
-cite, composite dispatch for the merged model). Graph splitting into train/val/test.}
+\paragraph{Wikipedia hyperlinks.}
+Wikitext links \texttt{[[Title|label]]} are rewritten to Markdown
+\texttt{[label](Title)} with the raw title preserved, and an edge is emitted when the
+normalized title is a node. The graph used for all Wikipedia results
+(\texttt{wiki\_merged}) is the union of eight English-language Wikimedia projects
+(Simple English Wikipedia, Wikinews, Wikibooks, Wikivoyage, Wikiquote, Wikiversity,
+Wikisource, Wiktionary), merged by normalized identifier with a fixed priority order
+for title collisions; it has $9.65$M nodes. English Wikipedia proper is not in the
+training graph, which matters for the HotpotQA benchmark (\Cref{sec:analysis}).
+% Node count from docs/handoff_wiki_crossdoc.md §5; dump list + priority from
+% scripts/wiki_merge_finalize.sh. Token count not yet located in a durable artifact:
+% RESULTS.md/TUNING_LESSONS.md say 4 epochs ≈ 3.8B tokens (≈0.95B/epoch).
+
+\paragraph{Code imports.}
+For each of nine languages from The Stack \citep{kocetkov2022stack}---Python, Java,
+Go, TypeScript, JavaScript, Kotlin, Rust, Dart, Zig---a tree-sitter pass extracts
+import statements and resolves each to a file (or, for Go and Kotlin, a package or
+declared symbol) \emph{within the same repository}; standard-library and ubiquitous
+third-party modules are dropped, so every edge is an intra-repository dependency and a
+pack never mixes repositories. Files with fewer than two intra-repository links are
+discarded. \Cref{tab:datasets} gives the as-built graph sizes.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}llrrr@{}}
+    \toprule
+    Corpus & Node & Nodes & Edges & Mean out-degree \\
+    \midrule
+    \texttt{wiki\_merged} (8 projects) & article & $9{,}650{,}000$ & \fillin{edges} & \fillin{deg} \\
+    Python (The Stack)   & file    & $3{,}560{,}799$ & $6{,}335{,}322$  & $1.78$ \\
+    TypeScript           & file    & $7{,}482{,}656$ & $12{,}342{,}676$ & $1.65$ \\
+    JavaScript           & file    & $9{,}736{,}820$ & \fillin{edges} & \fillin{deg} \\
+    Kotlin               & symbol  & $2{,}003{,}631$ & $4{,}879{,}033$  & $2.44$ \\
+    Rust                 & module  & $580{,}314$     & $1{,}152{,}231$  & $1.99$ \\
+    Go                   & package & $358{,}812$     & $388{,}608$      & \fillin{deg} \\
+    Java                 & file    & $316{,}992$     & $229{,}357$      & \fillin{deg} \\
+    Dart                 & file    & $344{,}788$     & \fillin{edges} & \fillin{deg} \\
+    Zig                  & file    & $8{,}798$       & \fillin{edges} & \fillin{deg} \\
+    \midrule
+    arXiv (unarXive 2022; scoped out) & paper & \fillin{nodes} & \fillin{edges} & \fillin{deg} \\
+    \bottomrule
+  \end{tabular}
+  \caption{As-built graph sizes after extraction and filtering (train + held-out
+  splits). Code edges are intra-repository imports; the Python row is the working set
+  after the two-link filter. Blank cells are not yet recovered from a durable artifact.}
+  \label{tab:datasets}
+\end{table}
+% Sources: docs/multilang_code_datasets_DESIGN.md (rust/kotlin/ts table L188; go L70;
+% java L94; zig/dart/js L231); paper/sections/appendices/F_dataset_construction.tex
+% (python). Missing cells: pull from each dataset's metadata.json / audit log on
+% /fss-data (TODOS.md, "dataset table cells").
+
+The languages differ substantially in realized link density---the number of grants
+the mask actually opens per pack, which depends on out-degree \emph{and} on how often
+a target is co-packed with its linker---and this variation is what the density
+experiments exploit (\Cref{sec:results}).
+
+\paragraph{arXiv citations (built, not claimed).}
+We also built a citation graph from the unarXive 2022 release
+\citep{saier2023unarxive} ($\approx1.9$M papers), resolving
+\texttt{\textbackslash cite} keys to in-corpus papers (via unarXive's own ids and an
+OpenAlex map) and rewriting each resolved citation to \texttt{\textbackslash
+cite\{Title\}}; unresolved citations are removed from the text so the model never sees
+a reference it cannot follow. Papers are long relative to the $32$k context, however:
+a pack typically holds only one or two documents, so link targets are rarely co-packed
+and the cross-document mask has almost nothing to grant. The arXiv models we trained
+are therefore uninformative about the method, and we make no arXiv claims; the modality
+awaits sequence-parallel training at longer context (\Cref{sec:analysis}).
+
+\paragraph{Splits.}
+Each graph is partitioned at the node level into \texttt{train}, random held-out
+splits, and \emph{community} held-out splits: intact linked subgraphs of $50$--$5{,}000$
+nodes grown by bidirectional BFS, on which held-out loss reflects genuine
+cross-document traversal. Edges crossing a split boundary are severed, and no held-out
+node's tokens are ever a training target. The multi-source merge used in the diversity
+experiment unifies all eleven graphs by normalized identifier with per-node source
+provenance, and packs strictly within source (\Cref{app:datasets}).
