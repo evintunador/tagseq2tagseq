@@ -1,31 +1,78 @@
 \section{Introduction}
 \label{sec:intro}
 
-% Motivation: corpora are graphs, standard LM training flattens them.
-\todo{Open with the graph-structure-is-ignored motivation (Wikipedia links, Python
-imports, arXiv citations as three concrete edge types).}
+Most of the text a language model is trained on was written with references to other
+text. A Wikipedia article on fluid dynamics links to \emph{Hydraulics} and
+\emph{Archimedes' screw}; a Python file imports \texttt{chess/board.py}; a paper cites
+the work it builds on. These references are not incidental. They are the author's own
+statement of which other documents are needed to understand this one, and they are
+recoverable from the text at essentially no cost. Standard pretraining discards them:
+the corpus is shuffled into a flat token stream, documents that reference each other
+land in different sequences, and even when two related documents happen to share a
+window, the model is either walled off from the neighbour (document-isolated attention)
+or allowed to read it indiscriminately (naive concatenation), with no notion of
+\emph{which} document a given position is entitled to consult.
 
-% The gap: retrieval/RAG uses links at inference; packing work orders docs but adds
-% no cross-doc attention; GNN/graph-LM work message-passes but doesn't train a
-% decoder-only LM's attention along edges.
-\todo{State the gap precisely against the three neighbouring literatures
-(retrieval-augmented LMs, sequence packing, graph-aware pretraining) --- pull from
-related work once the lit-review returns.}
+\method treats a corpus as a \emph{text-attributed graph}---documents are nodes, links
+are directed edges---and makes the edges a first-class part of attention. Two
+ingredients. First, a graph traversal packs topologically close documents into each
+$32$k-token training sequence, ordered so that link targets precede the documents that
+link to them. Second, a block-sparse attention mask keeps every document causally
+isolated \emph{except} along explicit edges: when document $A$ links to document $B$,
+the tokens of $A$ from the link position onward may attend into all of $B$. Nothing
+else crosses a boundary and causality is never relaxed. The same link detector and the
+same mask then run at inference: when the model emits a link that resolves to a corpus
+document, that document is inserted into the context before the linking one, and the
+grant opens into it exactly as it did in training.
 
-% Contribution list.
+The property we care about is the last one. Because the grant opens at the link, the
+model is trained, through the ordinary next-token objective and nothing else, that
+\emph{writing a reference is what makes a document readable}. A model with this
+inductive bias can in principle fetch from its corpus during generation by generating a
+citation---no retriever, no fusion module, no instruction tuning or reinforcement
+learning to teach tool use---and the train--inference mirror is a single implementation
+rather than an analogy. We regard native corpus-referencing under maintained causality
+as the central promise of the design. Measuring it directly requires models large
+enough to generate coherently, which the models in this paper are not; what we
+establish here is the prerequisite: that the mask is learned, that the learning is
+attributable to the link structure rather than to extra attention, and how the benefit
+depends on the density of the graph.
+
+Three neighbouring literatures do not occupy this point (\Cref{sec:related}).
+Retrieval-augmented models use links or similarity at inference but bolt retrieval on
+through a separate retriever and fusion path, with no pretraining-time analogue.
+Structured packing (in-context pretraining, repository-level file ordering) puts
+related documents in one window but under ordinary attention, which the packing
+literature itself shows is harmful across unrelated boundaries. Graph-aware
+pretraining (LinkBERT, CDLM, text-attributed-graph encoders) trains on structure, but
+in encoders with symmetric attention over document pairs or through message passing,
+not as a directed, link-position-gated grant inside a decoder-only language model. The
+concat literature also establishes what we do \emph{not} claim: co-locating related
+documents under plain attention buys most of the general long-context gain, and a
+merged-corpus, general-capability story is not ours.
+
 \paragraph{Contributions.}
 \begin{itemize}
   \item A pretraining framework that packs documents by graph traversal and grants
-        \emph{link-position-gated} cross-document attention along explicit edges
-        (\Cref{sec:method}).
-  \item Compute-controlled ablations (\concatlink, \concat) that attribute the gain
-        to the linking inductive bias rather than to extra attention FLOPs.
-  \item Evidence across three edge modalities---Wikipedia hyperlinks, code imports,
-        arXiv citations---that cross-document attention beats flat concatenation of
-        the same linked content on benchmarks built to require it, while remaining
-        neutral on single-document benchmarks.
-  \item A density-aware batch scheduler that removes the DDP rank imbalance caused
-        by variable mask sparsity, for a \fillin{mean $\times$} mean step speedup.
-  \item An inference/generation loop that resolves generated links against the
-        corpus and injects the target document, mirroring training.
+        \emph{link-position-gated}, causality-preserving cross-document attention along
+        explicit edges, with custom block-sparse kernels that make it tractable at $32$k
+        context (\Cref{sec:method}, \Cref{app:kernels}).
+  \item Matched-compute controls (\concatlink, \concat) that attribute the
+        cross-document gain to the linking inductive bias rather than to added attention
+        or to co-location of linked content (\Cref{sec:results}).
+  \item Evidence on two edge modalities---Wikipedia hyperlinks and code imports across
+        several languages---that link-gated attention lowers the likelihood of
+        link-dependent completions relative to the same tokens scored without the
+        target, while leaving single-document benchmarks unchanged.
+  \item A link-density dose--response: holding corpus and packing fixed and varying only
+        the fraction of edges the mask may use, the cross-document benefit on code scales
+        near-linearly with the number of grants the mask realizes, is captured mostly by
+        a minority of edges at training time, and is dominated by the density available
+        at \emph{inference}---to the point that a model trained without any
+        cross-document grants exploits them at evaluation nearly as well as one trained
+        with them.
+  \item A density-aware batch scheduler that removes the DDP rank imbalance induced by
+        variable mask sparsity (\Cref{sec:method:density}), and a link-following
+        generation loop that resolves generated links against the corpus and inserts the
+        target under the training mask (\Cref{sec:method:inference}).
 \end{itemize}

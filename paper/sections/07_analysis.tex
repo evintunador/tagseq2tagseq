@@ -1,18 +1,110 @@
 \section{Analysis and Discussion}
 \label{sec:analysis}
 
-\todo{Why cross-doc $>$ concat: link-position gating vs. whole-doc concat.
-Why code $\ll$ wiki (\fillin{ratio $\times$} smaller effect): cross-file dependency is
-more local/predictable than Wikipedia bridge reasoning. community\_pack
-\fillin{near-noise?} for code. Limitations: undertrained regime, scale ceiling,
-single-language benchmark coverage gaps (only Python/Java have RepoBench). Honest
-framing of the flat scaling.}
+\paragraph{What the controls isolate.}
+The number that isolates our contribution is not \crossdoc against \doccausal but
+\crossdoc against \concatlink at identical connectivity. The concat literature
+\citep{yasunaga2022linkbert,shi2024incontext,staniszewski2025structured,yasunaga2022dragon}
+is consistent that co-locating related documents under ordinary attention buys most of
+the \emph{general} long-context gain; that gain is available to \concatlink and
+\concat too, and we do not claim it. What \concatlink cannot do is tell the model
+\emph{where} the entitlement to read the target begins. On RepoBench perplexity the
+link-gated mask beats its whole-document superset, and the fully permissive
+\concat is the worst condition of the four (\Cref{sec:results:controls}), the
+ordering K-BERT's visible-matrix ablation \citep{liu2020kbert} would predict: the
+typed edge is doing work that more attention does not. We treat the controls as
+first-class results, not a survival test.
 
 \paragraph{The effect is a genuine linking bias.}
-The placebo and leakage controls (Section~\ref{sec:results}) rule out the two deflationary
-readings of the cross-document $\Delta$nll. The derangement placebo removes almost all of
-the gain while holding the amount of granted context fixed, so the benefit is specificity
-to the correct linked document, not generic extra context; and the reduction persists in
-the lowest $n$-gram-overlap stratum, so it is not verbatim copying of duplicated text. What
-remains is the intended inductive bias: attention gated onto the right cross-document
-target at generation time.
+The placebo and leakage controls (\Cref{sec:results:specificity}) rule out the two
+deflationary readings of the cross-document $\Delta$nll. The derangement placebo
+removes almost all of the gain while holding the amount of granted context fixed, so
+the benefit is specificity to the correct linked document, not generic extra context;
+and the reduction persists in the lowest $n$-gram-overlap stratum, so it is not
+verbatim copying of duplicated text. What remains is the intended inductive bias:
+attention gated onto the right cross-document target at generation time.
+
+\paragraph{Why the inference-time density result is about capability, not the thesis.}
+The density experiments say that on code the cross-document benefit is mostly a
+property of what the mask exposes at evaluation: a \doccausal-trained model given
+\crossdoc grants at test time recovers nearly the whole effect, and training-time
+density saturates early. Read as a statement about \emph{intelligence}---how much
+better a model predicts when it can see the file it imports---this is a sharp finding:
+the capability to exploit an adjacent, causally readable document is largely already
+present in a document-isolated model, and what training with grants adds is modest.
+It is not, however, a statement about what \crossdoc is \emph{for}. The purpose of
+training with the link-gated mask is that the model learns, under maintained
+causality and through the plain next-token objective, that emitting a reference is
+what opens access to the referenced document---the behaviour the generation loop
+exploits. A \doccausal-trained model can be \emph{handed} a target and read it; it has
+no reason to have learned to \emph{ask} for one. Whether the trained model in fact
+generates resolvable references at a higher rate, and uses what comes back, is the
+measurement the design was built for and the one this paper does not yet contain: the
+models here are too small to generate coherently enough for the test to be meaningful.
+We flag it as the central open measurement rather than let the density result stand in
+for it.
+
+\paragraph{Why code margins are smaller than Wikipedia's.}
+The Wikipedia HotpotQA $\Delta$ is an order of magnitude larger than the RepoBench
+$\Delta$s. A bridge question requires a fact that lives only in the second article; a
+cross-file completion is usually locally predictable from the import line and the
+surrounding code, and the target file resolves the residual uncertainty about a name
+or a signature. Community-pack perplexity, which averages over every token of every
+document, is accordingly near-noise for code and is why the density experiments report
+it only as a within-model, same-token difference; the use-line re-anchoring of the
+internal ports exists to concentrate the score where the dependency is actually
+consumed.
+
+\paragraph{The Wikipedia community-pack measurement.}
+On the community-pack instrument the Wikipedia graph does not follow the code line,
+and an earlier reading of it produced a small negative that appears to depend on how
+well the model already fits the text. We do not interpret that measurement here: the
+HotpotQA contrast on the same checkpoints is large and positive, the two instruments
+differ in what they score (a link-dependent answer versus every token of a linked
+article), and the community-pack result on this corpus is under audit. Until it is
+resolved we make no claim, in either direction, about generic held-out Wikipedia text.
+% User (2026-08-23) suspects the wiki community_pack negative is a harness/corruption
+% artifact; see TODOS.md. Do not promote either reading until re-measured.
+
+\paragraph{RoPE without a per-document reset.}
+We use global rotary positions over the packed sequence, so a granted target sits at a
+packing-order-dependent offset from its linker. \citet{zhao2024analysing} reset
+positions per document, but only because their intra-document mask forbids all
+cross-document attention; once a grant crosses a boundary a clean reset is ill-defined,
+since one key has one absolute position but is read by linkers at many distances. The
+targets-first packing order keeps those distances short and correlated, which also
+means the prediction that the advantage \emph{grows} with packing distance is not
+cleanly testable in our setup. We therefore treat position handling as an empirical
+question (does link utilization decay with distance?) rather than ablate a reset; that
+diagnostic and a per-grant additive embedding are future work.
+
+\paragraph{Training with the same mask versus an auxiliary structure loss.}
+A reviewer may ask whether a link- or target-prediction loss would beat the plain
+next-token objective, since structure masks without a structure objective leave gains
+on the table in GraphCodeBERT \citep{guo2021graphcodebert} and EMAT
+\citep{wu2022emat}. Our position is that \emph{trained} integration is what those
+results show matters, and the train--inference mirror provides it: the identical mask,
+detector, and matching key are learned through the existing loss and run unchanged at
+generation. We add no auxiliary loss.
+
+\paragraph{Limitations.}
+\emph{Scale and fit.} All models are $\approx350$M parameters trained for a few billion
+tokens; the literature predicts retrieval-style gains shrink with scale
+\citep{khandelwal2020knnlm,borgeaud2022retro,taylor2022galactica}, and whether
+edge-gated attention follows that trend is an open question our scaling runs are
+designed to test, not one we preconclude. \emph{arXiv.} Papers are long relative to a
+$32$k window, so citation targets are rarely co-packed and the arXiv models are
+uninformative about the method; the modality needs sequence-parallel training.
+\emph{Leakage.} HotpotQA is built on 2017 English Wikipedia and The Stack overlaps
+public code; the paired same-token contrast cancels memorization of the completion,
+and the $\alpha$-stratified analysis shows the gain survives where the completion
+cannot be copied from the granted document (\Cref{sec:results:specificity}) --- but
+corpus deduplication itself remains sampling-only. \emph{Fired-subset reporting.} $\Delta$ is over items where the
+detector fires, which correlates with clean titles and parseable imports.
+\emph{Inference cost.} The generation loop recomputes the full forward at every token
+with no key/value cache. \emph{Diversity.} The merged-corpus experiment was invalidated
+by a dataloader bug and is being re-run; no diversity claim is made here.
+\emph{Packing details.} Realized link density is below raw graph density (targets not
+co-packed, the grant cap, cycles dropped by the DAG gate), which we quantify only
+through the realized-grants axis; and grants beyond the cap are dropped by position,
+not importance.

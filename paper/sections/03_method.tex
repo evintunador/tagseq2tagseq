@@ -1,44 +1,246 @@
 \section{Method}
 \label{sec:method}
 
+\method has three parts that share one piece of machinery. A \emph{graph traversal}
+decides which documents share a training sequence and in what order; a
+\emph{link-aware attention mask} decides which tokens may attend across document
+boundaries; and a \emph{link-following generation loop} runs the same link detection
+and the same mask at inference, fetching a linked document into the context when the
+model emits a link to it. The link detector, the target-matching key, the grant
+geometry, and the ordering constraint are a single implementation used in both
+regimes (\Cref{app:linkdet}); nothing about the mask is specific to training.
+
 \subsection{Text-attributed graphs}
-\todo{Formalize: corpus as directed graph $G=(V,E)$, node = document with a token
-sequence, edge $(A,B)$ = a detected link from $A$ to $B$. Link detectors run online.}
+\label{sec:method:tag}
+
+A corpus is a directed graph $G=(V,E)$. Each node $v\in V$ is a document with a
+token sequence $x_v$ and a string identifier (an article title, a
+repository-qualified file path). An edge $(A,B)\in E$ exists when the text of $A$
+contains a \emph{link} that resolves to $B$: a wikilink \texttt{[label](Title)}, an
+\texttt{import} whose module path resolves to a file in the same repository, or a
+\texttt{\textbackslash cite\{\}} whose key resolves to a paper in the corpus. Edges are
+typed by modality and each modality has an \emph{online link detector} that, given a
+token sequence, returns the set of links it contains as (\emph{end position},
+\emph{target string}) pairs, where the end position is the token index one past the
+link's closing delimiter. Detectors run at training time on packed sequences and at
+generation time on the model's own output; they emit decoded strings and integer
+offsets, so the mask machinery has no tokenizer dependency. Link \emph{positions} are
+never stored in the graph---only that an edge exists---and are re-detected at runtime,
+which forces the extractor that built the graph and the detector that reads it to
+agree on what a link is (\Cref{app:datasets,app:linkdet}).
 
 \subsection{Graph-traversal packing}
-\todo{BFS/DFS/random-walk/random; token budget + per-doc token cap; why order matters
-for causal cross-doc attention (a doc can only attend to earlier docs in the pack).}
+\label{sec:method:packing}
+
+A training example is one packed sequence of exactly $T$ tokens ($T=32{,}768$
+throughout) assembled from several documents. Each document occupies a contiguous
+span laid out as an identifier card (a one-line comment carrying the document's
+title or path, included with probability $\tfrac12$ per document and epoch so the
+model sees both forms), the document body, and a single end-of-sequence token; only
+bodies are ever truncated. Which documents share a pack is decided by a traversal of
+$G$ from a uniformly sampled seed:
+\begin{description}
+  \item[BFS] expands the seed's out-neighbourhood level by level, in stored neighbour
+        order (deterministic given the seed);
+  \item[DFS] follows one out-path deep before backtracking, shuffling neighbours at each
+        expansion;
+  \item[random walk] a first-order walk over out-edges with a small uniform-teleport
+        restart probability (not a restart-to-seed walk);
+  \item[random] draws documents uniformly, ignoring $G$; the structure-free control.
+\end{description}
+A traversal is grown until the token budget is met, and a pack may hold several
+disconnected neighbourhoods if the first is exhausted early. Because every seed is drawn
+uniformly regardless of strategy, ``BFS packing'' means a set of uniformly seeded local
+BFS neighbourhoods, not a global sweep (\Cref{app:traversal}).
+
+\paragraph{Order matters.}
+Attention is causal, so a document can only attend to documents packed \emph{before}
+it. With out-edge traversal the natural proposal order puts a linking document ahead of
+its target, which would leave every link unrealizable under the mask below. The packer
+therefore reorders each connected component by a topological sort that places link
+targets before the documents linking to them, and lays each component down as a
+contiguous block. This targets-first reordering is applied identically under every
+mask condition, including the controls, so it is not a confound in any contrast we
+report; its consequence for what we \emph{can} measure is discussed in
+\Cref{sec:analysis}.
 
 \subsection{Link-aware attention masks}
-The four mask conditions, ordered by attention permitted
-($\doccausal < \crossdoc \le \concatlink \le \concat$):
-\begin{description}
-  \item[\doccausal] block-diagonal causal; documents fully isolated (baseline).
-  \item[\crossdoc] when $A$ links to $B$ and both are packed, tokens in $A$ from the
-        link position onward attend to all of $B$; asymmetric, causal order kept.
-  \item[\concatlink] compute control: grant from the \emph{entire} source document,
-        not just the link position (same connectivity, more attention).
-  \item[\concat] compute control: connected components merged into one causal
-        super-document (most attention, no inference-time linking).
-\end{description}
-\todo{Figure: the four masks on one 16k batch (reuse docs/images/mask\_*.png).}
-\todo{Formal mask definition (indicator over token pairs).}
-The mask is compiled to a block-sparse form so that fully-masked $128\times128$ blocks
-are skipped: we build on PyTorch FlexAttention
-\citep{flexattention_blog2024,flexattention_paper2024} for the reference path and
-implement custom Triton block-sparse attention kernels that make 32k-context
-sparse-masked training tractable; the kernel design is detailed in \Cref{app:kernels}.
+\label{sec:method:masks}
+
+Let $\mathrm{doc}(i)$ be the document occupying position $i\in[0,T)$ and
+$\mathrm{comp}(i)$ the connected component of that document under the undirected
+closure of $E$ restricted to the pack. A detected link $\ell$ in document $A$ with end
+position $p_\ell$ and resolved target $B$ (present in the pack) defines a
+\emph{grant}: the rectangle of (query, key) pairs
+\[
+  \mathcal{G}_\ell \;=\; [\,p_\ell,\ \mathrm{end}(A)\,)\times[\,\mathrm{start}(B),\ \mathrm{end}(B)\,),
+\]
+admitted only if $\mathrm{start}(B) < p_\ell$ (the target begins before the link---the
+\emph{DAG gate}; a link to a later document is dropped, never granted acausally). The
+four mask conditions, each a Boolean predicate $M(q,k)$ over query position $q$ and key
+position $k$, are:
+\begin{align}
+  \doccausal:\quad  & M = [k\le q]\wedge[\mathrm{doc}(q)=\mathrm{doc}(k)] \\
+  \crossdoc:\quad   & M = [k\le q]\wedge\bigl([\mathrm{doc}(q)=\mathrm{doc}(k)]\ \vee\ \textstyle\bigvee_{\ell}[(q,k)\in\mathcal{G}_\ell]\bigr) \\
+  \concatlink:\quad & \text{as \crossdoc with } \mathcal{G}_\ell = [\,\mathrm{start}(A),\mathrm{end}(A)\,)\times[\,\mathrm{start}(B),\mathrm{end}(B)\,) \\
+  \concat:\quad     & M = [k\le q]\wedge[\mathrm{comp}(q)=\mathrm{comp}(k)]
+\end{align}
+\doccausal is the baseline: block-diagonal causal attention, every document isolated,
+equivalent to training on independent documents with the efficiency of packing.
+\crossdoc is the method: when $A$ links to $B$, the tokens of $A$ \emph{from the link
+onward} may read all of $B$. The grant is asymmetric ($B$ never sees $A$ unless it links
+back), causality is never relaxed, and multiple grants compose by union. Because the
+grant opens exactly where the link closes, the model learns that emitting a link is
+what makes a document readable---the property the generation loop relies on.
+
+The remaining two are \emph{compute controls}, ordered by the attention they permit
+($\doccausal < \crossdoc \le \concatlink \le \concat$). \concatlink keeps the same
+connectivity as \crossdoc but grants from the \emph{start} of the linking document
+rather than from the link position: a strict superset of every \crossdoc grant, so it
+isolates the effect of link-position gating from the effect of simply being able to
+read the target. \concat merges each connected component into one causally attended
+super-document: the most attention of the four, with no link supervision at all and
+nothing an inference-time link could add. If \crossdoc beats both controls, the gain is
+not explained by extra attention FLOPs or by mere co-location of linked content; that
+residual---\crossdoc minus \concatlink at matched connectivity---is the number that
+isolates the contribution (\Cref{sec:results}). \Cref{fig:masks} shows all four on one
+packed batch.
+
+\begin{figure}[t]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{mask_doc_causal.png}
+    \caption{\doccausal}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{mask_cross_doc_link.png}
+    \caption{\crossdoc}
+  \end{subfigure}\\[0.5em]
+  \begin{subfigure}[t]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{mask_doc_concat_link.png}
+    \caption{\concatlink}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{mask_doc_concatenated.png}
+    \caption{\concat}
+  \end{subfigure}
+  \caption{The four attention masks on the same 16k-token pack (one Python repository
+  from The Stack; dashed lines mark document boundaries, black is attendable).
+  (a)~Every file attends only to itself. (b)~Where a file imports an earlier file, its
+  rows extend left into the target---but only from the import line down, so each grant's
+  top edge sits below the top of the importing file. (c)~The same grants extended to the
+  top of the importing file (whole-document grant). (d)~All import-connected files merged
+  into one causal triangle. Attention permitted increases from (a) to (d); (c) and (d)
+  are compute controls for (b).}
+  \label{fig:masks}
+\end{figure}
+
+\paragraph{Grant cap and block sparsity.}
+Grants per pack are capped at $\texttt{max\_grants}=256$ in every reported run
+(consumed in link-position order; later links beyond the cap are dropped with a
+warning), and are encoded as bit-packed per-position masks so that membership is a
+pointwise test with no $O(T^2)$ materialization. The mask is compiled to a block-sparse
+form so fully masked blocks are skipped: PyTorch FlexAttention
+\citep{flexattention_blog2024,flexattention_paper2024} serves as the reference path,
+and training runs on custom Triton block-sparse kernels whose block schedule is computed
+once per batch on the CPU and shared across all heads and layers. The kernels, the
+grant encoding, and two numerical-correctness fixes they required are described in
+\Cref{app:kernels}.
 
 \subsection{Density-aware batch scheduling}
-\todo{Mask sparsity varies $6\times$ across packs $\to$ DDP rank imbalance. Offline
-epoch precompute + kv\_block\_count quantile buckets; ranks draw from the same bucket.
-$1.45\times$ mean step speedup. Reuse docs/images/density\_aware\_*.png.}
+\label{sec:method:density}
+
+Under \crossdoc the number of live attention blocks varies several-fold from pack to
+pack---a pack of many short unlinked documents is nearly block-diagonal, one dominated
+by a few long cross-linked documents is much denser---and the backward pass costs in
+proportion. Under data-parallel training every rank must reach the gradient all-reduce
+together, so each step runs at the speed of the densest pack in the group while the
+other ranks idle. We remove this imbalance at the data-loading level. Packs are
+precomputed offline for each epoch, with link detection done once in parallel workers;
+each pack's density is scored analytically from its link positions by counting the
+non-empty $128{\times}128$ blocks of its mask (exact under targets-first ordering, at
+about a millisecond per pack), and packs are sorted into $32$ equal-count quantile
+buckets. At each accumulation step every rank draws its pack from the \emph{same}
+bucket---the bucket sequence is seeded by epoch, not by rank---so per-rank backward
+cost is matched by construction, with no run-time cost measurement. The bucket
+sequence shuffles across buckets so consecutive steps see different densities, and the
+scheme bakes in no world size, so a run resumes at a different GPU count from a saved
+schedule position. \Cref{fig:density-masks} shows the spread this equalizes; the
+measured wall-clock effect is reported in \Cref{sec:results} and the mechanism and its
+caveats in \Cref{app:density}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{density_aware_masks.png}
+  \caption{Block-level \crossdoc masks for one pack from the sparsest density bucket
+  (left: many short documents, few links; almost all blocks empty) and one from the
+  densest (right: a few large documents with cross-document grants filling large
+  rectangles). Each cell is one $128$-token block, blue is non-empty, red lines mark
+  document boundaries. Backward cost scales with the number of non-empty cells, so
+  ranks holding packs from opposite ends of this range would otherwise wait on each
+  other at every all-reduce.}
+  \label{fig:density-masks}
+\end{figure}
 
 \subsection{Inference: link-following generation}
-\todo{generate.py: after each token, run link detection; resolved links fetch the
-target doc into the attention context (retrieval mirroring training);
---allow-generation-fallback synthesizes unresolved targets.}
+\label{sec:method:inference}
+
+At inference the same detector runs over the model's own output after each generated
+token (on a trailing window, firing when a link closes at the just-emitted token). A
+detected target is resolved against the corpus by the \emph{same} key the training-time
+matcher uses (exact identifier, then the detector's normalized key, then an optional
+fuzzy title index). On a hit, the target document's tokens are inserted into the packed
+context \emph{immediately before} the linking document---so that, exactly as in
+training, the target starts before the link and the \crossdoc grant opens from the link
+position into it---and generation continues with the mask rebuilt over the new layout.
+A fetched document is itself scanned for links, giving bounded multi-hop retrieval to a
+configurable depth (default two). Unresolved links may be skipped or, optionally,
+satisfied by recursively \emph{generating} the missing document before the linking one,
+which yields open-ended multi-document synthesis. This is retrieval by
+\emph{insertion into the sequence} under the training mask, not by concatenating text
+into a prompt: the fetched document is a first-class packed neighbour with the same
+layout, span, and grant it would have had in a training pack. \Cref{alg:generation}
+gives the loop. The current implementation recomputes the full forward pass at every
+token (no key/value cache; inserting a document shifts every later rotary position,
+which would invalidate a naive cache), a throughput limitation we discuss in
+\Cref{sec:analysis}.
+
+\begin{figure}[t]
+\begin{center}
+\fbox{\begin{minipage}{0.94\linewidth}\small
+\textbf{Algorithm 1: link-following generation.}\\[2pt]
+\textbf{Input:} corpus $C$, prompt for root document $r$, link detector $\mathcal{D}$,
+max link depth $D$, retrieval mode.\\[2pt]
+$\textsc{ctx} \gets [\,r\,]$ \hfill \textit{ordered list of document spans; root last}\\[2pt]
+\textbf{procedure} \textsc{Generate}$(d,\ \mathit{depth})$:\\
+\hspace*{1.5em}\textbf{while} $d$ is not finished:\\
+\hspace*{3em}$S \gets \textsc{BuildSequence}(\textsc{ctx})$ \hfill \textit{concatenate spans; every target precedes its linker}\\
+\hspace*{3em}$z \gets \textsc{Forward}(S,\ \text{\crossdoc mask})$ \hfill \textit{full forward; grants from detected links}\\
+\hspace*{3em}$t \sim \textsc{Sample}(z \text{ at the last position of } d)$;\quad append $t$ to $d$\\
+\hspace*{3em}\textbf{if} $\mathcal{D}$ fires on the trailing window, closing link $\ell$ with target string $s$, \textbf{and} $\mathit{depth} < D$:\\
+\hspace*{4.5em}\textbf{if} $s$ resolves to $B \in C$: \hfill \textit{exact id $\to$ detector key $\to$ optional fuzzy index}\\
+\hspace*{6em}insert $B$ into \textsc{ctx} immediately \emph{before} $d$ \hfill \textit{so the grant from $\ell$ opens into $B$}\\
+\hspace*{6em}scan $B$ for its own links at $\mathit{depth}{+}1$ \hfill \textit{bounded multi-hop retrieval}\\
+\hspace*{4.5em}\textbf{else if} generation fallback enabled:\\
+\hspace*{6em}$B \gets$ new empty document before $d$;\quad \textsc{Generate}$(B,\ \mathit{depth}{+}1)$\\
+\hspace*{3em}\textbf{if} $t = \texttt{EOS}$ or the per-document budget is exhausted: \textbf{stop}\\[2pt]
+\textsc{Generate}$(r,\ 0)$
+\end{minipage}}
+\end{center}
+\caption{Link-following generation. The detector, the resolution key, the
+targets-before-linkers ordering, and the mask are the training-time implementations;
+retrieval is insertion into the packed sequence, and an unresolved link may instead be
+\emph{generated} recursively (open-ended multi-document synthesis). Context-window
+pressure evicts the oldest non-active auxiliary documents.}
+\label{alg:generation}
+\end{figure}
 
 \subsection{Model and training recipe}
-\todo{Decoder-only transformer, RoPE, bf16, Muon (2D) + AdamW (embeddings/norms),
-weight tying + mid-training untie, squared-ReLU MLP, logit soft-cap; Chinchilla-derived token budgets; DDP via SLURM/submitit.}
+\label{sec:method:recipe}
+
+The backbone is a standard decoder-only transformer inherited from the open NanoGPT
+speedrun lineage, held fixed across all mask conditions so that any measured
+difference is attributable to the attention structure. Every component of it is prior
+art; \Cref{app:recipe} documents the recipe and \Cref{sec:experiments} the tuned
+operating point. One choice matters to the method itself: rotary positions run over
+the global packed index with no per-document reset (\Cref{sec:analysis}).

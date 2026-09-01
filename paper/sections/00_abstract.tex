@@ -1,18 +1,25 @@
 % ABSTRACT
 Most text corpora carry an implicit graph structure that standard language-model
-pretraining discards: Wikipedia articles hyperlink to related articles, source
-files import one another, and papers cite prior work. \method treats such a corpus
-as a \emph{text-attributed graph}---documents are nodes, links are edges---and makes
-that structure a first-class part of both pretraining and inference.
-% TODO: tighten once numbers are final.
-Two ingredients: (i) a graph traversal (BFS/DFS/random-walk) packs
-topologically-close documents into each long training sequence, and (ii) a custom
-sparse attention mask grants a linking document read-access, from the link position
-onward, into the document it links to, while causally isolating unrelated documents.
-The same link machinery runs at inference: a generated link that resolves to a
-corpus document pulls that document into the attention context.
-\todo{headline results sentence.} Cross-document attention beats flat concatenation of
-the same linked content on multi-hop QA ($\val{crossdoc.wiki_hotpotqa.delta_nll}$
-$\Delta$nll on HotpotQA-cross-doc) and cross-file code completion, with the effect
-isolated from raw compute via concatenation controls; a merged multi-source model
-\fillin{strengthens/weakens?} the effect.
+pretraining discards: Wikipedia articles hyperlink to related articles, source files
+import one another, and papers cite prior work. \method treats such a corpus as a
+\emph{text-attributed graph}---documents are nodes, links are edges---and makes that
+structure a first-class part of both pretraining and inference. Two ingredients: (i) a
+graph traversal packs topologically close documents into each $32$k-token training
+sequence, and (ii) a block-sparse attention mask keeps documents causally isolated
+except along explicit edges, granting a linking document read-access, from the link
+position onward, into the document it links to. The same link machinery runs at
+inference: a generated link that resolves to a corpus document pulls that document
+into the attention context under the training mask. On Wikipedia hyperlinks and code
+imports across several languages, link-gated attention lowers the likelihood of
+link-dependent completions relative to the same tokens scored without the target
+($\Delta$nll $=\val{crossdoc.wiki_hotpotqa.delta_nll}$ on a HotpotQA cross-document
+benchmark; \val{crossdoc.repobench_python.delta_nll}--\val{crossdoc.repobench_java.rw.delta_nll}
+on RepoBench), leaves single-document benchmarks unchanged, and beats matched-compute
+controls that grant more attention without the link gating. Holding the corpus fixed
+and varying only the fraction of edges the mask may use, the benefit on code scales
+near-linearly with realized link density, saturates early in training, and is
+dominated by the density exposed at inference. A merged multi-source model
+\fillin{strengthens/weakens?} the effect. We argue that the design's central promise
+--- a model that fetches from its corpus by generating a reference, learned from
+pretraining alone --- is a measurement these small models cannot yet support, and set
+it up as the next step.

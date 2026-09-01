@@ -227,6 +227,495 @@ entries:
       source from runs/run_20260719_070658_156892/logs/metrics_rank_0.jsonl (field
       val_loss_mean = 3.0006); literal grounding debt until then."
 
+  # === Wiki HotpotQA cross-doc Delta nll across traversals (dfs / random-walk / random) ===
+  # bfs is the headline crossdoc.wiki_hotpotqa.* above (n=738). These three arms were scored
+  # on the max_grants=256 re-eval sidecar (eval_reeval256.json) at n=377, so the table reports n per row.
+  crossdoc.wiki_hotpotqa.dfs.nll_crossdoc:
+    run_ids: [run_20260718_220241_161507]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 5.868662811716924
+    units: nll
+    note: "Wiki HotpotQA cross-doc-only mean NLL, dfs traversal (wiki_crossdoc_dfs.yaml)."
+  crossdoc.wiki_hotpotqa.dfs.nll_flat:
+    run_ids: [run_20260718_220241_161507]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 7.137606684029577
+    units: nll
+    note: "Wiki HotpotQA flat-linked-only mean NLL, dfs traversal."
+  crossdoc.wiki_hotpotqa.dfs.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.wiki_hotpotqa.dfs.nll_flat, crossdoc.wiki_hotpotqa.dfs.nll_crossdoc]}
+    units: nll
+    note: "Wiki dfs cross-doc NLL reduction (flat - cross)."
+  crossdoc.wiki_hotpotqa.dfs.n:
+    run_ids: [run_20260718_220241_161507]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: n_cross_doc}
+    expected: 377
+    format: {sig_figs: 0}
+    note: "Number of cross-doc examples scored, dfs arm."
+  crossdoc.wiki_hotpotqa.rw.nll_crossdoc:
+    run_ids: [run_20260718_220242_649013]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 5.839258661004529
+    units: nll
+    note: "Wiki HotpotQA cross-doc-only mean NLL, rw traversal (wiki_crossdoc_random_walk.yaml)."
+  crossdoc.wiki_hotpotqa.rw.nll_flat:
+    run_ids: [run_20260718_220242_649013]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 7.06013323773756
+    units: nll
+    note: "Wiki HotpotQA flat-linked-only mean NLL, rw traversal."
+  crossdoc.wiki_hotpotqa.rw.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.wiki_hotpotqa.rw.nll_flat, crossdoc.wiki_hotpotqa.rw.nll_crossdoc]}
+    units: nll
+    note: "Wiki rw cross-doc NLL reduction (flat - cross)."
+  crossdoc.wiki_hotpotqa.rw.n:
+    run_ids: [run_20260718_220242_649013]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: n_cross_doc}
+    expected: 377
+    format: {sig_figs: 0}
+    note: "Number of cross-doc examples scored, rw arm."
+  crossdoc.wiki_hotpotqa.random.nll_crossdoc:
+    run_ids: [run_20260719_070658_156892]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: average_nll_cross_doc_only}
+    expected: 5.748742574722129
+    units: nll
+    note: "Wiki HotpotQA cross-doc-only mean NLL, random traversal (wiki_crossdoc_random.yaml)."
+  crossdoc.wiki_hotpotqa.random.nll_flat:
+    run_ids: [run_20260719_070658_156892]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: average_nll_flat_linked_only}
+    expected: 6.927245541656049
+    units: nll
+    note: "Wiki HotpotQA flat-linked-only mean NLL, random traversal."
+  crossdoc.wiki_hotpotqa.random.delta_nll:
+    source: {kind: derived, op: subtract, operands: [crossdoc.wiki_hotpotqa.random.nll_flat, crossdoc.wiki_hotpotqa.random.nll_crossdoc]}
+    units: nll
+    note: "Wiki random cross-doc NLL reduction (flat - cross)."
+  crossdoc.wiki_hotpotqa.random.n:
+    run_ids: [run_20260719_070658_156892]
+    source: {kind: eval, metric_path: "hotpotqa_cross_doc/experimental", field: n_cross_doc}
+    expected: 377
+    format: {sig_figs: 0}
+    note: "Number of cross-doc examples scored, random arm."
+
+  # === n for the code RepoBench cross-doc arms (table rows) ===
+  crossdoc.repobench_java.bfs.n:
+    run_ids: [run_20260722_063905_465684]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: n_cross_doc}
+    expected: 470
+    format: {sig_figs: 0}
+    note: "Java RepoBench cross-doc examples scored, bfs."
+  crossdoc.repobench_java.dfs.n:
+    run_ids: [run_20260722_191916_590119]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: n_cross_doc}
+    expected: 470
+    format: {sig_figs: 0}
+    note: "Java RepoBench cross-doc examples scored, dfs."
+  crossdoc.repobench_java.rw.n:
+    run_ids: [run_20260722_194928_381368]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: n_cross_doc}
+    expected: 470
+    format: {sig_figs: 0}
+    note: "Java RepoBench cross-doc examples scored, rw."
+  crossdoc.repobench_java.random.n:
+    run_ids: [run_20260722_201940_182374]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: n_cross_doc}
+    expected: 470
+    format: {sig_figs: 0}
+    note: "Java RepoBench cross-doc examples scored, random."
+  crossdoc.repobench_python.n:
+    run_ids: [run_20260720_063128_690228]
+    source: {kind: eval, metric_path: "repobench_cross_doc/experimental", field: n_cross_doc}
+    expected: 435
+    format: {sig_figs: 0}
+    note: "Python RepoBench cross-doc examples scored (max_grants=256 re-eval)."
+
+  # === Single-document controls, matched 4-mask set (wiki_merged, bfs, 3614 steps; undertrained) ===
+  # Extends the hellaswag entries above to the full benchmark panel + held-out perplexity.
+  singledoc.arc_easy.doc_causal:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy}
+    expected: 0.2866161616161616
+    format: {sig_figs: 3}
+    note: "doc_causal, arc_easy accuracy (4-mask set)."
+  singledoc.arc_easy.doc_causal.ci:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, arc_easy 95% CI."
+  singledoc.arc_easy.cross_doc_link:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy}
+    expected: 0.2845117845117845
+    format: {sig_figs: 3}
+    note: "cross_doc_link, arc_easy accuracy (4-mask set)."
+  singledoc.arc_easy.cross_doc_link.ci:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, arc_easy 95% CI."
+  singledoc.arc_easy.doc_concatenated:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy}
+    expected: 0.27525252525252525
+    format: {sig_figs: 3}
+    note: "doc_concatenated, arc_easy accuracy (4-mask set)."
+  singledoc.arc_easy.doc_concatenated.ci:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concatenated, arc_easy 95% CI."
+  singledoc.arc_easy.doc_concat_link:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy}
+    expected: 0.3005050505050505
+    format: {sig_figs: 3}
+    note: "doc_concat_link, arc_easy accuracy (4-mask set)."
+  singledoc.arc_easy.doc_concat_link.ci:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concat_link, arc_easy 95% CI."
+  singledoc.piqa.doc_causal:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "piqa/doceval", field: accuracy}
+    expected: 0.4766050054406964
+    format: {sig_figs: 3}
+    note: "doc_causal, piqa accuracy (4-mask set)."
+  singledoc.piqa.doc_causal.ci:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "piqa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, piqa 95% CI."
+  singledoc.piqa.cross_doc_link:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "piqa/doceval", field: accuracy}
+    expected: 0.5087051142546246
+    format: {sig_figs: 3}
+    note: "cross_doc_link, piqa accuracy (4-mask set)."
+  singledoc.piqa.cross_doc_link.ci:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "piqa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, piqa 95% CI."
+  singledoc.piqa.doc_concatenated:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "piqa/doceval", field: accuracy}
+    expected: 0.500544069640914
+    format: {sig_figs: 3}
+    note: "doc_concatenated, piqa accuracy (4-mask set)."
+  singledoc.piqa.doc_concatenated.ci:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "piqa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concatenated, piqa 95% CI."
+  singledoc.piqa.doc_concat_link:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "piqa/doceval", field: accuracy}
+    expected: 0.5097932535364527
+    format: {sig_figs: 3}
+    note: "doc_concat_link, piqa accuracy (4-mask set)."
+  singledoc.piqa.doc_concat_link.ci:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "piqa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concat_link, piqa 95% CI."
+  singledoc.winogrande.doc_causal:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "winogrande/doceval", field: accuracy}
+    expected: 0.48697711128650356
+    format: {sig_figs: 3}
+    note: "doc_causal, winogrande accuracy (4-mask set)."
+  singledoc.winogrande.doc_causal.ci:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "winogrande/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, winogrande 95% CI."
+  singledoc.winogrande.cross_doc_link:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "winogrande/doceval", field: accuracy}
+    expected: 0.4980268350434096
+    format: {sig_figs: 3}
+    note: "cross_doc_link, winogrande accuracy (4-mask set)."
+  singledoc.winogrande.cross_doc_link.ci:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "winogrande/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, winogrande 95% CI."
+  singledoc.winogrande.doc_concatenated:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "winogrande/doceval", field: accuracy}
+    expected: 0.4980268350434096
+    format: {sig_figs: 3}
+    note: "doc_concatenated, winogrande accuracy (4-mask set)."
+  singledoc.winogrande.doc_concatenated.ci:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "winogrande/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concatenated, winogrande 95% CI."
+  singledoc.winogrande.doc_concat_link:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "winogrande/doceval", field: accuracy}
+    expected: 0.4980268350434096
+    format: {sig_figs: 3}
+    note: "doc_concat_link, winogrande accuracy (4-mask set)."
+  singledoc.winogrande.doc_concat_link.ci:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "winogrande/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concat_link, winogrande 95% CI."
+  singledoc.openbookqa.doc_causal:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "openbookqa/doceval", field: accuracy}
+    expected: 0.196
+    format: {sig_figs: 3}
+    note: "doc_causal, openbookqa accuracy (4-mask set)."
+  singledoc.openbookqa.doc_causal.ci:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "openbookqa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, openbookqa 95% CI."
+  singledoc.openbookqa.cross_doc_link:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "openbookqa/doceval", field: accuracy}
+    expected: 0.202
+    format: {sig_figs: 3}
+    note: "cross_doc_link, openbookqa accuracy (4-mask set)."
+  singledoc.openbookqa.cross_doc_link.ci:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "openbookqa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, openbookqa 95% CI."
+  singledoc.openbookqa.doc_concatenated:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "openbookqa/doceval", field: accuracy}
+    expected: 0.202
+    format: {sig_figs: 3}
+    note: "doc_concatenated, openbookqa accuracy (4-mask set)."
+  singledoc.openbookqa.doc_concatenated.ci:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "openbookqa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concatenated, openbookqa 95% CI."
+  singledoc.openbookqa.doc_concat_link:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "openbookqa/doceval", field: accuracy}
+    expected: 0.188
+    format: {sig_figs: 3}
+    note: "doc_concat_link, openbookqa accuracy (4-mask set)."
+  singledoc.openbookqa.doc_concat_link.ci:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "openbookqa/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concat_link, openbookqa 95% CI."
+  singledoc.boolq.doc_causal:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "boolq/doceval", field: accuracy}
+    expected: 0.4335
+    format: {sig_figs: 3}
+    note: "doc_causal, boolq accuracy (4-mask set)."
+  singledoc.boolq.doc_causal.ci:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "boolq/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, boolq 95% CI."
+  singledoc.boolq.cross_doc_link:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "boolq/doceval", field: accuracy}
+    expected: 0.434
+    format: {sig_figs: 3}
+    note: "cross_doc_link, boolq accuracy (4-mask set)."
+  singledoc.boolq.cross_doc_link.ci:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "boolq/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, boolq 95% CI."
+  singledoc.boolq.doc_concatenated:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "boolq/doceval", field: accuracy}
+    expected: 0.429
+    format: {sig_figs: 3}
+    note: "doc_concatenated, boolq accuracy (4-mask set)."
+  singledoc.boolq.doc_concatenated.ci:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "boolq/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concatenated, boolq 95% CI."
+  singledoc.boolq.doc_concat_link:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "boolq/doceval", field: accuracy}
+    expected: 0.4465
+    format: {sig_figs: 3}
+    note: "doc_concat_link, boolq accuracy (4-mask set)."
+  singledoc.boolq.doc_concat_link.ci:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "boolq/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concat_link, boolq 95% CI."
+  singledoc.hellaswag.doc_concatenated.ci:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concatenated, HellaSwag 95% CI."
+  singledoc.hellaswag.doc_concat_link.ci:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concat_link, HellaSwag 95% CI."
+  singledoc.held_out_ppl.doc_causal:
+    run_ids: ["20260703_051129"]
+    source: {kind: eval, metric_path: "held_out_perplexity/doceval", field: perplexity}
+    expected: 137.4556896394726
+    format: {sig_figs: 4}
+    note: "doc_causal, held-out isolated-document perplexity (4-mask set, undertrained)."
+  singledoc.held_out_ppl.cross_doc_link:
+    run_ids: ["20260703_050528"]
+    source: {kind: eval, metric_path: "held_out_perplexity/doceval", field: perplexity}
+    expected: 124.10770116538055
+    format: {sig_figs: 4}
+    note: "cross_doc_link, held-out isolated-document perplexity (4-mask set, undertrained)."
+  singledoc.held_out_ppl.doc_concatenated:
+    run_ids: ["20260703_052240"]
+    source: {kind: eval, metric_path: "held_out_perplexity/doceval", field: perplexity}
+    expected: 132.21144095675555
+    format: {sig_figs: 4}
+    note: "doc_concatenated, held-out isolated-document perplexity (4-mask set, undertrained)."
+  singledoc.held_out_ppl.doc_concat_link:
+    run_ids: ["20260703_053518"]
+    source: {kind: eval, metric_path: "held_out_perplexity/doceval", field: perplexity}
+    expected: 115.06387440417615
+    format: {sig_figs: 4}
+    note: "doc_concat_link, held-out isolated-document perplexity (4-mask set, undertrained)."
+
+  # === Single-document controls at the TUNED recipe (wiki_merged, bfs, muon_lr=0.003, muon_wd=0.3, VE-off) ===
+  # Three masks share wd=0.3 so the comparison is recipe-matched; no doc_concatenated eval exists at this recipe.
+  singledoc_tuned.held_out_ppl.doc_causal:
+    run_ids: [run_20260716_193210_720133]
+    source: {kind: eval, metric_path: "held_out_perplexity/doceval", field: perplexity}
+    expected: 3.8436969219721027
+    format: {sig_figs: 3}
+    note: "doc_causal, held-out isolated-document perplexity, tuned recipe (wd=0.3)."
+  singledoc_tuned.hellaswag.doc_causal:
+    run_ids: [run_20260716_193210_720133]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.331
+    format: {sig_figs: 3}
+    note: "doc_causal, hellaswag accuracy, tuned recipe."
+  singledoc_tuned.hellaswag.doc_causal.ci:
+    run_ids: [run_20260716_193210_720133]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, hellaswag 95% CI, tuned recipe."
+  singledoc_tuned.arc_easy.doc_causal:
+    run_ids: [run_20260716_193210_720133]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy}
+    expected: 0.369
+    format: {sig_figs: 3}
+    note: "doc_causal, arc_easy accuracy, tuned recipe."
+  singledoc_tuned.arc_easy.doc_causal.ci:
+    run_ids: [run_20260716_193210_720133]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_causal, arc_easy 95% CI, tuned recipe."
+  singledoc_tuned.held_out_ppl.cross_doc_link:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "held_out_perplexity/doceval", field: perplexity}
+    expected: 3.840655403692914
+    format: {sig_figs: 3}
+    note: "cross_doc_link, held-out isolated-document perplexity, tuned recipe (wd=0.3)."
+  singledoc_tuned.hellaswag.cross_doc_link:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.331
+    format: {sig_figs: 3}
+    note: "cross_doc_link, hellaswag accuracy, tuned recipe."
+  singledoc_tuned.hellaswag.cross_doc_link.ci:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, hellaswag 95% CI, tuned recipe."
+  singledoc_tuned.arc_easy.cross_doc_link:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy}
+    expected: 0.375
+    format: {sig_figs: 3}
+    note: "cross_doc_link, arc_easy accuracy, tuned recipe."
+  singledoc_tuned.arc_easy.cross_doc_link.ci:
+    run_ids: [run_20260717_173951_071952]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "cross_doc_link, arc_easy 95% CI, tuned recipe."
+  singledoc_tuned.held_out_ppl.doc_concat_link:
+    run_ids: [run_20260717_234605_156456]
+    source: {kind: eval, metric_path: "held_out_perplexity/doceval", field: perplexity}
+    expected: 3.8458037521598385
+    format: {sig_figs: 3}
+    note: "doc_concat_link, held-out isolated-document perplexity, tuned recipe (wd=0.3)."
+  singledoc_tuned.hellaswag.doc_concat_link:
+    run_ids: [run_20260717_234605_156456]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy}
+    expected: 0.319
+    format: {sig_figs: 3}
+    note: "doc_concat_link, hellaswag accuracy, tuned recipe."
+  singledoc_tuned.hellaswag.doc_concat_link.ci:
+    run_ids: [run_20260717_234605_156456]
+    source: {kind: eval, metric_path: "hellaswag/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concat_link, hellaswag 95% CI, tuned recipe."
+  singledoc_tuned.arc_easy.doc_concat_link:
+    run_ids: [run_20260717_234605_156456]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy}
+    expected: 0.369
+    format: {sig_figs: 3}
+    note: "doc_concat_link, arc_easy accuracy, tuned recipe."
+  singledoc_tuned.arc_easy.doc_concat_link.ci:
+    run_ids: [run_20260717_234605_156456]
+    source: {kind: eval, metric_path: "arc_easy/doceval", field: accuracy_ci}
+    format: {kind: interval, sig_figs: 3}
+    note: "doc_concat_link, arc_easy 95% CI, tuned recipe."
+
+  # === Density-aware scheduling wall-clock (LITERAL / grounding debt) ===
+  # From README.md "Measured impact" (2 nodes x 2 GPUs, The Stack 10M, 32k tokens):
+  # live = online link detection + random density; precomputed = density-bucketed.
+  # The step_timing_rank*.csv files are not located in-repo and carry no run_id; replace
+  # with a kind:artifact source once the originating run is found (TODOS.md).
+  efficiency.step_time.live_mean:
+    source: {kind: literal, value: 6.39}
+    units: s
+    format: {decimals: 2}
+    note: "Mean step time, live path. From README.md prose; raw CSVs unlocated; reverify."
+  efficiency.step_time.precomputed_mean:
+    source: {kind: literal, value: 4.42}
+    units: s
+    format: {decimals: 2}
+    note: "Mean step time, precomputed density-bucketed path. Same source/caveat."
+  efficiency.step_time.live_max:
+    source: {kind: literal, value: 10.7}
+    units: s
+    format: {decimals: 1}
+    note: "Max step time, live path. Same source/caveat."
+  efficiency.step_time.precomputed_max:
+    source: {kind: literal, value: 9.4}
+    units: s
+    format: {decimals: 1}
+    note: "Max step time, precomputed path. Same source/caveat."
+  efficiency.speedup_mean:
+    source: {kind: literal, value: 1.45}
+    format: {decimals: 2}
+    note: "Mean step-time ratio live/precomputed (6.39/4.42). Same source/caveat."
+  efficiency.speedup_max:
+    source: {kind: literal, value: 1.14}
+    format: {decimals: 2}
+    note: "Max step-time ratio live/precomputed (10.7/9.4). Same source/caveat."
+  efficiency.cov.live:
+    source: {kind: literal, value: 36}
+    units: percent
+    format: {sig_figs: 2}
+    note: "Live step-time coefficient of variation (no bucket structure). Same source/caveat."
+  efficiency.cov.precomputed_within_bucket:
+    source: {kind: literal, value: 4}
+    units: percent
+    format: {sig_figs: 1}
+    note: "Precomputed mean within-bucket step-time CoV (per-bucket range 2-13%). Same source/caveat."
   # === Placebo (derangement) control + leakage-α stratification on the headline arms ===
   # Tier-2 harness (eval/benchmark_harness) run on the SAME single-source cross_doc_link
   # checkpoints that back the grounded headline cross-doc numbers above.

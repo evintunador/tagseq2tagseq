@@ -1,27 +1,105 @@
 \section{Experimental Setup}
 \label{sec:experiments}
 
-\todo{Model sizes (350M--1B, 1024d/24L default), 32k context, tuned recipe
-(muon\_lr=0.003, muon\_wd=0.1), max\_grants=256.}
+\paragraph{Models and budget.}
+All reported models share one architecture: $1024$-dimensional, $24$ layers, $8$ heads
+(head dimension $128$), $32{,}768$-token context, GPT-2 vocabulary, roughly $350$M
+parameters with the optional value-embedding banks disabled (\Cref{app:recipe}). A
+training step is $8$ packs of $32$k tokens ($262{,}144$ tokens per optimizer step,
+one pack per GPU, no gradient accumulation) on A100-80GB nodes under SLURM. The
+single-source runs train for about $15$k steps ($\approx3.9$B tokens); on the
+Wikipedia graph this is four passes over the training split, each pass a distinct
+traversal (a different seed re-packs every document with a different subset and
+order of its neighbours), so repeated epochs re-sample the co-occurrence structure
+rather than replaying it.
 
-\todo{Benchmarks: HotpotQA-cross-doc (multi-hop, the headline wiki metric);
-RepoBench-cross-doc (Python/Java, headline code metric); community\_pack held-out
-cross-doc perplexity; single-doc controls (HellaSwag, ARC, PIQA, WinoGrande,
-OpenBookQA, BoolQ, HumanEval).}
+\paragraph{Recipe.}
+The optimizer and schedule are inherited (\Cref{app:recipe}) but two hyperparameters
+were retuned for this data regime because the inherited values, set for a short
+FineWeb speedrun, were badly off: an eight-point Muon learning-rate sweep on the
+\doccausal Wikipedia model found a clean U-curve with its minimum at
+$\mu_\text{lr}=0.003$ (the inherited $0.001$ was second-worst), and a weight-decay
+sweep found the inherited $1.2$ roughly an order of magnitude too high, with the
+minimum at $0.1$. AdamW's rate is coupled at $0.01\times$ Muon's. Unless stated
+otherwise every run uses $\mu_\text{lr}=0.003$, warmup $300$ steps, a linear cooldown
+over the final $40\%$ to $0.1\times$ peak, the embedding/head untie at two-thirds of
+training, and $\texttt{max\_grants}=256$. The weight decay of each arm is listed with
+its result (\Cref{app:results}); within a paired contrast both arms share every
+hyperparameter, so the within-model $\Delta$ is robust to the exact operating point.
+% Provenance for the sweeps: RESULTS.md "LR RETUNE MILESTONE" + "Follow-on tuning";
+% TUNING_LESSONS.md. The sweep U-curve values are training-log val losses and are not
+% yet ledger-grounded (see the log-source item in TODOS.md).
 
-\paragraph{Contrasts and controls.}
-Each cross-document benchmark scores the same target tokens under two conditions:
-\crossdoc attention with the granted linked document(s) present, versus the flat
-\doccausal baseline over the identical context and completion (the cross-vs-flat
-$\Delta$nll). Two further controls isolate the effect. The \emph{placebo} (derangement)
-re-scores each fired query with the granted document's content replaced by a different
-example's while holding the link identifiers fixed, so the grant still fires but the model
-attends to a wrong-but-plausible document; the placebo separation (placebo minus
-cross-document NLL) measures specificity to the correct link. To rule out verbatim
-re-exposure of duplicated text, we additionally stratify the $\Delta$nll by the
-target--context $n$-gram overlap $\alpha$ (RETRO's leakage protocol) and report the effect
-within the lowest-overlap stratum. Confidence intervals are 95\% percentile bootstrap over
-the paired per-example deltas.
+\paragraph{The cross-document contrast.}
+Our headline metric is a paired, same-token contrast. For a benchmark item with a
+context $c$, a completion $y$, and a document $B$ that $c$ links to, we score the
+teacher-forced negative log-likelihood of $y$ twice on the \emph{same} model: once
+with $B$ packed before $c$ and the \crossdoc grant open from the link in $c$ into $B$
+(\emph{cross-doc}), and once with the identical $c$ and $y$ under \doccausal
+(\emph{flat}), where $B$ is either absent from the sequence (RepoBench) or packed but
+unreadable (HotpotQA) --- equivalent for the scored tokens under document-isolated
+attention, up to positional offset. We report
+$\Delta\mathrm{nll}=\mathrm{nll}_\text{flat}-\mathrm{nll}_\text{cross}$ over the
+subset of items on which the link detector fires and resolves (the \emph{fired}
+subset, of size $n$), with $95\%$ percentile-bootstrap confidence intervals over the
+paired per-example deltas. Because both arms score the same tokens on the same weights,
+memorization of $y$ cancels: the contrast measures only what attending into $B$ through
+the link adds. Two further controls isolate what that gain is made of
+(\Cref{sec:results:specificity}). A derangement \emph{placebo} re-scores each fired
+item with the link identifiers kept --- so the grant still fires --- but the granted
+document's content swapped for another example's; the placebo separation (placebo minus
+cross-doc NLL) measures specificity to the \emph{correct} document rather than to any
+extra in-language context. And the $\Delta$ is stratified by target--context $n$-gram
+overlap $\alpha$ (RETRO's leakage protocol), reporting the effect within the
+lowest-overlap stratum, where the completion cannot be copied from the granted
+document.
+\begin{itemize}
+  \item \textbf{HotpotQA cross-doc} (Wikipedia). Bridge-type questions from HotpotQA
+        \citep{yang2018hotpotqa}: the second supporting article $B$ is the target, the
+        first supporting article $A$---with its hyperlinks rewritten to Markdown
+        \texttt{[text](Title)} form---is the context, followed by the question and
+        \texttt{Answer:}; the completion is the answer. Items are kept only if some
+        sentence of $A$ links to $B$'s title, and two documented structural non-fires
+        (parenthesized and quoted titles) are left as non-fires rather than forced.
+  \item \textbf{RepoBench cross-doc} (Python, Java). From RepoBench
+        \citep{liu2024repobench}: the item's cross-file snippets are the targets, the
+        import statement plus the cropped in-file code is the context, and the next
+        line is the completion. Each import path is matched precisely to its snippet
+        (Java imports are resolved to source-root-relative fully-qualified names).
+  \item \textbf{Internal cross-file ports} (the other code languages). For languages
+        with no external cross-file benchmark we build the same item shape from our own
+        held-out community splits and score at the \emph{use line}---the first statement
+        that references a symbol declared in the granted file, located with a
+        tree-sitter declaration query---which removes import-syntax artefacts and
+        concentrates the signal where the dependency is used. These carry the same
+        derangement placebo as the headline arms.
+  \item \textbf{Community-pack perplexity.} Packs built by BFS over a held-out
+        \texttt{val\_community} split (intact linked subgraphs, \Cref{app:datasets}) are
+        scored under \crossdoc versus \doccausal on the same model, grants taken
+        directly from graph edges; $\Delta\mathrm{nll}$ is over documents with at least
+        one incoming grant. This is the metric of the density experiments below.
+\end{itemize}
 
-\todo{The 4-mask ablation and the traversal ablation (bfs/dfs/rw/random $\times$
-dc/cdl) design.}
+\paragraph{Single-document controls.}
+Isolated-document held-out perplexity and six likelihood-scored multiple-choice
+benchmarks---HellaSwag \citep{zellers2019hellaswag}, ARC-easy \citep{clark2018arc},
+PIQA \citep{bisk2020piqa}, WinoGrande, OpenBookQA, and BoolQ---scored under
+\doccausal for every model. No link can fire on an isolated document, so these
+measure whether a mask condition changes the base language model at all.
+
+\paragraph{Ablation designs.}
+\emph{Four-mask}: \doccausal, \crossdoc, \concatlink, \concat on the Wikipedia graph
+with identical data order and recipe. \emph{Traversal}: $\{$bfs, dfs, random walk,
+random$\}\times\{\doccausal,\crossdoc\}$ on Wikipedia (HotpotQA cross-doc) and on Java
+(RepoBench cross-doc). \emph{Link density}: with the corpus, packing, and model fixed,
+a seeded per-edge subsample keeps a fraction $\kappa\in\{0,0.25,0.5,0.75,1\}$ of the
+resolved grants; $\kappa=0$ is exactly \doccausal, which anchors the instrument. The
+subsample is applied either at evaluation only (one trained \crossdoc checkpoint, how
+much the model \emph{uses} density) or at training (retrain per $\kappa$, then
+evaluate at every $\kappa$, how much density helps \emph{learning}), giving a
+train-$\kappa\times$eval-$\kappa$ grid per dataset; the honest cross-dataset density
+axis is the number of grants the mask actually realizes per pack, not raw graph
+out-degree, since edges whose targets are not co-packed can never be attended.
+\emph{Diversity}: one model trained jointly on the eleven linked sources versus the
+single-source specialists, as a \crossdoc/\doccausal pair per token budget; its
+results await a corrected re-run (\Cref{sec:results}).

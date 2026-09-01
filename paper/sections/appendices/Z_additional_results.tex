@@ -1,7 +1,43 @@
 \section{Additional results}
 \label{app:results}
-\todo{Full per-language sweep tables, per-traversal ablation tables, community\_pack
-32k re-run numbers, hyperparameter sweep (LR/WD U-curves).}
+
+% Every numeric cell is a ledger-bound value macro from generated/values.tex
+% (provenance/ledger.yaml). The headline, traversal, compute-control, and efficiency
+% tables live in the main text (Sec. Results); this appendix holds the full panels.
+
+\subsection{Single-document controls, four-mask set}
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{@{}lrrrr@{}}
+    \toprule
+    Benchmark & \doccausal & \crossdoc & \concatlink & \concat \\
+    \midrule
+    Held-out ppl $\downarrow$ & \val{singledoc.held_out_ppl.doc_causal} & \val{singledoc.held_out_ppl.cross_doc_link} & \val{singledoc.held_out_ppl.doc_concat_link} & \val{singledoc.held_out_ppl.doc_concatenated} \\
+    HellaSwag  & \val{singledoc.hellaswag.doc_causal} & \val{singledoc.hellaswag.cross_doc_link} & \val{singledoc.hellaswag.doc_concat_link} & \val{singledoc.hellaswag.doc_concatenated} \\
+    ARC-easy   & \val{singledoc.arc_easy.doc_causal} & \val{singledoc.arc_easy.cross_doc_link} & \val{singledoc.arc_easy.doc_concat_link} & \val{singledoc.arc_easy.doc_concatenated} \\
+    PIQA       & \val{singledoc.piqa.doc_causal} & \val{singledoc.piqa.cross_doc_link} & \val{singledoc.piqa.doc_concat_link} & \val{singledoc.piqa.doc_concatenated} \\
+    WinoGrande & \val{singledoc.winogrande.doc_causal} & \val{singledoc.winogrande.cross_doc_link} & \val{singledoc.winogrande.doc_concat_link} & \val{singledoc.winogrande.doc_concatenated} \\
+    OpenBookQA & \val{singledoc.openbookqa.doc_causal} & \val{singledoc.openbookqa.cross_doc_link} & \val{singledoc.openbookqa.doc_concat_link} & \val{singledoc.openbookqa.doc_concatenated} \\
+    BoolQ      & \val{singledoc.boolq.doc_causal} & \val{singledoc.boolq.cross_doc_link} & \val{singledoc.boolq.doc_concat_link} & \val{singledoc.boolq.doc_concatenated} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Matched four-mask set on \texttt{wiki\_merged} (bfs, $3614$ steps, the
+  inherited pre-retune recipe). Accuracies are at or near chance and all $95\%$
+  intervals overlap across masks (e.g.\ HellaSwag
+  \val{singledoc.hellaswag.doc_causal.ci} / \val{singledoc.hellaswag.cross_doc_link.ci} /
+  \val{singledoc.hellaswag.doc_concat_link.ci} / \val{singledoc.hellaswag.doc_concatenated.ci};
+  ARC-easy \val{singledoc.arc_easy.doc_causal.ci} / \val{singledoc.arc_easy.cross_doc_link.ci} /
+  \val{singledoc.arc_easy.doc_concat_link.ci} / \val{singledoc.arc_easy.doc_concatenated.ci}).
+  The tuned-recipe three-mask comparison is in \Cref{sec:results:singledoc}.}
+  \label{tab:singledoc-4mask}
+\end{table}
+
+\todo{Per-language sweep tables and the LR/WD U-curves await a log-value provenance
+source (the U-curve points are training-log validation losses); the per-dataset
+link-density table, 2D grid, and cross-dataset regression await an artifact-JSON
+provenance source (see TODOS.md).}
 
 \subsection{Graph-sparsity: cross-dataset regression detail}
 \label{app:sparsity-regression}
