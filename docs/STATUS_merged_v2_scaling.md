@@ -37,6 +37,42 @@ but it launches `$REPO=/fss/evin_t/tagseq2tagseq` code). Ledger:
    on Priority; launched with `--train_loop.exhaustion_tolerance_frac 0.02` so the
    watcher's lineage match cannot fall back to the pre-fix Aug 12 run of the same config.
 
+## Weekend checklist (manual, when nodes free up)
+
+Automatic: the watcher relaunches the 14 ledger entries above, one per node that has
+been idle >= 30 min while nobody is pending (up to one per idle node per 2-min poll), and
+SLURM places job 86583. Nothing to do for those beyond `squeue -u evin_t`.
+
+Manual, after a clean-stop resume has written its final `latest.pt` (check
+`<run>/eval_results.json` exists):
+
+1. Port evals for the cross_doc arms that lack them. Edit the `CK` map in
+   `scripts/eval_ports_local.sh` to the FINAL run dir of each arm (the relaunch creates a
+   new `run_*` dir; the ledger log names it) and run on a node with 7 free GPUs:
+   ```
+   SCOPE=use_line GPUS_OVERRIDE="1 2 3 4 5 6 7" scripts/eval_ports_local.sh
+   ```
+   Arms: 3.9B cross_doc (re-port on annealed weights), div3/5/7/9 cross_doc,
+   16B balanced cross_doc, 32B balanced cross_doc, 32B natural cross_doc (when done).
+   Use `--checkpoint .../latest.pt` (final, annealed); the doc_causal arms are not
+   port-able (no cross-doc mask).
+2. Optional 16B natural doc_causal control (lineage dead since Aug 26; 60600 steps, ~3 days):
+   ```
+   .venv/bin/python launch_slurm.py --nodes 1 --gpus-per-node 8 \
+     --config configs/merged_v2_16b_natural_doc_causal.yaml --time 168:00:00 --no-tail \
+     --train_loop.exhaustion_tolerance_frac 0.02
+   ```
+   The override keeps the watcher's lineage matcher from resuming a pre-fix Aug run.
+3. Then refresh the tables in `RESULTS_merged_v2_diversity_scaling.md` from the new
+   `port_eval/*__use_line.json` files.
+
+## Step-time reference (median s/step, 1024d/24L, 32k ctx, world 8, A100)
+
+| mask | typical | notes |
+|---|---|---|
+| cross_doc_link (triton_v18) | 2.2-3.0 | 1.8-2.0 on small single-language sets |
+| doc_causal (varlen_bim_v2) | 4.2-5.5 | consistently 1.7-2.3x slower than cross_doc on the SAME packs, since at least Aug 3; a kernel-side issue, not the cluster |
+
 ## Open problems
 
 1. **Yield churn.** The watcher cancels youngest-first whenever any other job pends on

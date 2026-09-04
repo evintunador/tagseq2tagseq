@@ -111,8 +111,8 @@ the ports table above (community_pack is near-noise for code per prior work).
 ## Status / TODO
 - Arm-by-arm run state, checkpoints and open problems: `docs/STATUS_merged_v2_scaling.md`.
 - Port-evaluated so far (fixed lineage): 3.9B cross_doc, 8B cross_doc, 16B natural
-  cross_doc, div7 cross_doc. Still to port: 16B balanced, 32B, div3/5/9, and every
-  doc_causal control's flat-nll baseline.
+  cross_doc, div7 cross_doc. Still to port: 16B balanced, 32B, div3/5/9 cross_doc arms
+  (doc_causal arms are not port-able — no cross-doc mask; placebo separation is the control).
 - Controls outstanding: 3.9B doc_causal (stopped at step 12000), 16B balanced doc_causal.
 - LR/WD not retuned across rungs (all arms muon_lr 0.003 / wd 0.1).
 - Infra notes (fixed this experiment): checkpoint host-OOM barrier, absolute-step
