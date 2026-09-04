@@ -151,3 +151,23 @@ Runs live in the main checkout `/fss/evin_t/tagseq2tagseq/`.
 
 - Link *injection* for code datasets — the repo already rejects this (TODOS L415);
   code uses the real import edge (present/withhold), a separate line of work.
+
+## Implementation notes
+
+- **Grant cells use the detector's coarse mode** (`aux_raw_identifiers=None`): the
+  re-detected injected link grants access to every packed aux span. With one link and one
+  aux per record this equals the precise grant, and it does not depend on
+  `detect_links`' re-extracted `target_str` matching the aux identifier — that match fails
+  for titles containing `)` (the detector truncates at the first `)`), which silently
+  dropped 10/40 fired sciq items from the grant/placebo cells in the smoke.
+- **Gold aux (relevance-gradient ceiling)** is the benchmark's own passage, attached per
+  record as `gold_aux_tokens` and scored through the same injected link as
+  `grant_gold` / `concat_gold` / `placebo_gold`. Only `sciq` (`support`) qualifies:
+  hotpotqa's annotatable context already contains the gold supporting sentences, so an
+  injected gold aux would be redundant there. Reported extras: the `_gold` block,
+  `relevance_slope[W] = grant − grant_gold` and `relevance_slope_interaction`.
+- **Replay** (`--replay-records`): re-score cached annotations without re-annotating or
+  loading the corpus — used to add the gold cells to a finished run or to score another
+  checkpoint pair on identical injected links + aux. Per-item cell NLLs are written to
+  `<benchmark>_cell_scores.json` alongside the report so stratifications (leakage α,
+  popularity) can be computed post hoc.

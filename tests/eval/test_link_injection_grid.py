@@ -124,3 +124,101 @@ def test_interaction_pairs_only_shared_items():
     dc = _grid({i: 0.2 for i in range(5)})   # only items 0..4 scored
     agg = aggregate_grid(cross, dc)
     assert agg["training_grant_interaction"]["n"] == 5
+
+
+# ─── gold-aux gradient ────────────────────────────────────────────────────────────
+
+from eval.link_injection_grid import attach_gold_aux, derange_gold_aux
+
+
+def _rec_gold(idx, gold=True, fired=True):
+    r = _rec(idx, fired=fired)
+    r.gold_aux_tokens = [900 + idx] if gold else None
+    return r
+
+
+def test_records_roundtrip_with_gold_and_legacy_files():
+    recs = [_rec_gold(0), _rec_gold(1, gold=False)]
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "recs.jsonl")
+        save_records(recs, p)
+        assert load_records(p) == recs
+        # A record file written before gold existed (no key) still loads, gold=None.
+        import json
+        legacy = {k: v for k, v in json.loads(open(p).readline()).items()
+                  if k != "gold_aux_tokens"}
+        with open(p, "w") as f:
+            f.write(json.dumps(legacy) + "\n")
+        assert load_records(p)[0].gold_aux_tokens is None
+
+
+def test_derange_gold_only_keys_fired_gold_records_no_fixed_points():
+    recs = [_rec_gold(i) for i in range(5)] + [_rec_gold(5, gold=False), _rec_gold(6, fired=False)]
+    mapping = derange_gold_aux(recs, seed=0)
+    assert set(mapping) == {0, 1, 2, 3, 4}
+    for r in recs[:5]:
+        assert mapping[r.item_index] != [r.gold_aux_tokens]
+        assert len(mapping[r.item_index]) == 1  # one-element aux list
+
+
+def test_attach_gold_aux_rejects_non_sciq():
+    import pytest
+    with pytest.raises(ValueError):
+        attach_gold_aux([_rec(0)], "hotpotqa", lambda t: [1])
+
+
+def test_attach_gold_aux_sciq_by_item_index(monkeypatch):
+    import eval.link_injection_grid as g
+    fake = [{"support": "alpha beta"}, {"support": ""}, {"support": " gamma "}]
+
+    class _DS:
+        def __init__(self, rows): self.rows = rows
+        def __iter__(self): return iter(self.rows)
+    import types, sys
+    fake_mod = types.SimpleNamespace(load_dataset=lambda *a, **k: _DS(fake))
+    monkeypatch.setitem(sys.modules, "datasets", fake_mod)
+    recs = [_rec(0), _rec(1), _rec(2), _rec(7)]
+    n = attach_gold_aux(recs, "sciq", enc=lambda t: [len(t)])
+    assert n == 2
+    assert recs[0].gold_aux_tokens == [len("alpha beta")]
+    assert recs[1].gold_aux_tokens is None          # empty support
+    assert recs[2].gold_aux_tokens == [len("gamma")]  # stripped
+    assert recs[3].gold_aux_tokens is None          # out of range
+
+
+def _grid_gold(n, retrieved_help, gold_help):
+    """Per-checkpoint scores where retrieved aux helps by retrieved_help and gold aux
+    helps by gold_help (both via grant); concat halves it; placebos do nothing."""
+    out = {}
+    for k in range(n):
+        base = 5.0 + 0.01 * k
+        out[k] = {
+            "baseline": base, "grant": base - retrieved_help, "concat": base - retrieved_help / 2,
+            "invisible": base, "placebo": base,
+            "grant_gold": base - gold_help, "concat_gold": base - gold_help / 2,
+            "placebo_gold": base,
+        }
+    return out
+
+
+def test_aggregate_gold_block_and_relevance_slope():
+    cross = _grid_gold(40, retrieved_help=0.2, gold_help=1.0)
+    dc = _grid_gold(40, retrieved_help=0.2, gold_help=0.4)
+    agg = aggregate_grid(cross, dc)
+    assert abs(agg["aux_lift_grant_gold_cross"]["mean"] - 1.0) < 1e-9
+    assert abs(agg["aux_lift_grant_gold_doc_causal"]["mean"] - 0.4) < 1e-9
+    # slope = grant - grant_gold = extra lift from a better aux
+    assert abs(agg["relevance_slope_cross"]["mean"] - 0.8) < 1e-9
+    assert abs(agg["relevance_slope_doc_causal"]["mean"] - 0.2) < 1e-9
+    assert abs(agg["relevance_slope_interaction"]["mean"] - 0.6) < 1e-9
+    assert agg["relevance_slope_interaction"]["significant"]
+    assert abs(agg["training_grant_gold_interaction"]["mean"] - 0.6) < 1e-9
+    # retrieved-aux block unchanged by the gold cells
+    assert abs(agg["training_grant_interaction"]["mean"]) < 1e-9
+    assert abs(agg["placebo_sep_gold_cross"]["mean"] - 1.0) < 1e-9
+
+
+def test_aggregate_without_gold_cells_emits_no_gold_keys():
+    cross = {k: {c: 1.0 for c in ("baseline", "grant", "concat", "invisible", "placebo")} for k in range(3)}
+    agg = aggregate_grid(cross, cross)
+    assert not any(k.endswith("_gold_interaction") or k.startswith("relevance_slope") for k in agg)

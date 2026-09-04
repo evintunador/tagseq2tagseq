@@ -37,12 +37,20 @@ The cells map onto tested scoring primitives:
   invisible score_completion_concat(aux, ..., 'doc_causal')           sanity ~ baseline
   placebo   score_completion_with_context_docs(deranged_aux, ...)     grant-on, wrong aux
 
+Gold-aux gradient (optional, sciq only): each record can also carry the benchmark's own
+gold passage (sciq `support`) as `gold_aux_tokens`, scored under the same link through
+  grant_gold / concat_gold / placebo_gold
+so the relevance slope (gold vs retrieved aux) and the gold-aux training interaction can
+be read off the same paired items. hotpotqa is excluded: its annotatable context already
+contains the gold supporting sentences.
+
 See docs/link_injection_causal_eval_DESIGN.md.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -55,6 +63,9 @@ BOOTSTRAP_RESAMPLES = 10_000
 # Cells scored per checkpoint. "baseline" is the paired reference (link spliced, no
 # aux) so every delta isolates the AUX-DOC effect, holding the injected link fixed.
 CELLS = ("baseline", "grant", "concat", "invisible", "placebo")
+# Extra cells scored only for records that carry a gold aux passage.
+GOLD_CELLS = ("grant_gold", "concat_gold", "placebo_gold")
+GOLD_AUX_BENCHMARKS = ("sciq",)
 
 
 # ─── Records ────────────────────────────────────────────────────────────────────
@@ -78,6 +89,9 @@ class AnnotatedRecord:
     target_str: str
     link_opener_prob: float
     link_fired: bool
+    # Benchmark-native gold aux passage (sciq `support`), attached by attach_gold_aux.
+    # None when absent / not requested; older record files load with None.
+    gold_aux_tokens: Optional[List[int]] = None
 
     def gold_completion(self) -> List[int]:
         """The completion whose NLL is the paired continuous signal: the gold choice
@@ -106,39 +120,90 @@ def load_records(path: str) -> List[AnnotatedRecord]:
 
 # ─── Placebo (derangement) ───────────────────────────────────────────────────────
 
-def derange_aux(
-    records: List[AnnotatedRecord], seed: int = SEED
-) -> Dict[int, List[List[int]]]:
-    """Map each fired record's index → a DIFFERENT fired record's aux token lists.
-
-    Mirrors the tier2 placebo: swap aux CONTENT across fired examples while keeping
-    each record's OWN aux_raw_identifiers (so the grant still fires at the same link,
-    but attends to wrong-but-plausible content). A true derangement (no fixed points)
-    is used so no record keeps its own aux; falls back to a rotation when <2 fired.
-
-    Returns {item_index: placebo_aux_token_lists}. Only fired records are keyed.
-    """
-    fired = [r for r in records if r.link_fired and any(r.aux_token_lists)]
-    n = len(fired)
+def _derange(keyed: List[Tuple[int, Any]], seed: int) -> Dict[int, Any]:
+    """{key: value of a DIFFERENT entry}. True derangement (no fixed points), rejection-
+    sampled with a rotation fallback; a single entry maps to itself."""
+    n = len(keyed)
     if n == 0:
         return {}
     if n == 1:
         # No other content to swap in; reuse own aux (placebo == real for this one).
-        return {fired[0].item_index: fired[0].aux_token_lists}
-
+        return {keyed[0][0]: keyed[0][1]}
     rng = random.Random(seed)
     order = list(range(n))
-    # Rejection-sample a permutation with no fixed points (derangement).
     for _ in range(1000):
         perm = order[:]
         rng.shuffle(perm)
         if all(perm[i] != i for i in range(n)):
             break
     else:
-        # Deterministic fallback: single rotation is a derangement for n >= 2.
         perm = order[1:] + order[:1]
+    return {keyed[i][0]: keyed[perm[i]][1] for i in range(n)}
 
-    return {fired[i].item_index: fired[perm[i]].aux_token_lists for i in range(n)}
+
+def derange_aux(
+    records: List[AnnotatedRecord], seed: int = SEED
+) -> Dict[int, List[List[int]]]:
+    """Map each fired record's index → a DIFFERENT fired record's aux token lists.
+
+    Mirrors the tier2 placebo: swap aux CONTENT across fired examples while keeping
+    each record's OWN injected link (so the grant still fires at the same link, but
+    attends to wrong-but-plausible content). A true derangement (no fixed points) is
+    used so no record keeps its own aux; falls back to a rotation when <2 fired.
+
+    Returns {item_index: placebo_aux_token_lists}. Only fired records are keyed.
+    """
+    fired = [(r.item_index, r.aux_token_lists)
+             for r in records if r.link_fired and any(r.aux_token_lists)]
+    return _derange(fired, seed)
+
+
+def derange_gold_aux(
+    records: List[AnnotatedRecord], seed: int = SEED
+) -> Dict[int, List[List[int]]]:
+    """Placebo for the gold cells: each gold-carrying fired record's index → a
+    DIFFERENT record's gold passage (as a one-element aux list)."""
+    keyed = [(r.item_index, [list(r.gold_aux_tokens)])
+             for r in records
+             if r.link_fired and any(r.aux_token_lists) and r.gold_aux_tokens]
+    return _derange(keyed, seed)
+
+
+# ─── Gold aux (relevance-gradient ceiling) ──────────────────────────────────────
+
+def attach_gold_aux(
+    records: List[AnnotatedRecord],
+    benchmark_name: str,
+    enc,
+    cache_dir: Optional[str] = None,
+) -> int:
+    """Attach each record's benchmark-native gold passage as `gold_aux_tokens`.
+
+    sciq: the HF dataset's `support` field (the passage the question was written
+    from). `item_index` is the raw validation-split index — SciQDataset keeps raw
+    order and only truncates (`items[:limit]`), so indices line up. Empty supports
+    leave gold_aux_tokens=None. Returns the number of records that received gold.
+    """
+    if benchmark_name not in GOLD_AUX_BENCHMARKS:
+        raise ValueError(
+            f"gold aux is only defined for {GOLD_AUX_BENCHMARKS}; hotpotqa's annotatable "
+            "context already contains the gold supporting sentences, so an injected gold "
+            "aux would be redundant there."
+        )
+    from datasets import load_dataset
+    raw = load_dataset(
+        "allenai/sciq", split="validation",
+        cache_dir=cache_dir or os.path.join("data", ".cache", "sciq"),
+    )
+    supports = [(ex.get("support") or "").strip() for ex in raw]
+    n = 0
+    for r in records:
+        text = supports[r.item_index] if r.item_index < len(supports) else ""
+        r.gold_aux_tokens = list(enc(text)) if text else None
+        n += bool(r.gold_aux_tokens)
+    logger.info("attach_gold_aux(%s): %d/%d records carry a gold passage",
+                benchmark_name, n, len(records))
+    return n
 
 
 # ─── Annotation (phase 1) ──────────────────────────────────────────────────────
@@ -204,6 +269,7 @@ def score_grid(
     records: List[AnnotatedRecord],
     device: str = "cuda",
     placebo_aux: Optional[Dict[int, List[List[int]]]] = None,
+    placebo_gold_aux: Optional[Dict[int, List[List[int]]]] = None,
 ) -> Dict[int, Dict[str, Optional[float]]]:
     """Score each link-fired record under every cell for ONE loaded checkpoint.
 
@@ -213,7 +279,9 @@ def score_grid(
     mask / aux content differs.
 
     Returns {item_index: {cell: gold_completion_nll_or_None}}. Only fired records with
-    non-empty aux are scored (unfired items carry no aux signal).
+    non-empty aux are scored (unfired items carry no aux signal). Records carrying
+    `gold_aux_tokens` additionally get the GOLD_CELLS (same link, gold passage as the
+    single aux).
     """
     from eval.scoring import (
         score_completion, score_completion_concat, score_completion_with_context_docs,
@@ -221,6 +289,8 @@ def score_grid(
 
     if placebo_aux is None:
         placebo_aux = derange_aux(records)
+    if placebo_gold_aux is None:
+        placebo_gold_aux = derange_gold_aux(records)
 
     out: Dict[int, Dict[str, Optional[float]]] = {}
     for r in records:
@@ -267,6 +337,27 @@ def score_grid(
             )
         else:
             scores["placebo"] = None
+
+        # gold-aux gradient: the benchmark's own gold passage through the same link.
+        if r.gold_aux_tokens:
+            gold = [list(r.gold_aux_tokens)]
+            scores["grant_gold"] = score_completion_with_context_docs(
+                model, aux_token_lists=gold, context_tokens=r.context_tokens,
+                completion_tokens=comp, link_detector=model.link_detector,
+                aux_raw_identifiers=None, device=device,
+            )
+            scores["concat_gold"] = score_completion_concat(
+                model, aux_token_lists=gold, context_tokens=r.context_tokens,
+                completion_tokens=comp, mask_type="doc_concatenated", device=device,
+            )
+            pg = placebo_gold_aux.get(r.item_index)
+            scores["placebo_gold"] = (
+                score_completion_with_context_docs(
+                    model, aux_token_lists=pg, context_tokens=r.context_tokens,
+                    completion_tokens=comp, link_detector=model.link_detector,
+                    aux_raw_identifiers=None, device=device,
+                ) if pg is not None else None
+            )
 
         out[r.item_index] = scores
     return out
@@ -330,30 +421,49 @@ def aggregate_grid(
       training_grant      = aux_lift_grant[cross] - aux_lift_grant[doc_causal]
                             (the HEADLINE interaction: cross-doc TRAINING advantage)
       invisible_check[W]  = |mean(invisible - baseline)|  (should be ~0)
+
+    When gold cells are present (see GOLD_CELLS), the same block is emitted with a
+    `_gold` suffix (aux_lift_grant_gold, mechanism_gold, placebo_sep_gold,
+    training_grant_gold_interaction) plus
+      relevance_slope[W]  = grant - grant_gold  (extra lift from gold over retrieved;
+                            > 0 means the model exploits a BETTER aux more)
+      relevance_slope_interaction = relevance_slope[cross] - relevance_slope[doc_causal]
     """
     result: Dict[str, Any] = {}
-
     per_ckpt = {"cross": cross, "doc_causal": doc_causal}
-    aux_lift_grant_items: Dict[str, List[float]] = {}
+
+    def _block(grant: str, concat: str, placebo: str, suffix: str) -> None:
+        lift_items: Dict[str, Dict[int, float]] = {}
+        for name, a in per_ckpt.items():
+            keys = list(a.keys())
+            lift_items[name] = _per_item_map(a, grant, "baseline")      # baseline - grant
+            result[f"aux_lift_grant{suffix}_{name}"] = _mean_ci(_paired(a, keys, grant, "baseline"))
+            result[f"aux_lift_concat{suffix}_{name}"] = _mean_ci(_paired(a, keys, concat, "baseline"))
+            result[f"mechanism{suffix}_{name}"] = _mean_ci(_paired(a, keys, grant, concat))
+            result[f"placebo_sep{suffix}_{name}"] = _mean_ci(_paired(a, keys, grant, placebo))
+        # Interaction: cross-doc training advantage in aux utilization, paired over
+        # items scored by BOTH checkpoints.
+        shared = sorted(set(lift_items["cross"]) & set(lift_items["doc_causal"]))
+        result[f"training_grant{suffix}_interaction"] = _mean_ci(
+            [lift_items["cross"][k] - lift_items["doc_causal"][k] for k in shared]
+        )
+
+    _block("grant", "concat", "placebo", "")
     for name, a in per_ckpt.items():
-        keys = list(a.keys())
-        aux_lift_grant = _paired(a, keys, "grant", "baseline")     # baseline - grant
-        aux_lift_grant_items[name] = _per_item_map(a, "grant", "baseline")
-        result[f"aux_lift_grant_{name}"] = _mean_ci(aux_lift_grant)
-        result[f"aux_lift_concat_{name}"] = _mean_ci(_paired(a, keys, "concat", "baseline"))
-        result[f"mechanism_{name}"] = _mean_ci(_paired(a, keys, "grant", "concat"))
-        result[f"placebo_sep_{name}"] = _mean_ci(_paired(a, keys, "grant", "placebo"))
-        inv = _paired(a, keys, "invisible", "baseline")  # baseline - invisible ~ 0
+        inv = _paired(a, list(a.keys()), "invisible", "baseline")  # baseline - invisible ~ 0
         result[f"invisible_check_{name}"] = _mean_ci(inv)
 
-    # Headline interaction: cross-doc training advantage in aux utilization, paired
-    # over items scored by BOTH checkpoints.
-    shared = sorted(set(aux_lift_grant_items["cross"]) & set(aux_lift_grant_items["doc_causal"]))
-    interaction = [
-        aux_lift_grant_items["cross"][k] - aux_lift_grant_items["doc_causal"][k]
-        for k in shared
-    ]
-    result["training_grant_interaction"] = _mean_ci(interaction)
+    has_gold = any("grant_gold" in s for a in per_ckpt.values() for s in a.values())
+    if has_gold:
+        _block("grant_gold", "concat_gold", "placebo_gold", "_gold")
+        slope_items: Dict[str, Dict[int, float]] = {}
+        for name, a in per_ckpt.items():
+            slope_items[name] = _per_item_map(a, "grant_gold", "grant")  # grant - grant_gold
+            result[f"relevance_slope_{name}"] = _mean_ci(list(slope_items[name].values()))
+        shared = sorted(set(slope_items["cross"]) & set(slope_items["doc_causal"]))
+        result["relevance_slope_interaction"] = _mean_ci(
+            [slope_items["cross"][k] - slope_items["doc_causal"][k] for k in shared]
+        )
     return result
 
 
@@ -412,6 +522,79 @@ def _build_markdown_annotator(
     return annotator, corpus
 
 
+def _score_pair_and_report(
+    cross_model,
+    cross_ckpt: str,
+    doc_causal_ckpt: str,
+    records: List[AnnotatedRecord],
+    out_dir: str,
+    benchmark_name: str,
+    device: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Phases 2-3 for an already-loaded cross-doc model: score both checkpoints over
+    the cached records (fixed placebo mappings → paired), aggregate, write the report.
+    Frees `cross_model` before loading the doc-causal checkpoint."""
+    import torch
+    from generate import load_inference_model
+
+    placebo_aux = derange_aux(records)
+    placebo_gold_aux = derange_gold_aux(records)
+
+    # ── Phase 2a: score the cross-doc checkpoint ──────────────────────────────────
+    cross_scores = score_grid(
+        cross_model, records, device=device,
+        placebo_aux=placebo_aux, placebo_gold_aux=placebo_gold_aux,
+    )
+    del cross_model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # ── Phase 2b: score the doc-causal checkpoint under a cross_doc_link mask ──────
+    logger.info("Loading doc-causal checkpoint under cross_doc_link mask: %s", doc_causal_ckpt)
+    dc_model, _ = load_inference_model(
+        doc_causal_ckpt, device=device,
+        mask_type_override="cross_doc_link", link_detector_override="markdown",
+    )
+    dc_scores = score_grid(
+        dc_model, records, device=device,
+        placebo_aux=placebo_aux, placebo_gold_aux=placebo_gold_aux,
+    )
+    del dc_model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # ── Phase 3: aggregate + report ───────────────────────────────────────────────
+    agg = aggregate_grid(cross_scores, dc_scores)
+    report = {
+        "benchmark": benchmark_name,
+        "cross_ckpt": cross_ckpt,
+        "doc_causal_ckpt": doc_causal_ckpt,
+        "n_items": len(records),
+        "n_fired": sum(1 for r in records if r.link_fired),
+        "n_gold": sum(1 for r in records if r.gold_aux_tokens),
+        "n_scored_cross": len(cross_scores),
+        "n_scored_doc_causal": len(dc_scores),
+        **(extra or {}),
+        "effects": agg,
+    }
+    report_path = os.path.join(out_dir, f"{benchmark_name}_grid_report.json")
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
+    scores_path = os.path.join(out_dir, f"{benchmark_name}_cell_scores.json")
+    with open(scores_path, "w") as f:
+        json.dump({"cross": cross_scores, "doc_causal": dc_scores}, f)
+    logger.info("Wrote report → %s (per-item cell scores → %s)", report_path, scores_path)
+
+    for key in ("training_grant_interaction", "training_grant_gold_interaction",
+                "relevance_slope_interaction"):
+        if key in agg:
+            e = agg[key]
+            logger.info("HEADLINE %s: mean=%.4f ci95=%s n=%d significant=%s",
+                        key, e["mean"], e["ci95"], e["n"], e["significant"])
+    return report
+
+
 def run_link_injection_grid(
     cross_ckpt: str,
     doc_causal_ckpt: str,
@@ -424,15 +607,16 @@ def run_link_injection_grid(
     max_examples: Optional[int] = None,
     cache_dir: Optional[str] = None,
     device: str = "cuda",
+    gold_aux: bool = False,
 ) -> Dict[str, Any]:
     """End-to-end causal 2x2 link-injection eval on a matched checkpoint pair.
 
     Annotates each benchmark item ONCE with the cross-doc checkpoint (the designated
-    annotator), scores the cached records under both checkpoints (the doc-causal one
-    loaded under a cross_doc_link mask + markdown detector), and writes the aggregated
-    interaction report. Returns the aggregate dict.
+    annotator), optionally attaches the benchmark's gold passage (`gold_aux`, sciq),
+    scores the cached records under both checkpoints (the doc-causal one loaded under
+    a cross_doc_link mask + markdown detector), and writes the aggregated interaction
+    report. Returns the report dict.
     """
-    import os
     from generate import load_inference_model
     from eval.nlp_benchmarks import _load_benchmark_items, _make_encoder
 
@@ -450,56 +634,53 @@ def run_link_injection_grid(
         use_trie=use_trie, beam_width=beam_width,
     )
     records = annotate_items(cross_model, annotator, benchmark_name, items, device=device)
+    corpus.close()
+    if gold_aux:
+        attach_gold_aux(records, benchmark_name, enc, cache_dir)
     records_path = os.path.join(out_dir, f"{benchmark_name}_records.jsonl")
     save_records(records, records_path)
     logger.info("Saved %d records → %s", len(records), records_path)
 
-    # Fixed placebo mapping, shared across both checkpoints for a paired comparison.
-    placebo_aux = derange_aux(records)
-
-    # ── Phase 2a: score the cross-doc checkpoint ──────────────────────────────────
-    cross_scores = score_grid(cross_model, records, device=device, placebo_aux=placebo_aux)
-    corpus.close()
-    del cross_model
-    import torch
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    # ── Phase 2b: score the doc-causal checkpoint under a cross_doc_link mask ──────
-    logger.info("Loading doc-causal checkpoint under cross_doc_link mask: %s", doc_causal_ckpt)
-    dc_model, _ = load_inference_model(
-        doc_causal_ckpt, device=device,
-        mask_type_override="cross_doc_link", link_detector_override="markdown",
+    return _score_pair_and_report(
+        cross_model, cross_ckpt, doc_causal_ckpt, records, out_dir, benchmark_name,
+        device, extra={"annotator_mode": annotator_mode, "records": records_path},
     )
-    dc_scores = score_grid(dc_model, records, device=device, placebo_aux=placebo_aux)
-    del dc_model
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
-    # ── Phase 3: aggregate + report ───────────────────────────────────────────────
-    agg = aggregate_grid(cross_scores, dc_scores)
-    report = {
-        "benchmark": benchmark_name,
-        "annotator_mode": annotator_mode,
-        "cross_ckpt": cross_ckpt,
-        "doc_causal_ckpt": doc_causal_ckpt,
-        "n_items": len(records),
-        "n_fired": sum(1 for r in records if r.link_fired),
-        "n_scored_cross": len(cross_scores),
-        "n_scored_doc_causal": len(dc_scores),
-        "effects": agg,
-    }
-    report_path = os.path.join(out_dir, f"{benchmark_name}_grid_report.json")
-    with open(report_path, "w") as f:
-        json.dump(report, f, indent=2)
-    logger.info("Wrote report → %s", report_path)
 
-    inter = agg["training_grant_interaction"]
-    logger.info(
-        "HEADLINE training-grant interaction: mean=%.4f ci95=%s n=%d significant=%s",
-        inter["mean"], inter["ci95"], inter["n"], inter["significant"],
+def replay_link_injection_grid(
+    cross_ckpt: str,
+    doc_causal_ckpt: str,
+    records_path: str,
+    out_dir: str,
+    cache_dir: Optional[str] = None,
+    device: str = "cuda",
+    gold_aux: bool = False,
+) -> Dict[str, Any]:
+    """Re-score cached annotations (no re-annotation, no corpus load) — e.g. to add the
+    gold-aux cells to a finished run, or to score a different checkpoint pair on the
+    identical injected links + aux. Writes a fresh report into `out_dir`."""
+    from generate import load_inference_model
+    from eval.nlp_benchmarks import _make_encoder
+
+    os.makedirs(out_dir, exist_ok=True)
+    records = load_records(records_path)
+    benchmark_name = records[0].benchmark if records else "unknown"
+    logger.info("Replaying %d cached records (%s) from %s",
+                len(records), benchmark_name, records_path)
+
+    logger.info("Loading cross-doc checkpoint: %s", cross_ckpt)
+    cross_model, _ = load_inference_model(cross_ckpt, device=device)
+    if gold_aux and not any(r.gold_aux_tokens for r in records):
+        attach_gold_aux(records, benchmark_name, _make_encoder(cross_model.tokenizer), cache_dir)
+        new_path = os.path.join(out_dir, f"{benchmark_name}_records.jsonl")
+        if os.path.abspath(new_path) != os.path.abspath(records_path):
+            save_records(records, new_path)
+            logger.info("Saved gold-augmented records → %s", new_path)
+
+    return _score_pair_and_report(
+        cross_model, cross_ckpt, doc_causal_ckpt, records, out_dir, benchmark_name,
+        device, extra={"replayed_from": records_path},
     )
-    return report
 
 
 def _main():
@@ -508,8 +689,14 @@ def _main():
     p = argparse.ArgumentParser(description="Causal 2x2 link-injection eval.")
     p.add_argument("--cross-ckpt", required=True, help="cross_doc_link best_model.pt")
     p.add_argument("--doc-causal-ckpt", required=True, help="doc_causal best_model.pt")
-    p.add_argument("--benchmark", required=True, help="ANNOTATABLE benchmark name")
-    p.add_argument("--annotator-corpus", required=True, help="wiki_merged pretok dir")
+    p.add_argument("--benchmark", help="ANNOTATABLE benchmark name (annotate mode)")
+    p.add_argument("--annotator-corpus", help="wiki_merged pretok dir (annotate mode)")
+    p.add_argument("--replay-records", default=None,
+                   help="Cached *_records.jsonl from a previous run: skip annotation and "
+                        "re-score both checkpoints on the identical injected links + aux.")
+    p.add_argument("--gold-aux", action="store_true",
+                   help="Also score the benchmark's gold passage (sciq `support`) as an "
+                        "aux through the same link (grant_gold/concat_gold/placebo_gold).")
     p.add_argument("--out-dir", required=True)
     p.add_argument("--annotator-mode", default="corpus_only",
                    choices=["corpus_only", "generate_only", "corpus_then_generate"])
@@ -521,12 +708,22 @@ def _main():
     p.add_argument("--cache-dir", default=None)
     p.add_argument("--device", default="cuda")
     args = p.parse_args()
+    if args.replay_records:
+        replay_link_injection_grid(
+            cross_ckpt=args.cross_ckpt, doc_causal_ckpt=args.doc_causal_ckpt,
+            records_path=args.replay_records, out_dir=args.out_dir,
+            cache_dir=args.cache_dir, device=args.device, gold_aux=args.gold_aux,
+        )
+        return
+    if not (args.benchmark and args.annotator_corpus):
+        p.error("--benchmark and --annotator-corpus are required unless --replay-records")
     run_link_injection_grid(
         cross_ckpt=args.cross_ckpt, doc_causal_ckpt=args.doc_causal_ckpt,
         benchmark_name=args.benchmark, annotator_corpus_dir=args.annotator_corpus,
         out_dir=args.out_dir, annotator_mode=args.annotator_mode,
         use_trie=not args.no_trie, beam_width=args.beam_width,
         max_examples=args.max_examples, cache_dir=args.cache_dir, device=args.device,
+        gold_aux=args.gold_aux,
     )
 
 
