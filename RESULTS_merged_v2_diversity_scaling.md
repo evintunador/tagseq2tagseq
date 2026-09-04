@@ -109,14 +109,16 @@ the ports table above (community_pack is near-noise for code per prior work).
 ---
 
 ## Status / TODO
-- 8B cross_doc: ports DONE (above). 3.9B done. 16B ×2 IN PROGRESS (~1.45B/dom point).
-- TODO: 8B **doc_causal-arm** ports (control, expect ≈0 Δ); **16B** ports (scaling
-  curve — does the merge's cross-doc lead grow further?); formal specialist use_line
-  re-pull for the exact paper table; LR/WD sweep before any 32B.
+- Arm-by-arm run state, checkpoints and open problems: `docs/STATUS_merged_v2_scaling.md`.
+- Port-evaluated so far (fixed lineage): 3.9B cross_doc, 8B cross_doc, 16B natural
+  cross_doc, div7 cross_doc. Still to port: 16B balanced, 32B, div3/5/9, and every
+  doc_causal control's flat-nll baseline.
+- Controls outstanding: 3.9B doc_causal (stopped at step 12000), 16B balanced doc_causal.
+- LR/WD not retuned across rungs (all arms muon_lr 0.003 / wd 0.1).
 - Infra notes (fixed this experiment): checkpoint host-OOM barrier, absolute-step
   resume, community_pack 2048-budget, val-loader source-bias/rewind, Option-B
-  graph-edge grants for eval, per-pack layout_epoch for multi-epoch. See
-  `[[merged-corpus-build]]`.
+  graph-edge grants for eval, per-pack layout_epoch for multi-epoch, clean stop at
+  schedule exhaustion (`train_loop.exhaustion_tolerance_frac`). See `[[merged-corpus-build]]`.
 
 ---
 ## ★ COMPUTE-MATCHED CROSSOVER (post-forgetting-fix, 2026-08-28)
@@ -128,8 +130,35 @@ merge WINS 6 / TIE 3 / spec 4 (of 13 ports).
 - Tie: ase_kotlin, crosscodeeval_ts, repobench_python.
 - Spec wins: go (+0.15 vs +0.22), rust (+0.12 vs +0.28), dart (+0.25 vs +0.34), javascript.
 HEADLINE: with 1/11th the per-domain tokens, the merge matches-or-beats specialists on
-9/13 cross-doc benchmarks (decisively on ts/python/java/kotlin/zig). Effect STRENGTHENS
-with scale — at 8B/16B the merge win-or-tie count rises (typescript reaches +0.81 @16B).
-Base-LM ability (flat_nll) improves ~uniformly with tokens (~-0.23/doubling); cross-doc
-Δnll grows heterogeneously (ts/kotlin climb, python/rust/java saturate) — the two axes
-are DECOUPLED. Ladder completion + diversity-count curve (div3/5/7/9) still filling in.
+9/13 cross-doc benchmarks (decisively on ts/python/java/kotlin/zig).
+
+### Token-scaling across rungs: cross-doc Δ is FLAT 3.9B → 8B → 16B
+use_line Δnll_real per port (mean flat nll in parentheses), from the on-disk
+`port_eval/` of the fixed-lineage cross_doc runs: 3.9B = run_20260821_052234 (latest.pt at
+step 14000 of a 14790 schedule — the run hit data exhaustion a few steps before its
+budget, so the evaluated weights are mid-cooldown, LR ≈ 22% of peak), 8B = run_20260813_144916 (step 30000),
+16B natural = run_20260813_182257 (step 60600, complete).
+
+| port | 3.9B Δ (flat nll) | 8B Δ (flat nll) | 16B-natural Δ (flat nll) |
+|---|---|---|---|
+| repobench_python | +0.105 (2.05) | +0.120 (1.99) | +0.092 (1.77) |
+| repobench_java | +0.178 (1.77) | +0.176 (1.76) | +0.172 (1.52) |
+| internal_python | +0.298 (2.89) | +0.261 (2.78) | +0.297 (2.52) |
+| internal_java | +0.150 (1.88) | +0.114 (1.85) | +0.135 (1.63) |
+| internal_typescript | +0.537 (2.55) | +0.539 (2.53) | +0.454 (2.06) |
+| internal_kotlin | +0.225 (2.29) | +0.163 (2.24) | +0.169 (1.96) |
+| internal_go | +0.146 (2.14) | +0.144 (2.07) | +0.147 (1.86) |
+| internal_rust | +0.116 (2.14) | +0.096 (2.05) | +0.107 (1.88) |
+| internal_javascript | +0.101 (1.84) | +0.103 (1.85) | +0.112 (1.69) |
+| internal_zig | +0.254 (2.31) | +0.315 (2.39) | +0.255 (2.27) |
+| internal_dart | +0.247 (1.86) | +0.311 (1.94) | +0.181 (1.50) |
+| ase_kotlin | +0.102 (1.34) | +0.108 (1.28) | +0.112 (1.12) |
+| crosscodeeval_ts | +0.048 (1.46) | +0.039 (1.30) | +0.033 (1.16) |
+
+No port moves by more than noise across the three rungs; typescript is +0.54 / +0.54 /
++0.45. Base-LM ability (flat nll) improves with tokens on every port while the
+cross-doc Δ does not — the two axes are DECOUPLED, and the diversity advantage is a
+fixed effect present from the smallest rung, not a scaling one. No 16B-balanced or 32B
+cross_doc port evals exist yet; div7 is the only diversity tier ported so far, and its
+dart/go ports (languages absent from div7's training mix) are out-of-distribution and
+must not be read as cross-doc evidence. Run-level state: `docs/STATUS_merged_v2_scaling.md`.
