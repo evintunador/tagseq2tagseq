@@ -395,11 +395,18 @@ def _paired(a: Dict[int, Dict[str, Optional[float]]], keys: List[int],
 
 
 def _mean_ci(deltas: List[float]) -> Dict[str, Any]:
+    """Mean with bootstrap CI, plus heavy-tail-robust companions: the median and the
+    fraction of items with a positive delta (aux helped). Per-item NLL deltas are
+    heavy-tailed (a long irrelevant aux can add several nats on one item), so a mean
+    alone can be driven by a handful of items."""
     import numpy as np
     lo, hi = _bootstrap_ci(deltas)
+    arr = np.asarray(deltas, dtype=float)
     return {
-        "mean": float(np.mean(deltas)) if deltas else float("nan"),
+        "mean": float(arr.mean()) if deltas else float("nan"),
         "ci95": [lo, hi],
+        "median": float(np.median(arr)) if deltas else float("nan"),
+        "frac_positive": float((arr > 0).mean()) if deltas else float("nan"),
         "n": len(deltas),
         "significant": (not (lo != lo)) and (lo > 0 or hi < 0),  # CI excludes 0
     }
