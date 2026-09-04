@@ -232,11 +232,17 @@ def score_grid(
         # baseline: link spliced, no aux (doc_causal reference).
         scores["baseline"] = score_completion(model, r.context_tokens, comp, device=device)
 
-        # grant-on: real aux via the cross_doc_link mask.
+        # grant-on: real aux via the cross_doc_link mask. Coarse grant mode
+        # (aux_raw_identifiers=None): the re-detected link grants access to every
+        # packed aux span. With one injected link and one aux doc per record this is
+        # exactly the precise grant, but it does not depend on the detector's
+        # re-extracted target_str matching the aux identifier — which fails for
+        # titles containing ')' (detect_links truncates at the first ')') and
+        # silently dropped ~25% of fired items from the grant cell in the smoke.
         scores["grant"] = score_completion_with_context_docs(
             model, aux_token_lists=r.aux_token_lists, context_tokens=r.context_tokens,
             completion_tokens=comp, link_detector=model.link_detector,
-            aux_raw_identifiers=r.aux_raw_identifiers, device=device,
+            aux_raw_identifiers=None, device=device,
         )
 
         # raw-concat: same aux as ordinary prior context (doc_concatenated).
@@ -257,7 +263,7 @@ def score_grid(
             scores["placebo"] = score_completion_with_context_docs(
                 model, aux_token_lists=p_aux, context_tokens=r.context_tokens,
                 completion_tokens=comp, link_detector=model.link_detector,
-                aux_raw_identifiers=r.aux_raw_identifiers, device=device,
+                aux_raw_identifiers=None, device=device,
             )
         else:
             scores["placebo"] = None
