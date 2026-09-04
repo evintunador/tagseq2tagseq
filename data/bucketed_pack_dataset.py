@@ -64,6 +64,20 @@ def _make_bucket_sequence(n_buckets: int, seed: int, n_repeats: int = 1000) -> L
     return seq
 
 
+class EpochDirsExhausted(RuntimeError):
+    """Raised by a TRAINING BucketedPackDataset when every epoch dir is drained
+    before the caller stopped iterating.
+
+    Each density bucket ends with a drop_last tail of up to ``world_size - 1``
+    packs, so a schedule of ``n_packs`` yields slightly fewer than
+    ``n_packs // world_size`` steps (up to ``n_buckets * (world_size - 1)`` packs
+    are never drawn). A step budget set from ``n_packs // world_size`` therefore
+    always overruns the data by a few steps. ``LimitedDataLoader`` (main.py)
+    catches this type and ends the run cleanly when the shortfall is within its
+    tolerance; anything larger propagates as a hard failure.
+    """
+
+
 class BucketedPackDataset(IterableDataset):
     """Iterable dataset yielding pre-computed packs in density-bucket order.
 
@@ -257,7 +271,7 @@ class BucketedPackDataset(IterableDataset):
             # the step budget.) Needed because val_steps can exceed a small val
             # schedule's pack count (e.g. zig val = 25 packs < val_steps).
             return
-        raise RuntimeError(
+        raise EpochDirsExhausted(
             f"All pre-computed epoch dirs exhausted after {len(self.epoch_dirs)} epochs. "
             "Re-run precompute_epochs.py to generate more."
         )

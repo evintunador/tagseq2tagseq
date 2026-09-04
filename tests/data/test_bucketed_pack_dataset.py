@@ -454,3 +454,47 @@ class TestPerPackLayout:
         # not freeze while the default advances.
         assert default.epochs_seen[-1] == 3
         assert extra.epochs_seen[-1] == 3
+
+
+class TestExhaustionTolerance:
+    """Drop_last tails make a schedule yield a few steps fewer than n_packs//world;
+    the training wrapper must end cleanly for a small shortfall and fail for a big one."""
+
+    def test_exhaustion_raises_typed_error(self):
+        from data.bucketed_pack_dataset import EpochDirsExhausted
+        with tempfile.TemporaryDirectory() as tmp:
+            epoch_dir = _make_epoch_dir(tmp, n_buckets=1, packs_per_bucket=2)
+            ds = _make_dataset([epoch_dir])
+            it = iter(ds)
+            with pytest.raises(EpochDirsExhausted):
+                while True:
+                    next(it)
+
+    def _limited(self, epoch_dir, max_batches, tol):
+        from torch.utils.data import DataLoader
+        from main import LimitedDataLoader
+        ds = _make_dataset([epoch_dir])
+        return LimitedDataLoader(DataLoader(ds, batch_size=None, num_workers=0),
+                                 max_batches=max_batches,
+                                 exhaustion_tolerance_batches=tol)
+
+    def test_shortfall_within_tolerance_ends_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            epoch_dir = _make_epoch_dir(tmp, n_buckets=1, packs_per_bucket=4)
+            loader = self._limited(epoch_dir, max_batches=6, tol=2)  # 4 packs, budget 6
+            got = list(loader)
+            assert len(got) == 4
+
+    def test_shortfall_beyond_tolerance_raises(self):
+        from data.bucketed_pack_dataset import EpochDirsExhausted
+        with tempfile.TemporaryDirectory() as tmp:
+            epoch_dir = _make_epoch_dir(tmp, n_buckets=1, packs_per_bucket=4)
+            loader = self._limited(epoch_dir, max_batches=6, tol=1)
+            with pytest.raises(EpochDirsExhausted):
+                list(loader)
+
+    def test_budget_met_does_not_touch_exhaustion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            epoch_dir = _make_epoch_dir(tmp, n_buckets=1, packs_per_bucket=4)
+            loader = self._limited(epoch_dir, max_batches=3, tol=0)
+            assert len(list(loader)) == 3
