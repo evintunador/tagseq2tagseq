@@ -16,6 +16,7 @@ from data.layout import EOSLayoutPolicy, NullLayoutPolicy
 from eval.scoring import (
     score_completion, score_completions_batched,
     score_completions_independent_batched, score_completion_with_context_docs,
+    score_completion_concat,
     score_doc, score_docs_batched, score_doc_with_context,
 )
 
@@ -154,6 +155,56 @@ def test_score_completion_prompt_preprocessor_is_called(mock_model):
     tokens_arg = call_args[0][0]
     expected_len = len(context) + len(extra_token) + len(completion)
     assert tokens_arg.shape == (1, expected_len)
+
+
+def test_score_completion_concat_returns_float(mock_model):
+    result = score_completion_concat(
+        mock_model, [[7, 8]], [1, 2, 3], [4, 5], device="cpu"
+    )
+    assert isinstance(result, float)
+    assert abs(result - math.log(VOCAB_SIZE)) < 1e-4
+
+
+def test_score_completion_concat_no_aux_returns_none(mock_model):
+    # No non-empty aux span → nothing to concatenate → None.
+    assert score_completion_concat(mock_model, [], [1, 2, 3], [4, 5], device="cpu") is None
+    assert score_completion_concat(mock_model, [[]], [1, 2, 3], [4, 5], device="cpu") is None
+
+
+def test_score_completion_concat_empty_completion_returns_zero(mock_model):
+    assert score_completion_concat(mock_model, [[7]], [1, 2, 3], [], device="cpu") == 0.0
+
+
+def test_score_completion_concat_empty_context_returns_none(mock_model):
+    assert score_completion_concat(mock_model, [[7]], [], [4, 5], device="cpu") is None
+
+
+def test_score_completion_concat_packs_aux_before_primary(mock_model):
+    aux = [[7, 8, 9], [10]]        # 4 aux tokens total
+    context = [1, 2, 3]
+    completion = [4, 5]
+    score_completion_concat(mock_model, aux, context, completion, device="cpu")
+    call_args = mock_model.forward_inference.call_args
+    tokens_arg = call_args[0][0]
+    # Full sequence = aux(4) + context(3) + completion(2) = 9
+    assert tokens_arg.shape == (1, 4 + len(context) + len(completion))
+
+
+def test_score_completion_concat_propagates_mask_type(mock_model):
+    score_completion_concat(
+        mock_model, [[7]], [1, 2], [3], mask_type="doc_causal", device="cpu"
+    )
+    _, kwargs = mock_model.forward_inference.call_args
+    assert kwargs.get("mask_type") == "doc_causal"
+
+
+def test_score_completion_concat_shared_component_id_on_all_spans(mock_model):
+    # doc_concatenated only merges spans that share a component_id; every packed
+    # span must carry component_id=0 or the cell silently degrades to doc_causal.
+    score_completion_concat(mock_model, [[7, 8]], [1, 2, 3], [4, 5], device="cpu")
+    spans = mock_model.forward_inference.call_args[0][1]
+    assert len(spans) == 2  # one aux span + primary
+    assert all(s.component_id == 0 for s in spans)
 
 
 def test_score_completion_preprocessor_none_unchanged(mock_model):

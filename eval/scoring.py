@@ -821,6 +821,107 @@ def score_completion_with_context_docs(
     return nll
 
 
+def score_completion_concat(
+    model,
+    aux_token_lists: List[List[int]],
+    context_tokens: List[int],
+    completion_tokens: List[int],
+    mask_type: str = "doc_concatenated",
+    device: Optional[str] = None,
+) -> Optional[float]:
+    """Score a completion with aux docs packed as ordinary context (no link grant).
+
+    The content-matched control for ``score_completion_with_context_docs``: it packs
+    the SAME aux snippets before the primary (context+completion) doc, but the aux is
+    made visible (or not) purely by the mask, with no link detection and no
+    ``link_to_target`` grant. Two masks are meaningful here:
+
+      - ``doc_concatenated`` (default): aux + primary share a ``component_id`` and are
+        merged into one causally-concatenated super-doc, so the primary attends back
+        to the aux as raw prior context. This is the "raw-concat" cell — what any LM
+        gets from more relevant context, independent of the cross-doc-link mechanism.
+      - ``doc_causal``: each span is isolated, so the aux is invisible. Equivalent to
+        the no-aux baseline; used as a sanity anchor (should match ``score_completion``
+        on ``context_tokens`` alone).
+
+    Unlike ``score_completion_with_context_docs`` this never returns None for a missing
+    link — the aux is always present in the sequence; only the mask decides visibility.
+    Returns None only when there is no aux or no context to score against.
+
+    Args:
+        model: TS2TSModel in eval mode.
+        aux_token_lists: Pre-tokenized aux snippet token lists, packed in order.
+            Empty lists are skipped.
+        context_tokens: Primary-doc prefix token IDs.
+        completion_tokens: Token IDs to score NLL over.
+        mask_type: 'doc_concatenated' (raw-concat) or 'doc_causal' (aux-invisible).
+        device: Device string. If None, inferred from model.backbone.parameters().
+
+    Returns:
+        Mean NLL over completion_tokens as a float, or None.
+    """
+    if not completion_tokens:
+        return 0.0
+    if not context_tokens:
+        return None
+    if device is None:
+        device = next(model.backbone.parameters()).device
+
+    # Pack non-empty aux docs first, primary last. All spans share component_id=0 so
+    # doc_concatenated merges them into one super-doc; doc_causal isolates by doc_id
+    # (component_id is ignored there), leaving the aux invisible.
+    all_tokens: List[int] = []
+    spans: List[DocSpan] = []
+    offset = 0
+    doc_id = 0
+    for aux_toks in aux_token_lists:
+        if not aux_toks:
+            continue
+        spans.append(DocSpan(
+            doc_id=doc_id,
+            normed_identifier="",
+            raw_identifier="",
+            start=offset,
+            end=offset + len(aux_toks),
+            truncated=False,
+            outgoing_identifiers=[],
+            component_id=0,
+        ))
+        all_tokens.extend(aux_toks)
+        offset += len(aux_toks)
+        doc_id += 1
+
+    if not spans:
+        return None
+
+    primary_start = offset
+    primary_tokens = context_tokens + completion_tokens
+    spans.append(DocSpan(
+        doc_id=doc_id,
+        normed_identifier="",
+        raw_identifier="",
+        start=primary_start,
+        end=primary_start + len(primary_tokens),
+        truncated=False,
+        outgoing_identifiers=[],
+        component_id=0,
+    ))
+    all_tokens.extend(primary_tokens)
+
+    tokens_tensor = torch.tensor(all_tokens, dtype=torch.long, device=device).unsqueeze(0)
+
+    logits = model.forward_inference(tokens_tensor, spans, mask_type=mask_type)  # [1,T,V]
+    log_probs = F.log_softmax(logits[0].float(), dim=-1)
+
+    ctx_len = len(context_tokens)
+    comp_len = len(completion_tokens)
+    logit_start = primary_start + ctx_len - 1
+    tgt_start = primary_start + ctx_len
+    lp = log_probs[logit_start : logit_start + comp_len, :]
+    tgt = tokens_tensor[0, tgt_start : tgt_start + comp_len]
+    return -lp[torch.arange(comp_len, device=device), tgt].mean().item()
+
+
 def link_to_target_from_graph_edges(doc_spans) -> Dict[int, List[int]]:
     """Build a ``link_to_target`` grant map from the pack's KNOWN graph edges
     (Option B), rather than re-detecting links from text.
