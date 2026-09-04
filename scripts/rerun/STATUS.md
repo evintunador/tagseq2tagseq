@@ -56,8 +56,15 @@ Then re-run the affected evals since the old numbers can't be trusted.
    under experimental/baseline will NOT help (repobench always flattens to doc_causal). Real
    options: re-ground on `repobench_cross_doc` (cross_doc_link-only → not a 4-way table, needs
    re-framing) OR drop the flat-repobench compute-control comparison. Your call.
-2. **Quarantine** the old contaminated `runs/*/eval_results.json` + `runs/*/eval/`? Deferred
-   because the main checkout's `runs/` is shared with live peer sessions.
+2. **Quarantine** the old contaminated `runs/*/eval_results.json` + `runs/*/eval/`.
+   Answered: nothing in the main checkout's `runs/` has been touched since 2026-08-07 (94
+   `eval/` dirs, 141 `eval_results.json`; the 6 live jobs all write under fss-data), so it
+   is safe from a liveness standpoint. `scripts/rerun/quarantine_contaminated_evals.py`
+   does a reversible MOVE (dry-run default, manifest + `--undo`); current dry run = 239
+   paths / 31 MB. ORDERING: run it only after this PR's distiller (evals-root re-attach)
+   is on the branch you distill from — before that, main's distiller loses those metrics.
+   `--eval-dirs-only` leaves `eval_results.json` in place if you want to keep the training
+   runs' own end-of-training eval blended in there.
 
 ## NOT yet done (intentionally)
 - Nothing committed. `ledger.yaml` `expected:` values NOT edited. RESULTS*.md NOT edited.
