@@ -1,0 +1,111 @@
+{
+  "benchmark": "sciq",
+  "annotator_mode": "corpus_only",
+  "cross_ckpt": "/fss/evin_t/tagseq2tagseq/runs/20260703_050528/checkpoints/best_model.pt",
+  "doc_causal_ckpt": "/fss/evin_t/tagseq2tagseq/runs/20260703_051129/checkpoints/best_model.pt",
+  "n_items": 1000,
+  "n_fired": 999,
+  "n_scored_cross": 999,
+  "n_scored_doc_causal": 999,
+  "effects": {
+    "aux_lift_grant_cross": {
+      "mean": -1.738536328168641,
+      "ci95": [
+        -2.3398604005788273,
+        -1.1557887626254402
+      ],
+      "n": 979,
+      "significant": true
+    },
+    "aux_lift_concat_cross": {
+      "mean": -2.2297091598625296,
+      "ci95": [
+        -2.885848117531002,
+        -1.5829463303626121
+      ],
+      "n": 999,
+      "significant": true
+    },
+    "mechanism_cross": {
+      "mean": 0.42512039753462855,
+      "ci95": [
+        -0.009747037946021084,
+        0.8485924971602908
+      ],
+      "n": 979,
+      "significant": false
+    },
+    "placebo_sep_cross": {
+      "mean": 0.24934144794514765,
+      "ci95": [
+        -0.173834938730234,
+        0.6768976077361296
+      ],
+      "n": 979,
+      "significant": false
+    },
+    "invisible_check_cross": {
+      "mean": -0.003386766702921183,
+      "ci95": [
+        -0.010762251091671657,
+        0.004068159460424778
+      ],
+      "n": 999,
+      "significant": false
+    },
+    "aux_lift_grant_doc_causal": {
+      "mean": -0.3892035742458698,
+      "ci95": [
+        -0.6746840285694757,
+        -0.11478605858517381
+      ],
+      "n": 979,
+      "significant": true
+    },
+    "aux_lift_concat_doc_causal": {
+      "mean": -1.2318527514750774,
+      "ci95": [
+        -1.788934649313773,
+        -0.6870895613898507
+      ],
+      "n": 999,
+      "significant": true
+    },
+    "mechanism_doc_causal": {
+      "mean": 0.8283035835523284,
+      "ci95": [
+        0.33875729381368397,
+        1.3289288266686543
+      ],
+      "n": 979,
+      "significant": true
+    },
+    "placebo_sep_doc_causal": {
+      "mean": 0.3647876847630502,
+      "ci95": [
+        0.051854176479900704,
+        0.6828012663813972
+      ],
+      "n": 979,
+      "significant": true
+    },
+    "invisible_check_doc_causal": {
+      "mean": 0.005499651243498137,
+      "ci95": [
+        -0.0021770798646890605,
+        0.01307471044309385
+      ],
+      "n": 999,
+      "significant": false
+    },
+    "training_grant_interaction": {
+      "mean": -1.3493327539227713,
+      "ci95": [
+        -1.8932348599351096,
+        -0.8349609522215559
+      ],
+      "n": 979,
+      "significant": true
+    }
+  }
+}

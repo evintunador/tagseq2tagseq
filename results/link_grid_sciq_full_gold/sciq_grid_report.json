@@ -1,0 +1,266 @@
+{
+  "benchmark": "sciq",
+  "cross_ckpt": "/fss/evin_t/tagseq2tagseq/runs/20260703_050528/checkpoints/best_model.pt",
+  "doc_causal_ckpt": "/fss/evin_t/tagseq2tagseq/runs/20260703_051129/checkpoints/best_model.pt",
+  "n_items": 1000,
+  "n_fired": 999,
+  "n_gold": 887,
+  "n_scored_cross": 999,
+  "n_scored_doc_causal": 999,
+  "replayed_from": "results/link_grid_sciq_full/sciq_records.jsonl",
+  "effects": {
+    "aux_lift_grant_cross": {
+      "mean": -1.738536328168641,
+      "ci95": [
+        -2.3398604005788273,
+        -1.1557887626254402
+      ],
+      "median": -0.002651214599609375,
+      "frac_positive": 0.48314606741573035,
+      "n": 979,
+      "significant": true
+    },
+    "aux_lift_concat_cross": {
+      "mean": -2.2297091598625296,
+      "ci95": [
+        -2.885848117531002,
+        -1.5829463303626121
+      ],
+      "median": -0.5461349487304688,
+      "frac_positive": 0.43843843843843844,
+      "n": 999,
+      "significant": true
+    },
+    "mechanism_cross": {
+      "mean": 0.42512039753462855,
+      "ci95": [
+        -0.009747037946021084,
+        0.8485924971602908
+      ],
+      "median": 0.0073394775390625,
+      "frac_positive": 0.5045965270684372,
+      "n": 979,
+      "significant": false
+    },
+    "placebo_sep_cross": {
+      "mean": 0.24934144794514765,
+      "ci95": [
+        -0.173834938730234,
+        0.6768976077361296
+      ],
+      "median": 0.0,
+      "frac_positive": 0.46884576098059244,
+      "n": 979,
+      "significant": false
+    },
+    "aux_lift_grant_doc_causal": {
+      "mean": -0.3892035742458698,
+      "ci95": [
+        -0.6746840285694757,
+        -0.11478605858517381
+      ],
+      "median": 0.0059795379638671875,
+      "frac_positive": 0.5178753830439223,
+      "n": 979,
+      "significant": true
+    },
+    "aux_lift_concat_doc_causal": {
+      "mean": -1.2318527514750774,
+      "ci95": [
+        -1.788934649313773,
+        -0.6870895613898507
+      ],
+      "median": -0.2495899200439453,
+      "frac_positive": 0.4624624624624625,
+      "n": 999,
+      "significant": true
+    },
+    "mechanism_doc_causal": {
+      "mean": 0.8283035835523284,
+      "ci95": [
+        0.33875729381368397,
+        1.3289288266686543
+      ],
+      "median": 0.14103317260742188,
+      "frac_positive": 0.5362614913176711,
+      "n": 979,
+      "significant": true
+    },
+    "placebo_sep_doc_causal": {
+      "mean": 0.3647876847630502,
+      "ci95": [
+        0.051854176479900704,
+        0.6828012663813972
+      ],
+      "median": 0.0,
+      "frac_positive": 0.47088866189989786,
+      "n": 979,
+      "significant": true
+    },
+    "training_grant_interaction": {
+      "mean": -1.3493327539227713,
+      "ci95": [
+        -1.8932348599351096,
+        -0.8349609522215559
+      ],
+      "median": -0.11492347717285156,
+      "frac_positive": 0.43820224719101125,
+      "n": 979,
+      "significant": true
+    },
+    "invisible_check_cross": {
+      "mean": -0.003386766702921183,
+      "ci95": [
+        -0.010762251091671657,
+        0.004068159460424778
+      ],
+      "median": 1.3828277587890625e-05,
+      "frac_positive": 0.5015015015015015,
+      "n": 999,
+      "significant": false
+    },
+    "invisible_check_doc_causal": {
+      "mean": 0.005499651243498137,
+      "ci95": [
+        -0.0021770798646890605,
+        0.01307471044309385
+      ],
+      "median": 0.0004119873046875,
+      "frac_positive": 0.5295295295295295,
+      "n": 999,
+      "significant": false
+    },
+    "aux_lift_grant_gold_cross": {
+      "mean": 5.2873849397418144,
+      "ci95": [
+        4.793873139003227,
+        5.7973054708831615
+      ],
+      "median": 2.5455875396728516,
+      "frac_positive": 0.8724137931034482,
+      "n": 870,
+      "significant": true
+    },
+    "aux_lift_concat_gold_cross": {
+      "mean": 7.919491817935056,
+      "ci95": [
+        7.325000733298588,
+        8.543554655222
+      ],
+      "median": 5.025723218917847,
+      "frac_positive": 0.9209932279909706,
+      "n": 886,
+      "significant": true
+    },
+    "mechanism_gold_cross": {
+      "mean": -2.653019133929549,
+      "ci95": [
+        -3.095734655583042,
+        -2.2268052456844813
+      ],
+      "median": -0.6363458633422852,
+      "frac_positive": 0.19080459770114944,
+      "n": 870,
+      "significant": true
+    },
+    "placebo_sep_gold_cross": {
+      "mean": 5.352517082499362,
+      "ci95": [
+        4.86853210543764,
+        5.861741754378396
+      ],
+      "median": 2.6633405685424805,
+      "frac_positive": 0.8873563218390804,
+      "n": 870,
+      "significant": true
+    },
+    "aux_lift_grant_gold_doc_causal": {
+      "mean": 5.017787934445787,
+      "ci95": [
+        4.5556066907685375,
+        5.511190361921814
+      ],
+      "median": 2.3465638160705566,
+      "frac_positive": 0.8816091954022989,
+      "n": 870,
+      "significant": true
+    },
+    "aux_lift_concat_gold_doc_causal": {
+      "mean": 7.854964664773532,
+      "ci95": [
+        7.270140006539514,
+        8.469204470898712
+      ],
+      "median": 5.148175239562988,
+      "frac_positive": 0.9187358916478555,
+      "n": 886,
+      "significant": true
+    },
+    "mechanism_gold_doc_causal": {
+      "mean": -2.8539284092256394,
+      "ci95": [
+        -3.3077911600299266,
+        -2.4213139789954
+      ],
+      "median": -0.7197921276092529,
+      "frac_positive": 0.19540229885057472,
+      "n": 870,
+      "significant": true
+    },
+    "placebo_sep_gold_doc_causal": {
+      "mean": 4.873127164511845,
+      "ci95": [
+        4.417341653711494,
+        5.355334548867981
+      ],
+      "median": 2.1334712505340576,
+      "frac_positive": 0.8804597701149425,
+      "n": 870,
+      "significant": true
+    },
+    "training_grant_gold_interaction": {
+      "mean": 0.26959700529602754,
+      "ci95": [
+        0.07598862616495156,
+        0.4580475975042101
+      ],
+      "median": 0.09894990921020508,
+      "frac_positive": 0.5436781609195402,
+      "n": 870,
+      "significant": true
+    },
+    "relevance_slope_cross": {
+      "mean": 6.944912490625491,
+      "ci95": [
+        6.205971787660971,
+        7.713280862240955
+      ],
+      "median": 2.6688129901885986,
+      "frac_positive": 0.8298850574712644,
+      "n": 870,
+      "significant": true
+    },
+    "relevance_slope_doc_causal": {
+      "mean": 5.4096705628537585,
+      "ci95": [
+        4.879894572578627,
+        5.9597314526705905
+      ],
+      "median": 2.261774778366089,
+      "frac_positive": 0.8551724137931035,
+      "n": 870,
+      "significant": true
+    },
+    "relevance_slope_interaction": {
+      "mean": 1.5352419277717326,
+      "ci95": [
+        0.9697673987109086,
+        2.115736536979675
+      ],
+      "median": 0.20333433151245117,
+      "frac_positive": 0.6057471264367816,
+      "n": 870,
+      "significant": true
+    }
+  }
+}

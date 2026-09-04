@@ -115,22 +115,22 @@ class TS2TSModel:
 
         creators: Dict[str, Callable] = {}
 
-        # doc_causal always available — needed for eval overrides on every model
-        # (the apples-to-apples isolated-attention eval condition).
+        # doc_causal and doc_concatenated are always available — needed for eval
+        # overrides on every model. doc_causal is the isolated-attention condition
+        # (aux packed alongside a doc is invisible); doc_concatenated is the
+        # raw-concat condition (aux visible as ordinary prior context when spans
+        # share a component_id), the content-matched control for the cross_doc_link
+        # grant. Neither needs a link_detector.
         creators['doc_causal_flex'] = make_mask_creator_callable('doc_causal')
         creators['doc_causal_triton'] = make_mask_creator_callable_from(
             create_doc_causal_triton_mask
         )
-
-        if self.mask_type == 'doc_concatenated':
-            # Merge each traversal component into one causally-concatenated
-            # super-doc; reuses the doc-causal varlen kernel via component ids.
-            creators['doc_concatenated_flex'] = make_mask_creator_callable(
-                'doc_concatenated'
-            )
-            creators['doc_concatenated_triton'] = make_mask_creator_callable_from(
-                create_doc_concat_triton_mask
-            )
+        creators['doc_concatenated_flex'] = make_mask_creator_callable(
+            'doc_concatenated'
+        )
+        creators['doc_concatenated_triton'] = make_mask_creator_callable_from(
+            create_doc_concat_triton_mask
+        )
 
         if self.mask_type in ('cross_doc_link', 'doc_concat_link'):
             if self.link_detector is None:

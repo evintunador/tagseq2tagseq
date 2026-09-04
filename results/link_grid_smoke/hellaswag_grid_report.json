@@ -1,0 +1,111 @@
+{
+  "benchmark": "hellaswag",
+  "annotator_mode": "corpus_only",
+  "cross_ckpt": "/fss/evin_t/tagseq2tagseq/runs/20260703_050528/checkpoints/best_model.pt",
+  "doc_causal_ckpt": "/fss/evin_t/tagseq2tagseq/runs/20260703_051129/checkpoints/best_model.pt",
+  "n_items": 20,
+  "n_fired": 0,
+  "n_scored_cross": 0,
+  "n_scored_doc_causal": 0,
+  "effects": {
+    "aux_lift_grant_cross": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "aux_lift_concat_cross": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "mechanism_cross": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "placebo_sep_cross": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "invisible_check_cross": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "aux_lift_grant_doc_causal": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "aux_lift_concat_doc_causal": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "mechanism_doc_causal": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "placebo_sep_doc_causal": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "invisible_check_doc_causal": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    },
+    "training_grant_interaction": {
+      "mean": NaN,
+      "ci95": [
+        NaN,
+        NaN
+      ],
+      "n": 0,
+      "significant": false
+    }
+  }
+}
