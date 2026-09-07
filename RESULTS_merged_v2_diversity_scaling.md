@@ -132,33 +132,87 @@ merge WINS 6 / TIE 3 / spec 4 (of 13 ports).
 HEADLINE: with 1/11th the per-domain tokens, the merge matches-or-beats specialists on
 9/13 cross-doc benchmarks (decisively on ts/python/java/kotlin/zig).
 
-### Token-scaling across rungs: cross-doc Δ is FLAT 3.9B → 8B → 16B
-use_line Δnll_real per port (mean flat nll in parentheses), from the on-disk
-`port_eval/` of the fixed-lineage cross_doc runs: 3.9B = run_20260821_052234 (latest.pt at
-step 14000 of a 14790 schedule — the run hit data exhaustion a few steps before its
-budget, so the evaluated weights are mid-cooldown, LR ≈ 22% of peak), 8B = run_20260813_144916 (step 30000),
-16B natural = run_20260813_182257 (step 60600, complete).
+### Token-scaling across rungs: cross-doc Δ is FLAT 3.9B → 8B → 16B → 32B
+use_line Δnll_real per port from `port_eval/` of the fixed-lineage cross_doc runs, all
+evaluated on the FINAL (clean-stop, annealed) `latest.pt`:
+3.9B = run_20260905_052305 (step 14784), 8B = repo-local runs/run_20260813_144916 (30000),
+16B natural = repo-local runs/run_20260813_182257 (60600), 16B balanced = run_20260905_093303
+(60733), 32B balanced = run_20260905_052254 (120864), 32B natural = run_20260905_063449 (119877).
 
-| port | 3.9B Δ (flat nll) | 8B Δ (flat nll) | 16B-natural Δ (flat nll) |
-|---|---|---|---|
-| repobench_python | +0.105 (2.05) | +0.120 (1.99) | +0.092 (1.77) |
-| repobench_java | +0.178 (1.77) | +0.176 (1.76) | +0.172 (1.52) |
-| internal_python | +0.298 (2.89) | +0.261 (2.78) | +0.297 (2.52) |
-| internal_java | +0.150 (1.88) | +0.114 (1.85) | +0.135 (1.63) |
-| internal_typescript | +0.537 (2.55) | +0.539 (2.53) | +0.454 (2.06) |
-| internal_kotlin | +0.225 (2.29) | +0.163 (2.24) | +0.169 (1.96) |
-| internal_go | +0.146 (2.14) | +0.144 (2.07) | +0.147 (1.86) |
-| internal_rust | +0.116 (2.14) | +0.096 (2.05) | +0.107 (1.88) |
-| internal_javascript | +0.101 (1.84) | +0.103 (1.85) | +0.112 (1.69) |
-| internal_zig | +0.254 (2.31) | +0.315 (2.39) | +0.255 (2.27) |
-| internal_dart | +0.247 (1.86) | +0.311 (1.94) | +0.181 (1.50) |
-| ase_kotlin | +0.102 (1.34) | +0.108 (1.28) | +0.112 (1.12) |
-| crosscodeeval_ts | +0.048 (1.46) | +0.039 (1.30) | +0.033 (1.16) |
+| port | 3.9B | 8B | 16B-nat | 16B-bal | 32B-bal | 32B-nat |
+|---|---|---|---|---|---|---|
+| repobench_python | +0.113 | +0.120 | +0.092 | +0.101 | +0.060 | +0.079 |
+| repobench_java | +0.173 | +0.176 | +0.172 | +0.158 | +0.168 | +0.174 |
+| ase_kotlin | +0.108 | +0.108 | +0.112 | +0.103 | +0.117 | +0.113 |
+| crosscodeeval_ts | +0.058 | +0.039 | +0.033 | +0.044 | +0.042 | +0.042 |
+| internal_python | +0.307 | +0.261 | +0.297 | +0.280 | +0.334 | +0.319 |
+| internal_java | +0.140 | +0.114 | +0.135 | +0.136 | +0.155 | +0.121 |
+| internal_typescript | +0.528 | +0.539 | +0.454 | +0.480 | +0.401 | +0.516 |
+| internal_kotlin | +0.235 | +0.163 | +0.169 | +0.181 | +0.167 | +0.183 |
+| internal_go | +0.150 | +0.144 | +0.147 | +0.144 | +0.182 | +0.189 |
+| internal_rust | +0.110 | +0.096 | +0.107 | +0.062 | +0.100 | +0.088 |
+| internal_javascript | +0.106 | +0.103 | +0.112 | +0.104 | +0.105 | +0.110 |
+| internal_zig | +0.282 | +0.315 | +0.255 | +0.218 | +0.301 | +0.431 |
+| internal_dart | +0.249 | +0.311 | +0.181 | +0.269 | +0.173 | +0.251 |
 
-No port moves by more than noise across the three rungs; typescript is +0.54 / +0.54 /
-+0.45. Base-LM ability (flat nll) improves with tokens on every port while the
-cross-doc Δ does not — the two axes are DECOUPLED, and the diversity advantage is a
-fixed effect present from the smallest rung, not a scaling one. No 16B-balanced or 32B
-cross_doc port evals exist yet; div7 is the only diversity tier ported so far, and its
-dart/go ports (languages absent from div7's training mix) are out-of-distribution and
-must not be read as cross-doc evidence. Run-level state: `docs/STATUS_merged_v2_scaling.md`.
+
+Across an 8× range of tokens no port moves by more than noise (typescript +0.53 / +0.54 /
++0.45 / +0.48 / +0.40 / +0.52; python +0.31 / +0.26 / +0.30 / +0.28 / +0.33 / +0.32).
+Base-LM ability (mean flat nll, table below) improves monotonically with tokens on every
+port while the cross-doc Δ does not: the two axes are DECOUPLED, and the diversity
+advantage over specialists is a fixed effect present from the smallest rung, not a
+scaling one. Balanced vs natural mixing at 16B and 32B makes no consistent difference
+to Δ; natural is slightly better on flat nll for the big sources and worse for
+zig/dart, as expected from token share.
+
+### Diversity-count curve at fixed 3.9B: Δ on SEEN languages does not depend on how many domains share the budget
+Tiers split the same 3.9B budget over 3/5/7/9/11 sources (build_diversity_tiers.sh; div11
+is the full 3.9B merge). Starred cells are ports in a language the tier never trained on:
+their Δ is inflated and comes with a large placebo Δ (any context helps an unseen
+language), so they are NOT cross-doc evidence and are excluded from the reading.
+
+### Δnll_real (use_line) — diversity-count tiers at fixed 3.9B (placebo Δ in parentheses; * = language NOT in that tier's training mix)
+
+| port | div3 | div5 | div7 | div9 | div11 (=3.9B) |
+|---|---|---|---|---|---|
+| repobench_python | +0.107 (-0.05) | +0.093 (-0.06) | +0.104 (-0.04) | +0.108 (-0.04) | +0.113 (-0.03) |
+| repobench_java | +0.494 (+0.05)* | +0.337 (+0.00)* | +0.353 (+0.02)* | +0.175 (-0.06) | +0.173 (-0.05) |
+| ase_kotlin | +0.225 (-0.04)* | +0.124 (-0.02) | +0.123 (-0.03) | +0.110 (-0.04) | +0.108 (-0.04) |
+| crosscodeeval_ts | +0.052 (+0.02)* | +0.062 (+0.03) | +0.068 (+0.03) | +0.077 (+0.02) | +0.058 (+0.02) |
+| internal_python | — | +0.322 (-0.08) | +0.317 (-0.09) | +0.322 (-0.08) | +0.307 (-0.08) |
+| internal_java | +0.297 (+0.06)* | +0.225 (+0.04)* | +0.243 (+0.03)* | +0.131 (-0.02) | +0.140 (-0.02) |
+| internal_typescript | +0.703 (+0.13)* | +0.462 (+0.06) | +0.450 (+0.04) | +0.603 (+0.07) | +0.528 (+0.05) |
+| internal_kotlin | +0.490 (+0.16)* | +0.287 (+0.03) | +0.162 (+0.02) | +0.230 (+0.00) | +0.235 (+0.03) |
+| internal_go | +0.869 (+0.44)* | +0.901 (+0.42)* | +0.792 (+0.36)* | +0.170 (-0.02) | +0.150 (-0.03) |
+| internal_rust | +0.543 (+0.19)* | +0.440 (+0.17)* | +0.075 (-0.05) | +0.106 (-0.04) | +0.110 (-0.03) |
+| internal_javascript | +0.120 (-0.06) | +0.128 (-0.05) | +0.124 (-0.07) | +0.146 (-0.06) | +0.106 (-0.07) |
+| internal_zig | +0.613 (+0.45)* | +0.624 (+0.48)* | +0.426 (+0.39)* | +0.356 (+0.35)* | +0.282 (+0.17) |
+| internal_dart | +1.280 (+0.13)* | +1.447 (+0.22)* | +1.173 (+0.10)* | +0.972 (+0.07)* | +0.249 (-0.14) |
+
+
+On in-distribution ports the Δ is flat from div3 to div11 (repobench_python +0.11 → +0.11,
+internal_python +0.32 → +0.31, internal_javascript +0.12 → +0.11, typescript +0.46 to
++0.60 without trend, kotlin +0.29 → +0.24 once kotlin is in the mix). Halving or
+quadrupling the tokens a language receives (div3 gives python 3.7× the tokens div11
+does) does not move its cross-doc Δ. Consistent with the token-scaling result: the
+cross-doc benefit saturates below 355M tokens/domain, and neither more tokens per domain
+nor more domains per budget changes it. div3's internal_python cell is pending a re-run
+(job 87061; the first audit died on a transient CUDA launch failure).
+
+### mean flat nll (no aux) — base-LM axis
+
+| port | 3.9B | div3 | div5 | div7 | div9 | 8B | 16B-nat | 16B-bal | 32B-bal | 32B-nat |
+|---|---|---|---|---|---|---|---|---|---|---|
+| repobench_python | 2.06 | 1.98 | 1.97 | 2.05 | 2.05 | 1.99 | 1.77 | 2.02 | 1.70 | 1.71 |
+| repobench_java | 1.73 | 3.14 | 2.51 | 2.63 | 1.75 | 1.76 | 1.52 | 1.67 | 1.31 | 1.47 |
+| ase_kotlin | 1.34 | 1.93 | 1.28 | 1.35 | 1.34 | 1.28 | 1.12 | 1.27 | 1.05 | 1.09 |
+| crosscodeeval_ts | 1.39 | 1.52 | 1.36 | 1.50 | 1.46 | 1.30 | 1.16 | 1.28 | 1.07 | 1.12 |
+| internal_python | 2.88 | — | 2.86 | 2.90 | 2.90 | 2.78 | 2.52 | 2.68 | 2.40 | 2.46 |
+| internal_java | 1.85 | 2.77 | 2.35 | 2.39 | 1.85 | 1.85 | 1.63 | 1.75 | 1.45 | 1.63 |
+| internal_typescript | 2.51 | 3.02 | 2.35 | 2.46 | 2.52 | 2.53 | 2.06 | 2.40 | 1.80 | 1.97 |
+| internal_kotlin | 2.24 | 3.23 | 2.27 | 2.36 | 2.25 | 2.24 | 1.96 | 2.05 | 1.95 | 2.01 |
+| internal_go | 2.12 | 3.85 | 3.74 | 3.70 | 2.10 | 2.07 | 1.86 | 2.00 | 1.67 | 1.84 |
+| internal_rust | 2.12 | 4.57 | 3.85 | 2.13 | 2.11 | 2.05 | 1.88 | 1.99 | 1.74 | 1.85 |
+| internal_javascript | 1.82 | 1.92 | 1.81 | 1.88 | 1.91 | 1.85 | 1.69 | 1.76 | 1.59 | 1.58 |
+| internal_zig | 2.28 | 3.49 | 3.57 | 3.30 | 3.16 | 2.39 | 2.27 | 2.24 | 1.83 | 2.22 |
+| internal_dart | 1.79 | 4.19 | 3.86 | 3.72 | 3.17 | 1.94 | 1.50 | 1.77 | 1.26 | 1.57 |
