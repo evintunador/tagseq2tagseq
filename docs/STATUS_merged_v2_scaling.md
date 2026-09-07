@@ -13,25 +13,26 @@ Final = trained to data exhaustion under the clean-stop code (final val + final 
 
 | arm | mask | final step | final run dir | completion eval | port_eval |
 |---|---|---|---|---|---|
-| 3.9B | cross_doc | 14784 | run_20260905_052305_672857 | NCCL timeout during eval (see below) | job 87045 |
+| 3.9B | cross_doc | 14784 | run_20260905_052305_672857 | NCCL timeout during eval (see below) | yes |
 | 3.9B | doc_causal | 14784 | run_20260905_052259_914139 | yes | n/a |
-| div3 | cross_doc / doc_causal | 14607 | run_20260905_052310_693329 / run_20260906_035127_955402 | timeout / yes | job 87046 |
-| div5 | cross_doc / doc_causal | 14656 | run_20260905_052316_175248 / run_20260906_001456_919330 | timeout / yes | job 87047 |
-| div7 | cross_doc / doc_causal | 14688 | run_20260905_055342_251005 / run_20260905_203430_080300 | yes / yes | job 87049 |
-| div9 | cross_doc / doc_causal | 14720 | run_20260905_052322_671272 / run_20260906_072353_870455 | timeout / yes | job 87048 |
+| div3 | cross_doc / doc_causal | 14607 | run_20260905_052310_693329 / run_20260906_035127_955402 | timeout / yes | yes (internal_python re-run 87061) |
+| div5 | cross_doc / doc_causal | 14656 | run_20260905_052316_175248 / run_20260906_001456_919330 | timeout / yes | yes |
+| div7 | cross_doc / doc_causal | 14688 | run_20260905_055342_251005 / run_20260905_203430_080300 | yes / yes | yes |
+| div9 | cross_doc / doc_causal | 14720 | run_20260905_052322_671272 / run_20260906_072353_870455 | timeout / yes | yes |
 | 8B | cross_doc | 30000 | repo-local runs/run_20260813_144916_125137 | yes | yes |
 | 8B | concat / concat_link | 30335 / 30336 | run_20260905_095922_217348 / run_20260906_110220_009287 | yes / yes | n/a |
 | 16B natural | cross_doc | 60600 | repo-local runs/run_20260813_182257_104861 | yes | yes |
 | 16B natural | doc_causal / concat / concat_link | — | lineages dead since Aug 26, not relaunched | — | — |
-| 16B balanced | cross_doc | 60733 | run_20260905_093303_660287 | yes | job 87050 |
+| 16B balanced | cross_doc | 60733 | run_20260905_093303_660287 | yes | yes |
 | 16B balanced | doc_causal | 34000 / 60750 | RUNNING job 87028 (GPU-613), lineage run_20260905_062243 | — | n/a |
-| 32B balanced | cross_doc | 120864 | run_20260905_052254_667822 | yes | job 87051 |
+| 32B balanced | cross_doc | 120864 | run_20260905_052254_667822 | yes | yes |
 | 32B balanced | doc_causal | 82000 / 120888 | RUNNING job 87008 (GPU-302) | — | n/a |
-| 32B natural | cross_doc | 119877 | run_20260905_063449_204090 | yes | job 87052 |
+| 32B natural | cross_doc | 119877 | run_20260905_063449_204090 | yes | yes |
 | 32B natural | doc_causal | 61000 / 119901 | RUNNING job 87018 (GPU-689) | — | n/a |
 
-Port-eval jobs 87045-87052 (submitted 2026-09-07 ~21:45, `scripts/eval_ports_slurm.sh`,
-one node each, ~30 min) write `<final run dir>/port_eval/<port>__use_line.json`.
+Port evals: `scripts/eval_ports_slurm.sh <label> <run_dir>` (one node, 13 ports, ~27 min)
+writes `<run_dir>/port_eval/<port>__use_line.json`; all eight cross_doc arms are ported and
+tabulated in `RESULTS_merged_v2_diversity_scaling.md`.
 
 Completion-eval NCCL timeout: on cross_doc arms, rank 0 runs the post-training
 benchmarks (repobench_cross_doc downloads from HF) while the other 7 ranks wait at a
@@ -48,11 +49,9 @@ Watcher ledger is empty. Remaining training: the three doc_causal controls above
 
 ## Next manual steps
 
-1. When jobs 87045-87052 finish, refresh `RESULTS_merged_v2_diversity_scaling.md` from
-   the new `port_eval/*__use_line.json` (3.9B on annealed weights, div3/5/7/9, 16B
-   balanced, 32B balanced, 32B natural).
-2. Port-eval 32B/16B doc_causal arms is not applicable (no cross-doc mask).
-3. Optional 16B natural doc_causal control (fresh, ~3 days):
+1. When the three doc_causal controls finish, their per-source held-out nll (from
+   `eval_results.json`) pairs with the cross_doc twins for the within-pair ppl Δ.
+2. Optional 16B natural doc_causal control (fresh, ~3 days):
    ```
    .venv/bin/python launch_slurm.py --nodes 1 --gpus-per-node 8 \
      --config configs/merged_v2_16b_natural_doc_causal.yaml --time 168:00:00 --no-tail \
