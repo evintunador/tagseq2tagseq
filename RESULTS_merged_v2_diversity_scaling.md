@@ -179,7 +179,7 @@ language), so they are NOT cross-doc evidence and are excluded from the reading.
 | repobench_java | +0.494 (+0.05)* | +0.337 (+0.00)* | +0.353 (+0.02)* | +0.175 (-0.06) | +0.173 (-0.05) |
 | ase_kotlin | +0.225 (-0.04)* | +0.124 (-0.02) | +0.123 (-0.03) | +0.110 (-0.04) | +0.108 (-0.04) |
 | crosscodeeval_ts | +0.052 (+0.02)* | +0.062 (+0.03) | +0.068 (+0.03) | +0.077 (+0.02) | +0.058 (+0.02) |
-| internal_python | — | +0.322 (-0.08) | +0.317 (-0.09) | +0.322 (-0.08) | +0.307 (-0.08) |
+| internal_python | +0.327 (-0.04) | +0.322 (-0.08) | +0.317 (-0.09) | +0.322 (-0.08) | +0.307 (-0.08) |
 | internal_java | +0.297 (+0.06)* | +0.225 (+0.04)* | +0.243 (+0.03)* | +0.131 (-0.02) | +0.140 (-0.02) |
 | internal_typescript | +0.703 (+0.13)* | +0.462 (+0.06) | +0.450 (+0.04) | +0.603 (+0.07) | +0.528 (+0.05) |
 | internal_kotlin | +0.490 (+0.16)* | +0.287 (+0.03) | +0.162 (+0.02) | +0.230 (+0.00) | +0.235 (+0.03) |
@@ -191,13 +191,12 @@ language), so they are NOT cross-doc evidence and are excluded from the reading.
 
 
 On in-distribution ports the Δ is flat from div3 to div11 (repobench_python +0.11 → +0.11,
-internal_python +0.32 → +0.31, internal_javascript +0.12 → +0.11, typescript +0.46 to
+internal_python +0.33 → +0.31, internal_javascript +0.12 → +0.11, typescript +0.46 to
 +0.60 without trend, kotlin +0.29 → +0.24 once kotlin is in the mix). Halving or
 quadrupling the tokens a language receives (div3 gives python 3.7× the tokens div11
 does) does not move its cross-doc Δ. Consistent with the token-scaling result: the
 cross-doc benefit saturates below 355M tokens/domain, and neither more tokens per domain
-nor more domains per budget changes it. div3's internal_python cell is pending a re-run
-(job 87061; the first audit died on a transient CUDA launch failure).
+nor more domains per budget changes it.
 
 ### mean flat nll (no aux) — base-LM axis
 
@@ -207,7 +206,7 @@ nor more domains per budget changes it. div3's internal_python cell is pending a
 | repobench_java | 1.73 | 3.14 | 2.51 | 2.63 | 1.75 | 1.76 | 1.52 | 1.67 | 1.31 | 1.47 |
 | ase_kotlin | 1.34 | 1.93 | 1.28 | 1.35 | 1.34 | 1.28 | 1.12 | 1.27 | 1.05 | 1.09 |
 | crosscodeeval_ts | 1.39 | 1.52 | 1.36 | 1.50 | 1.46 | 1.30 | 1.16 | 1.28 | 1.07 | 1.12 |
-| internal_python | 2.88 | — | 2.86 | 2.90 | 2.90 | 2.78 | 2.52 | 2.68 | 2.40 | 2.46 |
+| internal_python | 2.88 | 2.90 | 2.86 | 2.90 | 2.90 | 2.78 | 2.52 | 2.68 | 2.40 | 2.46 |
 | internal_java | 1.85 | 2.77 | 2.35 | 2.39 | 1.85 | 1.85 | 1.63 | 1.75 | 1.45 | 1.63 |
 | internal_typescript | 2.51 | 3.02 | 2.35 | 2.46 | 2.52 | 2.53 | 2.06 | 2.40 | 1.80 | 1.97 |
 | internal_kotlin | 2.24 | 3.23 | 2.27 | 2.36 | 2.25 | 2.24 | 1.96 | 2.05 | 1.95 | 2.01 |
