@@ -20,6 +20,12 @@ diversity. **LR/WD NOT retuned for the larger rungs yet** (planned before 32B).
 
 ## ★ HEADLINE: cross-doc benchmark ports — the merge BEATS specialists on the thesis metric
 
+> The numbers in this section and the 3.9B→8B comparison below come from the PRE-FIX
+> lineage (run_20260803_145120, source-phased pack order, wiki/arxiv forgetting). The
+> fixed-lineage results on final annealed checkpoints are in "COMPUTE-MATCHED CROSSOVER"
+> and the token-scaling / diversity-tier / held-out tables further down; they agree on
+> the qualitative claim (large, flat cross-doc Δ) but supersede every figure here.
+
 Δnll_real = flat(no aux) − cross-doc(real aux); higher = attending to the linked
 doc helps more. `use_line` scope (scored at the first use of an imported symbol),
 Tier-2, 8B merge `latest.pt` (run_20260803_145120_344576), placebo-controlled.

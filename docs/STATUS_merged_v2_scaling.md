@@ -22,17 +22,20 @@ Final = trained to data exhaustion under the clean-stop code (final val + final 
 | 8B | cross_doc | 30000 | repo-local runs/run_20260813_144916_125137 | yes | yes |
 | 8B | concat / concat_link | 30335 / 30336 | run_20260905_095922_217348 / run_20260906_110220_009287 | yes / yes | n/a |
 | 16B natural | cross_doc | 60600 | repo-local runs/run_20260813_182257_104861 | yes | yes |
-| 16B natural | doc_causal / concat / concat_link | — | lineages dead since Aug 26, not relaunched | — | — |
+| 16B natural | doc_causal | fresh, 0 / 60600 | RUNNING job 87330 (run_20260908_151850_764779) | — | n/a |
+| 16B natural | concat / concat_link | — | lineages dead since Aug 26, not relaunched | — | — |
 | 16B balanced | cross_doc | 60733 | run_20260905_093303_660287 | yes | yes |
-| 16B balanced | doc_causal | 34000 / 60750 | RUNNING job 87028 (GPU-613), lineage run_20260905_062243 | — | n/a |
+| 16B balanced | doc_causal | 44000 / 60750 | RUNNING job 87028 (GPU-613), lineage run_20260905_062243 | — | n/a |
 | 32B balanced | cross_doc | 120864 | run_20260905_052254_667822 | yes | yes |
-| 32B balanced | doc_causal | 82000 / 120888 | RUNNING job 87008 (GPU-302) | — | n/a |
+| 32B balanced | doc_causal | 92000 / 120888 | RUNNING job 87008 (GPU-302) | — | n/a |
 | 32B natural | cross_doc | 119877 | run_20260905_063449_204090 | yes | yes |
-| 32B natural | doc_causal | 61000 / 119901 | RUNNING job 87018 (GPU-689) | — | n/a |
+| 32B natural | doc_causal | 71000 / 119901 | RUNNING job 87018 (GPU-689) | — | n/a |
 
 Port evals: `scripts/eval_ports_slurm.sh <label> <run_dir>` (one node, 13 ports, ~27 min)
-writes `<run_dir>/port_eval/<port>__use_line.json`; all eight cross_doc arms are ported and
-tabulated in `RESULTS_merged_v2_diversity_scaling.md`.
+writes `<run_dir>/port_eval/<port>__use_line.json`; all cross_doc arms are ported.
+Per-source held-out + community-pack evals: `scripts/eval_by_source_slurm.sh <label> <run_dir> <cdl|dc>`
+(one node, 22 evals, ~1 h cdl / ~30 min dc) writes `<run_dir>/eval_by_source/`; done for all
+17 finished arms. Both are tabulated in `RESULTS_merged_v2_diversity_scaling.md`.
 
 Completion-eval NCCL timeout: on cross_doc arms, rank 0 runs the post-training
 benchmarks (repobench_cross_doc downloads from HF) while the other 7 ranks wait at a
@@ -43,20 +46,15 @@ regenerated offline with `eval_checkpoints.py` if needed.
 
 ## Queue
 
-Watcher ledger is empty. Remaining training: the three doc_causal controls above
-(32B balanced ~39k steps, 32B natural ~59k steps, 16B balanced ~27k steps, all at
-~4.5-5 s/step, all subject to yield churn).
+Watcher ledger is empty. Remaining training: four doc_causal controls (32B balanced
+~29k steps, 32B natural ~49k, 16B balanced ~17k, 16B natural 60600 from scratch), all at
+~5.3 s/step, all subject to yield churn.
 
 ## Next manual steps
 
-1. When the three doc_causal controls finish, their per-source held-out nll (from
-   `eval_results.json`) pairs with the cross_doc twins for the within-pair ppl Δ.
-2. Optional 16B natural doc_causal control (fresh, ~3 days):
-   ```
-   .venv/bin/python launch_slurm.py --nodes 1 --gpus-per-node 8 \
-     --config configs/merged_v2_16b_natural_doc_causal.yaml --time 168:00:00 --no-tail \
-     --train_loop.exhaustion_tolerance_frac 0.02
-   ```
+1. When a doc_causal control finishes, run
+   `scripts/eval_by_source_slurm.sh <label> <final run dir> dc` and add its column to the
+   within-pair table in RESULTS (16B balanced, 32B balanced, 32B natural, 16B natural).
 
 ## Step-time reference (median s/step, 1024d/24L, 32k ctx, world 8, A100)
 
