@@ -85,6 +85,45 @@ example pools, so those ratios are indicative not exact. doc_causal-arm control 
 
 ---
 
+## Interpretation (fixed lineage, final annealed checkpoints)
+
+**What the ladder supports.**
+- The cross-doc benefit is a fixed, early-saturating effect. use_line Δ is flat across an
+  8× token range (3.9B → 32B) on every port while the same checkpoints' no-aux nll falls
+  steadily (typescript 2.51 → 1.80). Within the merge lineage Δ is therefore not a
+  headroom artifact of a worse LM; whatever the model learns about exploiting linked
+  context, it has learned by ~355M tokens per domain.
+- Domain count at fixed budget does not change Δ on seen languages (div3 → div11).
+  Giving a language 3.7× more tokens (python in div3 vs div11) leaves its Δ unchanged.
+- Cross-doc training is free on the LM axis: doc_causal − cross_doc held-out nll is within
+  ±0.015 on every source at 3.9B and every div tier. concat without the mask is the worst
+  LM on every source, so the mask does the work, not the packing.
+- Balance is a base-LM lever, not a mechanism lever: balanced mixing is the better LM on
+  the small sources it up-weights (32B zig 1.18 vs 1.34, dart 1.17 vs 1.28) with no
+  difference in Δ.
+- The defensible headline is transfer and sample efficiency, not scaling: one model
+  trained jointly on 11 link types matches or beats single-language specialists on 9/13
+  cross-doc ports at 1/11 of the per-language tokens, at no perplexity cost. "Effect
+  strengthens with scale or diversity" is not supported.
+
+**Caveats that gate the paper claims.**
+- Merge-vs-specialist carries a headroom confound: the merge trails specialists on raw
+  perplexity and shows larger Δ in nats. The within-lineage flatness rules this out for
+  the scaling claim but not for the cross-lineage comparison. A headroom-matched view
+  (Δ relative to no-aux nll, or specialists re-ported through `scripts/eval_ports_slurm.sh`
+  with their flat nll alongside) is needed before leaning on 9/13.
+- Noise floor is unmeasured: one seed per rung, rungs are independent resamples,
+  port-to-port wobble ≈ ±0.03–0.05, zig n=125. 32B-natural zig +0.43 is almost certainly
+  noise. Two extra seeds of the 3.9B cross_doc arm (~10 node-hours each + 30 min of ports)
+  would size it.
+- Wiki community-pack Δ is slightly negative (≈ −0.02) at every rung while code is
+  consistently positive (+0.02 to +0.05). Either wiki's markdown-link grants at eval do not
+  match what training exploited, or attending to linked articles genuinely distracts.
+  Check grant construction before the paper leans on wiki.
+- The 8B and 16B-natural cross_doc rows are the Aug 13 repo-local runs (same fixed recipe,
+  three weeks older than the Sept 5 clean-stop batch); the doc_causal twins for 16B/32B are
+  still training, so the within-pair table stops at the div tiers.
+
 ## Held-out perplexity (base-LM-quality axis) — final annealed checkpoints
 
 nll on each source's held-out `val_random` (≤500 docs, isolated-doc scoring via

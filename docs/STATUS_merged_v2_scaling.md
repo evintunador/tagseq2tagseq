@@ -55,6 +55,26 @@ Watcher ledger is empty. Remaining training: four doc_causal controls (32B balan
 1. When a doc_causal control finishes, run
    `scripts/eval_by_source_slurm.sh <label> <final run dir> dc` and add its column to the
    within-pair table in RESULTS (16B balanced, 32B balanced, 32B natural, 16B natural).
+   The `write_heldout.py`-style table builder reads `<run>/eval_by_source/*.json`
+   (keys `held_out_perplexity/<cond>`, field `mean_nll`).
+2. Follow-ups that would harden the paper claims (see RESULTS "Interpretation"):
+   two extra seeds of 3.9B cross_doc; specialists re-ported through
+   `scripts/eval_ports_slurm.sh` with flat nll; wiki community-pack grant check.
+
+## Review checklist for PR #12 (provenance-grounding → main)
+
+- Branch is merged with origin/main (merge commit 6c3e8ae); the only conflict was
+  `scripts/sweep_yield_watcher.sh` and was resolved by taking main's `resolve_rundir`
+  helper inside our lineage-resume/gate version. Selftest 14/14, dataset tests 20/20.
+- The watcher process on the login node still runs the `tagseq2tagseq-memexp` copy
+  (identical logic, minus main's `resolve_rundir` refactor). Restart it from the main
+  checkout after merge if you want one copy of record:
+  `nohup scripts/sweep_yield_watcher.sh >> /fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/sweep_yield_watcher.out 2>&1 &`
+  (kill the old pid first; state lives in the ledger files, not the process).
+- `train_loop.exhaustion_tolerance_frac` (default 0.02) is the one behavioral change to
+  training; everything else is eval drivers, configs, docs.
+- Untracked and deliberately NOT in the PR: `tagseq2tagseq-memexp/configs/merged_v2_*div*`
+  copies (watcher cwd workaround), `pipeline_logs/watcher_state/yielded_jobs.tsv.bak_*`.
 
 ## Step-time reference (median s/step, 1024d/24L, 32k ctx, world 8, A100)
 
