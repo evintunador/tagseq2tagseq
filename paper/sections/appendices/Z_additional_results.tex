@@ -1,4 +1,83 @@
 \section{Additional results}
 \label{app:results}
-\todo{Full per-language sweep tables, per-traversal ablation tables, community\_pack
-32k re-run numbers, hyperparameter sweep (LR/WD U-curves).}
+
+% Every numeric cell is a ledger-bound value macro from generated/values.tex
+% (provenance/ledger.yaml). The headline, traversal, compute-control, and efficiency
+% tables live in the main text (Sec. Results); this appendix holds the full panels.
+
+\subsection{Single-document controls, four-mask set}
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{@{}lrrrr@{}}
+    \toprule
+    Benchmark & \doccausal & \crossdoc & \concatlink & \concat \\
+    \midrule
+    Held-out ppl $\downarrow$ & \val{singledoc.held_out_ppl.doc_causal} & \val{singledoc.held_out_ppl.cross_doc_link} & \val{singledoc.held_out_ppl.doc_concat_link} & \val{singledoc.held_out_ppl.doc_concatenated} \\
+    HellaSwag  & \val{singledoc.hellaswag.doc_causal} & \val{singledoc.hellaswag.cross_doc_link} & \val{singledoc.hellaswag.doc_concat_link} & \val{singledoc.hellaswag.doc_concatenated} \\
+    ARC-easy   & \val{singledoc.arc_easy.doc_causal} & \val{singledoc.arc_easy.cross_doc_link} & \val{singledoc.arc_easy.doc_concat_link} & \val{singledoc.arc_easy.doc_concatenated} \\
+    PIQA       & \val{singledoc.piqa.doc_causal} & \val{singledoc.piqa.cross_doc_link} & \val{singledoc.piqa.doc_concat_link} & \val{singledoc.piqa.doc_concatenated} \\
+    WinoGrande & \val{singledoc.winogrande.doc_causal} & \val{singledoc.winogrande.cross_doc_link} & \val{singledoc.winogrande.doc_concat_link} & \val{singledoc.winogrande.doc_concatenated} \\
+    OpenBookQA & \val{singledoc.openbookqa.doc_causal} & \val{singledoc.openbookqa.cross_doc_link} & \val{singledoc.openbookqa.doc_concat_link} & \val{singledoc.openbookqa.doc_concatenated} \\
+    BoolQ      & \val{singledoc.boolq.doc_causal} & \val{singledoc.boolq.cross_doc_link} & \val{singledoc.boolq.doc_concat_link} & \val{singledoc.boolq.doc_concatenated} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Matched four-mask set on \texttt{wiki\_merged} (bfs, $3614$ steps, the
+  inherited pre-retune recipe). Accuracies are at or near chance and all $95\%$
+  intervals overlap across masks (e.g.\ HellaSwag
+  \val{singledoc.hellaswag.doc_causal.ci} / \val{singledoc.hellaswag.cross_doc_link.ci} /
+  \val{singledoc.hellaswag.doc_concat_link.ci} / \val{singledoc.hellaswag.doc_concatenated.ci};
+  ARC-easy \val{singledoc.arc_easy.doc_causal.ci} / \val{singledoc.arc_easy.cross_doc_link.ci} /
+  \val{singledoc.arc_easy.doc_concat_link.ci} / \val{singledoc.arc_easy.doc_concatenated.ci}).
+  The tuned-recipe three-mask comparison is in \Cref{sec:results:singledoc}.}
+  \label{tab:singledoc-4mask}
+\end{table}
+
+\todo{Per-language sweep tables and the LR/WD U-curves await a log-value provenance
+source (the U-curve points are training-log validation losses); the per-dataset
+link-density table, 2D grid, and cross-dataset regression await an artifact-JSON
+provenance source (see TODOS.md).}
+
+\subsection{Graph-sparsity: cross-dataset regression detail}
+\label{app:sparsity-regression}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.72\linewidth]{regression.png}
+  \caption{Pooled cross-dataset regression of cross-doc benefit vs effective grant
+  density $\times$ keep fraction, train-time (blue) vs eval-time (orange), code
+  (circles) vs text (crosses), with code OLS fits.}
+  \label{fig:sparsity-regression}
+\end{figure}
+\begin{itemize}
+  \item \textbf{\cref{fig:sparsity-regression}.} The quantitative form of the
+  cross-dataset law in \cref{sec:sparsity}, pooling all (dataset, keep) points on the
+  honest density axis (effective grants/pack $\times$ keep). \emph{Meaning:} code is
+  near-linear both eval-time ($r{=}0.95$) and train-time ($r{=}0.84$); the lower
+  train-time $r$ and its positive intercept ($\sim{+}0.016$) reflect the concavity
+  (much of the benefit already present at low density). Text datasets sit off the code
+  line. Raw graph out-degree is the wrong axis ($r{=}{-}0.27$, a misleading null)
+  because it counts edges the mask never used.
+\end{itemize}
+
+\subsection{Graph-sparsity: mask-time vs traversal-time validation}
+\label{app:sparsity-traversal}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.62\linewidth]{fig_traversal_check.png}
+  \caption{Train-time $\Delta$nll vs effective grant density for \textsc{typescript}:
+  cheap \emph{mask-time} dropping (blue, packing fixed) vs \emph{traversal-time}
+  dropping (orange, graph adjacency thinned before packing so co-packing itself
+  changes --- a genuinely sparser corpus). Error bars are 95\% CIs.}
+  \label{fig:sparsity-traversal}
+\end{figure}
+\begin{itemize}
+  \item \textbf{\cref{fig:sparsity-traversal}.} A validity check on the instrument
+  behind every density line: does the cheap mask-time subsample (thin recorded grants
+  on identical packs) predict the effect of a \emph{really} sparser corpus, where fewer
+  links also reshuffle which documents are co-packed? \emph{Meaning:} the traversal-time
+  points fall on the mask-time dose-response curve at matched effective density (both
+  within CI), so the content-distribution shift from real edge removal does not move the
+  curve --- density drives the benefit, and mask-time dropping is a faithful, far
+  cheaper proxy.
+\end{itemize}

@@ -5,8 +5,8 @@
 %  in bib/raw/). Duplicates across slices merged to a single key (RETRO,
 %  Memorizing Transformers, Unlimiformer, Landmark, Focused Transformer, GPT-3,
 %  WikiLinkGraphs). Entries verified by the review agents against arXiv /
-%  ACL Anthology / DBLP; a handful of venue/page fields are FLAGGED inline as
-%  "verify" and should be reconfirmed before camera-ready.
+%  ACL Anthology / DBLP. The venue/page fields that were originally FLAGGED were
+%  re-verified against the publisher pages on 2026-08-23 (noted inline).
 % ============================================================================
 
 
@@ -69,7 +69,7 @@
   booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024},
   eprint = {2310.11511}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
 }
-% FLAG: ICLR 2024 (oral) not reconfirmed against OpenReview.
+% verified 2026-08-23: ICLR 2024 (oral).
 
 @article{ram2023incontextralm,
   title = {In-Context Retrieval-Augmented Language Models},
@@ -116,7 +116,7 @@
   author = {de Jong, Michiel and Zemlyanskiy, Yury and FitzGerald, Nicholas and Sanghai, Sumit and Cohen, William W. and Ainslie, Joshua},
   journal = {arXiv preprint arXiv:2306.10231}, year = {2023}
 }
-% FLAG: no formal venue found; preprint.
+% verified 2026-08-23: arXiv preprint only (2306.10231), no venue.
 
 @inproceedings{bertsch2023unlimiformer,
   title = {{Unlimiformer}: Long-Range Transformers with Unlimited Length Input},
@@ -155,9 +155,10 @@
   title = {CacheBlend: Fast Large Language Model Serving for {RAG} with Cached Knowledge Fusion},
   author = {Yao, Jiayi and Li, Hanchen and Liu, Yuhan and Ray, Siddhant and Cheng, Yihua and Zhang, Qizheng and Du, Kuntai and Lu, Shan and Jiang, Junchen},
   booktitle = {Proceedings of the Twentieth European Conference on Computer Systems (EuroSys)}, year = {2025},
+  doi = {10.1145/3689031.3696098},
   eprint = {2405.16444}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
 }
-% FLAG: EuroSys 2025 venue is consensus, not on arXiv page; reconfirm.
+% verified 2026-08-23: EuroSys 2025 (best paper), ACM DOI 10.1145/3689031.3696098.
 
 @inproceedings{ma2025blockattention,
   title = {Block-Attention for Efficient Prefilling},
@@ -332,7 +333,7 @@
   howpublished = {PyTorch Blog}, year = {2024}, month = aug,
   note = {\url{https://pytorch.org/blog/flexattention/}}
 }
-% FLAG: blog byline not recoverable from rendered page; verify author list.
+% verified 2026-08-23: byline He, Guessous, Liang, Dong (pytorch.org/blog/flexattention, Aug 2024).
 
 @article{flexattention_paper2024,
   author = {Dong, Juechu and Feng, Boyuan and Guessous, Driss and Liang, Yanbo and He, Horace},
@@ -618,14 +619,14 @@
   author = {Bisk, Yonatan and Zellers, Rowan and Le Bras, Ronan and Gao, Jianfeng and Choi, Yejin},
   booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence}, volume = {34}, number = {05}, pages = {7432--7439}, year = {2020}
 }
-% FLAG: pages from AAAI proceedings; reverify.
+% verified 2026-08-23: AAAI 2020, 34(05):7432-7439.
 
 @inproceedings{sakaguchi2020winogrande,
   title = {{WinoGrande}: An Adversarial {Winograd} Schema Challenge at Scale},
   author = {Sakaguchi, Keisuke and Le Bras, Ronan and Bhagavatula, Chandra and Choi, Yejin},
   booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence}, volume = {34}, number = {05}, pages = {8732--8740}, year = {2020}
 }
-% FLAG: pages from AAAI proceedings; reverify.
+% verified 2026-08-23: AAAI 2020, 34(05):8732-8740.
 
 @inproceedings{mihaylov2018openbookqa,
   title = {Can a Suit of Armor Conduct Electricity? A New Dataset for Open Book Question Answering},
@@ -672,15 +673,15 @@
   author = {Hu, Weihua and Fey, Matthias and Zitnik, Marinka and Dong, Yuxiao and Ren, Hongyu and Liu, Bowen and Catasta, Michele and Leskovec, Jure},
   booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, volume = {33}, pages = {22118--22133}, year = {2020}
 }
-% FLAG: pages from external ref; reverify.
+% verified 2026-08-23: NeurIPS 2020 proceedings, vol. 33, pp. 22118-22133.
 
 @inproceedings{consonni2019wikilinkgraphs,
   title = {{WikiLinkGraphs}: A Complete, Longitudinal and Multi-Language Dataset of the {Wikipedia} Link Networks},
   author = {Consonni, Cristian and Laniado, David and Montresor, Alberto},
-  booktitle = {Proceedings of the International AAAI Conference on Web and Social Media (ICWSM)}, volume = {13}, pages = {598--607}, year = {2019},
+  booktitle = {Proceedings of the International AAAI Conference on Web and Social Media (ICWSM)}, volume = {13}, number = {01}, pages = {598--607}, year = {2019},
   eprint = {1902.04298}, archivePrefix = {arXiv}, primaryClass = {cs.SI}
 }
-% FLAG: proceedings pages from external ref; reverify.
+% verified 2026-08-23: ICWSM 2019, 13(01):598-607 (ojs.aaai.org/index.php/ICWSM/article/view/3257).
 
 @inproceedings{merity2017pointer,
   title = {Pointer Sentinel Mixture Models},
@@ -810,7 +811,7 @@
   journal = {arXiv preprint arXiv:2408.00118}, year = {2024},
   eprint = {2408.00118}, archivePrefix = {arXiv}, primaryClass = {cs.CL}
 }
-% FLAG: logit soft-capping detail is in report body, not abstract.
+% verified 2026-08-23: logit soft-capping (attention 50, final 30) is in the Gemma 2 report body, Sec. 2.
 
 @inproceedings{press2017tying,
   title = {Using the Output Embedding to Improve Language Models},
@@ -888,7 +889,7 @@
   booktitle = {Proceedings of the 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)}, year = {2024},
   doi = {10.1145/3620665.3640366}
 }
-% FLAG: DOI/venue not web-confirmed (ACM returned 403).
+% verified 2026-08-23: ASPLOS 2024, DOI 10.1145/3620665.3640366.
 
 @misc{submitit,
   author = {Rapin, J{\'e}r{\'e}my and Martin, Louis},

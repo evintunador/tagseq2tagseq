@@ -47,6 +47,16 @@ result-number dependencies, all \cite keys resolve:
 refs.bib now 533 entries. VE banks + modded-nanoGPT provenance removed from main text
 (main claims scoped to contributions); the lineage is documented only in Appendix A.
 
+## Main-text draft (2026-08-23)
+§1 intro, §3 method (formal masks, both figures), §4 datasets, §5 setup, §6 results
+(+ new link-density subsection), §7 analysis, §8 conclusion, abstract all in prose.
+Framing: the thesis is causality-preserving native corpus-fetching (unmeasured, stated
+as the central open measurement); the density law is a *capability* finding; arXiv is
+scoped out (32k window); the wiki community_pack negative is under audit and unclaimed.
+Ledger: 109 grounded keys (`provenance/ledger.yaml`); Appendix Z tables are all `\val{}`.
+Remaining `\fillin{}` blanks + every cluster-side follow-up: `TODOS.md` "Paper —
+cluster-reliant items". Author: Evin Tunador, HOPPR. Bib: all 11 FLAGs verified.
+
 ## Notes layout
 - `bib/refs.bib` — bibliography, source of truth (533 entries).
 - `notes/related_work_notes.md` — annotated bibliography (per-work relationship notes, 6 themes).

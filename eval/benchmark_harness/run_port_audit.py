@@ -129,6 +129,12 @@ def main() -> None:
                 r2.delta_real_ci, r2.placebo_separation, r2.placebo_separation_ci,
                 r2.fire_rate, r2.n_examples, r2.n_dropped_no_use_site,
                 r2.n_oversized_skipped, r2.failures or "")
+            logger.info(
+                "  leakage(α, n=%d-gram) mean_α=%.3f | %s", r2.leakage_ngram_n,
+                r2.mean_alpha,
+                "  ".join(f"[{b['alpha_lo']:.2f},{b['alpha_hi']:.2f}) n={b['n']} "
+                         f"Δ={b['delta_real']:.4f} CI={tuple(round(x,4) for x in b['delta_real_ci'])}"
+                         for b in r2.leakage_strata))
 
     out = Path(args.out) if args.out else (
         Path(__file__).parent / "reports" / f"{args.port}.json")

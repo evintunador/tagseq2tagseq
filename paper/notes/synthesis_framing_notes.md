@@ -78,6 +78,12 @@ Our arXiv graph has ~1.98M nodes, matching a newer "unarXive 2024 extended" rele
 not the cited saier2023unarxive (2022, 1.88M). Reconcile the Methods citation to the
 release actually ingested.
 
+**Resolved 2026-08-23:** the unarXive GitHub README lists no 2024 release; the current
+release is "unarXive 2022" (1991–2022, ~1.9M full texts), cited as Saier/Krause/Färber
+JCDL 2023 — i.e. `saier2023unarxive` IS the release we ingested ("2024" in the repo is
+the download year). §4 now says "unarXive 2022 release (≈1.9M papers)". arXiv is
+scoped out of the claims anyway (32k window → 1–2 docs/pack; see TODOS.md).
+
 ## Kernel / numerical-stability justifications (systems appendix)
 
 - The sentinel-LSE NaN guard for fully-masked rows is independently confirmed a real

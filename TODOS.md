@@ -4,6 +4,130 @@ Remaining work, organized by area. All completed items stripped.
 
 ---
 
+## Paper — cluster-reliant items (filed 2026-08-23)
+
+Everything here needs `/fss-data` (run dirs, artifacts, or GPUs). The paper's prose is
+written against these being resolved; each maps to a `\fillin{}` / LaTeX comment in
+`paper/sections/`. Run `python scripts/check_grounding.py` after any of them.
+
+### Audit the wiki community_pack negative (suspected corruption) — BLOCKS §7 wiki paragraph
+`RESULTS_graph_sparsity.md` §4 / `docs/handoff_wiki_crossdoc.md` report solo-wiki
+cross-doc Δnll on `val_community` as small but consistently NEGATIVE (−0.02, tight CIs),
+while HotpotQA-cross-doc on the same ckpts is +1.29. Human suspects the community_pack
+finding is a harness/corruption artifact, not real. Re-derive from scratch: (a) rebuild
+the wiki_merged val_community packs and confirm grants are the RIGHT edges (not stale
+schedule/normalization drift — see the "schedule staleness" memory); (b) check the
+Option-B `span.start+1` grant keying and the `max_seq_len` 2048-default bug do not apply;
+(c) score the identical packs with the HotpotQA-style paired scorer as a cross-check;
+(d) widen to seeds 0–2 / 500 packs. Until resolved the paper makes NO claim about
+generic held-out wiki text (§7 "The Wikipedia community-pack measurement"). If it is
+real, the fit-dependence hypothesis in the handoff becomes an appendix result.
+
+### arXiv is scoped OUT until sequence-parallel training exists
+arXiv papers are long relative to the 32k window, so packs hold 1–2 docs, targets are
+rarely co-packed, and the cross-doc mask has ~nothing to grant (sparsity eff.
+grants/pack = 1.5, Δ flat). The arXiv sweep (cdl val 2.471 vs dc 2.156) is therefore
+uninformative about the method. §4 states this; no arXiv claim is made. Re-enable only
+after implementing sequence-parallel / context-parallel training (ring/striped attention
+over the BIM kernels) so a citation neighbourhood fits in one logical sequence. Also
+note the `\cite`-in-`%`-comment detector gap (App. C) before re-running.
+
+### Measure the actual thesis: native corpus-fetching generation from pretraining alone
+The design's purpose (§1, §7, §8) is that `cross_doc_link` teaches, via plain NTP under
+maintained causality, that EMITTING a reference is what opens access to the referenced
+doc — so a trained model can fetch from its corpus by generating a citation, with no
+retriever/fusion/SFT/RL. This is UNMEASURED. The density result (dc-trained model gets
+nearly the full cross-doc benefit at eval) is about *reading* a handed target, not
+*asking* for one, and must not stand in for it. Design a measurement that works at
+~350M params where free generation is incoherent. Candidates:
+- **Link-emission rate under teacher forcing**: at positions where the reference doc
+  contains a link, compare P(link-opener) and P(correct target title | opener) for cdl vs
+  dc vs concat_link models. Cheap, no free generation, uses existing annotator openers.
+- **Constrained-decoding resolution rate**: force the opener, decode the target with the
+  trie/title index, measure fraction resolving to a corpus doc and to the RIGHT doc.
+- **Counterfactual use**: after a resolved fetch, Δnll of the continuation with the
+  fetched doc vs a deranged doc (placebo) — does the model USE what it asked for?
+- **Scale ladder**: the honest test needs a model that generates coherently; plan the
+  first size at which free-generation link-following becomes measurable.
+Fold into the eval harness as a first-class benchmark; report cdl vs dc vs concat_link.
+
+### Wiki concat-control HotpotQA eval (missing) — `\fillin` in §6.3
+`wiki_docconcatlink_best` (run_20260717_234605_156456, wd0.3, best_model.pt) has
+single-doc evals but NO `hotpotqa_cross_doc` eval in any record; `wiki_docconcat_best`
+(run_20260717_234603_647704) has no eval at all. Run `hotpotqa_cross_doc` on the
+concat_link ckpt (mask has links, so the cross arm is well-defined) and the single-doc
+panel + held-out ppl on the concat ckpt; distill; add `compute.wiki_hotpotqa.*` keys.
+Then §6.3's "matching contrast on Wikipedia" and Table Z.3 get a `doc_concatenated`
+column.
+
+### Provenance: `kind: log` source for the two val-loss literals
+`traversal.wiki_val_loss.{graph,random}` are literals. Implement a `log` source in
+`scripts/provenance_lib.py` that parses `runs/<id>/logs/metrics_rank_0.jsonl`
+(`val_loss_mean`, last/min row) and have `distill_runs.py` snapshot the needed rows into
+the record so it survives run-dir deletion. Same source unlocks the LR/WD U-curve tables
+and the per-language sweep val-loss table for App. Z.
+
+### Provenance: `kind: artifact` source for the sparsity-scaling JSONs — remaining §6.5 numbers
+PARTIALLY RESOLVED 2026-08-28: figures are in `paper/figures/` and wired into §6.5 +
+App. Z; the eval-time code r is ledger-grounded as a documented literal
+(`sparsity.crossdoc_law.eval_r_code`); keep=0 row and the traversal-time spot-check are
+done and in the paper. REMAINING: the other `\fillin` magnitudes in §6.5 (n, slope,
+out-degree r, 2D-grid axis swings, TS keep0 pair) and a per-dataset Δ@κ=1 table. Values
+live in `/fss-data/evin_t/tagseq2tagseq_artifacts/sparsity_scaling/{phase1_eval,
+phase2_traintime,grid2d,effective_density.json,regression.json}` (listed in the §6.5
+LaTeX comment). Either extend the literal pattern used for eval_r_code, or (better) add
+a `kind: artifact` source (path + JSON pointer, content-hashed, copied into
+`provenance/artifacts/`) and migrate eval_r_code onto it too.
+
+### Density-aware timing: locate the originating run — `\fillin` in §6.7
+The 1.45×/1.14× speedup and CoV numbers in README.md come from `step_timing_rank*.csv`
+files that are not in-repo and carry no run_id (2 nodes × 2 GPUs, The Stack 10M, 32k).
+Find the run on `/fss-data` (or re-time: one live vs one precomputed short run at the
+same world_size/node layout), archive the CSVs under `provenance/artifacts/`, ground via
+the `artifact` source above.
+
+### Diversity section — blocked on the corrected merged_v2 re-run
+§6.6 is fully `\fillin`. All `merged_all_v2` models were retracted 2026-08-14
+(sequential-not-interleaved loader). Re-run at 3.9B/8B/16B (corrected LR from the 16B
+sweep) with all four masks (configs `merged_v2_*`), then ports (use_line, Tier-2 placebo)
++ specialist re-pull for an exact table, distill, ground. Note in the paper: rungs are
+independent samples, not nested; packs are within-source (multi-task mixing, not
+cross-source attention).
+
+### Dataset table cells — `\fillin` in §4 Table 1
+Missing: wiki_merged edges + mean out-degree (+ token count: RESULTS says 4 epochs ≈
+3.8B tok); JS / Dart / Zig edge counts + out-degree; Go / Java out-degree; arXiv
+nodes/edges (README says 2.20M nodes ~10B tok; framing notes say ~1.98M — reconcile).
+Read each dataset's `metadata.json` / audit log under
+`/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/<ds>/`.
+
+### Link-reliance probe: synthetic cross-doc versions of standard benchmarks (filed 2026-08-26)
+How heavily does the model actually rely on the links it references? Build
+cross-doc-link versions of regular, non-HotpotQA-like benchmarks (e.g. HellaSwag):
+inject a synthetic link into the question body and score the completion with an aux doc
+attached via the normal grant machinery. Full design is a 2×3 grid:
+- **Link placement** (who picks where in the question body the link goes):
+  1. a smarter model (Claude) picks the location;
+  2. the trained (dumber) model picks its own location.
+- **Aux-doc author** (what the granted reference contains), for each placement:
+  (a) smarter model writes a genuinely helpful synthetic reference doc;
+  (b) the trained model generates its own aux doc (its generation-fallback path);
+  (c) smarter model writes a bad/placebo reference (plausible but unhelpful/wrong).
+Reliance = Δnll sensitivity across (a)/(b)/(c) — a model that leans on its references
+should gain from (a), gain less (or self-consistently) from (b), and be hurt or
+unmoved by (c); placement row contrasts whether link POSITION quality matters.
+Reuses the `annotated` link-injection machinery (`eval/link_annotator.py` opener
+placement + `score_completion_with_context_docs`); the new parts are synthetic aux-doc
+authoring, the model-picks-placement condition, and the 2×3 report. Not yet done as of
+2026-08-26 (idea predates; never implemented). Relates to the derangement placebo
+(content-swap) but tests *synthetic* references on benchmarks with no natural links.
+
+### Related but pre-existing (see below): leakage-stratified Δnll (RETRO bpb(α)),
+eval-time max_seq_len extension, RoPE link-utilization diagnostic, concat controls across
+non-bfs traversals — all cited as future work in §7 and unchanged.
+
+---
+
 ## Java dataset — cross-repo framework-class mock resolution
 
 In the Java code dataset, framework/stdlib imports (`android.content.Context`,
@@ -333,27 +457,31 @@ bottleneck.
 
 ## Eval
 
-### Leakage-stratified cross-doc Δnll (RETRO bpb(α) protocol — filed 2026-08-10)
-Our grant makes verbatim copying from the target more direct than retrieval baselines,
-and dedup is sampling-only, so raw perplexity gains risk being re-exposure of
-memorized/duplicated text (HotpotQA's 2017 Wikipedia and The Stack both overlap
-training data). Measure FIRST on the already-completed sweep (pure eval, no retrain):
-stratify the cross-doc Δnll by target<->context n-gram overlap α and show the effect
-survives at low overlap. Only if the low-overlap effect is weak do we go back to the
-datasets, filter, and re-run training — a HARD BLOCKER on final numbers *conditional*
-on the measurement demanding it, NOT a pre-committed retrain. Expect a steeper leakage
-slope than RETRO. (Related but distinct from the deferred dataset-side dedup blacklist
-item below, which is graph-construction dedup, not eval-side α-stratification.)
+### Per-run eval metrics (ReproducibilityManager) linked to their training run + re-run ALL eval numbers (filed 2026-08-28)
+Eval results are currently written as sidecar `eval_*.json` INTO the *training* run dir
+and layered by `distill_runs` (`eval_reeval256.json`, `eval_java_repobench_final.json`,
+`eval_leakage_placebo.json`, ...). The distilled record's `reproduce` block is the
+**training** run's git state, so an eval number carries NO record of the code that
+produced it. This is not reproducible across code evolution: replicating the grounded
+`repobench_python` cross-doc eval (run_20260720_063128_690228, stored 2026-07-27) on a
+later HEAD gives cross NLL 1.69973 vs stored 1.69981 and flat 1.79389 vs 1.79249 —
+bit-identical across two reruns (deterministic → code drift, not GPU noise; `eval/scoring.py`
+changed 2026-08-03, after that eval). The derived Δnll shifts 0.0927 → 0.0942, visible at
+the 3-sig-fig precision the paper reports. The flat/batched NLL drifted ~18x more than the
+per-example cross NLL, so the culprit is likely something small (e.g. a batch-size change
+in the batched flat scoring path).
 
-### Placebo/derangement on the headline arms + fired-subset Δnll (filed 2026-08-10)
-Tier-2 ports already have the derangement placebo (`eval/benchmark_harness/tier2.py`,
-`placebo_separation` + bootstrap CI). The headline HotpotQA-cross-doc and
-RepoBench-cross-doc arms do NOT — they report only cross-vs-flat, where the cross arm
-sees strictly more tokens, so "is it the right doc or just more context?" is unanswered
-(acute given HotpotQA single-hop solvability). Extend the existing derangement machinery
-to the headline arms, or caveat prominently. Also report Δnll over the *fired* subset
-honestly (Repoformer's ~20/60/20 help/neutral/hurt split makes averaging over non-fired
-items misleading).
+A per-eval-result commit field is NOT enough: eval is often run with uncommitted working-tree
+changes, which a bare SHA can't capture. **Fix:** make each eval its OWN run created via
+`tunalab.reproducibility.ReproducibilityManager` (full capture: git SHA + dirty patch +
+software/runtime env, exactly like training), holding a reference to the training run(s) it
+evaluates (to locate the checkpoint) — instead of dropping bare `eval_*.json` into the
+training run dir. `distill_runs` then harvests eval runs the same way as training runs.
+**Then re-run ALL eval numbers** under this scheme (headline cross-doc, compute controls,
+single-doc, and the new placebo/leakage-α numbers) and update the `paper/` number pipeline
+accordingly: point ledger `eval` sources at the new per-eval-run records; adjust
+`distill_runs`/`gen_values_tex`/`check_grounding` so the eval commit is grounded per number.
+Supersedes the sidecar pattern; existing sidecars stay readable until migrated.
 
 ### Eval-time max_seq_len extension (long-context generalization probe — filed 2026-08-10)
 Cheap probe, no retrain: eval a 32k-trained checkpoint at larger max_seq_len (64k+) and

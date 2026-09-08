@@ -1,0 +1,95 @@
+{
+  "bench": "repobench_java",
+  "port": "repobench_java",
+  "run_id": "run_20260722_063905_465684",
+  "checkpoint": "/fss/evin_t/tagseq2tagseq/runs/run_20260722_063905_465684/checkpoints/best_model.pt",
+  "scope": "native",
+  "max_examples": 500,
+  "tier2": {
+    "native": {
+      "port": "repobench_java",
+      "checkpoint": "/fss/evin_t/tagseq2tagseq/runs/run_20260722_063905_465684/checkpoints/best_model.pt",
+      "n_examples": 500,
+      "scope": "native",
+      "n_dropped_no_use_site": 0,
+      "n_fired": 470,
+      "n_oversized_skipped": 0,
+      "mean_nll_cross": 1.3727369480506546,
+      "mean_nll_flat": 1.4384637984083446,
+      "mean_nll_placebo": 1.4501190059558517,
+      "delta_real": 0.06572685035769009,
+      "delta_real_ci": [
+        0.048973249792732904,
+        0.08331930728972982
+      ],
+      "delta_placebo": -0.011655207547507151,
+      "placebo_separation": 0.07738205790519714,
+      "placebo_separation_ci": [
+        0.05922832496368322,
+        0.09676321543465356
+      ],
+      "leakage_ngram_n": 8,
+      "mean_alpha": 0.08578983672377624,
+      "leakage_strata": [
+        {
+          "alpha_lo": 0.0,
+          "alpha_hi": 0.05,
+          "n": 275,
+          "mean_alpha": 0.005303959235974377,
+          "delta_real": 0.038774442022497004,
+          "delta_real_ci": [
+            0.020425437940792605,
+            0.058902800706299864
+          ]
+        },
+        {
+          "alpha_lo": 0.05,
+          "alpha_hi": 0.25,
+          "n": 145,
+          "mean_alpha": 0.11099187010607511,
+          "delta_real": 0.08273686417217913,
+          "delta_real_ci": [
+            0.05545179240662476,
+            0.11172815480108918
+          ]
+        },
+        {
+          "alpha_lo": 0.25,
+          "alpha_hi": 0.5,
+          "n": 31,
+          "mean_alpha": 0.32816248597080216,
+          "delta_real": 0.19977280305277917,
+          "delta_real_ci": [
+            0.09031716890392764,
+            0.3276157163804577
+          ]
+        },
+        {
+          "alpha_lo": 0.5,
+          "alpha_hi": 0.75,
+          "n": 5,
+          "mean_alpha": 0.636362539421363,
+          "delta_real": 0.1202742338180542,
+          "delta_real_ci": [
+            NaN,
+            NaN
+          ]
+        },
+        {
+          "alpha_lo": 0.75,
+          "alpha_hi": 1.0,
+          "n": 10,
+          "mean_alpha": 0.9070804195804195,
+          "delta_real": 0.11745673418045044,
+          "delta_real_ci": [
+            -0.048711496591567996,
+            0.2885279539227485
+          ]
+        }
+      ],
+      "failures": [],
+      "passed": true,
+      "fire_rate": 0.94
+    }
+  }
+}

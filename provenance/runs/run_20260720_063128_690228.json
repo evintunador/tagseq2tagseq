@@ -165,7 +165,7 @@
   },
   "eval": {
     "present": true,
-    "eval_results_sha256": "3e6be84ffd2b970a105a73a20b82584fb4b306ba3d9ddc1c1ed54106ebf29437",
+    "eval_results_sha256": "5286dbcbf9b7128e69469e82d67e822b88cd1a0742ca9866e8c0f90c94eefd63",
     "metrics": {
       "held_out_perplexity/baseline": {
         "split": "all",
@@ -323,6 +323,70 @@
         "perplexity_ci_low": 4.046551102774848,
         "perplexity_ci_high": 4.5526951625139125
       },
+      "repobench_python_xdoc_placebo/native": {
+        "delta_real": 0.09371927948885186,
+        "delta_real_ci": [
+          0.07195748198170994,
+          0.11680465889184972
+        ],
+        "placebo_separation": 0.1295747930227324,
+        "placebo_separation_ci": [
+          0.10765100045952686,
+          0.15296572636033212
+        ],
+        "mean_nll_cross": 1.7029574412246082,
+        "mean_nll_flat": 1.7966767207134602,
+        "mean_nll_placebo": 1.8325322342473407,
+        "n_cross_doc": 435,
+        "fire_rate": 0.87,
+        "mean_alpha": 0.12521606529230755,
+        "leakage_ngram_n": 8
+      },
+      "repobench_python_leakage/alpha_0.00_0.05": {
+        "delta_real": 0.07807492273640258,
+        "delta_real_ci": [
+          0.04371891730118796,
+          0.1145106022972711
+        ],
+        "n": 191,
+        "mean_alpha": 0.006635997873017795
+      },
+      "repobench_python_leakage/alpha_0.05_0.25": {
+        "delta_real": 0.08171290195131876,
+        "delta_real_ci": [
+          0.05398959558771317,
+          0.11274516199188057
+        ],
+        "n": 166,
+        "mean_alpha": 0.13225706810949237
+      },
+      "repobench_python_leakage/alpha_0.25_0.50": {
+        "delta_real": 0.15685200272944935,
+        "delta_real_ci": [
+          0.08489753198728227,
+          0.2365541649492163
+        ],
+        "n": 57,
+        "mean_alpha": 0.3328014595250776
+      },
+      "repobench_python_leakage/alpha_0.50_0.75": {
+        "delta_real": 0.14101982712745667,
+        "delta_real_ci": [
+          0.059334015548229216,
+          0.23181644707918164
+        ],
+        "n": 10,
+        "mean_alpha": 0.5962187093951801
+      },
+      "repobench_python_leakage/alpha_0.75_1.00": {
+        "delta_real": 0.2453126311302185,
+        "delta_real_ci": [
+          NaN,
+          NaN
+        ],
+        "n": 6,
+        "mean_alpha": 0.9481481481481482
+      },
       "repobench_cross_doc/baseline": {
         "perplexity_cross_doc_only": 5.472907123986205,
         "average_nll_cross_doc_only": 1.6998099421632702,
@@ -338,8 +402,9 @@
     },
     "eval_source_files": [
       "eval_results.json",
+      "eval_leakage_placebo.json",
       "eval_reeval256.json"
     ]
   },
-  "distilled_at": "2026-08-19T20:41:37Z"
+  "distilled_at": "2026-08-27T23:39:06Z"
 }
