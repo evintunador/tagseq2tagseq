@@ -64,6 +64,20 @@ def _make_bucket_sequence(n_buckets: int, seed: int, n_repeats: int = 1000) -> L
     return seq
 
 
+class EpochDirsExhausted(RuntimeError):
+    """Raised by a TRAINING BucketedPackDataset when every epoch dir is drained
+    before the caller stopped iterating.
+
+    Each density bucket ends with a drop_last tail of up to ``world_size - 1``
+    packs, so a schedule of ``n_packs`` yields slightly fewer than
+    ``n_packs // world_size`` steps (up to ``n_buckets * (world_size - 1)`` packs
+    are never drawn). A step budget set from ``n_packs // world_size`` therefore
+    always overruns the data by a few steps. ``LimitedDataLoader`` (main.py)
+    catches this type and ends the run cleanly when the shortfall is within its
+    tolerance; anything larger propagates as a hard failure.
+    """
+
+
 class BucketedPackDataset(IterableDataset):
     """Iterable dataset yielding pre-computed packs in density-bucket order.
 
@@ -182,6 +196,10 @@ class BucketedPackDataset(IterableDataset):
                 meta = json.load(f)
             n_buckets: int = meta["n_buckets"]
             self._token_budget: Optional[int] = meta.get("token_budget")
+            # Dir's PRECOMPUTE epoch for the stochastic-prefix coin-flip. Fresh: ==
+            # loader _epoch_idx. Repeat (same dir replayed): stays fixed so replays
+            # reproduce identical packs (else T != token_budget -> AssertionError).
+            self._current_layout_epoch: int = int(meta.get("epoch_idx", self._epoch_idx))
 
             # Warn if max_grants warmup is active (bucketing is approximate during warmup)
             max_grants_start = meta.get("max_grants_start")
@@ -253,7 +271,7 @@ class BucketedPackDataset(IterableDataset):
             # the step budget.) Needed because val_steps can exceed a small val
             # schedule's pack count (e.g. zig val = 25 packs < val_steps).
             return
-        raise RuntimeError(
+        raise EpochDirsExhausted(
             f"All pre-computed epoch dirs exhausted after {len(self.epoch_dirs)} epochs. "
             "Re-run precompute_epochs.py to generate more."
         )
@@ -292,7 +310,10 @@ class BucketedPackDataset(IterableDataset):
         # so a prior pack's per-pack epoch could otherwise leak into a -1 pack.
         _le = getattr(pack, "layout_epoch", -1)
         if hasattr(layout, "set_epoch"):
-            layout.set_epoch(_le if _le >= 0 else self._epoch_idx)
+            # Single-epoch pack: use the dir's PRECOMPUTE epoch, not loader position,
+            # so replaying a dir (repeat-mode) doesn't re-roll the prefix coin-flip.
+            fallback_epoch = getattr(self, "_current_layout_epoch", self._epoch_idx)
+            layout.set_epoch(_le if _le >= 0 else fallback_epoch)
         batch = build_packed_batch(self.graph, self.backend, layout, placements)
         T = batch["tokens"].shape[-1]
         budget = getattr(self, '_token_budget', None)

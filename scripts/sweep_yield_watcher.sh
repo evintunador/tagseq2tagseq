@@ -1,11 +1,13 @@
 #!/bin/bash
 # LR-sweep courtesy watcher (node-demand-aware).
 #
-# Frees nodes for coworkers: when OTHER users have jobs PENDING and blocked on node
-# availability (REASON Resources/Priority), cancels our lowest-priority sweep jobs
-# (name-prefixed, default ts2ts_) YOUNGEST-first, freeing as many nodes as the
-# waiting jobs collectively request (capped at how many we're running). All sweep
-# runs checkpoint latest.pt every 250 steps → resumable via --resume-from.
+# Frees nodes for higher-priority work: when a job is PENDING and blocked on node
+# availability (REASON Resources/Priority) — either ANOTHER user's job, or one of MY
+# OWN non-sweep jobs (name NOT prefixed ts2ts_) — cancels our lowest-priority sweep
+# jobs (name-prefixed, default ts2ts_) YOUNGEST-first, freeing as many nodes as the
+# waiting jobs collectively request (capped at how many we're running). Our own
+# PENDING sweep jobs never count as demand, so sweeps don't yield to each other. All
+# sweep runs checkpoint latest.pt every 250 steps → resumable via --resume-from.
 #
 # The user (evin_t) explicitly authorized auto-kill: "do not hesitate to kill if
 # somebody's waiting in line." Personal, non-urgent project.
@@ -50,8 +52,9 @@ IDLE_SINCE="$STATE_DIR/node_idle_since.tsv"        # node<TAB>first_idle_epoch
 # Input (stdin): lines "USER|STATE|REASON|NODES|JOBID|NAME" (squeue -o "%u|%T|%r|%D|%i|%j").
 # Args: $1=me (my username), $2=prefix (my sweep job-name prefix), $3=max_kill.
 # Output (stdout): job IDs to cancel, one per line, youngest-first, sized to the
-#   total nodes demanded by other users' blocked-pending jobs (capped at max_kill
-#   and at how many sweep jobs I actually have running). Empty output = do nothing.
+#   total nodes demanded by blocked-pending jobs we yield to — other users' jobs plus
+#   my own non-sweep jobs (capped at max_kill and at how many sweep jobs I actually
+#   have running). Empty output = do nothing.
 # Also prints, to stderr, a human summary line prefixed "SUMMARY:".
 decide_cancellations() {
   local me="$1" prefix="$2" max_kill="$3"
@@ -66,8 +69,11 @@ decide_cancellations() {
     }
     {
       user=$1; state=$2; reason=$3; nodes=$4+0; jobid=$5; name=$6; elapsed=$7
-      # Other users blocked in the queue waiting for nodes:
-      if (user!=me && state=="PENDING" && (reason=="Resources"||reason=="Priority")) {
+      # Jobs blocked in the queue waiting for nodes that our sweep should yield to:
+      # any OTHER users blocked-pending job, plus MY OWN blocked-pending NON-sweep
+      # jobs. My own pending SWEEP jobs (name starts with prefix) are excluded so
+      # that sweeps do not yield to each other.
+      if (state=="PENDING" && (reason=="Resources"||reason=="Priority") && (user!=me || index(name,prefix)!=1)) {
         demand += nodes
         waiters = waiters " " jobid "(" nodes "n:" reason ")"
       }
@@ -169,7 +175,19 @@ run_selftest() {
     'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
     'evin_t|PENDING|Resources|1|45060|ts2ts_pending|0:00' \
     | decide_cancellations evin_t ts2ts_ 8 2>/dev/null)"
-  _check "E own-pending-ignored" "" "$E"
+  _check "E own-sweep-pending-ignored" "" "$E"
+  # Scenario M: my OWN pending NON-sweep job (different prefix) SHOULD trigger a yield.
+  local M; M="$(printf '%s\n' \
+    'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
+    'evin_t|PENDING|Resources|1|45061|mic_big|0:00' \
+    | decide_cancellations evin_t ts2ts_ 8 2>/dev/null)"
+  _check "M own-nonsweep-pending-triggers" "45048" "$M"
+  # Scenario N: my own pending NON-sweep job, but idle covers it -> net 0 -> NO kill.
+  local N; N="$(printf '%s\n' \
+    'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
+    'evin_t|PENDING|Resources|1|45061|mic_big|0:00' \
+    | decide_cancellations evin_t ts2ts_ 8 1 2>/dev/null)"
+  _check "N own-nonsweep-idle-covers-no-kill" "" "$N"
   # Scenario F: pending but NOT resource-blocked (e.g. Dependency) -> ignore
   local F; F="$(printf '%s\n' \
     'evin_t|RUNNING|None|1|45048|ts2ts_a|23:04' \
@@ -281,24 +299,94 @@ config_from_rundir() {
   python3 -c "import json,sys; a=json.load(open('$inv'))['argv']; print(a[a.index('--config')+1] if '--config' in a else '')" 2>/dev/null
 }
 
+# Per-node GPU count of a (running) job, for world-size-preserving resume. All our
+# arms are --nodes 1, so per-node == total. Default 8 if it can't be parsed.
+_gpus_of_job() {
+  local jid="$1" g=""
+  g="$(scontrol show job "$jid" 2>/dev/null | grep -oiE 'gres/gpu=[0-9]+|gpu:[0-9]+' | grep -oE '[0-9]+' | head -1)"
+  [ -z "$g" ] && g=8
+  echo "$g"
+}
+
+# Find the most-advanced checkpoint for this ARM'S WHOLE LINEAGE, not just the one
+# run dir that was just yielded. Every relaunch gets a brand-new run dir, so a run
+# yielded before its own first 250-step checkpoint save has no local latest.pt even
+# when EARLIER segments of the same arm trained for hours. Match candidates by
+# (--config, extra_main_args signature) — the same signature already used to replay
+# overrides on resume — and pick the one whose checkpoint file has the newest mtime
+# (chronologically latest in a strictly-resuming lineage == most trained). Without
+# this, relaunch_yielded silently fell back to a FRESH start, discarding all prior
+# optimizer steps for the arm: found 2026-09-02, ~42% of relaunches sweep-wide hit
+# this (120 silent full resets vs 163 real resumes), go_veoff_cdl alone 30 times.
+latest_lineage_checkpoint() {
+  local cfg="$1" extra="$2"
+  python3 - "$cfg" "$extra" "$REPO/runs" "/fss-data/evin_t/tagseq2tagseq_artifacts/runs" "${TS2TS_RUNS_ROOT:-}" <<'PYEOF' 2>/dev/null
+import sys, os, glob, json
+
+cfg, extra = sys.argv[1], sys.argv[2]
+roots = [r for r in sys.argv[3:] if r]
+
+def sig(argv):
+    out, i = [], 1
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--config", "--resume-from"):
+            i += 2; continue
+        out.append(a); i += 1
+    return " ".join(out)
+
+seen = set()
+best_path, best_mtime = None, -1.0
+for root in roots:
+    for d in glob.glob(os.path.join(root, "run_*")):
+        d = os.path.realpath(d)
+        if d in seen:
+            continue
+        seen.add(d)
+        ck = os.path.join(d, "checkpoints", "latest.pt")
+        if not os.path.isfile(ck):
+            continue
+        inv_glob = glob.glob(os.path.join(d, "reproducibility", "*", "run_invocation.json"))
+        if not inv_glob:
+            continue
+        try:
+            argv = json.load(open(inv_glob[0]))["argv"]
+        except Exception:
+            continue
+        if "--config" not in argv or argv[argv.index("--config") + 1] != cfg:
+            continue
+        if sig(argv) != extra:
+            continue
+        mtime = os.path.getmtime(ck)
+        if mtime > best_mtime:
+            best_mtime, best_path = mtime, ck
+
+if best_path:
+    print(best_path)
+PYEOF
+}
+
 # Relaunch one yielded job on a given clean node, resuming if a checkpoint exists.
 # Returns: 0 = relaunched; 1 = transient failure (retry later); 2 = UNRESOLVABLE
 # (no config anywhere) — caller should mark the ledger line so it stops jamming.
 relaunch_yielded() {
-  local rundir="$1" cfg="$2" node="$3"
+  local rundir="$1" cfg="$2" node="$3" gpus="${4:-8}"
   # Self-heal: if the ledger recorded no config, recover it from run_invocation.json.
   if [ -z "$cfg" ]; then cfg="$(config_from_rundir "$rundir")"; fi
   [ -z "$cfg" ] && { note "  relaunch UNRESOLVABLE ($rundir): no config in ledger or run_invocation.json — marking skipped"; return 2; }
-  local ck="$rundir/checkpoints/latest.pt"
+  # Replay the original invocation's extra overrides (e.g. --data.epoch_dirs) so
+  # resume trains on the SAME data the run was launched with, not the config default,
+  # and so the SAME signature can identify this arm's earlier segments below.
+  local extra; extra="$(extra_main_args "$rundir")"
+  local ck; ck="$(latest_lineage_checkpoint "$cfg" "$extra")"
+  [ -z "$ck" ] && ck="$rundir/checkpoints/latest.pt"   # fallback: this run dir's own
   local resume_args=""
   if [ -f "$ck" ]; then resume_args="--resume-from $ck"; fi
-  # Replay the original invocation's extra overrides (e.g. --data.epoch_dirs) so
-  # resume trains on the SAME data the run was launched with, not the config default.
-  local extra; extra="$(extra_main_args "$rundir")"
   local tag; tag="$(basename "$cfg" .yaml)"
-  note "  RELAUNCH $tag on $node $([ -n "$resume_args" ] && echo "(resume from $(basename "$rundir"))" || echo "(fresh — no ckpt)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
+  local ck_src=""; [ -n "$ck" ] && ck_src="$(basename "$(dirname "$(dirname "$ck")")")"
+  note "  RELAUNCH $tag on $node (gpus/node=$gpus) $([ -n "$resume_args" ] && echo "(resume from $ck_src$([ "$ck_src" != "$(basename "$rundir")" ] && echo " — earlier lineage segment, not $(basename "$rundir")"))" || echo "(fresh — no ckpt found anywhere in lineage)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
   TS2TS_SHARED_COMPILE_CACHE="/tmp/ts2ts_relaunch_$(basename "$rundir")" \
-    "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node 8 \
+    "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node "$gpus" \
     --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args $extra \
     >> "$STATE_DIR/relaunch.log" 2>&1
 }
@@ -320,17 +408,37 @@ while true; do
   # ---- YIELD (kill) logic ----
   to_kill="$(printf '%s\n' "$snapshot" | decide_cancellations "$ME" "$PREFIX" "$MAX_KILL" "$idle" 2>/dev/null)"
   summary="$(printf '%s\n' "$snapshot" | decide_cancellations "$ME" "$PREFIX" "$MAX_KILL" "$idle" 2>&1 >/dev/null | grep '^SUMMARY:')"
+  # "Someone is waiting" is judged from the DEMAND, not from whether we still have jobs
+  # to kill: once every sweep job is gone, to_kill is empty while a blocked waiter still
+  # pends, and relaunching then only hands it a node to take back 4 minutes later
+  # (~25 relaunch->kill cycles overnight 2026-09-04/05 against one pending 8-node job,
+  # zero training progress). Any unmet net demand blocks relaunch.
   someone_waiting=0; [ -n "$to_kill" ] && someone_waiting=1
+  if printf '%s' "$summary" | grep -qE 'net [1-9][0-9]* node\(s\) (needed|demanded)' \
+     && ! printf '%s' "$summary" | grep -q 'no action'; then
+    someone_waiting=1
+  fi
   if [ -n "$to_kill" ]; then
     if [ "$prev_had_net" -eq 1 ]; then
       note "$summary"
       while read -r jid; do
         [ -z "$jid" ] && continue
-        # Record run_dir + config to the ledger BEFORE scancel (squeue still knows the job).
+        # Map to run_dir/config and RECORD to the ledger BEFORE scancel. NEVER
+        # scancel a job we failed to record: doing so yields it with no ledger
+        # entry, so it can never auto-resume (the silent-drop bug that stranded
+        # yielded runs). If unmappable, leave it RUNNING rather than kill it.
         rc="$(job_to_rundir_config "$jid" 2>/dev/null)"
-        note "  scancel $jid (yielding; will auto-resume when a node is idle >= ${IDLE_RELAUNCH_MIN}min)"
+        if [ -z "$rc" ]; then
+          note "  SKIP-YIELD $jid: could not map to run_dir/config; leaving it RUNNING (refusing to kill-without-resume)."
+          continue
+        fi
+        gpn="$(_gpus_of_job "$jid")"   # preserve world_size for resume (partial-node arms)
+        if ! printf '%s\t%s\tyielded\t%s\n' "$rc" "$now" "$gpn" >> "$YIELD_LEDGER"; then
+          note "  SKIP-YIELD $jid: ledger append to $YIELD_LEDGER FAILED; leaving it RUNNING."
+          continue
+        fi
+        note "  scancel $jid (yielding; gpus/node=$gpn; recorded -> auto-resume when a node is idle >= ${IDLE_RELAUNCH_MIN}min)"
         scancel "$jid" 2>/dev/null
-        [ -n "$rc" ] && printf '%s\t%s\tyielded\n' "$rc" "$now" >> "$YIELD_LEDGER"
       done <<< "$to_kill"
       note "  remaining sweep jobs: $(squeue -h -u "$ME" -t RUNNING -o '%i' 2>/dev/null | tr '\n' ' ')"
       prev_had_net=0
@@ -358,20 +466,20 @@ while true; do
         # take the oldest un-relaunched yielded job
         line="$(awk -F'\t' '$4=="yielded"{print; exit}' "$YIELD_LEDGER" 2>/dev/null)"
         [ -z "$line" ] && break
-        rundir="$(echo "$line" | cut -f1)"; cfg="$(echo "$line" | cut -f2)"
+        rundir="$(echo "$line" | cut -f1)"; cfg="$(echo "$line" | cut -f2)"; gpus="$(echo "$line" | cut -f5)"; [ -z "$gpus" ] && gpus=8
         # preflight the node (GPU0 empty + NFS) before using it
         if "$REPO/scripts/preflight_node.sh" "$node" >/dev/null 2>&1; then
-          relaunch_yielded "$rundir" "$cfg" "$node"; rc_status=$?
+          relaunch_yielded "$rundir" "$cfg" "$node" "$gpus"; rc_status=$?
           if [ "$rc_status" -eq 0 ]; then
             # mark this ledger line relaunched (first match only)
-            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="relaunched"; done=1} {print $1"\t"$2"\t"$3"\t"$4}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
+            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="relaunched"; done=1} {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
             # reset that node's idle clock so we don't reuse it next poll
             grep -v "^${node}	" "$IDLE_SINCE" > "$IDLE_SINCE.tmp" 2>/dev/null; mv "$IDLE_SINCE.tmp" "$IDLE_SINCE"
           elif [ "$rc_status" -eq 2 ]; then
             # UNRESOLVABLE (no config anywhere): mark 'skipped' so this entry stops
             # jamming the head of the yield queue. Without this, the loop re-picks
             # the same broken oldest entry every poll and NOTHING else resumes.
-            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="skipped"; done=1} {print $1"\t"$2"\t"$3"\t"$4}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
+            awk -F'\t' -v rd="$rundir" 'BEGIN{done=0} $1==rd && $4=="yielded" && !done{$4="skipped"; done=1} {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' OFS='\t' "$YIELD_LEDGER" > "$YIELD_LEDGER.tmp" && mv "$YIELD_LEDGER.tmp" "$YIELD_LEDGER"
             # do NOT consume the node — let the next loop iteration use it for a real entry
           fi
           # rc_status==1 (transient): leave 'yielded', retry next poll (node not consumed)

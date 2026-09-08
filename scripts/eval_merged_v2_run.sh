@@ -12,7 +12,9 @@ set -uo pipefail
 REPO=/fss/evin_t/tagseq2tagseq; cd "$REPO"; source .venv/bin/activate 2>/dev/null || true
 ART=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets
 
-RD="$REPO/runs/$1"; MODE="${2:-cdl}"; CKPT_NAME="${3:-best_model.pt}"
+# $1 = run name under $REPO/runs, OR an absolute run dir (fss-data runs live outside the repo).
+RD="$1"; case "$RD" in /*) ;; *) RD="$REPO/runs/$1";; esac
+MODE="${2:-cdl}"; CKPT_NAME="${3:-best_model.pt}"
 # NOTE: prefer latest.pt for merged_v2 runs — best_model.pt was selected by the
 # pre-fix biased val metric, so it's unreliable; latest.pt is the final trained model.
 CKPT="$RD/checkpoints/$CKPT_NAME"

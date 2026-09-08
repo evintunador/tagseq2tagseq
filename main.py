@@ -42,7 +42,7 @@ from model.graph_traversal.python_import_detector import PythonImportDetector
 from model.graph_traversal.arxiv_cite_detector import ArxivCiteDetector
 from data.dataset import GraphIndex, PretokShardedBackend
 from data.packed_dataset import PackedSequenceDataset
-from data.bucketed_pack_dataset import BucketedPackDataset, BucketState
+from data.bucketed_pack_dataset import BucketedPackDataset, BucketState, EpochDirsExhausted
 from tunalab.device import to_device
 from data.layout import make_layout_policy, inference_layout_for_detector
 from data.pack_sampler import PackBatchSampler
@@ -224,12 +224,23 @@ class LimitedDataLoader:
     checkpoints). Do NOT set this for the training loader: training relies on
     the persistent state to walk the full epoch across many __iter__ calls and
     to resume mid-epoch from latest.pt.
+
+    ``exhaustion_tolerance_batches`` (TRAIN ONLY): a pre-computed schedule ends
+    with a drop_last tail per density bucket (up to ``world_size - 1`` packs each),
+    so it yields a few steps fewer than ``n_packs // world_size``, and a step budget
+    derived from that quotient overruns the data. When the dataset raises
+    ``EpochDirsExhausted`` with at most this many batches still owed, the iterator
+    ends normally so the training loop runs its final val, writes the final
+    checkpoint, and post-training eval proceeds. A larger shortfall re-raises: the
+    schedule really is too short for the configured run and must fail loudly.
     """
     def __init__(self, loader: DataLoader, max_batches: int,
-                 rewind_each_iter: bool = False) -> None:
+                 rewind_each_iter: bool = False,
+                 exhaustion_tolerance_batches: int = 0) -> None:
         self.loader = loader
         self.max_batches = max_batches
         self._rewind = rewind_each_iter
+        self._tolerance = max(0, int(exhaustion_tolerance_batches))
         self._init_state = None
         if rewind_each_iter:
             ds = getattr(loader, "dataset", None)
@@ -241,7 +252,21 @@ class LimitedDataLoader:
             ds = self.loader.dataset
             if hasattr(ds, "set_state"):
                 ds.set_state(self._init_state)
-        return itertools.islice(iter(self.loader), self.max_batches)
+        yielded = 0
+        try:
+            for item in itertools.islice(iter(self.loader), self.max_batches):
+                yielded += 1
+                yield item
+        except EpochDirsExhausted as exc:
+            owed = self.max_batches - yielded
+            if owed > self._tolerance:
+                raise
+            logger.warning(
+                "Pre-computed schedule exhausted %d batch(es) before the step budget "
+                "(%d of %d yielded this run; tolerance %d) — ending training cleanly "
+                "so the final checkpoint and post-training eval still run. %s",
+                owed, yielded, self.max_batches, self._tolerance, exc,
+            )
 
     @property
     def dataset(self):
@@ -765,7 +790,16 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
     max_optimizer_steps = cfg.get('train_loop', {}).get('max_optimizer_steps')
     if max_optimizer_steps is not None:
         accum_steps = cfg.get('train_loop', {}).get('atomic_feature_kwargs', {}).get('accum_steps', 1)
-        train_loader = LimitedDataLoader(train_loader, max_batches=max_optimizer_steps * accum_steps)
+        # Tolerated data shortfall, as a fraction of the FULL schedule (remaining +
+        # already-done steps), not of what is left in this resume segment. The
+        # drop_last tail alone costs n_buckets*(world_size-1)/world_size steps
+        # (~28 at 32 buckets / 8 ranks); budgets computed from n_packs//world_size
+        # or reused across slightly smaller schedules overrun by up to ~1.5%.
+        _full_steps = int(max_optimizer_steps) + int(resumed_steps)
+        _tol_frac = float(cfg.get('train_loop', {}).get('exhaustion_tolerance_frac', 0.02))
+        _tol_batches = int(round(_tol_frac * _full_steps * accum_steps))
+        train_loader = LimitedDataLoader(train_loader, max_batches=max_optimizer_steps * accum_steps,
+                                         exhaustion_tolerance_batches=_tol_batches)
 
     # ── Validation loaders ────────────────────────────────────────────────────
     # data.val_dirs  — dict of {name: path} for live-packed val loaders.
