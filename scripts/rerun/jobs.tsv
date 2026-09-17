@@ -1,0 +1,19 @@
+# Ledger-grounded eval rerun matrix. Fields pipe-delimited:
+# run_id|dataset_subdir|benchmarks|conditions|split|max_docs|extra_flags
+# dataset base = /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets
+# ckpt = /fss/evin_t/tagseq2tagseq/runs/<run_id>/checkpoints/best_model.pt
+# hotpotqa run uses trained max_grants=256 (loaded from checkpoint; no flag) — value WILL change vs stale ledger.
+20260703_050528|wiki_merged|hellaswag|doceval|all|2000|
+20260703_051129|wiki_merged|hellaswag|doceval|all|2000|
+20260703_052240|wiki_merged|hellaswag|doceval|all|2000|
+20260703_053518|wiki_merged|hellaswag|doceval|all|2000|
+run_20260717_173951_071952|wiki_merged|hotpotqa_cross_doc|experimental|all|1000|
+run_20260720_063128_690228|thestack|repobench|doceval|all|500|--repobench-split cross_file_first
+run_20260720_063128_690228|thestack|repobench_cross_doc|baseline experimental|val_community|500|--repobench-language python
+run_20260720_063850_432424|thestack|repobench|doceval|all|500|--repobench-split cross_file_first
+run_20260720_064936_044405|thestack|repobench|doceval|all|500|--repobench-split cross_file_first
+run_20260720_070020_196807|thestack|repobench|doceval|all|500|--repobench-split cross_file_first
+run_20260722_063905_465684|java|repobench_cross_doc|experimental|all|500|--repobench-language java
+run_20260722_191916_590119|java|repobench_cross_doc|experimental|all|500|--repobench-language java
+run_20260722_194928_381368|java|repobench_cross_doc|experimental|all|500|--repobench-language java
+run_20260722_201940_182374|java|repobench_cross_doc|experimental|all|500|--repobench-language java

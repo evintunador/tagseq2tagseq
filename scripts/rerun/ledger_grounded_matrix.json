@@ -1,0 +1,42 @@
+{
+  "run_20260717_173951_071952": [
+    "hotpotqa_cross_doc/experimental"
+  ],
+  "run_20260720_063128_690228": [
+    "repobench/doceval",
+    "repobench_cross_doc/experimental"
+  ],
+  "run_20260720_070020_196807": [
+    "repobench/doceval"
+  ],
+  "run_20260720_063850_432424": [
+    "repobench/doceval"
+  ],
+  "run_20260720_064936_044405": [
+    "repobench/doceval"
+  ],
+  "run_20260722_063905_465684": [
+    "repobench_cross_doc/experimental"
+  ],
+  "run_20260722_191916_590119": [
+    "repobench_cross_doc/experimental"
+  ],
+  "run_20260722_194928_381368": [
+    "repobench_cross_doc/experimental"
+  ],
+  "run_20260722_201940_182374": [
+    "repobench_cross_doc/experimental"
+  ],
+  "20260703_051129": [
+    "hellaswag/doceval"
+  ],
+  "20260703_050528": [
+    "hellaswag/doceval"
+  ],
+  "20260703_052240": [
+    "hellaswag/doceval"
+  ],
+  "20260703_053518": [
+    "hellaswag/doceval"
+  ]
+}
