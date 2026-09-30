@@ -12,8 +12,8 @@ matched corpus entry so you can visually confirm the new matches are sensible.
 Usage:
     # Compare default strategies vs default + edit_distance
     python scripts/compare_title_strategies.py \\
-        --checkpoint /fss/evin_t/tagseq2tagseq/runs/20260308_012516/checkpoints/best_model.pt \\
-        --dataset data/pretokenized_datasets/simplewiki \\
+        --checkpoint /fss-data/evin_t/tagseq2tagseq_artifacts/runs_legacy/20260308_012516/checkpoints/best_model.pt \\
+        --dataset /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \\
         --strategies-a exact norm word_overlap_ordered \\
         --strategies-b exact norm word_overlap_ordered edit_distance \\
         --max-examples 200

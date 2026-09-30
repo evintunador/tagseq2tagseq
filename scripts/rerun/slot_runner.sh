@@ -9,7 +9,7 @@ set -uo pipefail
 IDX="$1"; shift
 WT=/fss/evin_t/tagseq2tagseq-evaltrack
 PY=/fss/evin_t/tagseq2tagseq/.venv/bin/python
-RUNS=/fss/evin_t/tagseq2tagseq/runs
+RUNS=/fss-data/evin_t/tagseq2tagseq_artifacts/runs_legacy
 ART=/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets
 export TS2TS_EVALS_ROOT=/fss-data/evin_t/tagseq2tagseq_artifacts/evals
 LOGDIR=$WT/scripts/rerun/logs

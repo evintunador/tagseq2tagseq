@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 DEFAULT_ROOTS = [
-    "/fss/evin_t/tagseq2tagseq/runs",
+    "/fss-data/evin_t/tagseq2tagseq_artifacts/runs_legacy",
     "/fss-data/evin_t/tagseq2tagseq_artifacts/runs",
 ]
 DEFAULT_QUARANTINE = "/fss-data/evin_t/tagseq2tagseq_artifacts/quarantine_contaminated_evals"

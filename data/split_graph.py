@@ -21,14 +21,14 @@ with no cross-split edge leakage.
 
 Usage:
     python data/split_graph.py \\
-        --dataset-dir data/pretokenized_datasets/simplewiki \\
+        --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki \\
         [--val-frac 0.025] [--test-frac 0.025] \\
         [--community-size-min 50] [--community-size-max 5000] \\
         [--seed 42] [--dry-run]
 
 The output goes to dataset_dir/splits/ and can be pointed to directly:
-    GraphIndex("data/pretokenized_datasets/simplewiki/splits/train")
-    GraphIndex("data/pretokenized_datasets/simplewiki/splits/val_community")
+    GraphIndex("/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/train")
+    GraphIndex("/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki/splits/val_community")
 """
 from __future__ import annotations
 

@@ -13,16 +13,16 @@ Usage:
 
     # Step 3 – full correctness suite
     python benchmarks/attention_harness.py correctness \\
-        --dataset-dir data/pretokenized_datasets/simplewiki
+        --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 
     # Step 4 – production benchmark
     python benchmarks/attention_harness.py bench \\
         --seq-lens 32768 --num-heads 16 --head-dim 64 \\
-        --dataset-dir data/pretokenized_datasets/simplewiki
+        --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 
     # Full run
     python benchmarks/attention_harness.py all \\
-        --dataset-dir data/pretokenized_datasets/simplewiki
+        --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 """
 
 from __future__ import annotations

@@ -20,15 +20,15 @@ Any remaining arguments are forwarded verbatim to main.py / compose_config.
 Examples:
     # 1 node, 1 GPU
     python launch_slurm.py \\
-        --dataset-dir data/pretokenized_datasets/simplewiki
+        --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 
     # 2 nodes x 4 GPUs each (8 total), 12-hour wall time
     python launch_slurm.py --nodes 2 --gpus-per-node 4 --time 12:00:00 \\
-        --dataset-dir data/pretokenized_datasets/simplewiki
+        --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 
     # 8 nodes x 8 GPUs (64 total)
     python launch_slurm.py --nodes 8 --gpus-per-node 8 \\
-        --dataset-dir data/pretokenized_datasets/simplewiki
+        --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 """
 
 import argparse

@@ -5,8 +5,8 @@ data/github_graph_extractor/build_graph_streaming.py.
 
 Usage:
     python -m data.pretokenize_stack \\
-        data/github_graph_extractor/sample_1M.jsonl \\
-        data/github_graph_extractor/graph.jsonl \\
+        /fss-data/evin_t/tagseq2tagseq_artifacts/graphs/github_graph_extractor/sample_1M.jsonl \\
+        /fss-data/evin_t/tagseq2tagseq_artifacts/graphs/github_graph_extractor/graph.jsonl \\
         -o runs/stack_pretokenized \\
         -p 60
 """

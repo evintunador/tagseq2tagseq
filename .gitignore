@@ -229,3 +229,13 @@ review_artifacts_view
 
 # NFS delete-on-close turds (created when a file is removed while still open)
 .nfs*
+
+# Data directories live on fss-data; the checkout keeps symlinks at these paths.
+# Slash-suffixed patterns match only real directories, so symlinks need these.
+/runs
+/evals
+/logs
+/artifacts
+/slurm_logs
+/schedules
+/data/wiki_articles*

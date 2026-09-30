@@ -14,12 +14,12 @@ Usage examples
 # Density + masks only (no timing data):
 python visualize_epoch.py \\
     --epoch-dir  schedules/smoke_stack10m_bfs/epoch_0 \\
-    --dataset-dir data/pretokenized_datasets/stack_10m
+    --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/stack_10m
 
 # Full report including timing comparison:
 python visualize_epoch.py \\
     --epoch-dir         schedules/smoke_stack10m_bfs/epoch_0 \\
-    --dataset-dir       data/pretokenized_datasets/stack_10m \\
+    --dataset-dir       /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/stack_10m \\
     --live-run          runs/run_20260319_220022_460348 \\
     --precomputed-run   runs/run_20260319_220230_319138 \\
     --output-dir        artifacts/smoke_report

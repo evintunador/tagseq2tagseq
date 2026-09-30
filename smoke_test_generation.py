@@ -155,7 +155,7 @@ def main():
     parser = argparse.ArgumentParser(description="Smoke test for Stage 1 generation")
     parser.add_argument(
         "--checkpoint",
-        default="runs/20260224_212158/checkpoints/best_model.pt",
+        default="/fss-data/evin_t/tagseq2tagseq_artifacts/runs_legacy/20260224_212158/checkpoints/best_model.pt",
         type=Path,
     )
     parser.add_argument("--max-new-tokens", type=int, default=50)

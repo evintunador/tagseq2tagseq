@@ -178,7 +178,7 @@ def main():
     ap.add_argument("--launch", action="store_true", help="actually submit (staggered); default dry-run")
     ap.add_argument("--first-step-timeout", type=int, default=1800,
                     help="seconds to wait for an arm to reach step 1 before launching the next")
-    ap.add_argument("--out", default=str(REPO / "runs" / "MEM_EPOCHS_LAUNCH_CMDS.sh"))
+    ap.add_argument("--out", default=str(ART / "pipeline_logs" / "MEM_EPOCHS_LAUNCH_CMDS.sh"))
     args = ap.parse_args()
 
     if args.world_size != args.nodes * args.gpus:

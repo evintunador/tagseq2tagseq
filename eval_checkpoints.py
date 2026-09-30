@@ -20,7 +20,7 @@ behaviour and a doc_causal baseline.
 Usage (CLI — single checkpoint):
     python eval_checkpoints.py \\
         --checkpoints runs/YYYYMMDD/checkpoints/best_model.pt \\
-        --dataset data/pretokenized_datasets/stack_10m \\
+        --dataset /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/stack_10m \\
         [--benchmarks held_out_perplexity] \\
         [--split val_community] \\
         [--max-docs 500] \\
@@ -34,7 +34,7 @@ Usage (CLI — multiple checkpoints):
     python eval_checkpoints.py \\
         --checkpoints runs/RUN_A/checkpoints/best_model.pt \\
                       runs/RUN_B/checkpoints/best_model.pt \\
-        --dataset data/pretokenized_datasets/stack_10m
+        --dataset /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/stack_10m
 
     All checkpoints share one eval run dir; each checkpoint's results land in
     {eval_dir}/results/, and a combined comparison table is written alongside.

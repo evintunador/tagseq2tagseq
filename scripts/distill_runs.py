@@ -44,7 +44,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ROOTS = [
-    REPO_ROOT / "runs",
+    Path("/fss-data/evin_t/tagseq2tagseq_artifacts/runs_legacy"),
     Path("/fss-data/evin_t/tagseq2tagseq_artifacts/runs"),
 ]
 # Standalone eval run dirs (written by eval_checkpoints.py). Each carries a
@@ -52,7 +52,6 @@ DEFAULT_ROOTS = [
 # eval metrics are re-attached to the training record by source_run_id — eval no
 # longer writes into training run dirs. Keep in sync with eval_checkpoints._evals_root.
 DEFAULT_EVALS_ROOTS = [
-    REPO_ROOT / "evals",
     Path("/fss-data/evin_t/tagseq2tagseq_artifacts/evals"),
 ]
 
@@ -442,7 +441,7 @@ def write_if_changed(path, record, dry_run):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--roots", nargs="+", default=[str(r) for r in DEFAULT_ROOTS],
-                    help="Run-dir roots to scan (default: in-repo runs/ + fss-data runs/)")
+                    help="Run-dir roots to scan (default: fss-data runs/ + runs_legacy/)")
     ap.add_argument("--evals-roots", nargs="+", default=[str(r) for r in DEFAULT_EVALS_ROOTS],
                     help="Standalone eval-run roots to scan for metrics re-attached by "
                          "source_run_id (default: in-repo evals/ + fss-data evals/)")

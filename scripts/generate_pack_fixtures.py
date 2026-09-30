@@ -35,7 +35,7 @@ import torch
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-DATASET_DIR = "/fss/evin_t/tagseq2tagseq/data/pretokenized_datasets/simplewiki"
+DATASET_DIR = "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki"
 OUT_DIR = REPO_ROOT / "tests" / "fixtures" / "real_packs"
 
 

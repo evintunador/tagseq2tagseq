@@ -295,7 +295,7 @@ def test_fuzz_equivalence(seed):
 # 3. Dataset integration tests (conditional on simplewiki being present)
 # ---------------------------------------------------------------------------
 
-SIMPLEWIKI_DIR = "data/pretokenized_datasets/simplewiki"
+SIMPLEWIKI_DIR = "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki"
 
 
 def _simplewiki_available() -> bool:

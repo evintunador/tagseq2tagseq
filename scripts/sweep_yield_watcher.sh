@@ -39,10 +39,10 @@ IDLE_RELAUNCH_MIN="${IDLE_RELAUNCH_MIN:-30}"
 AUTO_RELAUNCH="${AUTO_RELAUNCH:-1}"
 REPO="/fss/evin_t/tagseq2tagseq"
 # Run dirs may live in the new default location (/fss-data, off-repo, survives worktree
-# deletion) OR the legacy <repo>/runs. Job name (ts2ts_<basename>) is root-agnostic, so
+# deletion) OR the legacy /fss-data/evin_t/tagseq2tagseq_artifacts/runs_legacy. Job name (ts2ts_<basename>) is root-agnostic, so
 # we resolve a basename against BOTH roots. Order = new first, then legacy. Extend via
 # TS2TS_RUNS_ROOT (checked first; matches the default in main.py/launch_slurm.py).
-RUNS_DIRS=(${TS2TS_RUNS_ROOT:+"$TS2TS_RUNS_ROOT"} "/fss-data/evin_t/tagseq2tagseq_artifacts/runs" "$REPO/runs")
+RUNS_DIRS=(${TS2TS_RUNS_ROOT:+"$TS2TS_RUNS_ROOT"} "/fss-data/evin_t/tagseq2tagseq_artifacts/runs" "/fss-data/evin_t/tagseq2tagseq_artifacts/runs_legacy")
 NOTIFY="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/SWEEP_YIELD_NOTIFY.log"
 STATE_DIR="/fss-data/evin_t/tagseq2tagseq_artifacts/pipeline_logs/watcher_state"
 YIELD_LEDGER="$STATE_DIR/yielded_jobs.tsv"        # run_dir<TAB>config<TAB>killed_epoch<TAB>status
@@ -320,7 +320,7 @@ _gpus_of_job() {
 # this (120 silent full resets vs 163 real resumes), go_veoff_cdl alone 30 times.
 latest_lineage_checkpoint() {
   local cfg="$1" extra="$2"
-  python3 - "$cfg" "$extra" "$REPO/runs" "/fss-data/evin_t/tagseq2tagseq_artifacts/runs" "${TS2TS_RUNS_ROOT:-}" <<'PYEOF' 2>/dev/null
+  python3 - "$cfg" "$extra" "/fss-data/evin_t/tagseq2tagseq_artifacts/runs_legacy" "/fss-data/evin_t/tagseq2tagseq_artifacts/runs" "${TS2TS_RUNS_ROOT:-}" <<'PYEOF' 2>/dev/null
 import sys, os, glob, json
 
 cfg, extra = sys.argv[1], sys.argv[2]

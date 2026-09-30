@@ -5,7 +5,7 @@ Usage:
     python generate.py \\
         --checkpoint runs/YYYYMMDD/checkpoints/best_model.pt \\
         --prompt "Python is a programming language" \\
-        [--dataset data/pretokenized_datasets/simplewiki] \\
+        [--dataset /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki] \\
         [--max-new-tokens 300] \\
         [--max-link-depth 2] \\
         [--link-retrieval-mode {corpus_only,generate_only,corpus_then_generate,link_but_skip,full_skip}] \\

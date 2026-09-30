@@ -28,8 +28,8 @@ from model.graph_traversal.markdown_link_detector import MarkdownLinkDetector
 cuda_available = torch.cuda.is_available()
 CUDA_MARK = pytest.mark.skipif(not cuda_available, reason="CUDA not available")
 
-SIMPLEWIKI_DIR = "data/pretokenized_datasets/simplewiki"
-STACK10M_DIR = "data/pretokenized_datasets/stack_10m"
+SIMPLEWIKI_DIR = "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki"
+STACK10M_DIR = "/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/stack_10m"
 
 
 # ---------------------------------------------------------------------------
