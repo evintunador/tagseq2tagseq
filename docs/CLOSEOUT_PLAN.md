@@ -187,41 +187,50 @@ Recovered reasoning from the unopenable sessions is in `docs/EVAL_DECISIONS.md`.
 
 ## 7. Housekeeping
 
-### The in-repo runs directory is not a duplicate
+### Where the data lives
 
-`runs/` in the main checkout holds 2.70 TB across 808 checkpoint files in 583 runs. The
-move to the fss-data runs root did happen: nothing in-repo is newer than 2026-08-13 and
-all current runs land on fss-data. But **634 of the 635 in-repo run directories exist
-nowhere else**. This is the only copy, not leftover duplication, so deleting the directory
-wholesale destroys data.
+All data and run outputs live under `/fss-data/evin_t/tagseq2tagseq_artifacts/`. The main
+checkout holds only code; it keeps symlinks at the old paths so that provenance records and
+result files embedding those paths still resolve.
 
-**All 22 run ids cited by `provenance/ledger.yaml` are repo-only**, totalling about
-150 GB. They must be kept. Among them are the matched pair that the link-injection
-evaluation scores against.
+| checkout path | fss-data location |
+|---|---|
+| `runs` | `runs_legacy` (runs written before the fss-data runs root existed) |
+| `schedules` | `schedules_legacy` |
+| `evals`, `artifacts` | `evals`, `artifacts` |
+| `logs`, `slurm_logs` | `pipeline_logs/repo_logs`, `pipeline_logs/repo_slurm_logs` |
+| `data/.cache` | `cache/main_checkout_data_cache` |
+| `data/wiki_articles*` | `raw/wiki_articles*` |
+| `data/github_graph_extractor/{graph,sample}*` | `graphs/github_graph_extractor/` |
 
-The safe reclaim is different. Every run stores both `best_model.pt` and `latest.pt`, and
-373 runs have both. Best-checkpoint selection ran on a validation metric that was itself
-buggy, which is why evaluation standardised on the fully cooled `latest.pt`. So
-`best_model.pt` is dead weight wherever `latest.pt` exists. Dropping it everywhere except
-the 22 ledger runs reclaims **1.31 TB** and costs nothing that is used. Keep both copies
-for the ledger runs, where the extra cost is 85 GB.
+`runs_legacy` is kept separate from `runs` on purpose. The quarantine script selects
+targets by a timing heuristic across every run under its roots, and the legacy set is the
+one known to hold contaminated eval sidecars. All 22 run ids cited by
+`provenance/ledger.yaml` are in `runs_legacy`, including the matched pair the
+link-injection evaluation scores against.
 
-Note for that operation: 48 runs have only `best_model.pt` and no `latest.pt`. Do not
-touch those, or they lose their only checkpoint.
+The virtual environment stays in the checkout, since a venv cannot be relocated.
 
-The distilled records in `provenance/runs/` cover 656 runs, so run *metadata* survives
-independently of the checkpoints. What deletion costs is the ability to re-run an eval,
-not the provenance trail.
+**Launch hazard:** the reproducibility manager reads every untracked, non-ignored file into
+its patch when a run starts. A large untracked file anywhere in a checkout silently bloats
+or hangs the next run launched from it. Keep bulk data out of checkouts or ignored.
+
+### Reclaimable space in runs_legacy
+
+Every run stores both `best_model.pt` and `latest.pt`, and 373 runs have both.
+Best-checkpoint selection ran on a validation metric that was itself buggy, which is why
+evaluation standardised on the fully cooled `latest.pt`, so `best_model.pt` is dead weight
+wherever `latest.pt` exists. Dropping it everywhere except the 22 ledger runs reclaims
+**1.31 TB**. 48 runs have only `best_model.pt`; do not touch those, or they lose their only
+checkpoint. The distilled records in `provenance/runs/` keep run metadata independently of
+the checkpoints.
 
 ### Other
 
-- `data/github_graph_extractor/sample_{1M,10M,100M}.jsonl` is 131 GB, and those committed
-  graph keys predate the normalization refactor, so they may be stale as well as large.
+- `graphs/github_graph_extractor/sample_{1M,10M,100M}.jsonl` is 131 GB, and those graph keys
+  predate the normalization refactor, so they may be stale as well as large.
 - Recreatable caches of a few GB each under `-evaltrack` and `-memexp`.
-- The other four worktrees hold no run output worth reclaiming; `-sparsity` and
-  `-evaltrack` have empty or absent runs directories.
 - `aws_keys_scratch.txt` sits in the home directory. Worth rotating or deleting.
-- Neither filesystem is near capacity, so this is hygiene rather than an emergency.
 
 ### Branches
 
