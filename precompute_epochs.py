@@ -10,7 +10,7 @@ the dataset type is auto-detected from the identifier format.
 Usage
 -----
     python precompute_epochs.py \\
-        --dataset-dir  /fss/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \\
+        --dataset-dir  /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/thestack/splits/train \\
         --output-dir   schedules/thestack_bfs \\
         --n-epochs     5 \\
         --strategy     bfs \\

@@ -1,5 +1,14 @@
 # tagseq2tagseq closeout plan
 
+> **2026-10-28 cleanup.** This plan describes the state on 2026-09-30. Since then the
+> java learning-rate sweep ended (last jobs finished 2026-10-09; three exited FAILED 6:0),
+> no tagseq jobs run, and the repo was reduced to a single `main` branch: the `-evaltrack`,
+> `-linkeval` and `-sparsity` worktrees and every merged or stale branch, local and remote,
+> are deleted. The `-memexp` worktree's uncommitted work is on main as of commit 20d4ed6.
+> Ignored, non-reproducible worktree files are in `worktree_archive/` on fss-data (see its
+> README). The project is now in a soft reset: design and experiment plan come before
+> any further runs, so sections 2, 4 and 8 are no longer the plan of record.
+
 Horizon: cluster compute available until mid-to-late October.
 
 Everything is on `main`. There are no open pull requests and no unmerged work in any
@@ -202,6 +211,8 @@ result files embedding those paths still resolve.
 | `data/.cache` | `cache/main_checkout_data_cache` |
 | `data/wiki_articles*` | `raw/wiki_articles*` |
 | `data/github_graph_extractor/{graph,sample}*` | `graphs/github_graph_extractor/` |
+| `/fss/evin_t/tagseq2tagseq_artifacts` (May 2026 simplewiki/thestack builds, outside the checkout) | `fss_home_legacy_may2026` |
+| ignored files from removed worktrees | `worktree_archive` |
 
 `runs_legacy` is kept separate from `runs` on purpose. The quarantine script selects
 targets by a timing heuristic across every run under its roots, and the legacy set is the
