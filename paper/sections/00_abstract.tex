@@ -14,12 +14,10 @@ imports across several languages, link-gated attention lowers the likelihood of
 link-dependent completions relative to the same tokens scored without the target
 ($\Delta$nll $=\val{crossdoc.wiki_hotpotqa.delta_nll}$ on a HotpotQA cross-document
 benchmark; \val{crossdoc.repobench_python.delta_nll}--\val{crossdoc.repobench_java.rw.delta_nll}
-on RepoBench), leaves single-document benchmarks unchanged, and beats matched-compute
-controls that grant more attention without the link gating. Holding the corpus fixed
+on RepoBench), and leaves single-document benchmarks unchanged. Holding the corpus fixed
 and varying only the fraction of edges the mask may use, the benefit on code scales
 near-linearly with realized link density, saturates early in training, and is
-dominated by the density exposed at inference. A merged multi-source model
-\fillin{strengthens/weakens?} the effect. We argue that the design's central promise
+dominated by the density exposed at inference. We argue that the design's central promise
 --- a model that fetches from its corpus by generating a reference, learned from
 pretraining alone --- is a measurement these small models cannot yet support, and set
 it up as the next step.

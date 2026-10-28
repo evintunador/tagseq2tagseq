@@ -58,28 +58,11 @@ entries:
     format: {sig_figs: 0}
     note: "Number of cross-doc examples scored."
 
-  # === Compute controls: RepoBench perplexity across masks (thestack, VE-off) ===
-  # thestack_sweep/thestack_veoff_*.yaml. Lower is better; cross_doc_link wins.
-  compute.repobench_ppl.cross_doc_link:
-    run_ids: [run_20260720_063128_690228]
-    source: {kind: eval, metric_path: "repobench/doceval", field: perplexity}
-    expected: 7.248327523404614
-    note: "cross_doc_link (the linking inductive bias)."
-  compute.repobench_ppl.doc_concat_link:
-    run_ids: [run_20260720_070020_196807]
-    source: {kind: eval, metric_path: "repobench/doceval", field: perplexity}
-    expected: 8.76307652585637
-    note: "doc_concat_link compute control (more attention, no link supervision)."
-  compute.repobench_ppl.doc_causal:
-    run_ids: [run_20260720_063850_432424]
-    source: {kind: eval, metric_path: "repobench/doceval", field: perplexity}
-    expected: 8.941371551083046
-    note: "doc_causal baseline."
-  compute.repobench_ppl.doc_concatenated:
-    run_ids: [run_20260720_064936_044405]
-    source: {kind: eval, metric_path: "repobench/doceval", field: perplexity}
-    expected: 10.417361568766257
-    note: "doc_concatenated (flat concat) baseline."
+  # === Compute controls: REMOVED 2026-10-28 ===
+  # compute.repobench_ppl.* (runs run_20260720_{063128_690228,070020_196807,063850_432424,
+  # 064936_044405}) were scored by run_repobench under doc_causal for every mask, so they
+  # cannot distinguish the masks; isolated re-runs collapse all four to ~5.9. Runs and their
+  # provenance/runs records are kept. See docs/CLOSEOUT_PLAN.md section 2.
 
   # === Code RepoBench cross-doc Delta nll across traversals (Java) ===
   # thestack Java runs; Delta = flat_linked - cross_doc mean NLL on repobench_cross_doc.

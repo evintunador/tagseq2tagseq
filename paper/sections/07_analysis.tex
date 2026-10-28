@@ -8,12 +8,12 @@ The number that isolates our contribution is not \crossdoc against \doccausal bu
 is consistent that co-locating related documents under ordinary attention buys most of
 the \emph{general} long-context gain; that gain is available to \concatlink and
 \concat too, and we do not claim it. What \concatlink cannot do is tell the model
-\emph{where} the entitlement to read the target begins. On RepoBench perplexity the
-link-gated mask beats its whole-document superset, and the fully permissive
-\concat is the worst condition of the four (\Cref{sec:results:controls}), the
-ordering K-BERT's visible-matrix ablation \citep{liu2020kbert} would predict: the
-typed edge is doing work that more attention does not. We treat the controls as
-first-class results, not a survival test.
+\emph{where} the entitlement to read the target begins. If the typed edge is doing
+work that more attention does not, the link-gated mask should beat its whole-document
+superset and the fully permissive \concat should be worst, the ordering K-BERT's
+visible-matrix ablation \citep{liu2020kbert} would predict
+(\Cref{sec:results:controls}: \fillin{mask-aware compute-control result}). We treat
+the controls as first-class results, not a survival test.
 
 \paragraph{The effect is a genuine linking bias.}
 The placebo and leakage controls (\Cref{sec:results:specificity}) rule out the two

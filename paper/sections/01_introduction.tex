@@ -57,9 +57,9 @@ merged-corpus, general-capability story is not ours.
         \emph{link-position-gated}, causality-preserving cross-document attention along
         explicit edges, with custom block-sparse kernels that make it tractable at $32$k
         context (\Cref{sec:method}, \Cref{app:kernels}).
-  \item Matched-compute controls (\concatlink, \concat) that attribute the
-        cross-document gain to the linking inductive bias rather than to added attention
-        or to co-location of linked content (\Cref{sec:results}).
+  \item Matched-compute controls (\concatlink, \concat) designed to separate the
+        linking inductive bias from added attention and from co-location of linked
+        content (\Cref{sec:results:controls}).
   \item Evidence on two edge modalities---Wikipedia hyperlinks and code imports across
         several languages---that link-gated attention lowers the likelihood of
         link-dependent completions relative to the same tokens scored without the

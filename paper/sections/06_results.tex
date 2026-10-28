@@ -113,39 +113,19 @@ trained for a few billion tokens.
 
 \subsection{Compute controls}
 \label{sec:results:controls}
-Granting the baselines more within-context attention does not close the gap
-(\Cref{tab:compute-controls}). On code RepoBench perplexity, \crossdoc reaches
-\val{compute.repobench_ppl.cross_doc_link}, whereas \concatlink and \concat --- which
-see the same concatenated multi-document context and strictly more attention --- sit at
-\val{compute.repobench_ppl.doc_concat_link} and \val{compute.repobench_ppl.doc_concatenated}
-respectively, and the plain \doccausal baseline at \val{compute.repobench_ppl.doc_causal}.
-The residual that isolates the contribution is \crossdoc against \concatlink at
-identical connectivity, and it favours the link-gated mask; \concat, the most
-permissive condition, is the \emph{worst} of the four, consistent with the packing
-literature's finding that indiscriminate cross-document attention hurts. The matching
-contrast on the Wikipedia HotpotQA benchmark --- \concatlink scored cross-doc against
-\crossdoc --- is \fillin{$\Delta$nll, wiki concat-link arm}.
+The contrast that isolates the contribution is \crossdoc against \concatlink at
+identical connectivity, each scored under its own mask:
+\fillin{mask-aware compute-control measurement}. The matching contrast on the
+Wikipedia HotpotQA benchmark --- \concatlink scored cross-doc against \crossdoc --- is
+\fillin{$\Delta$nll, wiki concat-link arm}.
+% REMOVED 2026-10-28: the four-way RepoBench-perplexity table (compute.repobench_ppl.*,
+% 7.25/8.94/8.76/10.4). run_repobench scores every model under doc_causal, so the
+% cross-doc mechanism is off at scoring time and the four masks cannot be distinguished;
+% re-running under isolated eval dirs collapsed all four to ~5.9 with overlapping CIs.
+% The runs are kept (run_20260720_{063128_690228,070020_196807,063850_432424,
+% 064936_044405}); see docs/CLOSEOUT_PLAN.md section 2 for the mask-aware fix.
 % The wiki_docconcatlink_best run (run_20260717_234605_156456) has single-doc evals but
 % NO hotpotqa_cross_doc eval in any record; needs a cluster-side eval (TODOS.md).
-
-\begin{table}[t]
-  \centering
-  \small
-  \begin{tabular}{@{}lr@{}}
-    \toprule
-    Mask & RepoBench perplexity $\downarrow$ \\
-    \midrule
-    \doccausal  & \val{compute.repobench_ppl.doc_causal} \\
-    \crossdoc   & \val{compute.repobench_ppl.cross_doc_link} \\
-    \concatlink & \val{compute.repobench_ppl.doc_concat_link} \\
-    \concat     & \val{compute.repobench_ppl.doc_concatenated} \\
-    \bottomrule
-  \end{tabular}
-  \caption{Compute controls on The Stack (Python), VE off, one run per mask. Attention
-  permitted increases down the table from \doccausal to \concat; the link-gated
-  \crossdoc is best and the most permissive control is worst.}
-  \label{tab:compute-controls}
-\end{table}
 
 \subsection{Traversal ablation}
 \label{sec:results:traversal}
@@ -239,18 +219,10 @@ analysis pending an audit of the community-pack instrument on that corpus
 % grounded. Figures: sparsity_scaling/fig_sparsity.png, fig_traintime.png, fig_grid2d.png,
 % regression.png -- copy into paper/figures/.
 
-\subsection{Diversity scaling (merged multi-source model)}
-\label{sec:results:diversity}
-An 11-source merged model's cross-document $\Delta$ is \fillin{ratio $\times$}
-\fillin{larger/smaller?} than single-domain specialists (flat scaling
-\fillin{params} $\to$ \fillin{params}), suggesting joint training over many link types
-\fillin{strengthens/weakens?} the cross-document machinery itself.
-% DO NOT ground yet: numbers are recomputable from results/merged_v2_{3p9b,8b}_ports_useline/*.json
-% (merge delta_real) + eval/benchmark_harness/reports/matrix/*.json (specialist baselines),
-% BUT the entire merged_all_v2 family was retracted 2026-08-14 (sequential-not-interleaved
-% dataloader bug; see RESULTS_graph_sparsity.md) and this claim is built on it. Kotlin/TS
-% baselines are external ports (indicative, not exact). Re-run on a fixed merge before grounding.
-% Add the per-port merge-vs-specialist table here once re-run.
+% REMOVED 2026-10-28: "Diversity scaling (merged multi-source model)" subsection. Its
+% claim was built on the merged_all_v2 family, retracted 2026-08-14 for a
+% sequential-not-interleaved dataloader bug; section 7 already makes no diversity claim.
+% Runs and results/merged_v2_*_ports_useline/*.json are kept for a re-run on a fixed merge.
 
 \subsection{Density-aware scheduling efficiency}
 \label{sec:results:efficiency}

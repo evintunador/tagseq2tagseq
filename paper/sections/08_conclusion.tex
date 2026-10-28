@@ -7,8 +7,7 @@ mask keeps them causally isolated except along explicit edges, and where documen
 links to document $B$ the tokens of $A$ from the link onward may read $B$. On
 Wikipedia hyperlinks and on code imports across several languages, this lowers the
 likelihood of link-dependent completions relative to the same tokens scored without
-the target, leaves single-document capability unchanged, and beats matched-compute
-controls that grant more attention without the link gating. Varying only the fraction
+the target, and leaves single-document capability unchanged. Varying only the fraction
 of edges the mask may use shows the benefit on code scaling with realized link
 density, saturating early in training, and being dominated by the density exposed at
 inference.
