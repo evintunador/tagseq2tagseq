@@ -387,7 +387,7 @@ relaunch_yielded() {
   note "  RELAUNCH $tag on $node (gpus/node=$gpus) $([ -n "$resume_args" ] && echo "(resume from $ck_src$([ "$ck_src" != "$(basename "$rundir")" ] && echo " — earlier lineage segment, not $(basename "$rundir")"))" || echo "(fresh — no ckpt found anywhere in lineage)")$([ -n "$extra" ] && echo " [+overrides: $extra]")"
   TS2TS_SHARED_COMPILE_CACHE="/tmp/ts2ts_relaunch_$(basename "$rundir")" \
     "$REPO/.venv/bin/python" "$REPO/launch_slurm.py" --nodes 1 --gpus-per-node "$gpus" \
-    --nodelist "$node" --config "$cfg" --time 96:00:00 --no-tail $resume_args $extra \
+    --exclude GPU-495,GPU-749 --config "$cfg" --time 96:00:00 --no-tail $resume_args $extra \
     >> "$STATE_DIR/relaunch.log" 2>&1
 }
 

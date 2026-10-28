@@ -37,9 +37,9 @@ DISPLAY = {"doc_causal": "doc_causal", "cross_doc_link": "cross_doc_link"}
 COLOR = {"doc_causal": C_DC, "cross_doc_link": C_CDL}
 
 
-def load_series(manifest_path, runs_root):
+def load_series(manifest_path, runs_root, lr_key="muon_lr_0.003"):
     """mask -> sorted list of (epoch, train_nll, val_nll), skipping missing runs."""
-    manifest = json.load(open(manifest_path))
+    manifest = json.load(open(manifest_path))[lr_key]
     out = {}
     for mask in ("doc_causal", "cross_doc_link"):
         pts = []
@@ -57,11 +57,11 @@ def load_series(manifest_path, runs_root):
     return out
 
 
-def plot(series, out_stem):
+def plot(series, out_stem, series_alt=None):
     fig, ax = plt.subplots(figsize=(5.6, 4.2), facecolor="#fcfcfb")
     ax.set_facecolor("#fcfcfb")
 
-    all_epochs = sorted({e for pts in series.values() for e, _, _ in pts})
+    all_epochs = sorted({e for ser in (series, series_alt or {}) for pts in ser.values() for e, _, _ in pts})
 
     for mask in ("doc_causal", "cross_doc_link"):
         pts = series[mask]
@@ -79,10 +79,18 @@ def plot(series, out_stem):
 
         # Direct label at the last available point of the val (primary) line.
         lx, ly = epochs[-1], val_y[-1]
-        dy = 0.012 if mask == "doc_causal" else -0.016
+        dy = -0.03 if mask == "doc_causal" else 0.03
         ax.annotate(DISPLAY[mask], (lx, ly), xytext=(6, dy * 300),
                     textcoords="offset points", color=color, fontsize=10,
                     fontweight="bold", va="center")
+
+    # Second series (muon_lr 0.002): val only, thin line, hollow markers.
+    for mask, pts in (series_alt or {}).items():
+        if not pts:
+            continue
+        ax.plot([e for e, _, _ in pts], [v for _, _, v in pts], color=COLOR[mask], linewidth=1.1,
+                marker="o", markersize=6, markerfacecolor="#fcfcfb", markeredgewidth=1.4,
+                alpha=0.9, zorder=2)
 
     # Line style (solid vs dashed) is a separate channel from color (mask identity),
     # so it gets its own neutral-ink legend rather than relying on the axis label.
@@ -91,6 +99,8 @@ def plot(series, out_stem):
                    markeredgewidth=0, label="held-out (val)"),
         plt.Line2D([], [], color=INK, linewidth=1.5, linestyle=(0, (3, 2)),
                    marker="o", markersize=4.5, markeredgewidth=0, alpha=0.55, label="train"),
+        plt.Line2D([], [], color=INK, linewidth=1.1, marker="o", markersize=6,
+                   markerfacecolor="#fcfcfb", markeredgewidth=1.4, label="val, muon_lr 0.002"),
     ]
     ax.legend(handles=style_handles, loc="upper right", frameon=False,
               fontsize=9, labelcolor=MUTED, handlelength=2.4, borderaxespad=0.2)
@@ -106,7 +116,7 @@ def plot(series, out_stem):
     ax.grid(axis="y", color=GRID, linewidth=0.8, zorder=0)
     ax.set_axisbelow(True)
 
-    fig.suptitle("java: cross_doc_link keeps improving past doc_causal's onset of degradation",
+    fig.suptitle("java: held-out NLL vs. data repetitions (muon_lr 0.003 unless noted)",
                  fontsize=10.5, color=INK, y=0.99)
 
     fig.tight_layout()
@@ -125,9 +135,11 @@ def main():
     a = ap.parse_args()
 
     series = load_series(a.manifest, a.runs_root)
-    for mask, pts in series.items():
-        print(f"{mask}: {len(pts)} point(s) -> epochs {[e for e, _, _ in pts]}")
-    plot(series, a.out)
+    series_alt = load_series(a.manifest, a.runs_root, "muon_lr_0.002")
+    for tag, ser in (("0.003", series), ("0.002", series_alt)):
+        for mask, pts in ser.items():
+            print(f"lr {tag} {mask}: {len(pts)} point(s) -> epochs {[e for e, _, _ in pts]}")
+    plot(series, a.out, series_alt)
 
 
 if __name__ == "__main__":

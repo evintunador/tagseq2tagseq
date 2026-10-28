@@ -1,19 +1,35 @@
 {
-  "_comment": "Run-dir manifest for eval/viz/plot_epochs_to_degradation.py. Each entry points at a run dir containing checkpoints/best_model.pt and a memorization_gap_eos_best.json (from `python -m eval.memorization --checkpoint .../best_model.pt --mode gap --max-docs 9000 --layout-policy eos`). best_model.pt, not latest.pt, is load-bearing here -- training val loss is noisy checkpoint-to-checkpoint, so latest.pt can land on an arbitrary uptick. Corrected-warmup arms only (warmup_percent, not the old fixed warmup_steps=300). Add the e16 row for cross_doc_link once that arm finishes training and its gap probe has been run.",
-  "doc_causal": {
-    "2": "run_20260904_104928_241150",
-    "4": "run_20260904_105146_844156",
-    "6": "run_20260905_063535_503909",
-    "8": "run_20260907_201237_966002",
-    "12": "run_20260907_201234_445738",
-    "16": "run_20260907_201246_402794"
+  "_comment": "Run-dir manifest for eval/viz/plot_epochs_to_degradation.py. Each entry points at a run dir containing checkpoints/best_model.pt and a memorization_gap_eos_best.json (from `python -m eval.memorization --checkpoint .../best_model.pt --mode gap --max-docs 9000 --layout-policy eos`). best_model.pt, not latest.pt, is load-bearing here -- training val loss is noisy checkpoint-to-checkpoint, so latest.pt can land on an arbitrary uptick. Corrected-warmup arms only (warmup_percent, not the old fixed warmup_steps=300). Two series: 'muon_lr_0.003' is the main ladder; 'muon_lr_0.002' holds the e12-e24 arms trained at the LR the e16 sweep favoured.",
+  "muon_lr_0.003": {
+    "doc_causal": {
+      "2": "run_20260904_104928_241150",
+      "4": "run_20260904_105146_844156",
+      "6": "run_20260905_063535_503909",
+      "8": "run_20260907_201237_966002",
+      "12": "run_20260907_201234_445738",
+      "16": "run_20260907_201246_402794",
+      "32": "run_20261007_084124_918724"
+    },
+    "cross_doc_link": {
+      "2": "run_20260903_182818_649889",
+      "4": "run_20260903_182813_840325",
+      "6": "run_20260904_105151_599132",
+      "8": "run_20260908_234344_337435",
+      "12": "run_20260908_234907_475056",
+      "32": "run_20261007_080639_761471"
+    }
   },
-  "cross_doc_link": {
-    "2": "run_20260903_182818_649889",
-    "4": "run_20260903_182813_840325",
-    "6": "run_20260904_105151_599132",
-    "8": "run_20260908_234344_337435",
-    "12": "run_20260908_234907_475056",
-    "16": null
+  "muon_lr_0.002": {
+    "doc_causal": {
+      "12": "run_20260926_051200_443742",
+      "16": "run_20260929_044215_497440",
+      "24": "run_20261002_164116_949692",
+      "32": "run_20261007_080555_240260"
+    },
+    "cross_doc_link": {
+      "12": "run_20260925_041857_376845",
+      "16": "run_20260926_062257_370746",
+      "24": "run_20261002_130500_405070"
+    }
   }
 }
