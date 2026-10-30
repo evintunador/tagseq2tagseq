@@ -2,14 +2,12 @@
 TS2TSAttention — single attention module that dispatches between flex_attention
 and custom Triton kernels based on self.backend.
 
-  backend='flex':         calls flex_attention directly with a FlexAttention BlockMask.
-  backend='triton':       dispatches to the right custom kernel based on block_mask type:
-                            TritonMaskInputs          → cdb_bim_v12 (cross_doc_link)
-                            DocCausalTritonMaskInputs → varlen_bim_v1 (doc_causal)
-  backend='triton_v17':   cross-doc: v17 kernel (BIM_BLOCK_SIZE=128 fwd, 64 bwd).
-                            BUG: NaN gradients when LSE has sentinel values.
-  backend='triton_v18':   cross-doc: v18 kernel (v17 + nan_to_num guard). DEFAULT.
-  backend='varlen_bim_v2': doc-causal: varlen BIM v2 kernel (v1 + nan_to_num guard).
+  backend='flex':    calls flex_attention directly with a FlexAttention BlockMask.
+  backend='triton':  dispatches to the custom kernel matching the block_mask type:
+                       TritonMaskInputs          → cross_doc_bitmask_bim_v18
+                                                   (cross_doc_link, doc_concat_link)
+                       DocCausalTritonMaskInputs → varlen_bim_v2
+                                                   (doc_causal, doc_concatenated)
 
 Changing self.backend after construction (e.g. layer.attn.backend = 'flex') switches
 inference mode without any weight copying or __class__ reassignment.
@@ -69,24 +67,6 @@ def _inject_ve(x_norm: Tensor, v: Tensor, ve: Tensor, ve_gate_w: Tensor,
 # Triton kernel wrappers (dynamo-disabled so non-tensor args don't graph-break)
 # ---------------------------------------------------------------------------
 
-def _triton_attn_v12(q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim, scale):
-    from kernels.cross_doc_bitmask_bim_v12 import triton_attn_cross_doc_bitmask_bim_v12
-    return triton_attn_cross_doc_bitmask_bim_v12(
-        q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim, scale
-    )
-
-_triton_attn_v12_disabled = torch._dynamo.disable(_triton_attn_v12)
-
-
-def _triton_attn_v17(q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim128, bim64, scale):
-    from kernels.cross_doc_bitmask_bim_v17 import triton_attn_cross_doc_bitmask_bim_v17
-    return triton_attn_cross_doc_bitmask_bim_v17(
-        q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim128, bim64, scale
-    )
-
-_triton_attn_v17_disabled = torch._dynamo.disable(_triton_attn_v17)
-
-
 def _triton_attn_v18(q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim128, bim64, scale):
     from kernels.cross_doc_bitmask_bim_v18 import triton_attn_cross_doc_bitmask_bim_v18
     return triton_attn_cross_doc_bitmask_bim_v18(
@@ -94,13 +74,6 @@ def _triton_attn_v18(q, k, v, document_ids, q_bitmasks, kv_bitmasks, bim128, bim
     )
 
 _triton_attn_v18_disabled = torch._dynamo.disable(_triton_attn_v18)
-
-
-def _varlen_bim_v1_attn(q, k, v, doc_ids, scale):
-    from kernels.varlen_bim_v1 import triton_attn_doc_causal_bim_v1_from_doc_ids
-    return triton_attn_doc_causal_bim_v1_from_doc_ids(q, k, v, doc_ids, scale)
-
-_varlen_bim_v1_attn_disabled = torch._dynamo.disable(_varlen_bim_v1_attn)
 
 
 def _varlen_bim_v2_attn(q, k, v, doc_ids, scale):
@@ -122,13 +95,9 @@ class TS2TSAttention(FlexSelfAttention):
 
     Args:
         backend: Attention backend. One of:
-                   'triton'       — custom Triton kernels (v12 for cross_doc_link,
-                                    varlen_bim_v1 for doc_causal). Default.
-                   'flex'         — flex_attention with a FlexAttention BlockMask.
-                   'triton_v17'   — v17 kernel for cross_doc_link (BIM_BS=128 fwd,
-                                    64 bwd). BUG: NaN with sentinel LSE.
-                   'triton_v18'   — v18 kernel for cross_doc_link (v17 + nan guard).
-                   'varlen_bim_v2'— v2 varlen kernel for doc_causal (v1 + nan guard).
+                   'triton' — custom Triton kernels (v18 for link masks,
+                              varlen_bim_v2 for doc-causal masks). Default.
+                   'flex'   — flex_attention with a FlexAttention BlockMask.
                  Can be changed after construction: ``layer.attn.backend = 'flex'``.
 
     Value embeddings:
@@ -168,70 +137,33 @@ class TS2TSAttention(FlexSelfAttention):
 
         elif self.backend == 'triton':
             if isinstance(block_mask, TritonMaskInputs):
-                # cross_doc_link: v12 BIM kernel
-                y = _triton_attn_v12_disabled(
+                assert block_mask.bim64 is not None, "v18 requires TritonMaskInputs.bim64"
+                y = _triton_attn_v18_disabled(
                     q.squeeze(0), k.squeeze(0), v.squeeze(0),
                     block_mask.document_ids,
                     block_mask.q_bitmasks,
                     block_mask.kv_bitmasks,
                     block_mask.bim,
+                    block_mask.bim64,
                     self.scale,
                 )
-                y = y.unsqueeze(0).reshape(B, T, self.num_heads * self.head_dim)
-
             elif isinstance(block_mask, DocCausalTritonMaskInputs):
-                # doc_causal: varlen BIM v1 kernel
-                y = _varlen_bim_v1_attn_disabled(
+                y = _varlen_bim_v2_attn_disabled(
                     q.squeeze(0), k.squeeze(0), v.squeeze(0),
                     block_mask.document_ids,
                     self.scale,
                 )
-                y = y.unsqueeze(0).reshape(B, T, self.num_heads * self.head_dim)
-
             else:
                 raise TypeError(
                     f"TS2TSAttention(backend='triton') expects TritonMaskInputs or "
                     f"DocCausalTritonMaskInputs, got {type(block_mask).__name__}. "
-                    f"Check that your mask creator uses backend='triton_v12' / "
-                    f"'varlen_bim_v1', not 'flex'."
+                    f"Check that the mask creator uses backend='triton', not 'flex'."
                 )
-
-        elif self.backend in ('triton_v17', 'triton_v18'):
-            assert isinstance(block_mask, TritonMaskInputs), (
-                f"TS2TSAttention(backend={self.backend!r}) expects TritonMaskInputs, "
-                f"got {type(block_mask).__name__}."
-            )
-            assert block_mask.bim64 is not None, (
-                f"{self.backend} requires TritonMaskInputs.bim64"
-            )
-            attn_fn = _triton_attn_v18_disabled if self.backend == 'triton_v18' else _triton_attn_v17_disabled
-            y = attn_fn(
-                q.squeeze(0), k.squeeze(0), v.squeeze(0),
-                block_mask.document_ids,
-                block_mask.q_bitmasks,
-                block_mask.kv_bitmasks,
-                block_mask.bim,
-                block_mask.bim64,
-                self.scale,
-            )
-            y = y.unsqueeze(0).reshape(B, T, self.num_heads * self.head_dim)
-
-        elif self.backend == 'varlen_bim_v2':
-            assert isinstance(block_mask, DocCausalTritonMaskInputs), (
-                f"TS2TSAttention(backend='varlen_bim_v2') expects DocCausalTritonMaskInputs, "
-                f"got {type(block_mask).__name__}."
-            )
-            y = _varlen_bim_v2_attn_disabled(
-                q.squeeze(0), k.squeeze(0), v.squeeze(0),
-                block_mask.document_ids,
-                self.scale,
-            )
             y = y.unsqueeze(0).reshape(B, T, self.num_heads * self.head_dim)
 
         else:
             raise ValueError(
-                f"Unknown backend {self.backend!r}. Expected 'flex', 'triton', "
-                f"'triton_v17', 'triton_v18', or 'varlen_bim_v2'."
+                f"Unknown backend {self.backend!r}. Expected 'flex' or 'triton'."
             )
 
         return self.Wout(y)

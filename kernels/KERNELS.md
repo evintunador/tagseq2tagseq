@@ -3,12 +3,28 @@
 Custom flash-attention kernels for the cross-document BIM (Block Interaction Mask)
 attention pattern used during TAGSeq2TAGSeq training.
 
-Benchmark harness: `python benchmarks/attention_harness.py bench --seq-lens 32768 --doc-lens 512`
-Correctness suite: `python benchmarks/attention_harness.py correctness --seq-len 512 --doc-len 128`
+## Production kernels
+
+| File | Used for | What it is |
+|------|----------|------------|
+| `cross_doc_bitmask_bim_v18.py` | `cross_doc_link`, `doc_concat_link` | BIM_BLOCK_SIZE=128 forward, 64 backward, sentinel-LSE NaN guard |
+| `varlen_bim_v2.py` | `doc_causal`, `doc_concatenated` | same BIM scheme without grant bitmasks, same NaN guard |
+| `bim_attn_core.py` | both | shared Triton sub-kernels (the v10 forward/backward inner loops + backward preprocess) |
+
+`TS2TSAttention(backend='triton')` picks between the two from the mask type; the mask
+creators build their inputs (`TritonMaskInputs` / `DocCausalTritonMaskInputs`).
+
+Correctness: `pytest tests/kernels/` (CUDA) or
+`python benchmarks/attention_harness.py correctness --seq-len 512 --doc-len 128`.
+Benchmark: `python benchmarks/attention_harness.py bench --seq-lens 32768 --doc-lens 512`.
+
+Every earlier version (v1–v17, `varlen_bim_v1`, and the causal / varlen / naive / bitmask
+OR-reduction kernels they grew from) was removed in the 2026-10 cleanup and is in git
+history. The rest of this file is the record of what each step taught.
 
 ---
 
-## Latest Results (A100 80GB, bf16, 16 heads, Dh=64, doc_len=512)
+## Historical results (v12 era; A100 80GB, bf16, 16 heads, Dh=64, doc_len=512)
 
 All ratios are relative to compiled FlexAttention (`torch.compile(flex_attention, dynamic=True)`).
 Ratio < 1.0 = faster than flex. Memory = peak HBM delta during fwd / fwd+bwd.
@@ -50,27 +66,21 @@ block masks at T=32k. v12 is the only viable option for Dh=128 workloads.
 
 ---
 
-## Kernel Inventory
+## Version lineage
 
-| File | Description |
-|------|-------------|
-| `causal_attn.py` | Full causal attention — `triton_causal` |
-| `varlen_attn.py` | Doc-causal via cu_seqlens — `triton_varlen` |
-| `cross_doc_naive_attn.py` | Cross-doc + dense bool mask — `triton_cross_doc_naive` |
-| `cross_doc_bitmask_attn.py` | Cross-doc + bitmasks, OR-reduction block skip — `cdb_v1` |
-| `cross_doc_bitmask_bim_v1.py` | BIM CSR forward + backward — `cdb_bim_v1` |
-| `cross_doc_bitmask_bim_v2.py` | v1 + diagonal-first backward — `cdb_bim_v2` |
-| `cross_doc_bitmask_bim_v3.py` | v2 + full/partial block split — `cdb_bim_v3` |
-| `cross_doc_bitmask_bim_v4.py` | v3 + split dKV/dQ backward kernels — `cdb_bim_v4` |
-| `cross_doc_bitmask_bim_v5.py` | Dead end: O(T²) bitmask scan — `cdb_bim_v5` |
-| `cross_doc_bitmask_bim_v6.py` | Dead end: double-tile via in-kernel CSR merge — `cdb_bim_v6` |
-| `cross_doc_bitmask_bim_v7.py` | Dead end: precomputed coarse CSR — `cdb_bim_v7` |
-| `cross_doc_bitmask_bim_v8.py` | Dead end: varlen-style same-doc pipelining — `cdb_bim_v8` |
-| `cross_doc_bitmask_bim_v9.py` | Dead end: split varlen-style pipelining — `cdb_bim_v9` |
-| `cross_doc_bitmask_bim_v10.py` | **bf16 TC matmuls** — `cdb_bim_v10` |
-| `cross_doc_bitmask_bim_v11.py` | v10 + **no permute/contiguous copies** — `cdb_bim_v11` |
-| `cross_doc_bitmask_bim_v12.py` | v11 + **BIM_BLOCK_SIZE=128** — `cdb_bim_v12` (**BEST**) |
-| `cross_doc_bitmask_bim_v13.py` | v12 + **pure-cross dispatch** — `cdb_bim_v13` |
+| Version | Change | Outcome |
+|---------|--------|---------|
+| causal / varlen / naive / bitmask_attn | full causal → doc-causal → dense cross-doc mask → [n_chunks, T] grant bitmasks with OR-reduction block skip | starting points |
+| v1–v4 | BIM CSR block lists; diagonal-first backward; full/partial block split; split dKV/dQ backward | v4 best of its era (1.3× flex) |
+| v5–v9 | attempts at bigger backward tiles | dead ends (below) |
+| v10 | native bf16 tensor-core matmuls | kept: its sub-kernels are `bim_attn_core.py` |
+| v11 | no permute/contiguous copies | flex-parity memory |
+| v12 | BIM_BLOCK_SIZE=128 | 0.77× flex at 32k |
+| v13 | pure-cross block dispatch | ~1% gain, dropped (its row ordering is still built) |
+| v14–v16 | wider autotune, persistent CTAs, cache hints | regressions / no gain (below) |
+| v17 | 128 forward / 64 backward BIM | fixes A100 SMEM overflow at Dh=128; NaN bug with sentinel LSE |
+| **v18** | v17 + sentinel-LSE NaN guard | **production** |
+| varlen_bim_v1 → **v2** | doc-causal-only BIM kernel; v2 adds the same NaN guard | **production** |
 
 ---
 
@@ -104,8 +114,8 @@ With bf16 from v10, K+V = 32KB total, so persistent pressure = 96KB → ~2.7 CTA
 larger matmuls (128×MICRO vs 64×MICRO), achieving far better TC utilization and
 cutting the backward from 7.41ms to 5.52ms.
 
-BIM rebuild: `_build_bim_128()` in `cross_doc_bitmask_bim_v12.py`. Separate BIM
-structures coexist (BS=64 for v1–v11, BS=128 for v12+).
+BIM rebuild: `_build_bim_128()` (now in `cross_doc_bitmask_bim_v18.py`). The mask
+creator builds both block sizes for v18: 128 for the forward, 64 for the backward.
 
 ### v13 — Pure-cross block classification
 Adds `q_kv_n_pure_cross` / `kv_q_n_pure_cross` to `BlockInteractionMask` and
@@ -208,5 +218,6 @@ and dLdO tensors (64 MB each), not on bitmasks.
 
 ## Kernel development complete
 
-v12 is the production kernel. No further kernel work is planned. The "tried and failed"
-log (v14–v16) and the dead-end history (v5–v9) are preserved above for reference.
+v18 (cross-doc) and varlen_bim_v2 (doc-causal) are the production kernels. No further
+kernel work is planned. The dead-end history (v5–v9) and the tried-and-failed log
+(v14–v16) are kept above for reference.

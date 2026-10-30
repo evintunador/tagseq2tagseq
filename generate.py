@@ -94,7 +94,7 @@ def load_inference_model(
         device: Target device.
         inference_attention_backend: Attention backend for the returned inference
             model. Defaults to 'flex' — FlexSelfAttention + torch.compile is
-            ~40× faster than varlen_bim_v1 for single-doc forward passes (37ms
+            ~40× faster than the varlen BIM kernel for single-doc forward passes (37ms
             vs 1.6s) because it compiles a single dynamic kernel rather than
             JIT-compiling per unique sequence length. Use 'triton' to keep the
             training backend (e.g. for batched multi-doc eval pipelines).
@@ -170,15 +170,10 @@ def load_inference_model(
 
     # Training backend — determines which attention kernel was used during training
     use_triton = model_cfg.get("attention_backend", "triton") != "flex"
-    if mask_type in ("cross_doc_link", "doc_concat_link"):
-        training_attention_backend = "triton" if use_triton else "flex"
-        training_attn_class_backend = "triton_v12" if use_triton else "flex"
-    elif mask_type == "doc_causal" and use_triton:
+    if use_triton and mask_type in ("cross_doc_link", "doc_concat_link", "doc_causal"):
         training_attention_backend = "triton"
-        training_attn_class_backend = "varlen_bim_v1"
     else:
         training_attention_backend = "flex"
-        training_attn_class_backend = "flex"
 
     # Build the block_mask_creator for weight reconstruction only.
     # The resulting TS2TSModel will build its own _creators dict.
@@ -188,11 +183,11 @@ def load_inference_model(
             CrossDocLinkMaskCreator(
                 link_detector=link_detector,
                 max_grants=int(model_cfg.get('max_grants') or 256),
-                backend=training_attn_class_backend,
+                backend=training_attention_backend,
                 whole_doc_grant=(mask_type == "doc_concat_link"),
             )
         )
-    elif training_attn_class_backend == "varlen_bim_v1":
+    elif mask_type == "doc_causal" and training_attention_backend == "triton":
         training_bmc = make_mask_creator_callable_from(create_doc_causal_triton_mask)
     else:
         training_bmc = make_mask_creator_callable(mask_type)
@@ -239,7 +234,7 @@ def load_inference_model(
         weight_tying=model_cfg.get("weight_tying", True),
         ignore_index=model_cfg.get("ignore_index", -100),
         dtype=torch.bfloat16,
-        attention_backend=training_attn_class_backend,
+        attention_backend=training_attention_backend,
         logit_softcap=model_cfg.get("logit_softcap"),
         mtp_extra_weights=mtp_extra_weights,
         ve_layers=ve_layers,

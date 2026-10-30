@@ -938,7 +938,7 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
             )
         enc = tiktoken.get_encoding('gpt2')
         detector = make_link_detector(link_detector_name, enc.decode)
-        attention_backend = 'triton_v18' if use_triton else 'flex'
+        attention_backend = 'triton' if use_triton else 'flex'
         block_mask_creator = make_mask_creator_callable_from(
             CrossDocLinkMaskCreator(
                 link_detector=detector,
@@ -953,14 +953,14 @@ def main(cfg: Dict[str, Any], dist: DistributedManager, rep: ReproducibilityMana
         # Merge each connected document component into one causally-concatenated
         # super-doc; reuses the doc-causal varlen kernel with component-keyed ids.
         if use_triton:
-            attention_backend = 'varlen_bim_v2'
+            attention_backend = 'triton'
             block_mask_creator = make_mask_creator_callable_from(create_doc_concat_triton_mask)
         else:
             attention_backend = 'flex'
             block_mask_creator = make_mask_creator_callable(mask_type)
     else:
         if use_triton and mask_type == 'doc_causal':
-            attention_backend = 'varlen_bim_v2'
+            attention_backend = 'triton'
             block_mask_creator = make_mask_creator_callable_from(create_doc_causal_triton_mask)
         else:
             attention_backend = 'flex'

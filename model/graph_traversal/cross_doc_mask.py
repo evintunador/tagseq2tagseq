@@ -44,16 +44,15 @@ class DocCausalTritonMaskInputs:
 class TritonMaskInputs:
     """Bundle of tensors passed to the Triton cross-doc kernel.
 
-    Built by CrossDocLinkMaskCreator when backend="triton_v12" or
-    "triton_v17" and reused across every layer and head.
+    Built by CrossDocLinkMaskCreator when backend="triton" and reused across every
+    layer and head.
 
     Attributes:
         document_ids:  [T]           int32 — doc index per token position
         q_bitmasks:    [n_chunks, T] int64 — query-side grant bitmasks
         kv_bitmasks:   [n_chunks, T] int64 — key-side grant bitmasks
         bim:           BlockInteractionMask at block_size=128 (forward tiles)
-        bim64:         BlockInteractionMask at block_size=64 (backward tiles);
-                       None when backend="triton_v12" (backward uses bim128).
+        bim64:         BlockInteractionMask at block_size=64 (backward tiles).
     """
     document_ids: torch.Tensor
     q_bitmasks:   torch.Tensor
@@ -101,35 +100,20 @@ class BlockInteractionMask:
     kv_q_ptrs:    torch.Tensor   # [n_blocks+1] int32
     kv_q_indices: torch.Tensor   # [nnz_bwd]    int32
 
-    # v3 extension: full/partial block split counts (None → v3 kernels unavailable).
+    # Full/partial block split counts (read by the kernels' full-block fast path).
     # q_kv row order: [full same-doc off-diag..., cross-doc..., diagonal(last)]
     # kv_q row order: [diagonal(first), full same-doc off-diag..., cross-doc...]
     q_kv_n_full: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
     kv_q_n_full: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
 
-    # v13 extension: pure-cross block counts.
-    # Within the cross-doc range, "pure-cross" pairs have both blocks entirely in
-    # distinct single documents (blk_is_pure=True, different doc IDs). These pairs
-    # satisfy same_doc=False for all position pairs, so only bitmask masking is
-    # needed — no doc_id loads or same_doc computation required.
+    # Pure-cross block counts: pairs whose blocks lie entirely in two distinct single
+    # documents. No production kernel reads these counts (the v13 kernel that did was
+    # dropped), but the classification still fixes the CSR row order below, which sets
+    # the kernels' accumulation order.
     # Row order (fwd):  [full..., pure_cross..., boundary..., diagonal(last)]
     # Row order (bwd):  [diagonal(first), full..., pure_cross..., boundary...]
-    # None → v13 kernels unavailable (BIM built before this extension).
     q_kv_n_pure_cross: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
     kv_q_n_pure_cross: Optional[torch.Tensor] = field(default=None)  # [n_blocks] int32
-
-    # v7 extension: coarse backward CSR at 2×block_size resolution (None → v7 unavailable).
-    # Each coarse block covers 2 fine BIM blocks.  Same row ordering as v3.
-    # bwd_kv_q_*: for each coarse KV block, coarse Q blocks (for dK/dV kernel)
-    # bwd_q_kv_*: for each coarse Q block, coarse KV blocks (for dQ kernel)
-    bwd_kv_q_counts:  Optional[torch.Tensor] = field(default=None)  # [n_coarse] int32
-    bwd_kv_q_ptrs:    Optional[torch.Tensor] = field(default=None)  # [n_coarse+1] int32
-    bwd_kv_q_indices: Optional[torch.Tensor] = field(default=None)  # [nnz_bwd_c] int32
-    bwd_kv_q_n_full:  Optional[torch.Tensor] = field(default=None)  # [n_coarse] int32
-    bwd_q_kv_counts:  Optional[torch.Tensor] = field(default=None)  # [n_coarse] int32
-    bwd_q_kv_ptrs:    Optional[torch.Tensor] = field(default=None)  # [n_coarse+1] int32
-    bwd_q_kv_indices: Optional[torch.Tensor] = field(default=None)  # [nnz_fwd_c] int32
-    bwd_q_kv_n_full:  Optional[torch.Tensor] = field(default=None)  # [n_coarse] int32
 
     @property
     def n_blocks(self) -> int:
@@ -279,19 +263,21 @@ class CrossDocLinkMaskCreator:
                                     strict FLOP-superset of the gated cross_doc_link
                                     grant. The kernel is unchanged — only the grant
                                     bitmask construction differs.
-            backend:                ``"flex"``   — return FlexAttention ``BlockMask``
-                                                   (default, used during training
-                                                   with torch.compile + DDP).
-                                    ``"triton"`` — return ``BlockInteractionMask``
-                                                   (precomputed block index lists for
-                                                   our custom Triton kernels; avoids
-                                                   per-block OR-reductions at runtime).
+            backend:                ``"flex"``   — return a FlexAttention ``BlockMask``.
+                                    ``"triton"`` — return ``TritonMaskInputs`` for the
+                                                   v18 kernel (bitmasks plus block
+                                                   interaction tables at block sizes
+                                                   128 and 64). The versioned names
+                                                   ``"triton_v12"``/``"_v17"``/``"_v18"``
+                                                   are accepted as aliases.
             triton_block_size:      Block granularity for ``BlockInteractionMask``.
                                     Should match the BLOCK_SIZE used by the Triton
                                     kernel (typically the autotune winner, default 64).
         """
-        assert backend in ("flex", "triton", "triton_v12", "triton_v17", "triton_v18"), \
-            f"backend must be 'flex', 'triton', 'triton_v12', or 'triton_v17', got {backend!r}"
+        if backend in ("triton_v12", "triton_v17", "triton_v18"):
+            backend = "triton"
+        assert backend in ("flex", "triton"), \
+            f"backend must be 'flex' or 'triton', got {backend!r}"
         self.link_detector = link_detector
         self.max_grants = max_grants
         self.backend = backend
@@ -314,7 +300,6 @@ class CrossDocLinkMaskCreator:
             f"warmup: {self._max_grants_start}→{max_grants} over "
             f"{max_grants_warmup_steps} steps, "
             f"backend={backend}"
-            + (f" (block_size={triton_block_size})" if backend == "triton" else "")
         )
 
     def _current_max_grants(self) -> int:
@@ -818,71 +803,6 @@ class CrossDocLinkMaskCreator:
         kv_q_counts, kv_q_ptrs, kv_q_indices, kv_q_n_full, kv_q_n_pure_cross = \
             _pack_csr_v3_bwd(kv_idxs_T, q_idxs_T, is_full_bwd, is_pure_cross_bwd)
 
-        # 7. Coarse backward CSR at 2×block_size resolution (for v7 double-tile backward).
-        n_coarse = (n_blocks + 1) // 2
-        n_pad    = n_coarse * 2
-        # Pad fine matrices to even size
-        interact_pad    = np.zeros((n_pad, n_pad), dtype=bool)
-        interact_full_pad = np.zeros((n_pad, n_pad), dtype=bool)
-        interact_pad[:n_blocks, :n_blocks]     = interact
-        interact_full_pad[:n_blocks, :n_blocks] = interact_full
-        # Coarse interact: True iff any of the 2×2 fine pairs interacts
-        coarse_interact = interact_pad.reshape(n_coarse, 2, n_coarse, 2).any(axis=(1, 3))
-        # Coarse full: True iff every fine pair that IS in interact is also full
-        coarse_full_cond = (~interact_pad) | interact_full_pad
-        coarse_full = coarse_full_cond.reshape(n_coarse, 2, n_coarse, 2).all(axis=(1, 3))
-        coarse_full &= coarse_interact
-        # Coarse causal (diagonal included only for non-diagonal block pairs via off-diag check)
-        coarse_full &= (np.arange(n_coarse)[:, None] > np.arange(n_coarse)[None, :])
-
-        coarse_q_idxs, coarse_kv_idxs = np.where(coarse_interact)
-        coarse_kv_idxs_T, coarse_q_idxs_T = np.where(coarse_interact.T)
-        is_full_coarse_fwd = coarse_full[coarse_q_idxs, coarse_kv_idxs]
-        is_full_coarse_bwd = coarse_full[coarse_q_idxs_T, coarse_kv_idxs_T]
-
-        def _pack_csr_coarse_fwd(row_i, col_i, is_full_i):
-            counts = np.bincount(row_i, minlength=n_coarse).astype(np.int32)
-            ptrs   = np.zeros(n_coarse + 1, dtype=np.int32)
-            ptrs[1:] = np.cumsum(counts)
-            new_col = np.empty_like(col_i)
-            n_full  = np.zeros(n_coarse, dtype=np.int32)
-            for rb in range(n_coarse):
-                s, e = ptrs[rb], ptrs[rb + 1]
-                if e == s:
-                    continue
-                cols = col_i[s:e]; ifs = is_full_i[s:e]; idiag = (cols == rb)
-                full_c  = np.sort(cols[ ifs & ~idiag])
-                cross_c = np.sort(cols[~ifs & ~idiag])
-                diag_c  = cols[idiag]
-                new_col[s:e] = np.concatenate([full_c, cross_c, diag_c])
-                n_full[rb]   = len(full_c)
-            return (torch.from_numpy(counts).to(device), torch.from_numpy(ptrs).to(device),
-                    torch.from_numpy(new_col).to(device), torch.from_numpy(n_full).to(device))
-
-        def _pack_csr_coarse_bwd(row_i, col_i, is_full_i):
-            counts = np.bincount(row_i, minlength=n_coarse).astype(np.int32)
-            ptrs   = np.zeros(n_coarse + 1, dtype=np.int32)
-            ptrs[1:] = np.cumsum(counts)
-            new_col = np.empty_like(col_i)
-            n_full  = np.zeros(n_coarse, dtype=np.int32)
-            for rb in range(n_coarse):
-                s, e = ptrs[rb], ptrs[rb + 1]
-                if e == s:
-                    continue
-                cols = col_i[s:e]; ifs = is_full_i[s:e]; idiag = (cols == rb)
-                diag_c  = cols[idiag]
-                full_c  = np.sort(cols[ ifs & ~idiag])
-                cross_c = np.sort(cols[~ifs & ~idiag])
-                new_col[s:e] = np.concatenate([diag_c, full_c, cross_c])
-                n_full[rb]   = len(full_c)
-            return (torch.from_numpy(counts).to(device), torch.from_numpy(ptrs).to(device),
-                    torch.from_numpy(new_col).to(device), torch.from_numpy(n_full).to(device))
-
-        bwd_q_kv_counts, bwd_q_kv_ptrs, bwd_q_kv_indices, bwd_q_kv_n_full = \
-            _pack_csr_coarse_fwd(coarse_q_idxs, coarse_kv_idxs, is_full_coarse_fwd)
-        bwd_kv_q_counts, bwd_kv_q_ptrs, bwd_kv_q_indices, bwd_kv_q_n_full = \
-            _pack_csr_coarse_bwd(coarse_kv_idxs_T, coarse_q_idxs_T, is_full_coarse_bwd)
-
         bim = BlockInteractionMask(
             seq_len=seq_len,
             block_size=bs,
@@ -896,14 +816,6 @@ class CrossDocLinkMaskCreator:
             kv_q_n_full=kv_q_n_full,
             q_kv_n_pure_cross=q_kv_n_pure_cross,
             kv_q_n_pure_cross=kv_q_n_pure_cross,
-            bwd_kv_q_counts=bwd_kv_q_counts,
-            bwd_kv_q_ptrs=bwd_kv_q_ptrs,
-            bwd_kv_q_indices=bwd_kv_q_indices,
-            bwd_kv_q_n_full=bwd_kv_q_n_full,
-            bwd_q_kv_counts=bwd_q_kv_counts,
-            bwd_q_kv_ptrs=bwd_q_kv_ptrs,
-            bwd_q_kv_indices=bwd_q_kv_indices,
-            bwd_q_kv_n_full=bwd_q_kv_n_full,
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -933,8 +845,8 @@ class CrossDocLinkMaskCreator:
             **kwargs:       Additional batch information (unused)
 
         Returns:
-            ``BlockMask``             if ``self.backend == "flex"``  (default)
-            ``BlockInteractionMask``  if ``self.backend == "triton"``
+            ``BlockMask``         if ``self.backend == "flex"``  (default)
+            ``TritonMaskInputs``  if ``self.backend == "triton"``
         """
         device = tokens.device
         seq_len = tokens.shape[-1]
@@ -982,30 +894,18 @@ class CrossDocLinkMaskCreator:
         )
 
         if self.backend == "triton":
-            # Precompute block interaction table — no FlexAttention BlockMask built.
-            return self._build_block_interaction_mask(
-                seq_len, document_ids, q_bms, kv_bms, device
-            )
-
-        if self.backend in ("triton_v12", "triton_v17", "triton_v18"):
-            # Build BIM at block_size=128 (forward tiles) and package all
-            # kernel inputs into a TritonMaskInputs bundle.
+            # Block interaction tables at block_size=128 (forward tiles) and 64
+            # (backward tiles; halves register pressure, fits A100 SMEM at Dh=128).
             saved_bs = self.triton_block_size
             self.triton_block_size = 128
             bim128 = self._build_block_interaction_mask(
                 seq_len, document_ids, q_bms, kv_bms, device
             )
+            self.triton_block_size = 64
+            bim64 = self._build_block_interaction_mask(
+                seq_len, document_ids, q_bms, kv_bms, device
+            )
             self.triton_block_size = saved_bs
-
-            # For v12_bwd64: also build BIM at block_size=64 for the backward
-            # passes (halves register pressure, fits within A100 SMEM at Dh=128).
-            bim64 = None
-            if self.backend in ("triton_v17", "triton_v18"):
-                self.triton_block_size = 64
-                bim64 = self._build_block_interaction_mask(
-                    seq_len, document_ids, q_bms, kv_bms, device
-                )
-                self.triton_block_size = saved_bs
 
             return TritonMaskInputs(
                 document_ids=document_ids,

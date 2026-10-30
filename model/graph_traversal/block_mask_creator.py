@@ -144,10 +144,10 @@ def create_doc_causal_block_mask(tokens: torch.Tensor, doc_spans: List[Any], **k
 def create_doc_causal_triton_mask(
     tokens: torch.Tensor, doc_spans: List[Any], **kwargs
 ) -> DocCausalTritonMaskInputs:
-    """Doc-causal mask for varlen_bim_v1 Triton kernel.
+    """Doc-causal mask for the varlen_bim_v2 Triton kernel.
 
     Returns a DocCausalTritonMaskInputs instead of a FlexAttention BlockMask.
-    Use with attention_backend="varlen_bim_v1".
+    Use with attention_backend="triton" (dispatches to varlen_bim_v2).
     """
     device = tokens.device
     seq_len = tokens.shape[-1]

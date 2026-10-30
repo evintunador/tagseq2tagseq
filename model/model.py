@@ -144,7 +144,7 @@ class TS2TSModel:
             creators[f'{self.mask_type}_triton'] = make_mask_creator_callable_from(
                 CrossDocLinkMaskCreator(
                     link_detector=self.link_detector,
-                    backend='triton_v12',
+                    backend='triton',
                     whole_doc_grant=whole_doc,
                     max_grants=self.max_grants,
                 )

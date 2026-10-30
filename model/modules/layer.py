@@ -27,15 +27,12 @@ class Layer(nn.Module):
         self.drop_path = DropPath(drop_path_rate)
         self.ln_1 = RMSNorm(n_embd)
 
-        # Map all backend names to the TS2TSAttention unified class.
-        # 'triton_v12' → 'triton', 'varlen_bim_v1' → 'triton' (kernel selected at runtime
-        # from block_mask type). v17/v18/varlen_bim_v2 pass through directly.
-        if attention_backend in ('triton_v12',):
+        # TS2TSAttention has two backends: 'flex' and 'triton' (kernel chosen at runtime
+        # from the block_mask type). The versioned kernel names are accepted so configs
+        # and checkpoints that recorded them still load.
+        if attention_backend in ('triton', 'triton_v12', 'triton_v17', 'triton_v18',
+                                 'varlen_bim_v1', 'varlen_bim_v2'):
             backend = 'triton'
-        elif attention_backend in ('varlen_bim_v1',):
-            backend = 'triton'
-        elif attention_backend in ('triton_v17', 'triton_v18', 'varlen_bim_v2', 'flex', 'triton'):
-            backend = attention_backend
         else:
             backend = 'flex'
         self.attn = TS2TSAttention(

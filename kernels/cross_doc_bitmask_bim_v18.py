@@ -33,8 +33,8 @@ from typing import TYPE_CHECKING
 import torch
 import triton
 
-from .cross_doc_bitmask_attn import _attn_backward_preprocess_cdb
-from .cross_doc_bitmask_bim_v10 import (
+from .bim_attn_core import (
+    _attn_backward_preprocess_cdb,
     _attn_fwd_cdb_bim_v10,
     _attn_backward_KV_cdb_bim_v10,
     _attn_backward_Q_cdb_bim_v10,

@@ -1,26 +1,23 @@
 """Attention kernel harness — correctness tests + memory + runtime benchmarks.
 
-Validates and benchmarks all four kernel variants against SDPA ground truth,
-building complexity step by step:
-  causal → varlen (doc_causal) → cross_doc_naive → cross_doc_bitmask
+Validates and benchmarks the production kernels against exact references:
+  doc_causal         varlen_bim_v2   vs naive PyTorch, varlen flash (vslf), FlexAttention
+  cross_doc_bitmask  cdb_bim_v18     vs naive PyTorch, FlexAttention
+
+Earlier kernel versions (v1-v17, varlen_bim_v1, causal/varlen/naive kernels) are in
+git history; kernels/KERNELS.md summarizes what each step taught.
 
 Usage:
-    # Step 1 – causal kernel correctness
-    python benchmarks/attention_harness.py correctness --mask-types full_causal
-
-    # Step 2 – varlen kernel correctness
-    python benchmarks/attention_harness.py correctness --mask-types doc_causal
-
-    # Step 3 – full correctness suite
+    # correctness, synthetic + real-pack fixtures
     python benchmarks/attention_harness.py correctness \\
         --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 
-    # Step 4 – production benchmark
+    # production benchmark
     python benchmarks/attention_harness.py bench \\
         --seq-lens 32768 --num-heads 16 --head-dim 64 \\
         --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 
-    # Full run
+    # both
     python benchmarks/attention_harness.py all \\
         --dataset-dir /fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/simplewiki
 """
@@ -57,9 +54,7 @@ _compiled_flex = torch.compile(flex_attention, dynamic=True)
 # ---------------------------------------------------------------------------
 
 class MaskType(str, Enum):
-    FULL_CAUSAL = "full_causal"
     DOC_CAUSAL = "doc_causal"
-    CROSS_DOC_NAIVE = "cross_doc_naive"
     CROSS_DOC_BITMASK = "cross_doc_bitmask"
 
 
@@ -467,17 +462,11 @@ def compute_reference(
 # Each entry: callable(q, k, v, mask_inputs, scale) → (T, H, Dh) Tensor
 # Returns None if mask_type unsupported.
 
-def _impl_sdpa(q, k, v, mask_inputs, scale):
-    """SDPA with is_causal=True (full causal only)."""
-    q4, k4, v4 = _to_bhnd(q), _to_bhnd(k), _to_bhnd(v)
-    return _to_thd(F.scaled_dot_product_attention(q4, k4, v4, is_causal=True, scale=scale))
-
-
 def _impl_vslf(q, k, v, mask_inputs, scale):
     """PyTorch built-in varlen flash (doc_causal via cu_seqlens)."""
     _vslf = torch.ops.aten._flash_attention_forward
     # Build a fresh tensor via torch.tensor() — same pattern as
-    # _impl_vslf_full_causal which is known to have stable autograd.
+    # the single-doc vslf path, which is known to have stable autograd.
     # Using mask_inputs.cu_seqlens directly (or a .clone()) causes backward
     # instability with this op for reasons that appear to be internal to
     # _flash_attention_forward's autograd implementation.
@@ -492,28 +481,6 @@ def _impl_vslf(q, k, v, mask_inputs, scale):
         0.0, True, False, scale=scale,
     )
     return out
-
-
-def _impl_vslf_full_causal(q, k, v, mask_inputs, scale):
-    """VSLF with a single doc spanning the whole sequence (= full causal)."""
-    T = q.shape[0]
-    cu = torch.tensor([0, T], dtype=torch.int32, device=q.device)
-    _vslf = torch.ops.aten._flash_attention_forward
-    out, *_ = _vslf(q, k, v, cu, cu, T, T, 0.0, True, False, scale=scale)
-    return out
-
-
-def _impl_flex_full_causal(q, k, v, mask_inputs, scale):
-    """FlexAttention with a plain full-causal BlockMask (no doc boundaries)."""
-    T = q.shape[0]
-    device = q.device
-    bm = create_block_mask(
-        lambda b, h, qi, ki: qi >= ki,
-        B=None, H=None, Q_LEN=T, KV_LEN=T, device=device,
-    )
-    q4, k4, v4 = _to_bhnd(q), _to_bhnd(k), _to_bhnd(v)
-    out4 = _compiled_flex(q4, k4, v4, block_mask=bm, scale=scale)
-    return _to_thd(out4)
 
 
 def _impl_flex_doc_causal(q, k, v, mask_inputs, scale):
@@ -533,204 +500,17 @@ def _impl_flex_cross_doc(q, k, v, mask_inputs, scale):
     return _to_thd(out4)
 
 
-def _impl_triton_causal(q, k, v, mask_inputs, scale):
-    from kernels.causal_attn import triton_attn_causal
-    q4, k4, v4 = _to_bhnd(q), _to_bhnd(k), _to_bhnd(v)
-    return _to_thd(triton_attn_causal(q4, k4, v4, scale))
-
-
-def _impl_triton_varlen(q, k, v, mask_inputs, scale):
-    from kernels.varlen_attn import triton_attn_varlen
-    return triton_attn_varlen(q, k, v, mask_inputs.cu_seqlens, mask_inputs.max_seqlen, scale)
-
-
-def _impl_varlen_bim_v1(q, k, v, mask_inputs, scale):
-    """varlen_bim_v1: BIM dispatch + v10 opts, doc-causal only (no bitmask)."""
-    from kernels.varlen_bim_v1 import triton_attn_doc_causal_bim_v1
-    return triton_attn_doc_causal_bim_v1(q, k, v, mask_inputs.cu_seqlens, mask_inputs.max_seqlen, scale)
-
-
 def _impl_varlen_bim_v2(q, k, v, mask_inputs, scale):
     """varlen_bim_v2: v1 + nan_to_num guard for sentinel-LSE NaN in backward."""
     from kernels.varlen_bim_v2 import triton_attn_doc_causal_bim_v2
     return triton_attn_doc_causal_bim_v2(q, k, v, mask_inputs.cu_seqlens, mask_inputs.max_seqlen, scale)
 
 
-def _impl_triton_cross_doc_naive(q, k, v, mask_inputs, scale):
-    from kernels.cross_doc_naive_attn import triton_attn_cross_doc_naive
-    assert mask_inputs.dense_mask is not None
-    return triton_attn_cross_doc_naive(
-        q, k, v, mask_inputs.document_ids, mask_inputs.dense_mask, scale,
-    )
-
-
-def _impl_cdb_v1(q, k, v, mask_inputs, scale):
-    """cdb_v1: OR-reduction block-skip, no BIM required."""
-    from kernels.cross_doc_bitmask_attn import triton_attn_cross_doc_bitmask
-    assert mask_inputs.q_bitmasks is not None
-    return triton_attn_cross_doc_bitmask(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, scale,
-    )
-
-
-def _impl_cdb_bim_v1(q, k, v, mask_inputs, scale):
-    """cdb_bim_v1: CSR index lists, BIM fwd + bwd (no OR-reductions)."""
-    from kernels.cross_doc_bitmask_bim_v1 import triton_attn_cross_doc_bitmask_bim_v1
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None, \
-        "BlockInteractionMask not built — use make_synthetic_batch with n_links>0"
-    return triton_attn_cross_doc_bitmask_bim_v1(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _rebuild_bim(mask_inputs, block_size: int):
-    """Rebuild BlockInteractionMask at a different block_size (for block-size experiments)."""
-    from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
-    creator = CrossDocLinkMaskCreator.__new__(CrossDocLinkMaskCreator)
-    creator.triton_block_size = block_size
-    creator._n_chunks = mask_inputs.q_bitmasks.shape[0]
-    return creator._build_block_interaction_mask(
-        mask_inputs.seq_len,
-        mask_inputs.document_ids,
-        list(mask_inputs.q_bitmasks),
-        list(mask_inputs.kv_bitmasks),
-        mask_inputs.document_ids.device,
-    )
-
-
-def _impl_cdb_bim_v2(q, k, v, mask_inputs, scale):
-    """cdb_bim_v2: diagonal-first backward (H2 fix). Forward identical to v1."""
-    from kernels.cross_doc_bitmask_bim_v2 import triton_attn_cross_doc_bitmask_bim_v2
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None, \
-        "BlockInteractionMask not built — use make_synthetic_batch with n_links>0"
-    return triton_attn_cross_doc_bitmask_bim_v2(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _impl_cdb_bim_v3(q, k, v, mask_inputs, scale):
-    """cdb_bim_v3: full/partial block split (H1) + diagonal-first bwd (H2)."""
-    from kernels.cross_doc_bitmask_bim_v3 import triton_attn_cross_doc_bitmask_bim_v3
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None, \
-        "BlockInteractionMask not built — use make_synthetic_batch with n_links>0"
-    return triton_attn_cross_doc_bitmask_bim_v3(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _impl_cdb_bim_v4(q, k, v, mask_inputs, scale):
-    """cdb_bim_v4: split dK/dV and dQ backward kernels (H5) + H1 + H2."""
-    from kernels.cross_doc_bitmask_bim_v4 import triton_attn_cross_doc_bitmask_bim_v4
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None, \
-        "BlockInteractionMask not built — use make_synthetic_batch with n_links>0"
-    return triton_attn_cross_doc_bitmask_bim_v4(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _impl_cdb_bim_v4_bs128(q, k, v, mask_inputs, scale):
-    """cdb_bim_v4 with BIM_BLOCK_SIZE=128 (flex's native tile size)."""
-    from kernels.cross_doc_bitmask_bim_v4 import triton_attn_cross_doc_bitmask_bim_v4
-    assert mask_inputs.q_bitmasks is not None
-    bim128 = _rebuild_bim(mask_inputs, 128)
-    return triton_attn_cross_doc_bitmask_bim_v4(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
-    )
-
-
-def _impl_cdb_bim_v5(q, k, v, mask_inputs, scale):
-    """cdb_bim_v5: free-tile backward (BLOCK_SIZE_MACRO up to 128, no BIM in bwd)."""
-    from kernels.cross_doc_bitmask_bim_v5 import triton_attn_cross_doc_bitmask_bim_v5
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None
-    return triton_attn_cross_doc_bitmask_bim_v5(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _impl_cdb_bim_v6(q, k, v, mask_inputs, scale):
-    """cdb_bim_v6: double-tile backward (2 BIM blocks/CTA → 128-token tiles)."""
-    from kernels.cross_doc_bitmask_bim_v6 import triton_attn_cross_doc_bitmask_bim_v6
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None
-    return triton_attn_cross_doc_bitmask_bim_v6(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _impl_cdb_bim_v7(q, k, v, mask_inputs, scale):
-    """cdb_bim_v7: precomputed coarse 128-token backward tiles."""
-    from kernels.cross_doc_bitmask_bim_v7 import triton_attn_cross_doc_bitmask_bim_v7
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None
-    return triton_attn_cross_doc_bitmask_bim_v7(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _impl_cdb_bim_v8(q, k, v, mask_inputs, scale):
-    """cdb_bim_v8: varlen-style pipelined same-doc + BIM cross-doc."""
-    from kernels.cross_doc_bitmask_bim_v8 import triton_attn_cross_doc_bitmask_bim_v8
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None
-    return triton_attn_cross_doc_bitmask_bim_v8(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _impl_cdb_bim_v9(q, k, v, mask_inputs, scale):
-    """cdb_bim_v9: split pipelined backward (varlen-style same-doc + BIM cross-doc)."""
-    from kernels.cross_doc_bitmask_bim_v9 import triton_attn_cross_doc_bitmask_bim_v9
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None
-    return triton_attn_cross_doc_bitmask_bim_v9(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim,
-        mask_inputs.cu_seqlens, scale,
-    )
-
-
-def _impl_cdb_bim_v10(q, k, v, mask_inputs, scale):
-    """cdb_bim_v10: native-dtype matmuls (bf16 TC) — no fp32 cast on load."""
-    from kernels.cross_doc_bitmask_bim_v10 import triton_attn_cross_doc_bitmask_bim_v10
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None
-    return triton_attn_cross_doc_bitmask_bim_v10(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
-def _impl_cdb_bim_v11(q, k, v, mask_inputs, scale):
-    """cdb_bim_v11: v10 + no permute/contiguous copies (pass THD strides directly)."""
-    from kernels.cross_doc_bitmask_bim_v11 import triton_attn_cross_doc_bitmask_bim_v11
-    assert mask_inputs.q_bitmasks is not None
-    assert mask_inputs.bim is not None
-    return triton_attn_cross_doc_bitmask_bim_v11(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, mask_inputs.bim, scale,
-    )
-
-
 _bim128_cache: Dict[int, Any] = {}
 
 def _get_bim128(mask_inputs):
     """Build (and cache) a BIM at block_size=128 for the given mask_inputs."""
-    from kernels.cross_doc_bitmask_bim_v12 import _build_bim_128
+    from kernels.cross_doc_bitmask_bim_v18 import _build_bim_128
     key = id(mask_inputs)
     if key not in _bim128_cache:
         _bim128_cache[key] = _build_bim_128(
@@ -741,24 +521,11 @@ def _get_bim128(mask_inputs):
     return _bim128_cache[key]
 
 
-def _impl_cdb_bim_v12(q, k, v, mask_inputs, scale):
-    """cdb_bim_v12: v11 + BIM_BLOCK_SIZE=128 (larger matmul tiles)."""
-    from kernels.cross_doc_bitmask_bim_v12 import (
-        triton_attn_cross_doc_bitmask_bim_v12, _build_bim_128,
-    )
-    assert mask_inputs.q_bitmasks is not None
-    bim128 = _get_bim128(mask_inputs)
-    return triton_attn_cross_doc_bitmask_bim_v12(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
-    )
-
-
 _bim64_cache: Dict[int, Any] = {}
 
 def _get_bim64(mask_inputs):
     """Build (and cache) a BIM at block_size=64 for the given mask_inputs."""
-    from kernels.cross_doc_bitmask_bim_v17 import _build_bim_64
+    from kernels.cross_doc_bitmask_bim_v18 import _build_bim_64
     key = id(mask_inputs)
     if key not in _bim64_cache:
         _bim64_cache[key] = _build_bim_64(
@@ -769,22 +536,8 @@ def _get_bim64(mask_inputs):
     return _bim64_cache[key]
 
 
-def _impl_cdb_bim_v17(q, k, v, mask_inputs, scale):
-    """cdb_bim_v17: BIM_BS=128 forward, BIM_BS=64 backward (SMEM fix for Dh=128)."""
-    from kernels.cross_doc_bitmask_bim_v17 import (
-        triton_attn_cross_doc_bitmask_bim_v17,
-    )
-    assert mask_inputs.q_bitmasks is not None
-    bim128 = _get_bim128(mask_inputs)
-    bim64  = _get_bim64(mask_inputs)
-    return triton_attn_cross_doc_bitmask_bim_v17(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, bim64, scale,
-    )
-
-
 def _impl_cdb_bim_v18(q, k, v, mask_inputs, scale):
-    """cdb_bim_v18: v17 + nan_to_num guard for sentinel-LSE NaN in backward."""
+    """cdb_bim_v18: BIM_BS=128 forward, BIM_BS=64 backward, sentinel-LSE NaN guard."""
     from kernels.cross_doc_bitmask_bim_v18 import (
         triton_attn_cross_doc_bitmask_bim_v18,
     )
@@ -794,50 +547,6 @@ def _impl_cdb_bim_v18(q, k, v, mask_inputs, scale):
     return triton_attn_cross_doc_bitmask_bim_v18(
         q, k, v, mask_inputs.document_ids,
         mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, bim64, scale,
-    )
-
-
-def _impl_cdb_bim_v13(q, k, v, mask_inputs, scale):
-    """cdb_bim_v13: v12 + pure-cross dispatch (bitmask-only inner kernel)."""
-    from kernels.cross_doc_bitmask_bim_v13 import triton_attn_cross_doc_bitmask_bim_v13
-    assert mask_inputs.q_bitmasks is not None
-    bim128 = _get_bim128(mask_inputs)
-    return triton_attn_cross_doc_bitmask_bim_v13(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
-    )
-
-
-def _impl_cdb_bim_v14(q, k, v, mask_inputs, scale):
-    """cdb_bim_v14: v12 + expanded backward autotune (num_warps=16, num_stages={2,6})."""
-    from kernels.cross_doc_bitmask_bim_v14 import triton_attn_cross_doc_bitmask_bim_v14
-    assert mask_inputs.q_bitmasks is not None
-    bim128 = _get_bim128(mask_inputs)
-    return triton_attn_cross_doc_bitmask_bim_v14(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
-    )
-
-
-def _impl_cdb_bim_v15(q, k, v, mask_inputs, scale):
-    """cdb_bim_v15: v12 + persistent-CTA backward (work-stealing dKV + dQ)."""
-    from kernels.cross_doc_bitmask_bim_v15 import triton_attn_cross_doc_bitmask_bim_v15
-    assert mask_inputs.q_bitmasks is not None
-    bim128 = _get_bim128(mask_inputs)
-    return triton_attn_cross_doc_bitmask_bim_v15(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
-    )
-
-
-def _impl_cdb_bim_v16(q, k, v, mask_inputs, scale):
-    """cdb_bim_v16: v12 + .cg cache hints on bitmask loads."""
-    from kernels.cross_doc_bitmask_bim_v16 import triton_attn_cross_doc_bitmask_bim_v16
-    assert mask_inputs.q_bitmasks is not None
-    bim128 = _get_bim128(mask_inputs)
-    return triton_attn_cross_doc_bitmask_bim_v16(
-        q, k, v, mask_inputs.document_ids,
-        mask_inputs.q_bitmasks, mask_inputs.kv_bitmasks, bim128, scale,
     )
 
 
@@ -858,16 +567,13 @@ def _build_bool_mask(
     qi = torch.arange(T, device=device)
     causal = qi.unsqueeze(1) >= qi.unsqueeze(0)   # lower-triangular including diagonal
 
-    if mask_type == MaskType.FULL_CAUSAL:
-        return causal
-
     doc_ids = mask_inputs.document_ids
     same_doc = doc_ids.unsqueeze(1) == doc_ids.unsqueeze(0)
 
     if mask_type == MaskType.DOC_CAUSAL:
         return causal & same_doc
 
-    # CROSS_DOC_NAIVE or CROSS_DOC_BITMASK — same semantic mask, different encoding
+    # CROSS_DOC_BITMASK: same semantic mask as the bitmasks, dense encoding
     assert mask_inputs.dense_mask is not None, \
         "dense_mask required for cross_doc naive baselines"
     return causal & (same_doc | mask_inputs.dense_mask)
@@ -978,9 +684,7 @@ SKIP_BWD_CHECK: frozenset = frozenset({"vslf"})
 
 # Which impl to use as the ratio denominator in bench mode.
 BENCH_REFERENCE: Dict[MaskType, str] = {
-    MaskType.FULL_CAUSAL:      "sdpa",
-    MaskType.DOC_CAUSAL:       "vslf",
-    MaskType.CROSS_DOC_NAIVE:  "flex",
+    MaskType.DOC_CAUSAL:        "vslf",
     MaskType.CROSS_DOC_BITMASK: "flex",
 }
 
@@ -989,57 +693,22 @@ BENCH_REFERENCE: Dict[MaskType, str] = {
 # Ordering convention within each mask type:
 #   1. naive_pytorch          — O(T²) exact reference, no flash tricks
 #   2. naive_compiled         — same + torch.compile
-#   3. sdpa / vslf            — PyTorch's own fast kernels (certified error budget)
+#   3. vslf                   — PyTorch's own fast varlen kernel (certified error budget)
 #   4. flex                   — FlexAttention
 #   5. triton_*               — our custom kernels
 REGISTRY: Dict[MaskType, List[Tuple[str, Callable]]] = {
-    MaskType.FULL_CAUSAL: [
-        ("naive_pytorch",      _make_naive_impl(MaskType.FULL_CAUSAL, compiled=False)),
-        ("naive_compiled",     _make_naive_impl(MaskType.FULL_CAUSAL, compiled=True)),
-        ("sdpa",               _impl_sdpa),
-        ("vslf",               _impl_vslf_full_causal),
-        ("flex",               _impl_flex_full_causal),
-        ("triton_causal",      _impl_triton_causal),
-    ],
     MaskType.DOC_CAUSAL: [
         ("naive_pytorch",      _make_naive_impl(MaskType.DOC_CAUSAL, compiled=False)),
         ("naive_compiled",     _make_naive_impl(MaskType.DOC_CAUSAL, compiled=True)),
         ("vslf",               _impl_vslf),
         ("flex",               _impl_flex_doc_causal),
-        ("triton_varlen",      _impl_triton_varlen),
-        ("varlen_bim_v1",      _impl_varlen_bim_v1),
-        ("varlen_bim_v2",      _impl_varlen_bim_v2),   # v1 + sentinel-LSE NaN guard
-    ],
-    MaskType.CROSS_DOC_NAIVE: [
-        ("naive_pytorch",          _make_naive_impl(MaskType.CROSS_DOC_NAIVE, compiled=False)),
-        ("naive_compiled",         _make_naive_impl(MaskType.CROSS_DOC_NAIVE, compiled=True)),
-        ("flex",                   _impl_flex_cross_doc),
-        ("triton_cross_doc_naive", _impl_triton_cross_doc_naive),
+        ("varlen_bim_v2",      _impl_varlen_bim_v2),
     ],
     MaskType.CROSS_DOC_BITMASK: [
         ("naive_pytorch",    _make_naive_impl(MaskType.CROSS_DOC_BITMASK, compiled=False)),
         ("naive_compiled",   _make_naive_impl(MaskType.CROSS_DOC_BITMASK, compiled=True)),
         ("flex",             _impl_flex_cross_doc),
-        ("cdb_v1",           _impl_cdb_v1),           # baseline: OR-reduction skip
-        ("cdb_bim_v1",       _impl_cdb_bim_v1),       # BIM fwd + bwd
-        ("cdb_bim_v2",       _impl_cdb_bim_v2),       # BIM fwd + diagonal-first bwd (H2)
-        ("cdb_bim_v3",       _impl_cdb_bim_v3),       # full/partial split (H1) + H2
-        ("cdb_bim_v4",       _impl_cdb_bim_v4),       # split dKV/dQ bwd (H5) + H1 + H2
-        ("cdb_bim_v4_bs128", _impl_cdb_bim_v4_bs128), # v4 with BIM_BLOCK_SIZE=128
-        ("cdb_bim_v5",       _impl_cdb_bim_v5),       # free-tile bwd
-        ("cdb_bim_v6",       _impl_cdb_bim_v6),       # double-tile bwd
-        ("cdb_bim_v7",       _impl_cdb_bim_v7),       # coarse 128-token bwd tiles
-        ("cdb_bim_v8",       _impl_cdb_bim_v8),       # varlen-style pipelined same-doc
-        ("cdb_bim_v9",       _impl_cdb_bim_v9),       # split pipelined same-doc + BIM cross-doc
-        ("cdb_bim_v10",      _impl_cdb_bim_v10),      # native-dtype matmuls (bf16 TC)
-        ("cdb_bim_v11",      _impl_cdb_bim_v11),      # v10 + no permute copies
-        ("cdb_bim_v12",        _impl_cdb_bim_v12),        # v11 + BIM_BLOCK_SIZE=128
-        ("cdb_bim_v17", _impl_cdb_bim_v17), # v12 fwd + BIM_BS=64 bwd (SMEM fix for Dh=128)
-        ("cdb_bim_v18", _impl_cdb_bim_v18), # v17 + nan_to_num guard for sentinel-LSE NaN
-        ("cdb_bim_v13",      _impl_cdb_bim_v13),      # v12 + pure-cross dispatch
-        ("cdb_bim_v14",      _impl_cdb_bim_v14),      # v12 + expanded bwd autotune
-        ("cdb_bim_v15",      _impl_cdb_bim_v15),      # v12 + persistent-CTA backward
-        ("cdb_bim_v16",      _impl_cdb_bim_v16),      # v12 + .cg cache hints on bitmask loads
+        ("cdb_bim_v18",      _impl_cdb_bim_v18),
     ],
 }
 
@@ -1449,7 +1118,7 @@ def bench_real_fixtures(
             print(f"  [fixture {meta.label}] load error: {e}")
             continue
 
-        _cross_doc_types = {MaskType.CROSS_DOC_NAIVE, MaskType.CROSS_DOC_BITMASK}
+        _cross_doc_types = {MaskType.CROSS_DOC_BITMASK}
         for mask_type in mask_types:
             # Skip cross-doc mask types when the fixture has no links — the mask
             # degenerates to doc_causal and flex_cross_doc_block_mask is None,
@@ -1553,7 +1222,7 @@ def _add_common_args(p: argparse.ArgumentParser):
                    choices=[m.value for m in MaskType],
                    help="Mask types to test/bench (default: all)")
     p.add_argument("--impls", nargs="+", default=None,
-                   help="Impl names to include (default: all). E.g. --impls flex cdb_bim_v12 cdb_bim_v14")
+                   help="Impl names to include (default: all). E.g. --impls flex cdb_bim_v18")
     p.add_argument("--dataset-dir", type=str, default=None,
                    help="Path to pretokenized dataset (enables real-data fixtures for cross_doc)")
     p.add_argument("--num-heads", type=int, default=16)
@@ -1605,7 +1274,7 @@ def _check_sentinel_lse_nan(
     dtype: torch.dtype,
     impls_filter: Optional[List[str]],
 ) -> bool:
-    """Regression test: v17 backward NaN from sentinel LSE values.
+    """Regression test: backward NaN from sentinel LSE values (the v17 bug v18 fixed).
 
     The flash-attention forward initialises the running max to M=-1e6.  If a
     Q token ends up with only a single attended KV position that has a very
@@ -1613,19 +1282,13 @@ def _check_sentinel_lse_nan(
     backward, exp2(score - (-999993)) overflows bfloat16 to inf, and
     inf * 0 = NaN when dLdO is zero.
 
-    We reproduce this by running the v17 forward normally, then patching the
+    We reproduce this by running the forward normally, then patching the
     saved LSE tensor (in a wrapper autograd Function) so that ~1% of token
     positions get LSE = -999993.  With upstream gradient = zeros the backward
     must return dLdq = zeros (not NaN) for the fix to be considered correct.
 
     Returns True (any_fail) if the tested impl produces NaN or inf gradients.
     """
-    from kernels.cross_doc_bitmask_bim_v17 import (
-        triton_attn_cross_doc_bitmask_bim_v17,
-        _build_bim_64,
-    )
-    from model.graph_traversal.cross_doc_mask import CrossDocLinkMaskCreator
-
     # Locate a fixture with real cross-doc structure.
     meta = next((m for m in reversed(REAL_PACK_FIXTURES) if m.path.exists()
                  and m.n_grants > 0), None)
@@ -1645,14 +1308,9 @@ def _check_sentinel_lse_nan(
         print(f"  [sentinel test] fixture load error: {e}")
         return False
 
-    bim128 = _get_bim128(mask_inputs)
-    bim64  = _get_bim64(mask_inputs)
     scale  = head_dim ** -0.5
 
-    # Implementations to test: any bim_v1x variant in the filter (or all).
-    _v17_name = "cdb_bim_v17"
-    _v18_name = "cdb_bim_v18"
-    target_impls = {_v17_name, _v18_name}
+    target_impls = {"cdb_bim_v18"}
     if impls_filter is not None:
         target_impls &= set(impls_filter)
     if not target_impls:
@@ -1710,7 +1368,7 @@ def _check_sentinel_lse_nan_doc_causal(
 ) -> bool:
     """Sentinel-LSE NaN regression test for doc_causal (varlen_bim) kernels.
 
-    Same mechanism as _check_sentinel_lse_nan but targets varlen_bim_v1/v2.
+    Same mechanism as _check_sentinel_lse_nan but targets varlen_bim_v2.
     Uses the sparse fixture (no cross-doc links — pure doc_causal scenario).
     """
     meta = next((m for m in REAL_PACK_FIXTURES if m.path.exists()), None)
@@ -1732,9 +1390,7 @@ def _check_sentinel_lse_nan_doc_causal(
 
     scale = head_dim ** -0.5
 
-    _v1_name = "varlen_bim_v1"
-    _v2_name = "varlen_bim_v2"
-    target_impls = {_v1_name, _v2_name}
+    target_impls = {"varlen_bim_v2"}
     if impls_filter is not None:
         target_impls &= set(impls_filter)
     if not target_impls:
@@ -1789,7 +1445,7 @@ def cmd_correctness(args):
     any_fail = False
 
     # ── Synthetic data ────────────────────────────────────────────────────
-    _cross_doc_types = {MaskType.CROSS_DOC_NAIVE, MaskType.CROSS_DOC_BITMASK}
+    _cross_doc_types = {MaskType.CROSS_DOC_BITMASK}
     needs_cross = bool(set(mask_types) & _cross_doc_types)
     n_links = max(4, seq_len // doc_len) if needs_cross else 0
     syn_label = f"synthetic(T={seq_len},doc={doc_len},links={n_links})"
@@ -1896,97 +1552,25 @@ def _get_autotune_kernels() -> Dict[str, Any]:
     Each key is used as the cache key in .autotune_cache.json.  Versioned
     BIM kernels get separate entries so their tuning is tracked independently.
     """
-    from kernels.causal_attn import (
-        _attn_fwd, _attn_backward_preprocess, _attn_backward,
-    )
-    from kernels.varlen_attn import (
-        _attn_fwd_varlen, _attn_backward_preprocess_varlen, _attn_backward_varlen,
-    )
-    from kernels.cross_doc_naive_attn import (
-        _attn_fwd_cross_doc_naive, _attn_backward_preprocess_cdn, _attn_backward_cdn,
-    )
-    from kernels.cross_doc_bitmask_attn import (
-        _attn_fwd_cdb, _attn_backward_preprocess_cdb, _attn_backward_cdb,
-    )
-    from kernels.cross_doc_bitmask_bim_v1 import (
-        _attn_fwd_cdb_bim_v1, _attn_backward_cdb_bim_v1,
-    )
-    from kernels.cross_doc_bitmask_bim_v2 import (
-        _attn_backward_cdb_bim_v2,
-    )
-    from kernels.cross_doc_bitmask_bim_v3 import (
-        _attn_fwd_cdb_bim_v3, _attn_backward_cdb_bim_v3,
-    )
-    from kernels.cross_doc_bitmask_bim_v4 import (
-        _attn_backward_KV_cdb_bim_v4, _attn_backward_Q_cdb_bim_v4,
-    )
-    from kernels.cross_doc_bitmask_bim_v5 import (
-        _attn_backward_KV_v5, _attn_backward_Q_v5,
-    )
-    from kernels.cross_doc_bitmask_bim_v6 import (
-        _attn_backward_KV_v6, _attn_backward_Q_v6,
-    )
-    from kernels.cross_doc_bitmask_bim_v7 import (
-        _attn_backward_KV_v7, _attn_backward_Q_v7,
-    )
-    from kernels.cross_doc_bitmask_bim_v8 import _attn_backward_cdb_bim_v8
-    from kernels.cross_doc_bitmask_bim_v9 import _attn_backward_KV_v9, _attn_backward_Q_v9
-    from kernels.cross_doc_bitmask_bim_v10 import (
-        _attn_fwd_cdb_bim_v10,
+    from kernels.bim_attn_core import (
+        _attn_backward_preprocess_cdb, _attn_fwd_cdb_bim_v10,
         _attn_backward_KV_cdb_bim_v10, _attn_backward_Q_cdb_bim_v10,
     )
-    from kernels.cross_doc_bitmask_bim_v14 import (
-        _attn_backward_KV_cdb_bim_v14, _attn_backward_Q_cdb_bim_v14,
-    )
-    from kernels.cross_doc_bitmask_bim_v15 import (
-        _attn_backward_KV_cdb_bim_v15, _attn_backward_Q_cdb_bim_v15,
-    )
-    from kernels.cross_doc_bitmask_bim_v16 import (
-        _attn_fwd_cdb_bim_v16,
-        _attn_backward_KV_cdb_bim_v16, _attn_backward_Q_cdb_bim_v16,
+    from kernels.varlen_bim_v2 import (
+        _attn_fwd_doc_causal_v1,
+        _attn_backward_KV_doc_causal_v1, _attn_backward_Q_doc_causal_v1,
     )
     kernels = {
-        "causal_fwd":        _attn_fwd,
-        "causal_pre":        _attn_backward_preprocess,
-        "causal_bwd":        _attn_backward,
-        "varlen_fwd":        _attn_fwd_varlen,
-        "varlen_pre":        _attn_backward_preprocess_varlen,
-        "varlen_bwd":        _attn_backward_varlen,
-        "cdn_fwd":           _attn_fwd_cross_doc_naive,
-        "cdn_pre":           _attn_backward_preprocess_cdn,
-        "cdn_bwd":           _attn_backward_cdn,
-        "cdb_v1_fwd":        _attn_fwd_cdb,
-        "cdb_v1_pre":        _attn_backward_preprocess_cdb,
-        "cdb_v1_bwd":        _attn_backward_cdb,
-        "cdb_bim_v1_fwd":    _attn_fwd_cdb_bim_v1,
-        "cdb_bim_v1_bwd":    _attn_backward_cdb_bim_v1,
-        # v2 shares v1 forward; only backward is new
-        "cdb_bim_v2_bwd":    _attn_backward_cdb_bim_v2,
-        "cdb_bim_v3_fwd":    _attn_fwd_cdb_bim_v3,
-        "cdb_bim_v3_bwd":    _attn_backward_cdb_bim_v3,
-        # v4 shares v3 forward; backward is two separate kernels
-        "cdb_bim_v4_KV_bwd": _attn_backward_KV_cdb_bim_v4,
-        "cdb_bim_v4_Q_bwd":  _attn_backward_Q_cdb_bim_v4,
-        "cdb_bim_v9_KV_bwd": _attn_backward_KV_v9,
-        "cdb_bim_v9_Q_bwd":  _attn_backward_Q_v9,
-        "cdb_bim_v10_fwd":   _attn_fwd_cdb_bim_v10,
-        "cdb_bim_v10_KV_bwd": _attn_backward_KV_cdb_bim_v10,
-        "cdb_bim_v10_Q_bwd":  _attn_backward_Q_cdb_bim_v10,
-        "cdb_bim_v8_bwd":    _attn_backward_cdb_bim_v8,
-        "cdb_bim_v7_KV_bwd": _attn_backward_KV_v7,
-        "cdb_bim_v7_Q_bwd":  _attn_backward_Q_v7,
-        "cdb_bim_v6_KV_bwd": _attn_backward_KV_v6,
-        "cdb_bim_v6_Q_bwd":  _attn_backward_Q_v6,
-        "cdb_bim_v5_KV_bwd": _attn_backward_KV_v5,
-        "cdb_bim_v5_Q_bwd":  _attn_backward_Q_v5,
-        # bs128 shares same kernels; autotune handles BIM_BLOCK_SIZE=128 via key
-        "cdb_bim_v14_KV_bwd": _attn_backward_KV_cdb_bim_v14,
-        "cdb_bim_v14_Q_bwd":  _attn_backward_Q_cdb_bim_v14,
-        "cdb_bim_v15_KV_bwd": _attn_backward_KV_cdb_bim_v15,
-        "cdb_bim_v15_Q_bwd":  _attn_backward_Q_cdb_bim_v15,
-        "cdb_bim_v16_fwd":    _attn_fwd_cdb_bim_v16,
-        "cdb_bim_v16_KV_bwd": _attn_backward_KV_cdb_bim_v16,
-        "cdb_bim_v16_Q_bwd":  _attn_backward_Q_cdb_bim_v16,
+        # shared by cdb_bim_v18 and varlen_bim_v2
+        "bim_pre":             _attn_backward_preprocess_cdb,
+        # cdb_bim_v18 (cross_doc_link)
+        "cdb_bim_fwd":         _attn_fwd_cdb_bim_v10,
+        "cdb_bim_KV_bwd":      _attn_backward_KV_cdb_bim_v10,
+        "cdb_bim_Q_bwd":       _attn_backward_Q_cdb_bim_v10,
+        # varlen_bim_v2 (doc_causal)
+        "varlen_bim_fwd":      _attn_fwd_doc_causal_v1,
+        "varlen_bim_KV_bwd":   _attn_backward_KV_doc_causal_v1,
+        "varlen_bim_Q_bwd":    _attn_backward_Q_doc_causal_v1,
     }
     return kernels
 

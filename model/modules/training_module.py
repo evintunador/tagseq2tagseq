@@ -128,7 +128,7 @@ class TS2TSTrainingModule(nn.Module):
             weight_tying: Whether to tie embedding and output head weights
             ignore_index: Index to ignore in loss computation
             dtype: Data type for loss computation
-            attention_backend: "flex" (default), "triton_v12", or "triton_v17"
+            attention_backend: "flex" (default) or "triton"
 
         Returns:
             Configured TS2TSTrainingModule ready for training

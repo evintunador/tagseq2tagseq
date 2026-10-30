@@ -1,22 +1,16 @@
-"""Custom Triton attention kernels for tagseq2tagseq.
+"""Custom Triton kernels for tagseq2tagseq.
 
-Kernel hierarchy (each step inherits everything above and changes only the mask):
-  causal_attn          — full causal (port of triton_docs_tutorials, + bf16)
-  varlen_attn          — doc_causal (packed docs via document_ids tensor)
-  cross_doc_naive_attn — cross_doc with dense [T,T] bool mask
-  cross_doc_bitmask_attn — cross_doc with [n_chunks,T] int64 bitmasks
+Attention (block-interaction-mask, "BIM", flash attention):
+  cross_doc_bitmask_bim_v18  cross_doc_link / doc_concat_link: doc-causal attention plus
+                             cross-document grants encoded as [n_chunks, T] int64 bitmasks.
+  varlen_bim_v2              doc_causal / doc_concatenated: doc-causal attention only.
+  bim_attn_core              Triton sub-kernels shared by the two above.
+
+Other:
+  fused_relu_sq_mlp          fused ReLU^2 MLP.
+  polar_express              Gram / quintic kernels for the Muon optimizer.
+
+Modules are imported directly (e.g. ``from kernels.varlen_bim_v2 import ...``); this
+package deliberately imports nothing eagerly. Design notes and the version history are
+in KERNELS.md.
 """
-
-from .causal_attn import triton_attn_causal
-from .varlen_attn import triton_attn_varlen
-from .cross_doc_naive_attn import triton_attn_cross_doc_naive
-from .cross_doc_bitmask_attn import triton_attn_cross_doc_bitmask
-from .cross_doc_bitmask_bim_v1 import triton_attn_cross_doc_bitmask_bim_v1
-
-__all__ = [
-    "triton_attn_causal",
-    "triton_attn_varlen",
-    "triton_attn_cross_doc_naive",
-    "triton_attn_cross_doc_bitmask",         # cdb_v1 — baseline OR-reduction
-    "triton_attn_cross_doc_bitmask_bim_v1",  # cdb_bim_v1 — BlockInteractionMask
-]

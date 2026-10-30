@@ -40,8 +40,8 @@ import torch
 import triton
 import triton.language as tl
 
-from .cross_doc_bitmask_attn import _attn_backward_preprocess_cdb
-from .cross_doc_bitmask_bim_v10 import (
+from .bim_attn_core import (
+    _attn_backward_preprocess_cdb,
     _attn_fwd_inner_full_v10,
     _bwd_kv_full_v10,
     _bwd_q_full_v10,
@@ -631,7 +631,7 @@ class _VarlenBIMv2(torch.autograd.Function):
         T, H, Dh = q.shape
         bim_bs   = bim.block_size
         n_blocks = bim.n_blocks
-        assert bim_bs == 128, f"varlen_bim_v1 requires BIM_BLOCK_SIZE=128, got {bim_bs}"
+        assert bim_bs == 128, f"varlen_bim_v2 requires BIM_BLOCK_SIZE=128, got {bim_bs}"
         assert bim.q_kv_n_full is not None
 
         q = q.contiguous()
