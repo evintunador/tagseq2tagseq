@@ -29,9 +29,10 @@
 \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
 % ---------------------------------------------------------------------------
 
-% --- grounded values (provenance) ------------------------------------------
-% Every result number is bound in generated/values.tex (from provenance/ledger.yaml)
-% and cited in prose as \val{claim-key}. \detokenize lets keys carry _ . / and keeps
+% --- frozen values ---------------------------------------------------------
+% generated/values.tex was generated from provenance/ledger.yaml, removed in the
+% 2026-10-28 soft reset (in git history at 209d17d); it is now a static file.
+% Numbers are cited in prose as \val{claim-key}. \detokenize lets keys carry _ . / and keeps
 % the define/use sides byte-identical. Undefined keys raise a hard error, never a blank.
 \makeatletter
 \newcommand{\valdef}[2]{\expandafter\def\csname val@\detokenize{#1}\endcsname{#2}}

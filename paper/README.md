@@ -16,7 +16,6 @@ cd paper && latexmk -pdf main.tex   # or: pdflatex main && bibtex main && pdflat
 
 ## Source material (in repo root)
 - README.md — method overview + mask figures
-- RESULTS*.md — all quantitative results
 - INSTRUCTIONS.md — full pipeline
 - docs/handoff_*.md — design notes
 
@@ -43,7 +42,6 @@ result-number dependencies, all \cite keys resolve:
 - D `D_traversal` — BFS/DFS/random-walk/random packing algorithms + traversal↔DAG-gate coupling.
 - E `E_density_scheduling` — kv_block_count proxy + quantile bucketing + per-rank density match.
 - F `F_dataset_construction` — per-modality graph extraction, normalization, splitting.
-- Z `Z_additional_results` — TODO placeholder for final tables.
 refs.bib now 533 entries. VE banks + modded-nanoGPT provenance removed from main text
 (main claims scoped to contributions); the lineage is documented only in Appendix A.
 
@@ -53,7 +51,8 @@ refs.bib now 533 entries. VE banks + modded-nanoGPT provenance removed from main
 Framing: the thesis is causality-preserving native corpus-fetching (unmeasured, stated
 as the central open measurement); the density law is a *capability* finding; arXiv is
 scoped out (32k window); the wiki community_pack negative is under audit and unclaimed.
-Ledger: 109 grounded keys (`provenance/ledger.yaml`); Appendix Z tables are all `\val{}`.
+Results (§6, Appendix Z) and the provenance ledger were removed in the 2026-10-28 soft
+reset (git history at 209d17d); `generated/values.tex` is now a frozen file.
 Remaining `\fillin{}` blanks + every cluster-side follow-up: `TODOS.md` "Paper —
 cluster-reliant items". Author: Evin Tunador, HOPPR. Bib: all 11 FLAGs verified.
 
