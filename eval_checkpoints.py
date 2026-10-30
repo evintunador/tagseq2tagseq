@@ -10,7 +10,7 @@ $TS2TS_EVALS_ROOT (default /fss-data/evin_t/tagseq2tagseq_artifacts/evals/<eval_
 Eval results are NEVER written into the training run dir being evaluated — doing so
 silently merged eval-time numbers into that run's own eval_results.json and polluted
 paper grounding. Each eval run records a manifest.json linking its metrics back to the
-source training run(s); scripts/distill_runs.py re-attaches them by source_run_id.
+source training run(s) by source_run_id.
 
 Benchmarks can be run under multiple named conditions in a single pass.
 Each condition specifies a mask_type and layout_policy override, allowing
@@ -317,9 +317,9 @@ def _source_run_id(checkpoint_path: Path) -> str:
     Convention: checkpoint lives at {run_dir}/checkpoints/<name>.pt
     → source_run_id = run_dir.name (e.g. 'run_20260720_063128_690228').
     Falls back to the checkpoint's immediate parent dir name if the parent is not
-    named 'checkpoints'. This is recorded in the eval run's manifest so
-    scripts/distill_runs.py can re-attach the metrics to that training run's
-    provenance record — it is NEVER used to write into the training run dir.
+    named 'checkpoints'. This is recorded in the eval run's manifest so the
+    metrics can be traced back to that training run — it is NEVER used to write
+    into the training run dir.
     """
     p = checkpoint_path.resolve()
     if p.parent.name == "checkpoints":
@@ -1329,10 +1329,9 @@ def main() -> None:
             _write_comparison_table(eval_dir, all_entries)
 
         # Manifest links this eval run's metrics back to the source training run(s)
-        # and records the eval CODE's own git commit, so scripts/distill_runs.py can
-        # re-attach the metrics to each training run's provenance record. Read the
-        # git_info.json ReproducibilityManager just wrote (same file the distiller
-        # reads), so manifest and distilled record agree on the commit source.
+        # and records the eval CODE's own git commit. Read the git_info.json
+        # ReproducibilityManager just wrote, so the manifest and the run's
+        # reproducibility record agree on the commit.
         git_info: Dict[str, Any] = {}
         try:
             _gi_path = eval_dir / "reproducibility" / "main" / "git_info.json"

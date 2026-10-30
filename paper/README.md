@@ -16,7 +16,6 @@ cd paper && latexmk -pdf main.tex   # or: pdflatex main && bibtex main && pdflat
 
 ## Source material (in repo root)
 - README.md — method overview + mask figures
-- INSTRUCTIONS.md — full pipeline
 - docs/handoff_*.md — design notes
 
 

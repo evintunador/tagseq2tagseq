@@ -2,7 +2,7 @@
 
 A framework for training language models on **graph-structured text** — where documents are nodes and hyperlinks or import dependencies are edges. Rather than treating corpora as flat token streams, this project makes the link structure a first-class part of both training and inference.
 
-See [INSTRUCTIONS.md](INSTRUCTIONS.md) for full pipeline, training, and generation commands.
+See [Pipeline](#pipeline) below for how to build data, train, generate and evaluate.
 
 ---
 
@@ -87,34 +87,27 @@ Within each strategy, a token budget and per-document token cap control sequence
 
 ## Datasets
 
-The framework currently supports four pretokenized datasets and has several more in progress, spanning three distinct link-structure modalities.
+All pretokenized datasets live under `/fss-data/evin_t/tagseq2tagseq_artifacts/pretokenized_datasets/`,
+each with `splits/{train,val_community,val_random,test_community,test_random}`. Precomputed
+schedules live under `.../schedules/<dataset>_<strategy>/epoch_N`.
 
-### Ready
-
-| Dataset | Edge type | Nodes | Tokens |
-|---------|-----------|-------|--------|
-| **SimpleWiki** | Markdown hyperlinks | 275k | ~108M |
-| **EnWikiSource** | Markdown hyperlinks | 662k | ~612M |
-| **The Stack** | Python `import` statements | 3.56M | ~8.7B |
-| **arXiv (unarXive 2024)** | `\cite{}` citations | 2.20M | ~10B |
-
-### Planned
-
-**Combined Wikipedia** — multiple language or thematic wiki dumps merged into a single graph. Cross-dump links and redirect edges give the graph richer connectivity than any single dump alone.
-
-**Obsidian vault** — a personal note-taking graph where `[[wikilink]]` syntax connects notes. Edges reflect the author's own associative structure rather than an editorial or codebase convention, making this a qualitatively different kind of graph: sparse, idiosyncratic, and highly personal.
-
-**Multi-dataset composition** — a dataset abstraction that mixes multiple corpora (e.g. Wikipedia + arXiv + code) in a single training run, with per-dataset link detectors dispatched based on document provenance. This requires handling heterogeneous edge types within the same batch.
+| Dataset | Edge type | Link detector |
+|---------|-----------|---------------|
+| `wiki_merged` (8 Wikimedia projects, incl. `simplewiki`, `enwikisource`) | Markdown hyperlinks | `markdown` |
+| `thestack` (Python from The Stack) | `import` statements | `python` |
+| `go`, `java`, `typescript`, `javascript`, `kotlin`, `rust`, `zig`, `dart` | imports / module references, parsed with tree-sitter | one per language |
+| `arxiv` (unarXive 2024 + OpenAlex) | `\cite{}` citations | `arxiv` |
+| `fineweb` | none (edgeless baseline) | `null` |
+| `merged_all_v2` (11 linked sources) | all of the above | `composite` (per-document dispatch) |
 
 ### Link detectors
 
-Each modality is served by a pluggable `LinkDetector` that runs online — during training to identify which token positions correspond to links, and during generation to detect links in newly generated text:
-
-| Detector | Used for |
-|----------|---------|
-| `MarkdownLinkDetector` | Wikipedia, Obsidian (`[[...]]` and `[text](url)` syntax) |
-| `PythonImportDetector` | The Stack (`import` / `from ... import`) |
-| *(planned)* `LatexCiteDetector` | arXiv (`\cite{...}`, `\input{...}`) |
+Each modality is served by a pluggable `LinkDetector` (`model/graph_traversal/*_detector.py`,
+registry in `link_detector.py`) that runs online: during training to find the token positions
+where links close, and during generation to detect links in newly generated text. The
+`composite` detector dispatches per document, so a model trained on mixed sources can generate
+across modalities. `data/graph_harness/` is a model-free conformance suite for the code
+detectors (detection and resolution against tree-sitter fixtures).
 
 ---
 
@@ -168,17 +161,25 @@ The 1.45× mean speedup comes from two combined effects:
 - **Eliminating online link detection** (`PythonImportDetector` at 32k tokens adds ~1.3 s/step on average; precomputed packs store link positions offline).
 - **Rank-stall reduction** from density matching (most visible on multi-node InfiniBand; effectively zero on single-node NVLink).
 
-See [INSTRUCTIONS.md](INSTRUCTIONS.md#density-aware-batch-scheduling) for full usage.
+See [Precompute epochs](#3-precompute-epochs) for usage.
 
 ---
 
 ## Model Architecture
 
-The model is a standard decoder-only transformer with rotary position embeddings, trained with bfloat16 mixed precision and the Muon optimizer (for 2D weight matrices) combined with AdamW (for embeddings and norms). Weight tying connects the embedding and unembedding matrices.
+A decoder-only transformer with rotary position embeddings and QK-norm, trained in bfloat16 with
+Muon (2D weight matrices) plus AdamW (embeddings, norms, scalars). The embedding and unembedding
+are tied for the first two thirds of training and then untied.
 
-The only architectural novelty is the **FlexAttention block mask**: instead of materialising a dense `T×T` attention matrix (expensive at 32k context), PyTorch's FlexAttention API compiles the mask logic into a sparse block representation, making long-context training tractable.
+The only architectural novelty is the attention mask. Training uses custom block-sparse Triton
+flash-attention kernels (`kernels/`): `cross_doc_bitmask_bim_v18` for the link masks and
+`varlen_bim_v2` for the doc-causal masks. Both precompute a per-batch block interaction table
+(BIM) so empty blocks are never launched, and they measured faster than FlexAttention at 32k
+context with the same memory (`kernels/KERNELS.md`). FlexAttention remains available
+(`model.attention_backend: flex`) and is what inference uses.
 
-Supported configurations range from 12L/768D (GPT-2 scale, 2k context) to 36L/1280D (medium scale, 32k context). Multi-node training is handled via DDP with SLURM/submitit.
+Configurations range from 12L/768D (2k context) to 36L/1280D (32k context). Multi-node training
+uses DDP launched through SLURM/submitit.
 
 ---
 
@@ -188,44 +189,202 @@ At inference time, `generate.py` loads a checkpoint and generates text autoregre
 
 For links that do not resolve to corpus documents, `--allow-generation-fallback` triggers generation of the auxiliary document from scratch, enabling open-ended multi-document synthesis.
 
+The generation loop currently recomputes the full forward pass at every token; there is no key/value cache yet.
+
+---
+
+## Pipeline
+
+Paths below abbreviate `/fss-data/evin_t/tagseq2tagseq_artifacts` as `$ART`. Bulk data never goes
+on `/fss`; see [Where data lives](#where-data-lives).
+
+### 0. Environment
+
+```bash
+uv venv --python /nfs/cluster/miniconda3/bin/python3.13 .venv
+VIRTUAL_ENV=$PWD/.venv uv pip install -r <requirements>     # torch 2.10, triton 3.6, tree-sitter-*, ...
+VIRTUAL_ENV=$PWD/.venv uv pip install -e /fss/evin_t/tunalab \
+    -e /fss/evin_t/tunalab/catalogs/common -e /fss/evin_t/tunalab/catalogs/nlp -e '.[dev]'
+python -m pytest tests/ -q
+```
+
+The last full package set is recorded in `$ART/worktree_archive/venv_freeze_2026-10-28.txt`
+(drop its `nvidia-*`/`cuda-*` pins and let torch choose them).
+
+### 1. Build a dataset
+
+Every dataset ends as a pretokenized directory: binary token shards, `tokenized_graph.jsonl`
+(nodes + edges) and `metadata.json`.
+
+- **Wikimedia**: `scripts/wiki_dump_pipeline.sh <tag> <dump.json.gz> <procs>` runs
+  extract → `data.wiki_graph_extractor.build_graph` → `data.pretokenize` for one dump;
+  `scripts/wiki_merge_finalize.sh` merges the per-dump datasets into `wiki_merged`
+  (`data/merge_datasets.py`).
+- **Code languages** (one language at a time, see CLAUDE.md on staggering):
+  ```bash
+  LANG=rust NPARQ=21 sbatch --array=0-20%12 scripts/download_stack_lang.sbatch   # the-stack-dedup shards
+  LANG=rust sbatch scripts/build_graph_lang.sbatch                               # tree-sitter import graph
+  LANG=rust sbatch scripts/finish_dataset_lang.sbatch                            # pretokenize, split, audit
+  bash scripts/make_review_artifacts.sh rust rust                                # human-readable review bundle
+  ```
+  Python (`thestack`) uses `data/github_graph_extractor/` and `data.pretokenize_stack`.
+- **arXiv**: `data/arxiv_graph_extractor/` (`build_openalex_map` → `extract` →
+  `data.pretokenize_arxiv`); each step is arg-driven and CPU-heavy, so run it on a compute node.
+- **Merged corpus**: `scripts/build_merged_v2_packs.sh` balances and re-buckets per-source
+  schedules into one (`data/merge_packs.py`); `scripts/precompute_merged_v2_val.sh` builds its
+  per-source val schedules.
+
+### 2. Split
+
+```bash
+python -m data.split_graph --dataset-dir $ART/pretokenized_datasets/<name> [--dry-run]
+```
+
+Writes five disjoint, self-contained splits under `splits/`. Cross-split edges are dropped.
+
+| Split | Purpose |
+|-------|---------|
+| `train` | training |
+| `val_community` | BFS-grown subgraphs with link structure intact: periodic val loss, `community_pack_perplexity` |
+| `val_random` | isolated uniformly-sampled nodes: `held_out_perplexity` |
+| `test_community`, `test_random` | same shapes, held back for final evaluation |
+
+### 3. Precompute epochs
+
+Packs are generated offline with the same traversal and link detection as live training, scored
+for attention density (`kv_block_count`, ~1 ms/pack on CPU) and sorted into quantile buckets.
+Training then draws every rank's pack from the same bucket.
+
+```bash
+python precompute_epochs.py \
+    --dataset-dir $ART/pretokenized_datasets/thestack/splits/train \
+    --output-dir  $ART/schedules/thestack_bfs \
+    --n-epochs 5 --strategy bfs --local-seq-len 32768 --n-buckets 32 --n-workers 16 --seed 42 \
+    --link-detector python --layout-policy stochastic_identifier_prefix
+# or, per language on SLURM:
+LANG=rust DET=rust STRAT=bfs LAYOUT=stochastic_slash_comment_prefix sbatch scripts/precompute_lang.sbatch
+```
+
+`--local-seq-len` must equal `model.max_seq_len` and `--layout-policy` must match the training
+layout. Precompute is resume-safe (finished epochs are skipped). Regenerate schedules after any
+dataset rebuild. `--keep-frac` / `--traversal-keep-frac` subsample edges for density studies.
+
+### 4. Train
+
+```bash
+python launch_slurm.py --nodes 1 --gpus-per-node 8 --time 48:00:00 \
+    --config configs/thestack_sweep/thestack_veoff_cdl.yaml \
+    [--section.key value ...] [--resume-from <run_dir>/checkpoints/latest.pt]
+```
+
+- Overrides are **dotted keys only** (`--model.mask_type`, `--data.epoch_dirs`, ...). The launcher
+  defines no shorthand flags.
+- `configs/` holds one tuned config per dataset and mask: `<ds>_sweep/<ds>_veoff_{dc,cdl,concat,concatlink}.yaml`,
+  plus `wiki_*_best.yaml`, `merged_v2_8b_*.yaml` and `fineweb_doc_causal.yaml`. Several still set
+  `train_loop.warmup_steps`, which `main.py` rejects; replace it with `train_loop.warmup_percent`.
+- `data.epoch_dirs` (a list of precomputed epochs) switches training to `BucketedPackDataset`.
+- Resume is exact across world sizes (Muon + AdamW state is keyed by parameter name; dataset
+  position is saved with every checkpoint).
+- Multi-rank runs need a pre-warmed compile cache, and jobs must be launched one at a time
+  (CLAUDE.md). `scripts/stagger_launch.sh` launches a list of configs that way.
+- Run directories go under `$ART/runs/` (`TS2TS_RUNS_ROOT` overrides).
+
+### 5. Generate
+
+```bash
+python generate.py --checkpoint <run_dir>/checkpoints/latest.pt \
+    --dataset $ART/pretokenized_datasets/thestack \
+    --root-identifier "trainer.py" --prompt "import torch ..." \
+    --max-new-tokens 500 --max-link-depth 2 --repetition-penalty 1.1
+```
+
+`generate.py` rebuilds the architecture, tokenizer, link detector and layout policy from the run's
+saved hyperparameters. With `--dataset`, links detected in generated text are resolved against the
+corpus and the targets inserted into the attention context; `--allow-generation-fallback`
+generates targets that don't resolve; `--link-detector composite` serves merged models.
+Checkpoints trained with an identifier-prefix layout need `--root-identifier`. For code use
+`--repetition-penalty 1.05–1.15` (the 1.3 default suits prose).
+
+### 6. Evaluate
+
+```bash
+python eval_checkpoints.py --checkpoints <ckpt> [<ckpt> ...] \
+    --dataset $ART/pretokenized_datasets/<name> [--benchmarks ...] [--split val_community]
+```
+
+Each invocation gets its own eval run directory under `$ART/evals/` (never inside the training
+run). Benchmarks include held-out and community-pack perplexity, standard single-document NLP
+benchmarks (`eval/nlp_benchmarks.py`), and cross-document benchmarks scored with and without the
+link (`eval/benchmark_harness/`: RepoBench, CrossCodeEval and HotpotQA-style ports;
+`scripts/eval_ports_slurm.sh <label> <run_dir>` runs them on SLURM). Experiment-specific evals:
+`eval/sparsity_sweep.py` (edge-density sweeps, `scripts/sparsity_phase1_sweep.sh`,
+`scripts/eval_sparsity_*.sbatch`), `eval/memorization.py`, `eval/link_injection_grid.py`.
+Plots for these are in `eval/viz/`.
+
+### 7. Inspect and visualise
+
+| Command | Shows |
+|---------|-------|
+| `python demo_traversal.py <dataset_dir> --strategy bfs [--layout-policy identifier-prefix]` | a packed batch: doc spans, in-batch links, decoded snippets |
+| `python visualize_llm_input.py ...` | the exact text the model sees for a pack, per-doc prefix/body/suffix and cross-doc links |
+| `python visualize_annotated.py --config <cfg> ...` | link annotations over a pack |
+| `python -m model.graph_traversal.block_mask_creator <dataset_dir> --mask-type cross_doc_link --link-detector python` | the attention mask of a real batch as a PNG |
+| `python visualize_epoch.py --epoch-dir <epoch> --dataset-dir <split> --output-dir <dir>` | density histogram, per-bucket masks, step timing (`--live-run`/`--precomputed-run`) |
+| `python benchmarks/attention_harness.py {correctness,bench,all}` | kernel correctness and speed vs FlexAttention and exact references |
+
+---
+
+## Where data lives
+
+Everything bulky is under `/fss-data/evin_t/tagseq2tagseq_artifacts/` (`$ART`). The checkout
+keeps symlinks at a few old paths so older records still resolve; the virtual environment is the
+only large thing inside the checkout.
+
+| Path in `$ART` | Contents |
+|----------------|----------|
+| `pretokenized_datasets/` | all datasets and their `splits/` |
+| `schedules/` | precomputed epochs (`<dataset>_<strategy>/epoch_N`) |
+| `graphs/`, `raw/`, `wiki_*` | raw downloads and intermediate graphs |
+| `runs/` | training runs (`runs_legacy/`: runs written inside the old checkout, symlinked as `./runs`) |
+| `evals/` | standalone eval runs |
+| `cache/` | benchmark dataset caches (`main_checkout_data_cache` is `./data/.cache`) |
+| `compile_cache/` | shared Triton/inductor compile caches for multi-rank runs |
+| `sparsity_scaling/` | edge-density experiment outputs read by `eval/viz/` |
+| `fss_home_legacy_may2026/` | May 2026 simplewiki/thestack builds formerly at `/fss/evin_t/tagseq2tagseq_artifacts` |
+| `worktree_archive/` | files kept from removed worktrees, and the last venv package freeze |
+
 ---
 
 ## Repository Layout
 
 ```
-main.py                          Training entry point (single-node or DDP)
-launch_slurm.py                  Multi-node SLURM launcher (submitit)
-generate.py                      Generation CLI
-precompute_epochs.py             Offline epoch pre-computation for density-aware batching
-visualize_epoch.py               Density / mask / timing visualisations for a pre-computed epoch
-visualize_llm_input.py           Decode a packed batch back to the exact text the LLM sees (per-doc prefix/body/suffix + cross-doc links)
-configs/                         YAML training configurations
-schedules/                       Pre-computed epoch directories (packs.parquet + metadata.json)
+main.py                    Training entry point (single GPU or DDP)
+launch_slurm.py            SLURM launcher (submitit); dotted-key config overrides
+precompute_epochs.py       Offline pack generation + density bucketing
+generate.py                Generation CLI (link detection + corpus fetch during decoding)
+eval_checkpoints.py        Evaluation CLI (own eval run dir per invocation)
+smoke_test_generation.py   Load a checkpoint and check generation end to end
+demo_traversal.py, visualize_*.py   Inspection and visualisation tools (see Pipeline §7)
+configs/                   One tuned config per dataset x mask
 data/
-  dataset.py                     GraphIndex, PretokShardedBackend
-  packed_dataset.py              PackedSequenceDataset (IterableDataset, live online path)
-  bucketed_pack_dataset.py       BucketedPackDataset (IterableDataset, pre-computed path)
-  epoch_precompute.py            EpochPrecomputer, PackRecord, worker logic
-  traversal.py                   BFS, DFS, RandomWalk, Random strategies
-  pack_sampler.py                Token-budget-aware batch construction
-  pretokenize.py / pretokenize_stack.py   Raw data → binary shards
-  wiki_graph_extractor/          Wikipedia dump → articles + graph
-  github_graph_extractor/        The Stack → Python files + import graph
+  dataset.py, packed_dataset.py, bucketed_pack_dataset.py   graph index, live and precomputed datasets
+  traversal.py, pack_sampler.py, layout.py, collate.py       packing: traversal, token budgets, per-doc decoration
+  epoch_precompute.py      precompute workers, partitioners, kv_block_count
+  pretokenize*.py, split_graph.py, merge_datasets.py, merge_packs.py
+  *_graph_extractor/       per-source graph builders (wiki, github/python, arxiv, fineweb, 8 code languages)
+  graph_harness/           conformance fixtures for the code link detectors
 model/
-  model.py                       TS2TSModel (inference wrapper)
-  modules/training_module.py     TS2TSTrainingModule (nn.Module, loss out)
-  graph_traversal/
-    block_mask_creator.py        FlexAttention mask registry + visualiser
-    cross_doc_mask.py            CrossDocLinkMaskCreator (flex + triton backends)
-    markdown_link_detector.py    Detects [[WikiLinks]] in token streams
-    python_import_detector.py    Detects `import` statements in token streams
-    arxiv_cite_detector.py       Detects \cite{Title} citations in token streams
-    link_detector.py             LinkDetector protocol + make_link_detector factory
-  generation_loop.py             run_generation, link-detection loop
-  document_context.py            DocumentContext (inference context window)
-kernels/                         Custom Triton attention kernels
-tunalab/train_loops/             Experiment-local atomic training features
-docs/images/                     Committed mask and density visualisations
+  model.py                 TS2TSModel (inference wrapper)
+  modules/                 attention (flex/triton dispatch), layer, backbone, training module
+  graph_traversal/         mask creators (cross_doc_mask.py, block_mask_creator.py) and link detectors
+  generation_loop.py, document_context.py, document_corpus.py, sampling.py   generation
+kernels/                   Triton kernels: attention (v18, varlen_bim_v2, shared core), MLP, Muon; KERNELS.md
+optimizers/                Muon
+eval/                      perplexity, NLP and cross-doc benchmarks, experiment evals, viz/
+tunalab/train_loops/       project-local training-loop features for tunalab's smart_train
+benchmarks/                attention and MLP kernel harnesses
+scripts/                   SLURM/data pipeline wrappers
+paper/                     paper draft (results section removed in the 2026-10 soft reset)
+docs/                      design docs (eval, benchmarks, multi-language datasets) and figures
+TODOS.md, TUNING_LESSONS.md   open questions and lessons from earlier rounds
 ```
-
-Full pipeline instructions (data extraction, pretokenization, training, generation) are in [INSTRUCTIONS.md](INSTRUCTIONS.md).

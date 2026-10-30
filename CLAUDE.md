@@ -2,7 +2,7 @@
 
 ## Custom kernels are the default — don't revert to flex
 
-`attention_backend: triton` (default) automatically selects the fastest custom Triton kernel per mask type: `cross_doc_link` → `triton_v18`, `doc_causal` → `varlen_bim_v2`. Don't set it to `flex` unless benchmarking against FlexAttention.
+`attention_backend: triton` (default) selects the custom Triton kernel from the mask type: link masks (`cross_doc_link`, `doc_concat_link`) → `kernels/cross_doc_bitmask_bim_v18.py`, doc-causal masks (`doc_causal`, `doc_concatenated`) → `kernels/varlen_bim_v2.py`. These are the only attention kernels in the tree; earlier versions are in git history and summarized in `kernels/KERNELS.md`. Don't set it to `flex` unless benchmarking against FlexAttention. Kernel correctness: `tests/kernels/` and `benchmarks/attention_harness.py`.
 
 ## Never disable torch.compile
 
@@ -27,4 +27,4 @@ Start training jobs **one at a time**, waiting for each to reach its first train
 1. **Concurrent cold compilation** thrashes/deadlocks the Triton/inductor compiler (see the compile-cache section above) — worst when jobs share a node or a compile-cache dir.
 2. **Run-directory collision**: `main.py` derives its run dir from `datetime.now()` at **second** precision (`runs/YYYYMMDD_HHMMSS`). Two jobs started in the same second get the same dir, and `ReproducibilityManager` aborts the second with *"Output directory ... already contains a 'reproducibility' folder"*.
 
-This applies to SLURM submissions, down-node `launch_downnode.sh` runs, and especially multiple jobs sharing one node (e.g. thestack + arxiv + wiki on disjoint GPU sets). Launch, confirm "Training: Nit" appears in the log, then launch the next.
+This applies to SLURM submissions, direct `torchrun` runs, and especially multiple jobs sharing one node (e.g. thestack + arxiv + wiki on disjoint GPU sets). Launch, confirm "Training: Nit" appears in the log, then launch the next.

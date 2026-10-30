@@ -38,7 +38,7 @@
 \newcommand{\valdef}[2]{\expandafter\def\csname val@\detokenize{#1}\endcsname{#2}}
 \newcommand{\val}[1]{%
   \@ifundefined{val@\detokenize{#1}}%
-    {\PackageError{val}{Undefined \string\val{\detokenize{#1}} -- run gen_values_tex.py}{}}%
+    {\PackageError{val}{Undefined \string\val{\detokenize{#1}} -- add it to generated/values.tex}{}}%
     {\csname val@\detokenize{#1}\endcsname}}
 \makeatother
 \input{generated/values.tex}

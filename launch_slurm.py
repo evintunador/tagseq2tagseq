@@ -109,7 +109,7 @@ def _training_worker(main_argv: list, run_dir: str, script: str = 'main') -> Non
     # main.py installs no console handler, so its logger.info lines (compile
     # warmup, "Wrapping model in DDP", scheduler config, auto-derived steps) are
     # INVISIBLE under submitit — you end up debugging blind.  torchrun paths get
-    # this via downnode_rank_wrapper.sh's basicConfig; replicate it here so the
+    # this via a basicConfig in their wrapper; replicate it here so the
     # submitit .err files capture the same INFO stream.
     import logging as _logging
     _logging.basicConfig(

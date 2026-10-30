@@ -1,5 +1,9 @@
 # Tuning & Infra Lessons (wiki_merged / arxiv retune, 2026-07-15 → ongoing)
 
+> **2026-10-28 soft reset.** References here to `RESULTS*.md`, `provenance/`, `scripts/distill_runs.py`,
+> `check_grounding.py`, the yield watcher and other removed files point at git history
+> (last present at commit 209d17d). Kept for the reasoning, not as a live task list.
+
 Running log of what we learned retuning hyperparameters and running the mask/traversal
 ablations. Keep appending. Detailed run-by-run log: `/fss-data/.../pipeline_logs/lrsweep_runmap.txt`.
 
