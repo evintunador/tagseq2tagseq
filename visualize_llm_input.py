@@ -19,7 +19,7 @@ For each packed sequence it shows:
     target document is *in this pack* (a real cross-doc attention grant) or not;
   * the input_ids / labels causal shift the model actually sees.
 
-The defaults mirror ``configs/arxiv_cross_doc.yaml`` (BFS traversal,
+The defaults mirror ``configs/arxiv_sweep/arxiv_veoff_cdl_wd0p3.yaml`` (BFS traversal,
 ``stochastic_latex_comment_prefix`` layout, arxiv link detector) but every knob
 is overridable on the CLI.
 

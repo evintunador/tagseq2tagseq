@@ -7,7 +7,7 @@ Usage:
 Launcher options (all optional):
     --nodes N            Number of nodes          (default: 1)
     --gpus-per-node N    GPUs per node            (default: 1)
-    --config PATH        Config YAML              (default: configs/baseline.yaml)
+    --config PATH        Config YAML              (required)
     --partition NAME     SLURM partition          (default: compute)
     --time HH:MM:SS      Wall-clock time limit    (default: 24:00:00)
     --mem-per-gpu GB     CPU RAM per GPU in GB    (default: 192)
@@ -287,7 +287,7 @@ def main():
                         help="Number of nodes")
     parser.add_argument("--gpus-per-node", type=int, default=1,
                         help="GPUs per node")
-    parser.add_argument("--config",        type=str, default="configs/baseline.yaml",
+    parser.add_argument("--config",        type=str, required=True,
                         help="Config YAML path (relative to project root)")
     parser.add_argument("--partition",     type=str, default="compute",
                         help="SLURM partition")
