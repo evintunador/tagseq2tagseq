@@ -336,6 +336,34 @@ extending the Python-only import graph in `model/graph_traversal/link_detector.p
 
 ## Model
 
+### Detector decision-token + prefix-stability audit (filed 2026-11-03, from REFRAME_NOTES F0)
+F0's axioms need (D) prefix-stability: any link a detector finds in a prefix must be found, with
+the same position and target, in every continuation. Grants should open at the **decision
+token** τ_ℓ, the first token whose prefix decides the link. Today grants open at
+`link_end_pos` = one past the closing token. For markdown that's one position conservative,
+because `)` already decides the target ("Apple" vs "Apple Inc."). For delimiter-free syntaxes
+(`import a.b` may continue `.c`; Rust `use a::{b, c}`; multi-line `from x import (...)`) the
+decision token is the terminator.
+- Write a CPU-only property test over all detectors (markdown, arxiv cite, python, go, java,
+  kotlin, rust, ts, js, dart, zig, composite). Run the detector on every prefix of real and
+  adversarial docs, and check that each link appears at a stable (position, target) from its
+  decision token onward and never retracts.
+- From the results, define τ_ℓ per detector and decide whether to move grant start from
+  `link_end_pos` to the decision token. That's a repo-wide change (detectors, mask builders,
+  kernels' bitmask construction, density scoring, generation loop trigger), so do it as part
+  of the redesign, not piecemeal.
+
+### Anchored leftward positions + reverse-link-order layout (filed 2026-11-03, from REFRAME_NOTES F0/§4.4)
+Global RoPE with targets-first packing leaks future-link information through positions (A's
+later-linked targets sit between A and earlier ones). The generation loop inserts fetches
+immediately before the reader (`model/generation_loop.py:333`), shifting earlier targets, which
+is why it needs full recompute.
+- Redesign: anchor the reader at position 0 and prepend each new fetch in front of the
+  existing targets (negative positions), so the reader's KV is append-only.
+- Packing: lay out each reader's targets in reverse link order, recursively. Decide what to do
+  for shared targets (approximate vs per-grant virtual offsets).
+- Design-first. Settle in REFRAME_NOTES §4.4 before touching code.
+
 ### RoPE length extrapolation past the 32k training window (later — consider)
 The rotary cos/sin buffer is sized to max_seq_len=32768 and
 `flex_self_attention` hard-asserts `cos.size(0) >= T`, so any pack over 32k

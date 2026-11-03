@@ -53,26 +53,109 @@ questions and future-empirics seeds. Written to be split into branching conversa
 Lead with cost (read-many/edit-few amortization). Follow with why it's *exact* (training
 already used the same isolation), unlike KV-reuse-for-RAG methods, which are approximate.
 
+### 2.1 The framing line (user, 2026-11-03) [DECIDED]
+> Flattening images into an MLP gave way to convolutions, which matched the data's true shape.
+> TAGSeq2TAGSeq does the same for LLMs. Corpora are not flat sequences, they are
+> **text-attributed directed acyclic graphs that evolve over time**, and the architecture
+> (attention mask, positions, cache, training data) should be built around that shape.
+
+The inductive-bias analogy is the intro's opening move. Repo histories as native training data
+(§5.3) are the "over time" half of the shape.
+
 ## 3. Theory: candidate formal results
 
 Lightweight propositions, each one sentence plus a short proof sketch. F0, F1 and F3 are
 must-haves.
 
-### F0. Mask causality and the maximal mask **[LEANING: centerpiece of the method section]**
-- **Condition:** for a model's link-following to be generative, the mask row at query position
-  q may depend only on tokens x_{≤q}. The model's own past decides what it may read.
-- `concat_link` violates it. B is visible from the *start* of A because A *will* cite B later,
-  so the mask leaks A's future. `doc_concatenated` violates it in the same way: component
-  membership depends on links that appear later in A.
-- Consequence: their losses are **conditional likelihoods given an oracle link set**. No
-  generator that chooses its links as it writes can realize them. `concat` is still a valid
-  autoregressive model over a *fixed* concatenation, but someone has to choose the component
-  before generation starts. That makes it RAG or plain long context, not self-directed fetching.
-- **Proposition (to formalize):** within the family of masks that (i) are causal, (ii) respect
-  link entitlement (cross-doc reads only along edges) and (iii) satisfy the condition,
-  `cross_doc_link` is maximal: it grants every pair any such mask could grant.
-  - [OPEN] Get the family definition exactly right so maximality is non-trivial but true.
-    Does "entitlement" include transitive reads? Section anchors?
+### F0. Axiomatic characterization of the mask **[DECIDED: centerpiece of the method section]**
+Worked through 2026-11-03.
+
+**Setup.** A context is an ordered list of documents, with the reader A (the one being written)
+last. A detector maps tokens to links (p, s) and a resolver maps s to a context document. A mask
+policy maps (context, tokens) to M(q, k). Multi-layer composition means q's *information set* is
+the closure of chains of mask edges, so the axioms must hold for the closure, not just one row.
+
+**Axioms.**
+- **A1. Token causality:** M(q, k) ⇒ k ≤ q.
+- **A2. Self-determination:** row q is a function only of x_{≤q} (and the documents before A).
+  What A may read is decided by what A has written so far. **[DECIDED] Positions count**: the
+  relative offsets the reader sees must also be prefix-determined (see the positional leak
+  below). This is what buys the append-only cache result.
+- **A3. Entitlement (direct) [DECIDED]:** a cross-doc read from q in A into B requires a link ℓ
+  in A resolving to B with decision time τ_ℓ ≤ q. Information from B's own ancestors reaches A
+  only through B's states (F7/F8). No transitive direct grants.
+- **D. Detector prefix-stability (precondition):** a link found in a prefix is found, with the
+  same position and target, in every continuation. τ_ℓ = the first token index whose prefix
+  makes the link decided (the "decision token").
+
+**Detector abstraction [DECIDED]:** the *terminator* (the decision token) is an explicit part
+of the detector interface. Each detector declares what closes a link (`)` for markdown,
+newline/`,`/` as` for imports, …) and returns τ_ℓ directly, instead of mask code inferring it
+from `link_end_pos`.
+
+**Theorem 1 (characterization).** A1–A3 are each preserved under unions of masks, so a unique
+greatest admissible mask exists. It equals `cross_doc_link` with grants from τ_ℓ. Near-
+definitional: present it in prose, with the axiom table as the point.
+
+| Design | A1 | A2 | A3 | Maximal |
+|---|---|---|---|---|
+| standard causal packing | ✓ | ✓ | ✗ unrelated prior docs | – |
+| doc_causal / IntraDoc | ✓ | ✓ | ✓ | ✗ grants nothing |
+| **cross_doc_link** | ✓ | ✓ | ✓ | **✓ unique** |
+| doc_concat_link | ✓ | ✗ reads B before citing | ✓ | – |
+| doc_concatenated | ✓ | ✗ | ✗ unlinked siblings | – |
+| LinkBERT / CDLM | ✗ bidirectional | – | – | – |
+| RAG / Block-Attention | ✓ | ✗ retriever decides beforehand | ✗ | – |
+
+**Theorem 2 (proper likelihood + leakage). Proof-worthy.** Under A1+A2 the pack loss is a
+normalized NLL (chain rule). Without A2, it isn't. Counterexample: A is one token, either "link
+B" or "other". The grant exists iff the token is "link B", so the model can put ~1 on whatever
+happened, and the "likelihood" sums to ~2. So the concat controls' NLL is partly **leakage**
+(link tokens become cheap), not just incomparable. That retroactively explains part of their
+old strength.
+
+**Theorem 3 (train = inference identity). Proof-worthy.** Under A1–A3 + D, with positions in
+A2, the cdl pack loss for A equals the teacher-forced NLL of the link-following generation
+process when the resolver returns exactly the pack's documents. With F2, training is the
+generation process run with a random subset of targets available.
+
+**Corollary (cacheability, links to F3).** A1+A3 ⇒ a doc's states depend only on its tokens and
+its entitlement closure. The axioms that make it generative also make it cacheable.
+
+**What the axioms exposed in the code:**
+1. *Grant start / decision token.* Markdown sets `link_end_pos = j+1`, where j is the token
+   containing `)`. For markdown, j is already the decision token, since `)` disambiguates
+   "Apple" from "Apple Inc.", so a grant from j is safe and j+1 is one position conservative.
+   For delimiter-free syntaxes (`import a.b` can continue `.c`) the decision token is the
+   terminator (newline, `,`, ` as`). There a grant at the last identifier token would be
+   premature. **Rule: grant from the decision token. Audit each detector.** (TODOS)
+2. Grant cap is consumed in link-position order (`cross_doc_mask.py:522`), so A2 is preserved.
+   Any other order would break A2 silently.
+3. *Positional leak under global RoPE.* With targets-first packing, A's later-linked targets
+   sit between A and its earlier-linked targets, so the RoPE distance from A's early queries to
+   B1 includes |B2|. That's information about a future link. The generation loop inserts each
+   fetch immediately before A (`generation_loop.py:333`, giving [B1, B2, A]), so every insert
+   shifts earlier targets. That's why it needs full recompute.
+   **Fix: anchor A at position 0 and prepend each new fetch in front of the existing targets
+   at increasingly negative positions.** Nothing computed ever moves, so the reader's KV is
+   **append-only** during link-following generation. Training needs the matching layout
+   (reverse link order, recursively). Readers that share targets can't all get their ideal
+   layout from one pack (the diamond problem again), so either accept approximation or use
+   per-grant virtual offsets.
+
+**Presentation [DECIDED leaning]:**
+- Main body: plain-language axioms, each motivated by a *requirement* (A2 ← "the model decides
+  what to read by writing"; A3 ← cacheability and attribution). Then the table, the one-line
+  leakage counterexample, and a one-sentence statement of Theorems 2–3.
+- Appendix: full proofs.
+- Don't dress Theorem 1 up. Theorems 2 and 3 have real downstream consequences (what concat-
+  style training measured; the append-only cache), so they earn proofs.
+
+**[OUT OF SCOPE → future work]**
+- Section/anchor-scoped grants (`Title#Section`), an efficiency refinement.
+- "Declared"/ambient edges (same directory, category). These are A2-safe if given by metadata
+  at doc start, but domain-specific and edge-case-prone (e.g. a live doc reading itself via a
+  directory rule).
 
 ### F1. Factorization
 - Under the DAG gate, the `cdl` pack loss is the exact NLL of a valid autoregressive
@@ -217,6 +300,19 @@ must-haves.
      packing-distance diagnostic TODO.
   2. **Total context.** Composed caches still have to fit the trained position range, so the
      window limit applies to cached context too. (F7 helps: fewer docs per reader.)
+- **Leading option [LEANING]:** keep RoPE, anchor the reader at 0, and grow fetched docs leftward
+  (F0 positional leak). Reader KV becomes append-only. "Take the slight hit" on shared-target
+  approximation in training.
+- Creative alternatives to brainstorm and narrow down (maybe test, maybe not):
+  - RoPE within the primary doc, plus a learned per-slot / per-distance / "uniqueness"
+    embedding for aux docs. To keep caches composable, apply it at attention time (a key bias
+    or query-side term), not to the cached hidden states.
+  - **RoPE on an orthogonal axis** (M-RoPE-style, cf. Qwen2-VL's multi-axis rotary): split head
+    dims. One subspace rotates by doc-local token position, the other by a document-level
+    coordinate (link order, hop depth). For grant blocks, the kernel uses only the doc-axis
+    rotation (store pre-rotation K, rotate per block type; BIM already dispatches by block type).
+  - NoPE across grants (content-addressed cross-doc reads). **User is enthusiastic about this one.**
+  - ALiBi-style per-document bias.
 - Alternatives if global RoPE doesn't hold up: doc-local RoPE + NoPE across grants (kernel-
   friendly, since BIM already distinguishes grant blocks from diagonal blocks); per-grant fixed
   virtual offset (rotate Q per grant block). **[OPEN / possible deep dive or future work.]**
@@ -346,6 +442,19 @@ must-haves.
   versions that share most of their nodes.
 - Connects to §4.6 (serving a versioned corpus) and §6 (knowledge that updates).
 - [OPEN] Edges across versions (doc@t links doc@t−1? diffs as documents?). Likely future work.
+- **Immutable-version redesign (user idea, 2026-11-03) [OPEN, potentially fundamental]:** make
+  every file version (or commit) a new content-addressed node, linked to its predecessor.
+  - An edit becomes an *append*. No cache is ever invalidated, since old entries stay valid for
+    their version. Like a persistent data structure / Merkle DAG; pairs with Scion (§4.6).
+  - Recompute doesn't vanish, it becomes **lazy and optional**. A@t still holds its old
+    B-informed state. A fresh reader that links B' directly gets the latest B' (direct
+    entitlement), while A's F8 "message" about B stays stale until someone materializes A@t+1.
+    So: define consistency levels (latest-direct vs. fully re-derived). **The user flagged this
+    stale-A problem as a key design driver for the eventual over-time model.**
+  - Generating a new version = a document linking to its previous version, so editing becomes
+    conditional generation along a version edge, and repo history becomes training data.
+  - Would need new datasets (repo histories), kernels, and cache handling. Small KV
+    (V4.1-class ~1 KB/token) makes storing every version plausible.
 
 ## 6. Grounding, alignment, pluralism
 
