@@ -216,30 +216,66 @@ its entitlement closure. The axioms that make it generative also make it cacheab
   reader only).
 - When a document is edited, changes in output are confined to the documents that read it.
 
-### F7. Corpus compilation as dynamic programming over the DAG (new, see §4.2) **[LEANING: headline]**
-- cache(v) = Forward(x_v | cache(parents(v))) in topological order. Each step needs only v's
-  tokens plus its parents' *cached* KV in context, not their full closures.
-- Information depth is unbounded but compute per document is local. This is exactly Scion's
-  "derived data defined recursively from parents" (§4.6).
+### F7. Corpus compilation as dynamic programming over the DAG **[DECIDED: headline]**
+Worked through 2026-11-04/05.
+- **Definition:** in topological order, S(v) = Φ_θ(x_v, {S(u) : u ∈ Pa(v)}), i.e. v's per-layer
+  KV computed with grants into its parents' *cached* KV.
+- **Lemma (DP = joint forward):** S(v) equals v's KV in one forward over v's whole ancestor
+  closure in topological order. Proof: induction over topo order and layers, using A1+A3. So
+  compiling the corpus is equivalent to running it as one giant pack, at local cost: one pass of
+  projections/MLP per token (≈2N·|corpus|) plus attention Σ_v |v|·(|v| + Σ_Pa |u|).
+- **Receptive field = L hops (corrects "unbounded").** Information from an ancestor h hops up
+  enters A's residual stream no earlier than the end of layer h. **The stack is an L-round
+  message-passing GNN over the corpus DAG: an L-hop receptive field at 1-hop context cost.**
+  Deeper hops arrive in later layers (cf. "hopping too late", Biran et al. 2024).
+  - User prior: useful depth is far below L (doubt anything useful 12+ hops back). L is an upper
+    bound, not an expectation.
+- **Invalidation is bounded by L:** an edit to C changes a descendant at distance h only in
+  layers > h, and not at all if h ≥ L.
+  - Layer-partial recompute (top L−h layers, needs residual checkpoints) → **[FOOTNOTE / future
+    work]**. Published code may be suboptimal as long as it conveys the idea.
+  - Approximate invalidation (stop at the depth where state change falls below a threshold) is
+    an eventual-consistency option.
+- **Diamonds disappear:** A→{B, C}→D. S(B) and S(C) each read the single S(D), exactly the joint
+  forward.
+- **Exactness needs reader-relative cross-grant positions.** One global layout can't give B and
+  C both their canonical offset to D. **[DECIDED] NoPE across grants** (RoPE only within a doc)
+  satisfies the lemma exactly and makes the layout question vanish (no anchoring, no reverse-
+  order packing, no diamond approximation). Per-grant virtual offsets are the alternative. Cost:
+  the reader tells targets apart only by content (identifier cards help).
+- **Cycles [DECIDED]:** the DP needs a DAG. The principled answer is **time**: if each version
+  links only to versions strictly earlier, the corpus is acyclic by construction. Cycles inside
+  one git commit are an artifact of snapshotting; a perfect record of edits in the order they
+  were written would have none. In the paper, present time-versioned TAGs as the principle and
+  a static snapshot as the degenerate case, with a one-line deterministic cycle-breaking
+  fallback (what the packer does today; optimal = min feedback arc set, NP-hard).
+  - Time dimensions available per source: GitHub (commits), Wikipedia (full revision history
+    dumps, TB-scale), arXiv (submission dates and versions; citations point mostly backward
+    already), web (crawl timestamps, coarse). Legwork: easy for code, hard for general web.
+  - SCC condensation / fixed-point iteration: mention only.
+- **Train/inference gap:** compiled S assumes all parents are present recursively, but a depth-h
+  chain is fully co-packed with probability ~ρ^h. Fixed by repo-step training (§5.2).
 
-### F8. Reader-shaped messages (pretraining makes B's cache useful to B's readers)
-- Under joint pretraining, gradient from A's loss flows A → B's states → B's attention over C.
-  So B's states are optimized for L_B **plus the losses of B's readers**. B's cached KV is a
-  *learned message* m_B = f(x_B, m_parents), trained end to end by downstream consumers. That
-  is message passing on the graph, and the model is an autoregressive GNN whose nodes are text
-  (F7 = one topological message-passing sweep).
-- Contrast: inference-only reuse (RAG KV reuse, Block-Attention) gives B states shaped only by
-  B's own objective.
-- Nuance: B is computed before (and independently of) A, so the message is tuned to the
-  **distribution of B's readers**, not to A in particular. It's amortized usefulness. Also,
-  only B's positions after its link to C can carry C's information.
-- **Clean test: the stop-gradient ablation.** Train with the same mask, but detach B's KV
-  wherever a reader attends to it. Inference information flow is identical. The only
-  difference is whether readers' gradients shape B. Synthetic version: C holds fact f, B links
-  C but its own text never needs f, A links B (not C) and needs f. Measure A's accuracy on f
-  from B's cache alone, plus linear probes for f on B's states.
-- **Tension with §5.2:** cached-KV targets are stop-gradient, so purely cached training kills
-  F8. Keep a share of token-targets (with gradient) in every regime.
+### F8. Summary for citers (reader-shaped messages) **[DECIDED]**
+- ∇θ = ∇θ^self + ∇θ^reader, where the reader term is the path from ℓ_A through the computation
+  of S(B). Weights are shared, so detaching S(B) doesn't stop A *learning to read*. It stops
+  **B learning to encode for its readers**. That's why the stop-gradient ablation is clean.
+- Optimum is amortized over citers: m*(B) = argmin ℓ(B) + E_{A∼citers(B)} ℓ(A | m(B)). A summary
+  for citers that lives in the representation, not the text.
+- **Key contrast (user loves this):** standard causal packing also has reader gradients, but
+  from *random* following text, so the incentive is to encode things useful to arbitrary text
+  (≈ nothing; plausibly the distraction/contamination effect). cdl aims those gradients at the
+  **actual citers**.
+- Literature hook: the "two-hop curse" (models fail to compose A→B, B→C latently without CoT).
+  F8 is a training-time mechanism for composition along declared edges.
+- **Synthetic test [DECIDED: first item of the eventual empirical plan; not run yet]:**
+  - Setup: C holds a planted key→value fact. B links C, and B's own text never needs the value.
+    A links B (not C) and must produce C's value.
+  - Arms: cdl with reader gradients, cdl with stop-gradient on S(B), doc_causal-trained
+    evaluated with grants, upper bound where A also links C.
+  - Sweeps: chain depth h = 1…L+2; linear probes on B's states.
+  - Predictions: reader-grad ≫ stop-grad; accuracy decays with h with a cliff at h ≥ L; probe
+    signal concentrated on B's positions after its link.
 
 ## 4. Inference / cache design
 
@@ -437,6 +473,27 @@ its entitlement closure. The axioms that make it generative also make it cacheab
   - **DINO:** an EMA teacher recomputes outputs fresh every step, so staleness is only in the
     weights. Analog of (c).
 
+- **Repo-step training (user refinement, 2026-11-05) [LEANING: replaces lagging-forward where
+  units are small]:** process a consistency unit (a repo; for web/wiki, a community or time
+  slice) in time/topological order, with the current batch writing the cache the next one
+  reads. **Apply the optimizer step only at the end of the whole unit**, so every cache entry
+  in the unit comes from the same weights and there's no staleness inside the unit.
+  - **Exact DAG backprop (makes it even better):** forward sweep in topo order storing S(v);
+    backward sweep in *reverse* topo order. For each doc, recompute its forward (doc-granular
+    activation checkpointing) and backprop its own loss plus the accumulated ∂L/∂S(v) from its
+    readers, which yields ∂L/∂S(parents) to accumulate. That's the **exact gradient of the
+    unit's loss, including F8 reader gradients**, with no stale or detached caches. Memory =
+    caches + their grads for the unit. Compute ≈ 2 forwards + 1 backward (like activation
+    checkpointing). Candidate algorithmic contribution.
+  - Costs: the effective batch = unit size, which varies hugely (10k-token repos vs 100M).
+    Bucket or pack small units into one step, chunk huge ones at time boundaries (accept
+    staleness there). DDP: rank = unit, so each step mixes many repos (mitigates the
+    correlated-gradient / source-forgetting risk).
+- **Write cost with DeepSeek-style KV:** ~1–4 KB/token (bf16 latent in training) × 262k
+  tokens/step ≈ 0.3–1 GB/step, about 10–40 ms over PCIe to host RAM, so negligible vs multi-second
+  steps. Small units can keep the cache on-GPU. (Current MHA ~98 KB/token ≈ 25 GB/step:
+  significant but overlappable.)
+
 ### 5.3 TAGs that change over time
 - Train on the *history* of a graph, e.g. a GitHub repo's commit history: a sequence of graph
   versions that share most of their nodes.
@@ -455,6 +512,24 @@ its entitlement closure. The axioms that make it generative also make it cacheab
     conditional generation along a version edge, and repo history becomes training data.
   - Would need new datasets (repo histories), kernels, and cache handling. Small KV
     (V4.1-class ~1 KB/token) makes storing every version plausible.
+
+### 5.4 Document-level GNN / next-node prediction (user idea, 2026-11-05) **[FUTURE — possibly the unifying piece]**
+- A document-level model running and training alongside the LLM that predicts the *high-level
+  content of the next node* (which doc gets written or linked next), rather than only the next
+  token given a prefix and aux docs. A competitor to next-concept-prediction lines (Large
+  Concept Models, etc.) with a much larger concept unit: the whole document.
+- Needs document embeddings. Candidate: the EOS-token state (a causal summary of the whole doc),
+  given an embedding-style objective and kept separate from the general KV cache.
+- Possible integration points:
+  - **Tiered cache:** doc embedding (tiny) vs full KV (big). An embedding-level GNN carries
+    cheap, coarse, *many-hop* information, while the KV path stays rich and L-bounded. That
+    changes the depth calculus.
+  - **Resolution:** the model's own doc embeddings as the index for links that don't exact-match
+    (replacing the fuzzy title index).
+  - **Planning:** predict which docs to fetch before writing. This is A2-safe if the prediction
+    uses only x_{≤q}.
+- Tension: it's an auxiliary objective, which the paper currently argues against (§7 analysis,
+  "no aux loss"). Keep out of this paper unless it turns out simple; mention as v2 direction.
 
 ## 6. Grounding, alignment, pluralism
 
